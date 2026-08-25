@@ -1,9 +1,9 @@
 //! The octave wheel: which slices draw, where each one sits, and what a
 //! released one fades to.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 /// The FOLD reading fills the same wedges of the same annulus, and reads each
 /// of them at its own octave's PITCH: a wedge is flat, so nothing about the
@@ -202,9 +202,7 @@ fn band_profile(px: &[u8], size: u32) -> Vec<bool> {
     // fringed band is heavier on the side its wide octaves fall, which would
     // pull a centroid off-center by roughly what the measurement below is
     // trying to see.
-    let drawn = (0..size * size)
-        .filter(|k| lit((k % size) as f32, (k / size) as f32))
-        .count();
+    let drawn = (0..size * size).filter(|k| lit((k % size) as f32, (k / size) as f32)).count();
     assert!(drawn > 100, "nothing drawn to measure ({drawn} lit px)");
     let (cx, cy) = (size as f32 / 2.0, size as f32 / 2.0);
 
@@ -329,9 +327,8 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 let layout = octave_layout(count, center, extras, size, blend);
                 let px = gpu.shot(&octave_wheel_scene(layout, cents));
                 let profile = band_profile(&px, SIZE[0]);
-                let case = format!(
-                    "{count}+2x{extras} at {center}, size {size} blend {blend}, {cents}c"
-                );
+                let case =
+                    format!("{count}+2x{extras} at {center}, size {size} blend {blend}, {cents}c");
 
                 // One indicator per octave of the wheel, closing the ring:
                 // that is one slit per boundary and no other break. A missing

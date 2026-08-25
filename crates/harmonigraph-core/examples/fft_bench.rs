@@ -176,9 +176,8 @@ fn bench<F: FnMut()>(name: &str, iters: u32, mut f: F) -> f64 {
 fn main() {
     let n = DEFAULT_FFT_SIZE;
     let iters = 400;
-    let signal: Vec<f32> = (0..n)
-        .map(|i| (i as f32 * 0.01).sin() * 0.5 + (i as f32 * 0.13).sin() * 0.2)
-        .collect();
+    let signal: Vec<f32> =
+        (0..n).map(|i| (i as f32 * 0.01).sin() * 0.5 + (i as f32 * 0.13).sin() * 0.2).collect();
     let window: Vec<f32> = (0..n)
         .map(|i| {
             let phase = std::f32::consts::TAU * i as f32 / n as f32;

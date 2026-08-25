@@ -2,14 +2,14 @@
 //! labels, and the tuning-learn overlay.
 
 use super::{display_note_name, learn_pulse, zoom_gesture};
+use crate::marks::{
+    draw_plain_name, draw_stacked_name, painter_ink, CENTS_GAP, CENTS_SIZE, LABEL_REACH, NAME_SIZE,
+    REFERENCE_HEIGHT,
+};
 use crate::{theme, SharedState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabel};
-use crate::marks::{
-    draw_plain_name, draw_stacked_name, painter_ink, CENTS_GAP, CENTS_SIZE, LABEL_REACH,
-    NAME_SIZE, REFERENCE_HEIGHT,
-};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -47,10 +47,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         // lattice, so the window's center goes back with the camera —
         // otherwise a double-click on a scrolled view resets the camera into
         // the middle of wherever it had scrolled to, which is not a reset.
-        state.camera = Camera {
-            projection: state.camera.projection,
-            ..Default::default()
-        };
+        state.camera = Camera { projection: state.camera.projection, ..Default::default() };
         state.view.center_threes = 0;
         state.view.center_fives = 0;
     }
@@ -539,7 +536,7 @@ pub(crate) fn draw_node_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{fresh, frame_full, painted_full, painted_into, themed};
+    use crate::tests::probe::{frame_full, fresh, painted_full, painted_into, themed};
     use harmonigraph_core::NoteEvent;
 
     /// Draw the labels for a chord, with the camera at `distance`, and
@@ -636,8 +633,7 @@ mod tests {
         // a name, wherever the reach is set.
         for distance in [14.0f32, 2.0] {
             let (pieces, scene) = labelled(rect, distance);
-            let projector =
-                scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+            let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
             let on_pane = scene
                 .nodes
                 .iter()
@@ -684,10 +680,7 @@ mod tests {
         let rect =
             egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, REFERENCE_HEIGHT));
         let biggest = |distance: f32| {
-            label_pieces(rect, distance)
-                .iter()
-                .map(|piece| piece.font_size)
-                .fold(0.0f32, f32::max)
+            label_pieces(rect, distance).iter().map(|piece| piece.font_size).fold(0.0f32, f32::max)
         };
         // Within a rung of the ladder either way. The size follows the camera
         // continuously and is RASTERIZED at the nearest size on offer, which
@@ -746,9 +739,8 @@ mod tests {
         // strip both and it asks for 25. So the margin between the promise and
         // the degradation is a single size, and it is that tight because of the
         // base and the ppp this fixture uses, not because 8 was picked loosely.
-        let mut sizes: Vec<f32> = (0..25)
-            .map(|step| biggest(Camera::DEFAULT_DISTANCE * 1.01f32.powi(step)))
-            .collect();
+        let mut sizes: Vec<f32> =
+            (0..25).map(|step| biggest(Camera::DEFAULT_DISTANCE * 1.01f32.powi(step))).collect();
         sizes.sort_by(f32::total_cmp);
         sizes.dedup();
         assert!(
@@ -984,7 +976,8 @@ mod tests {
             .find(|marker| marker.pos == node.world_pos)
             .map_or(0.0, |marker| marker.strength);
         assert_eq!(
-            standing, 0.0,
+            standing,
+            0.0,
             "a marker stood at {standing} under a name drawn at {}",
             label_strength(node, names),
         );
@@ -1076,6 +1069,9 @@ mod tests {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
         });
-        assert_eq!(state.hovered, None, "the interactive copy should pick, and clear a stale hover");
+        assert_eq!(
+            state.hovered, None,
+            "the interactive copy should pick, and clear a stale hover"
+        );
     }
 }

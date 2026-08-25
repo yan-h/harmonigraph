@@ -172,8 +172,7 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
             };
             let outer = egui::Rect::from_x_y_ranges(outer, rect.y_range());
             let target = shove_target(tree, &holds, node);
-            for (index, band) in
-                std::iter::once(outer).chain(inner_bands(tree, folded)).enumerate()
+            for (index, band) in std::iter::once(outer).chain(inner_bands(tree, folded)).enumerate()
             {
                 let id = egui::Id::new(("fold band", node.0, index));
                 match target {
@@ -270,12 +269,7 @@ fn nudge(tree: &mut Tree<Tab>, node: NodeIndex, delta: f32, style: &egui_dock::S
 ///
 /// Answers the points the boundary has moved this frame, live, because there is
 /// nothing to defer: the panes it trades are both on screen.
-fn shove(
-    ui: &egui::Ui,
-    band: egui::Rect,
-    id: egui::Id,
-    style: &egui_dock::Style,
-) -> Option<f32> {
+fn shove(ui: &egui::Ui, band: egui::Rect, id: egui::Id, style: &egui_dock::Style) -> Option<f32> {
     let reach = egui::vec2(style.separator.extra_interact_width * 0.5, 0.0);
     let response = ui
         .interact(band.expand2(reach), id, egui::Sense::click_and_drag())
@@ -477,10 +471,8 @@ fn paint_name(ui: &egui::Ui, body: egui::Rect, name: &str, style: &egui_dock::St
     // Rotating a quarter turn anticlockwise maps the galley's own x onto the
     // rail's height (upwards, hence the anchor at the text's far end) and its
     // height onto the rail's width.
-    let anchor = egui::pos2(
-        body.center().x - galley.size().y * 0.5,
-        body.top() + PAD + galley.size().x,
-    );
+    let anchor =
+        egui::pos2(body.center().x - galley.size().y * 0.5, body.top() + PAD + galley.size().x);
     painter.add(
         egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
             .with_angle(-std::f32::consts::FRAC_PI_2),

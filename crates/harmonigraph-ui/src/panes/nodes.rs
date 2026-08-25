@@ -15,12 +15,10 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
-    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
-    PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX, GLOW_REACH_MAX,
+    GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -282,12 +280,10 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // says both whether the marks shimmer and how.
         choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
         ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
-            ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
-                .show(ui)
-                .on_hover_text(
-                    "How fast the sheet travels, in lattice units a second — \
+            ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed").show(ui).on_hover_text(
+                "How fast the sheet travels, in lattice units a second — \
                      the same rate on screen and in a render. 0 freezes it.",
-                );
+            );
             // Eased, because the range is three orders wide and the useful
             // settings are not spread evenly over it: the tight end is a
             // different picture every few hundredths (0.05 to 0.1 halves the
@@ -428,18 +424,14 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              the threshold stops switching. 0 is one threshold. The Fade sets \
              how SLOWLY a ring comes and goes; this sets how RARELY.",
         );
-        ValueBar::new(
-            &mut view.spectral_ring_attack,
-            0.0..=SPECTRAL_BALLISTICS_MAX,
-            "Ring attack",
-        )
-        .display(ms_readout)
-        .show(ui)
-        .on_hover_text(
-            "How long a wedge takes to brighten toward a louder reading. Its \
+        ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Ring attack")
+            .display(ms_readout)
+            .show(ui)
+            .on_hover_text(
+                "How long a wedge takes to brighten toward a louder reading. Its \
              own time, not the analyzer's: the Spectral pane wants what is \
              there, and the ring wants whether a harmonic is present.",
-        );
+            );
         ValueBar::new(
             &mut view.spectral_ring_release,
             0.0..=SPECTRAL_BALLISTICS_MAX,
@@ -485,9 +477,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         )
         // A decimal below ten cents: the bar's floor is 0.5¢, and "{:.0}"
         // would read it out as the zero the floor exists to forbid.
-        .display(|cents| {
-            if cents < 10.0 { format!("{cents:.1}¢") } else { format!("{cents:.0}¢") }
-        })
+        .display(|cents| if cents < 10.0 { format!("{cents:.1}¢") } else { format!("{cents:.0}¢") })
         .show(ui)
         .on_hover_text(
             "How much spectrum one wedge shows, in cents around that octave's \
@@ -563,17 +553,15 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // draws both, and dragging it is visibly the stack opening up. The Octave
     // gap under it is not on this bar's axis at all, and is here anyway — see
     // there.
-    StackBar::new(view)
-        .show(ui)
-        .on_hover_text(
-            "A node's cross-section, from its center out: the empty middle its \
+    StackBar::new(view).show(ui).on_hover_text(
+        "A node's cross-section, from its center out: the empty middle its \
              light fills, the audio ring, the octave band and the melody/bass \
              strip, each named on its own cell where there is room for it. Drag \
              a handle to set the stretch inside it — 0 removes a layer and the \
              ones outside close up, and on the middle it seats the whole stack \
              on the node's center. The line is the node's edge, which only the \
              marks may cross. Double-click to restore.",
-        );
+    );
     // A node's two paddings, together and directly under the bar that draws one
     // of them. They are the same question asked on the node's two axes — how
     // far apart do its pieces read — so a person dialling one is looking at the

@@ -28,9 +28,9 @@
 //! shared with the display pane's title — see [`tab_title`](super::tab_title).
 
 use super::color::color_pane;
-use super::plus::plus_pane;
 use super::labels::labels_pane;
 use super::nodes::nodes_pane;
+use super::plus::plus_pane;
 use super::spectral::spectrum_settings_pane;
 use super::system::system_pane;
 use super::view::view_pane;

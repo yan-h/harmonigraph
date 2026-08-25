@@ -203,8 +203,7 @@ pub(crate) fn ink_inset(
     font: &egui::FontId,
     toward: egui::Vec2,
 ) -> f32 {
-    let galley =
-        painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+    let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
     // The same glyph rects `TextBatch::text` draws, in the galley's own space
     // — read here rather than out of the batch because this has to answer
     // BEFORE the anchor it corrects is handed over.
@@ -221,7 +220,11 @@ pub(crate) fn ink_inset(
     let Some(ink) = ink else { return 0.0 };
     let size = galley.size();
     if toward.x.abs() > toward.y.abs() {
-        if toward.x > 0.0 { size.x - ink.max.x } else { ink.min.x }
+        if toward.x > 0.0 {
+            size.x - ink.max.x
+        } else {
+            ink.min.x
+        }
     } else if toward.y > 0.0 {
         size.y - ink.max.y
     } else {
@@ -1031,8 +1034,7 @@ impl MarkAtlas {
     /// Only worth doing when there is something to drop AND the sheet has
     /// grown past what it should be carrying — see [`MARK_SHEET_SOFT_HEIGHT`].
     fn retire(&mut self) {
-        if self.image.height() as u32 <= MARK_SHEET_SOFT_HEIGHT
-            || self.used.len() >= self.at.len()
+        if self.image.height() as u32 <= MARK_SHEET_SOFT_HEIGHT || self.used.len() >= self.at.len()
         {
             return;
         }
@@ -1052,9 +1054,7 @@ impl MarkAtlas {
             .filter(|(key, _)| self.used.contains(*key))
             .map(|(&key, &patch)| (key, patch))
             .collect();
-        keep.sort_by_key(|(_, p)| {
-            std::cmp::Reverse((p.size[1], p.size[0], p.at[1], p.at[0]))
-        });
+        keep.sort_by_key(|(_, p)| std::cmp::Reverse((p.size[1], p.size[0], p.at[1], p.at[0])));
 
         let old = std::mem::take(&mut self.image);
         self.at.clear();
@@ -1493,8 +1493,11 @@ mod tests {
         // the rasterization it triggers lands for the next one.
         for _ in 0..2 {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let galley =
-                    ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE);
+                let galley = ui.painter().layout_no_wrap(
+                    text.to_owned(),
+                    font.clone(),
+                    egui::Color32::WHITE,
+                );
                 drawn = Some(
                     galley.rows[0]
                         .glyphs

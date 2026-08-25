@@ -11,8 +11,7 @@ const FRAME_HEIGHT: f32 = 600.0;
 fn dock() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Lattice]);
     let surface = dock.main_surface_mut();
-    let [pictures, settings] =
-        surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
+    let [pictures, settings] = surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
     surface.split_below(settings, 0.5, vec![Tab::Notes]);
     surface.split_right(pictures, 0.7, vec![Tab::Spectral]);
     dock
@@ -170,8 +169,7 @@ fn collapse(dock: &mut DockState<Tab>, tab: Tab, collapsed: bool) {
         } else if tree[left].is_collapsed() && tree[right].is_collapsed() {
             tree[parent].set_collapsed(true);
         }
-        let leaves =
-            if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
+        let leaves = if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
         tree[parent].set_collapsed_leaf_count(leaves);
         child = parent;
     }
@@ -270,10 +268,7 @@ fn folding_a_pane_takes_its_width_out_of_the_window() {
     let settled = frame(&mut folds, &mut dock, &mut dial, window);
     assert!((settled - window).abs() < 0.01, "one fold, one resize");
     assert!((width(&dock, LATTICE) - rail()).abs() < 0.01, "a rail, not a column");
-    assert!(
-        (width(&dock, SPECTRAL) - sibling).abs() < 0.01,
-        "the analyzer keeps the width it had"
-    );
+    assert!((width(&dock, SPECTRAL) - sibling).abs() < 0.01, "the analyzer keeps the width it had");
     assert!(
         (width(&dock, SETTINGS) - column).abs() < 0.01,
         "so does the settings column, a split further up"
@@ -287,7 +282,7 @@ fn a_rail_is_the_same_width_at_any_window_size() {
     for size in [600.0, 2400.0] {
         let mut dock = dock();
         let mut folds = Folds::default();
-    let mut dial = Dial::default();
+        let mut dial = Dial::default();
         lay_out(&mut dock, size);
         collapse(&mut dock, Tab::Lattice, true);
         let window = frame(&mut folds, &mut dock, &mut dial, size);
@@ -774,7 +769,6 @@ fn a_fold_the_window_cannot_pay_for_still_gives_it_all_back() {
         assert!((width(&dock, *node) - was).abs() < 0.01, "{node:?} is back to {was}");
     }
 }
-
 
 /// A rail is a fixed number of points in a window that would not shrink,
 /// too — the case the rail's whole width lives or dies on.
@@ -1394,7 +1388,6 @@ fn an_unfold_landing_does_not_ratchet_down_the_ceiling_a_fold_banked() {
     );
 }
 
-
 /// A folded subtree divides its rail span by how many rails each side
 /// holds, not evenly: fold three panes that sit side by side and the split
 /// between "two of them" and "one of them" is not down the middle.
@@ -1425,7 +1418,6 @@ fn a_folded_subtree_gives_each_side_the_rails_it_holds() {
         assert!((width - rail()).abs() < 0.01, "{tab:?} came out {width} wide, not a rail");
     }
 }
-
 
 /// Folding a pane and then dragging the window back out leaves the layout
 /// dialled for a window bigger still — the visible panes grew and the
@@ -1560,7 +1552,11 @@ fn an_unfold_the_window_refuses_opens_anyway() {
 fn frame_rounded(folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial, width: f32) -> f32 {
     let change = folds.apply(dock, &style(), width, 0.0, dial);
     lay_out(dock, width);
-    if change.abs() < 0.5 { width } else { (width + change).round() }
+    if change.abs() < 0.5 {
+        width
+    } else {
+        (width + change).round()
+    }
 }
 
 /// Folding a pane must not move the pane beside it, even by the fraction of a

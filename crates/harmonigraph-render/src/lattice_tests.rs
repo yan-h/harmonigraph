@@ -3,19 +3,19 @@
 //! device and the render/readback round trip they share with `roll` and
 //! `text` live in [`crate::gpu_harness`].
 
-mod fixtures;
+mod clearing;
+mod compose;
 mod contract;
 mod device;
-mod shimmer;
-mod sweep;
-mod marks;
-mod clearing;
-mod octaves;
-mod compose;
-mod ships;
-mod labels;
-mod glow_reach;
-mod glow_markers;
-mod glow_standoff;
+mod fixtures;
 mod glow_colour;
+mod glow_markers;
 mod glow_meld;
+mod glow_reach;
+mod glow_standoff;
+mod labels;
+mod marks;
+mod octaves;
+mod shimmer;
+mod ships;
+mod sweep;

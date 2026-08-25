@@ -102,7 +102,11 @@ impl DockHarness {
         harness
     }
 
-    pub(super) fn frame(&mut self, state: &mut SharedState, events: Vec<egui::Event>) -> egui::FullOutput {
+    pub(super) fn frame(
+        &mut self,
+        state: &mut SharedState,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
         self.frame_timed(state, events).0
     }
 
@@ -173,7 +177,11 @@ impl DockHarness {
     /// The ARROW, not the tab name: egui_dock reaches `set_collapsed` from its
     /// own square at the left end of the tab bar, and clicking the title only
     /// selects a tab.
-    pub(super) fn collapse_click(&mut self, state: &mut SharedState, tab: panes::Tab) -> egui::FullOutput {
+    pub(super) fn collapse_click(
+        &mut self,
+        state: &mut SharedState,
+        tab: panes::Tab,
+    ) -> egui::FullOutput {
         let path = state.workspace.dock.find_tab(&tab).expect("tab is in the dock");
         let leaf = &state.workspace.dock[path.surface][path.node];
         let rect = leaf.rect().expect("the leaf is laid out");
@@ -339,8 +347,7 @@ pub(super) fn tab_body_on(
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane
             // ui inside it is inset, exactly as the dock's Frame leaves it.
-            let mut body_ui =
-                ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
             let mut viewer = panes::Viewer { state, params: &backend, now };
             egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
@@ -352,7 +359,11 @@ pub(super) fn tab_body_on(
 /// whose Camera section depends on it (see [`PROJECTIONS`]), and the default
 /// alone for the panes that draw the same thing either way.
 pub(super) fn projections_for(pane: SettingsPane) -> &'static [harmonigraph_scene::Projection] {
-    if pane == SettingsPane::Page(DisplayPage::Lattice) { &PROJECTIONS } else { &PROJECTIONS[..1] }
+    if pane == SettingsPane::Page(DisplayPage::Lattice) {
+        &PROJECTIONS
+    } else {
+        &PROJECTIONS[..1]
+    }
 }
 
 /// The render the pane fixtures have in flight, so the Video pane's progress

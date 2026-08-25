@@ -2,10 +2,10 @@
 //! floor under it, and what a blob costs when a key it carries — or one it is
 //! missing — is not the shape this build expects.
 
-use crate::*;
-use crate::state::UI_PERSIST_VERSION;
-use harmonigraph_scene::{Camera, NoteNames};
 use super::probe::fresh;
+use crate::state::UI_PERSIST_VERSION;
+use crate::*;
+use harmonigraph_scene::{Camera, NoteNames};
 
 #[test]
 fn persist_round_trips_camera_and_view() {
@@ -52,11 +52,7 @@ fn persist_round_trips_camera_and_view() {
     // could not pass.
     state.view.marvel = false;
     state.view.marvel_auto = true;
-    state.camera_presets.push(CameraPreset {
-        name: "reading".into(),
-        yaw: 0.7,
-        pitch: 0.2,
-    });
+    state.camera_presets.push(CameraPreset { name: "reading".into(), yaw: 0.7, pitch: 0.2 });
     let saved = state.save_persist();
 
     let mut restored = fresh();
@@ -299,10 +295,7 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
             &format!("sevens_gutter_soft:{:?},", state.view.sevens_gutter_soft),
             "sevens_gutter_soft:0.5,",
         )
-        .replace(
-            &format!("sevens_gutter:{:?},", state.view.sevens_gutter),
-            "sevens_gutter:0.1,",
-        )
+        .replace(&format!("sevens_gutter:{:?},", state.view.sevens_gutter), "sevens_gutter:0.1,")
         .replace(
             &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
             "roll_outline_fade:9.0,",
@@ -315,14 +308,8 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
             &format!("roll_lead_fade:{:?},", state.spectrum_config.roll_lead_fade),
             "roll_lead_fade:0.2,",
         )
-        .replace(
-            &format!("roll_lead:{:?},", state.spectrum_config.roll_lead),
-            "roll_lead:0.05,",
-        )
-        .replace(
-            &format!("plus_taper:{:?},", state.view.plus_taper),
-            "plus_taper:0.5,",
-        )
+        .replace(&format!("roll_lead:{:?},", state.spectrum_config.roll_lead), "roll_lead:0.05,")
+        .replace(&format!("plus_taper:{:?},", state.view.plus_taper), "plus_taper:0.5,")
         .replace(&format!("plus_arm:{:?},", state.view.plus_arm), "plus_arm:0.1,");
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
@@ -703,8 +690,7 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(
-        restored.spectrum_config.spectrogram_gradient,
-        state.spectrum_config.spectrogram_gradient,
+        restored.spectrum_config.spectrogram_gradient, state.spectrum_config.spectrogram_gradient,
         "every knob of the heatmap's gradient, not just the ones a preset moves",
     );
 }
@@ -1215,12 +1201,8 @@ fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
 
     // The same blob with the field taken back out, which is what every project
     // saved before this looks like.
-    let stripped = saved
-        .split(",ui_scale:")
-        .next()
-        .expect("the blob names the field")
-        .to_owned()
-        + ")";
+    let stripped =
+        saved.split(",ui_scale:").next().expect("the blob names the field").to_owned() + ")";
     let mut older = fresh();
     older.load_persist(&stripped);
     assert_eq!(older.ui_scale, 1.0, "a blob with no scale did not load at the design size");
@@ -1234,8 +1216,7 @@ fn an_impossible_ui_scale_is_clamped() {
     // A nonsense value falls back to the design size rather than to the end of
     // the range it points at: an infinity is not a request for the largest
     // chrome available, it is a blob that has lost the number.
-    for (asked, expected) in
-        [(0.01f32, 0.7f32), (99.0, 1.5), (f32::NAN, 1.0), (f32::INFINITY, 1.0)]
+    for (asked, expected) in [(0.01f32, 0.7f32), (99.0, 1.5), (f32::NAN, 1.0), (f32::INFINITY, 1.0)]
     {
         crate::theme::set_ui_scale(&ctx, asked);
         assert_eq!(
@@ -1458,8 +1439,6 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
     assert!(state.view.marvel_auto, "and the missing detect key still opts in");
 }
 
-
-
 /// Dropping any one key from a serialized view costs THAT KEY alone, and the
 /// value it comes back with is the fresh-install one.
 ///
@@ -1572,10 +1551,7 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     );
     // And one page is ONE page: the Colors body it was switched away from is
     // gone rather than still stacked above.
-    assert!(
-        !drawn(&out, leaf, "Bloom"),
-        "the Colors page is still drawn under the Lattice page",
-    );
+    assert!(!drawn(&out, leaf, "Bloom"), "the Colors page is still drawn under the Lattice page",);
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as
@@ -1654,12 +1630,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
         ),
         ("fov_y", "NaN", "a NaN field of view", Some((0.2, 2.0))),
         ("fov_y", "100.0", "a field of view `ortho`'s `tan` cannot take", Some((0.2, 2.0))),
-        (
-            "cabinet_angle",
-            "NaN",
-            "a NaN cabinet angle",
-            Some((0.0, std::f32::consts::FRAC_PI_2)),
-        ),
+        ("cabinet_angle", "NaN", "a NaN cabinet angle", Some((0.0, std::f32::consts::FRAC_PI_2))),
         (
             "cabinet_angle",
             "10.0",
@@ -1717,10 +1688,9 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
 /// its fill pinned at the end of a range that does not contain it.
 #[test]
 fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
-    for (hint, yaw, pitch) in [
-        ("a NaN yaw", "NaN", "0.0"),
-        ("a pitch past `orbit`'s limit", "0.0", "10.0"),
-    ] {
+    for (hint, yaw, pitch) in
+        [("a NaN yaw", "NaN", "0.0"), ("a pitch past `orbit`'s limit", "0.0", "10.0")]
+    {
         let mut state = fresh();
         state.view.extent_sevens = 3;
         state.camera_presets.push(crate::CameraPreset {
@@ -1729,11 +1699,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
             pitch: 0.5,
         });
         let saved = state.save_persist();
-        let edited = saved.replacen(
-            "yaw:0.25,pitch:0.5",
-            &format!("yaw:{yaw},pitch:{pitch}"),
-            1,
-        );
+        let edited = saved.replacen("yaw:0.25,pitch:0.5", &format!("yaw:{yaw},pitch:{pitch}"), 1);
         assert_ne!(edited, saved, "{hint}: the preset is not in the blob to edit");
 
         let mut restored = fresh();

@@ -5,9 +5,9 @@
 //! hold that: the field's regularity is what the rows and columns are read
 //! off, so the resting picture is a set of marks and not a mesh.
 
+use super::harness::*;
 use crate::*;
 use harmonigraph_core::{LatticePos, NoteEvent, NoteTracker, Tuning};
-use super::harness::*;
 
 /// A 7x7 window one sevens step deep, so off-sheet positions are in the mix
 /// and can be shown to carry no marker.
@@ -79,11 +79,7 @@ fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
     let unit = unit_of(&view);
     assert!(unit > 0.0, "the field must have a unit to be measured in");
     let arm = pluses_of(&view)[0].radius;
-    assert!(
-        (arm / unit - 0.2).abs() < 1e-4,
-        "an arm of 0.2 read back as {}",
-        arm / unit,
-    );
+    assert!((arm / unit - 0.2).abs() < 1e-4, "an arm of 0.2 read back as {}", arm / unit,);
     assert!(
         (span_of(&view) / unit - 0.5).abs() < 1e-4,
         "an arm of 0.2 and a reach of 0.3 spanned {}",
@@ -379,11 +375,8 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let node = origin_node(&scene);
         let ground = scene.lattice_ground.w;
-        let standing = scene
-            .pluses
-            .iter()
-            .find(|p| p.pos == node.world_pos)
-            .map_or(0.0, |p| p.strength);
+        let standing =
+            scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
         // The complement, exactly: the name's level under Played IS the
         // activation (`label_strength` in harmonigraph-ui), so the two together
         // are one whole marker's worth of ink at every instant.
@@ -445,11 +438,8 @@ fn a_sounding_note_leaves_its_marker_standing_with_the_names_off() {
     for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let node = origin_node(&scene);
-        let standing = scene
-            .pluses
-            .iter()
-            .find(|p| p.pos == node.world_pos)
-            .map_or(0.0, |p| p.strength);
+        let standing =
+            scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
         assert!(
             (standing - resting).abs() < 1e-5,
             "at {now}s the note stands at {} and moved the marker to {standing} from {resting}",
@@ -477,18 +467,8 @@ fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // The GROUND, which is the marker's own colour: a node arriving or leaving
     // has to cross no seam against the marker under it.
     let view = plus_view();
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &view,
-        &plain_frame(),
-        0.0,
-    );
-    let idle = scene
-        .nodes
-        .iter()
-        .find(|n| n.activation == 0.0)
-        .expect("nothing is playing");
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let idle = scene.nodes.iter().find(|n| n.activation == 0.0).expect("nothing is playing");
     assert_eq!(idle.color, scene.lattice_ground);
     assert_eq!(
         idle.color,
@@ -544,18 +524,8 @@ fn a_resting_marker_is_the_grey_its_own_bar_names() {
 fn the_ring_and_an_idle_node_are_one_grey() {
     for ground in [8.0f32, 20.0, 45.0] {
         let view = ViewConfig { lattice_ground: ground, ..plus_view() };
-        let scene = scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &view,
-            &plain_frame(),
-            0.0,
-        );
-        let idle = scene
-            .nodes
-            .iter()
-            .find(|n| n.activation == 0.0)
-            .expect("nothing is playing");
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        let idle = scene.nodes.iter().find(|n| n.activation == 0.0).expect("nothing is playing");
         let ring = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
         for (what, got) in [("an idle node", idle.color), ("the audio ring", ring)] {
             let step = (got.truncate() - scene.lattice_ground.truncate()).abs().max_element();
@@ -616,15 +586,9 @@ fn the_two_at_rest_bars_move_nothing_of_each_others() {
     for ground in [0.0f32, 64.0] {
         for ink in [0.0f32, 64.0] {
             let view = ViewConfig { lattice_ground: ground, marker_ink: ink, ..plus_view() };
-            let scene = scene_of(
-                &NoteTracker::new(),
-                &Tuning::default(),
-                &view,
-                &plain_frame(),
-                0.0,
-            );
-            let marker =
-                scene.pluses.first().expect("the home sheet draws a resting marker field");
+            let scene =
+                scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+            let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
             assert_eq!(
                 marker.color,
                 crate::grey_of_lightness(ink),
@@ -704,8 +668,7 @@ fn a_named_position_draws_no_marker() {
     let view = ViewConfig { note_names: NoteNames::Past, ..plus_view() };
     let tracker = played_and_forgotten();
     let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 4.0);
-    let remembered: Vec<&NodeInstance> =
-        scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
+    let remembered: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
     assert!(!remembered.is_empty(), "nothing was remembered, so nothing is named at rest");
     for node in &remembered {
         assert!(
@@ -716,11 +679,8 @@ fn a_named_position_draws_no_marker() {
     }
     // And the positions with no memory on them keep theirs — the rule is about
     // the name, not about the mode being on.
-    let unvisited = scene
-        .nodes
-        .iter()
-        .filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0)
-        .count();
+    let unvisited =
+        scene.nodes.iter().filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0).count();
     assert_eq!(scene.pluses.len(), unvisited, "an unnamed home position lost its marker");
 
     // All names every node on screen, so the field goes with it — the mode
@@ -758,11 +718,7 @@ fn a_hovered_position_draws_no_marker() {
         Some(at),
         0.0,
     );
-    let hovered = scene
-        .nodes
-        .iter()
-        .find(|n| n.hovered)
-        .expect("the pointer is on the origin");
+    let hovered = scene.nodes.iter().find(|n| n.hovered).expect("the pointer is on the origin");
     assert!(
         !scene.pluses.iter().any(|d| d.pos == hovered.world_pos),
         "the hovered position wears both a name and a marker",
@@ -796,12 +752,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // draws at is what says how far off it has gone. A chain drawn down to
     // home would be the other answer, and the field is what it costs — so the
     // field is the same field whether that note sounds or not.
-    let view = ViewConfig {
-        extent_threes: 0,
-        extent_fives: 0,
-        extent_sevens: 2,
-        ..plain_view()
-    };
+    let view = ViewConfig { extent_threes: 0, extent_fives: 0, extent_sevens: 2, ..plain_view() };
     // 12-TET default: a sevens step is 1000¢, so (0,0,2) is MIDI 68's pitch
     // class. The home node is C.
     let mut tracker = NoteTracker::new();

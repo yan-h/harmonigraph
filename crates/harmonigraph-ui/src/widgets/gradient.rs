@@ -12,8 +12,9 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab, track_fill,
-    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -269,17 +270,11 @@ impl GradientPreview {
         // Rounded at both ends: the preview is a band in its own right, and
         // each of its ends meets the pane rather than another shape.
         let corner = f32::from(bar_radius(scale));
-        gradient_strip(
-            ui.painter(),
-            self.rect,
-            PITCH_LUT_N - 1,
-            (corner, corner),
-            |p| {
-                let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-                let i0 = f.floor() as usize;
-                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
-            },
-        );
+        gradient_strip(ui.painter(), self.rect, PITCH_LUT_N - 1, (corner, corner), |p| {
+            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+        });
         response
     }
 }
@@ -404,19 +399,16 @@ impl<'a> SpectrumBar<'a> {
         // the row, which is the right way round. A coarse handle beats an
         // unreachable one, but a button with no width cannot be pressed at all.
         let split = rect.left() + spectrum_track_width(rect.width(), scale);
-        let track_rect =
-            egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()));
+        let track_rect = egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()));
         let flip_rect = egui::Rect::from_min_max(
             egui::pos2((split + flip_gap).min(rect.right()), rect.top()),
             rect.max,
         );
         let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
-        let flip = ui
-            .interact(flip_rect, id.with("flip"), Sense::click())
-            .on_hover_text(
-                "Run the spectrum the other way round the circle — the same \
+        let flip = ui.interact(flip_rect, id.with("flip"), Sense::click()).on_hover_text(
+            "Run the spectrum the other way round the circle — the same \
                  colors, low and high swapped",
-            );
+        );
 
         // ---- The name, and the stretch it keeps the readout out of ----------
         // Laid out HERE rather than with the rest of the paint, so its width is
@@ -466,8 +458,7 @@ impl<'a> SpectrumBar<'a> {
         // readout already subtracted, so what is left here holds it: the name
         // can no more be pushed off by the number than the number can push into
         // the name.
-        let readable_left =
-            track_rect.left() + text_pad + label.size().x + BAR_LABEL_GAP * scale;
+        let readable_left = track_rect.left() + text_pad + label.size().x + BAR_LABEL_GAP * scale;
         // What the handle travels: the track, less half a handle at each end,
         // so both limits — a span of zero and a whole turn — are places it can
         // stand rather than edges it merges into. Same reason as HANDLE_INSET.
@@ -545,10 +536,9 @@ impl<'a> SpectrumBar<'a> {
                     // The magnitude only. Its SIGN is the flip button's, and
                     // leaving it there is what lets the handle reach zero
                     // without the arc turning inside out on the way past.
-                    SpectrumGrab::Span => Some(Gradient {
-                        hue_span: winding * offset_at(p.x).abs(),
-                        ..aimed
-                    }),
+                    SpectrumGrab::Span => {
+                        Some(Gradient { hue_span: winding * offset_at(p.x).abs(), ..aimed })
+                    }
                     SpectrumGrab::Rotate { held } => Some(Gradient {
                         hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
                         ..aimed
@@ -587,13 +577,19 @@ impl<'a> SpectrumBar<'a> {
         // both sides of the handle, so the two meet flush at every setting and
         // what the handle marks is how far round the turn the gradient reaches
         // — which is the only thing this track is for.
-        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, (corner as f32, corner as f32), |p| {
-            let hue = g.hue_start + p * FULL_TURN * winding;
-            let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
-            let i0 = f.floor() as usize % HUE_CIRCLE_N;
-            let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
-            scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
-        });
+        gradient_strip(
+            painter,
+            track_rect,
+            SPECTRUM_SEGMENTS,
+            (corner as f32, corner as f32),
+            |p| {
+                let hue = g.hue_start + p * FULL_TURN * winding;
+                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+                let i0 = f.floor() as usize % HUE_CIRCLE_N;
+                let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
+                scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
+            },
+        );
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
         };
@@ -697,18 +693,13 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
     let shaft = (rect.width() - 4.0 * scale).max(head);
     let stroke = egui::Stroke::new((1.0 * scale).max(1.0), color);
     let (left, right) = (rect.center().x - shaft * 0.5, rect.center().x + shaft * 0.5);
-    for (y, tip, tail) in [
-        (rect.center().y - gap, left, right),
-        (rect.center().y + gap, right, left),
-    ] {
+    for (y, tip, tail) in
+        [(rect.center().y - gap, left, right), (rect.center().y + gap, right, left)]
+    {
         painter.line_segment([egui::pos2(tail, y), egui::pos2(tip, y)], stroke);
         let back = tip + (tail - tip).signum() * head;
         painter.add(egui::Shape::convex_polygon(
-            vec![
-                egui::pos2(tip, y),
-                egui::pos2(back, y - half),
-                egui::pos2(back, y + half),
-            ],
+            vec![egui::pos2(tip, y), egui::pos2(back, y - half), egui::pos2(back, y + half)],
             color,
             egui::Stroke::NONE,
         ));
@@ -920,7 +911,10 @@ enum SpreadGrab {
     /// own two for the same reason, and the squish below is the same bargain.
     ///
     /// [`Grab::Span`]: super::range::Grab::Span
-    Middle { offset: f32, spread: f32 },
+    Middle {
+        offset: f32,
+        spread: f32,
+    },
 }
 
 impl SpreadGrab {
@@ -942,7 +936,11 @@ impl SpreadGrab {
             // choice inverts it in whichever direction it is not — and parked
             // on black or white that is the ONLY direction, so the right way
             // round would be unreachable from there.
-            if v < centre { SpreadGrab::Low } else { SpreadGrab::High }
+            if v < centre {
+                SpreadGrab::Low
+            } else {
+                SpreadGrab::High
+            }
         } else if d_low < d_high {
             SpreadGrab::Low
         } else {
@@ -1197,10 +1195,8 @@ impl<'a> SpreadBar<'a> {
             mono.clone(),
             theme::text(),
         );
-        let reserve = painter
-            .layout_no_wrap(self.spread.widest_readout(), mono, theme::text())
-            .size()
-            .x;
+        let reserve =
+            painter.layout_no_wrap(self.spread.widest_readout(), mono, theme::text()).size().x;
         let body = TextStyle::Body.resolve(ui.style());
         let job = egui::text::LayoutJob::simple_singleline(
             self.spread.label().to_owned(),
@@ -1434,12 +1430,7 @@ mod tests {
         /// the widget sees is ALWAYS some way along the drag and never at
         /// `from`. A harness that jumped straight to `to` would hand the widget
         /// a first frame at its destination and never exercise the gap.
-        fn drag(
-            &mut self,
-            g: &mut Gradient,
-            from: egui::Pos2,
-            to: egui::Pos2,
-        ) -> Vec<egui::Shape> {
+        fn drag(&mut self, g: &mut Gradient, from: egui::Pos2, to: egui::Pos2) -> Vec<egui::Shape> {
             self.frame(g, vec![egui::Event::PointerMoved(from)]);
             self.frame(g, vec![egui::Event::PointerMoved(from), press(from, true)]);
             let live_at = from + (to - from).normalized() * 12.0;
@@ -1483,11 +1474,7 @@ mod tests {
     /// failure rather than a readout read off the wrong run.
     fn spectrum_readout(shapes: &[egui::Shape]) -> String {
         let texts: Vec<String> = spectrum_texts(shapes).into_iter().map(|(_, s, _)| s).collect();
-        assert_eq!(
-            texts.len(),
-            2,
-            "a spectrum bar draws its name and one readout, not {texts:?}",
-        );
+        assert_eq!(texts.len(), 2, "a spectrum bar draws its name and one readout, not {texts:?}",);
         assert_eq!(texts[0], SPAN_LABEL, "the bar's first text run is not its name");
         texts.into_iter().nth(1).expect("checked just above")
     }
@@ -1642,12 +1629,8 @@ mod tests {
         // claiming nothing is a picture that says the gradient reaches the
         // first hue, and Mono is one click away on the Analyzer section.
         let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
-        let lit: Vec<usize> = nothing
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.a() != dim)
-            .map(|(i, _)| i)
-            .collect();
+        let lit: Vec<usize> =
+            nothing.iter().enumerate().filter(|(_, c)| c.a() != dim).map(|(i, _)| i).collect();
         assert!(lit.is_empty(), "a span of nothing lit columns {lit:?} of {}", nothing.len());
     }
 
@@ -1811,9 +1794,7 @@ mod tests {
                     far += 1;
                     box_.right() - radius
                 };
-                for (y, cy) in
-                    [(top.y, box_.top() + radius), (bottom.y, box_.bottom() - radius)]
-                {
+                for (y, cy) in [(top.y, box_.top() + radius), (bottom.y, box_.bottom() - radius)] {
                     let reach = ((top.x - cx).powi(2) + (y - cy).powi(2)).sqrt();
                     assert!(
                         (reach - radius).abs() < 0.05,
@@ -1992,11 +1973,7 @@ mod tests {
             let mut h = Spectrum::settled_at(&mut g, width);
             let shapes = h.frame(&mut g, vec![]);
             let texts = spectrum_texts(&shapes);
-            assert_eq!(
-                texts.len(),
-                2,
-                "{aimed} drew {texts:?} rather than a name and a readout",
-            );
+            assert_eq!(texts.len(), 2, "{aimed} drew {texts:?} rather than a name and a readout",);
             let (name, written, name_color) = texts[0].clone();
             let (readout, _, readout_color) = texts[1].clone();
             // The name in full at every width a reader can drag the column to,
@@ -2124,8 +2101,7 @@ mod tests {
     /// the paint reads leaves the bar a frame behind the button.
     #[test]
     fn the_flip_button_reads_the_arc_backwards() {
-        let mut g =
-            Gradient { hue_start: 260.0, hue_span: 190.0, ..Gradient::default() };
+        let mut g = Gradient { hue_start: 260.0, hue_span: 190.0, ..Gradient::default() };
         let before = g.sanitized();
         let mut h = Spectrum::settled(&mut g);
         let shapes = h.click(&mut g, h.on_flip());
@@ -2150,8 +2126,7 @@ mod tests {
     /// work a rectangle does for free, and doing it a few frames late.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
-        let before =
-            Gradient { hue_start: 0.0, hue_span: 90.0, ..Gradient::default() };
+        let before = Gradient { hue_start: 0.0, hue_span: 90.0, ..Gradient::default() };
         let mut g = before;
         let mut h = Spectrum::settled(&mut g);
         let to = h.at_span(120.0);
@@ -2411,8 +2386,7 @@ mod tests {
     fn a_flip_is_the_same_arc_read_backwards() {
         for (start, span) in [(260.0f32, 190.0f32), (0.0, 360.0), (95.0, -45.0), (12.0, 0.0)] {
             let before =
-                Gradient { hue_start: start, hue_span: span, ..Gradient::default() }
-                    .sanitized();
+                Gradient { hue_start: start, hue_span: span, ..Gradient::default() }.sanitized();
             let after = before.flipped();
             let ends = |g: Gradient| (g.lightness_and_hue(0.0).1, g.lightness_and_hue(1.0).1);
             let (low, high) = ends(before);
@@ -2461,11 +2435,7 @@ mod tests {
             g.sanitized().hue_span.is_sign_positive(),
             "a flipped arc dragged to nothing kept a direction it cannot have",
         );
-        assert_eq!(
-            spectrum_readout(&shapes),
-            "+0°",
-            "a span of nothing read out as running left",
-        );
+        assert_eq!(spectrum_readout(&shapes), "+0°", "a span of nothing read out as running left",);
     }
 
     /// A reach in value units wide enough to reach a handle from well away
@@ -2671,8 +2641,8 @@ mod tests {
             let unit = spread.per_unit();
             let (min, max) = spread.axis();
             for centre in [0.0f32, 0.135, 0.49, 0.636, 0.896, 1.0].map(|v| min + v * (max - min)) {
-                for spread_v in [0.0f32, 0.01, -0.07, 0.45, 0.999, -1.0, 4.0]
-                    .map(|v| v * (max - min))
+                for spread_v in
+                    [0.0f32, 0.01, -0.07, 0.45, 0.999, -1.0, 4.0].map(|v| v * (max - min))
                 {
                     let (c, s) = spread.snapped((centre, spread_v));
                     for end in [c - s * 0.5, c + s * 0.5] {
@@ -2919,7 +2889,6 @@ mod tests {
                     assert_eq!(grips[0], grips[1], "{spread:?} {what}: grips are not coincident");
                 }
 
-
                 // The order the painter walks: each grip in turn, and under it
                 // each run it stands in, name before readout. Derived from the
                 // geometry so the expectation tracks the fixture rather than
@@ -2927,9 +2896,9 @@ mod tests {
                 let want: Vec<_> = grips
                     .iter()
                     .flat_map(|g| {
-                        runs.iter().filter(move |(r, _)| g.intersects(*r)).map(move |(r, s)| {
-                            (*g, *r, s.clone())
-                        })
+                        runs.iter()
+                            .filter(move |(r, _)| g.intersects(*r))
+                            .map(move |(r, s)| (*g, *r, s.clone()))
                     })
                     .collect();
                 assert_eq!(
@@ -3127,12 +3096,9 @@ mod tests {
     #[test]
     fn a_brightness_readout_names_the_ends_the_curve_draws() {
         let fresh = ViewConfig::default().pitch_gradient;
-        for pair in [
-            (fresh.lightness, fresh.lightness_ramp),
-            (64.0, 44.0),
-            (64.0, -45.0),
-            (20.0, 7.0),
-        ] {
+        for pair in
+            [(fresh.lightness, fresh.lightness_ramp), (64.0, 44.0), (64.0, -45.0), (20.0, 7.0)]
+        {
             let g = holding(Spread::Brightness, pair);
             let (shown, said) = readout_ends(Spread::Brightness, pair);
             // In PITCH order, which is what the readout claims to be in: the
@@ -3203,11 +3169,7 @@ mod tests {
     ///
     /// Through a real context for the reason [`drag_bar`] is: the reset is a
     /// branch on a `Response`, and nothing synthetic reaches it.
-    fn double_click_spread(
-        spread: Spread,
-        start: Gradient,
-        home: Option<Gradient>,
-    ) -> (f32, f32) {
+    fn double_click_spread(spread: Spread, start: Gradient, home: Option<Gradient>) -> (f32, f32) {
         let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let mut g = start;

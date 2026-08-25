@@ -4,9 +4,9 @@
 //! both of those are on the Colors page ([`super::super::color`]).
 
 use crate::config::BALLISTICS_MAX;
+use crate::panes::{edge_bar, section};
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
-use crate::panes::{edge_bar, section};
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -115,7 +115,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     RangeBar::new(
         &mut cfg.low_midi,
         &mut cfg.high_midi,
-        harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI..=harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
+        harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
+            ..=harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
         "Pitch range",
     )
     .min_span(crate::PITCH_RANGE_MIN_SPAN)
@@ -167,17 +168,19 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // noise, and no single row of buttons can name both.
     button_row(ui, |ui| {
         ui.label("Tapers");
-        for (tapers, label) in [
-            (SpectrumTapers::One, "1"),
-            (SpectrumTapers::Three, "3"),
-            (SpectrumTapers::Five, "5"),
-        ] {
+        for (tapers, label) in
+            [(SpectrumTapers::One, "1"), (SpectrumTapers::Three, "3"), (SpectrumTapers::Five, "5")]
+        {
             ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
                 SpectrumTapers::One => "one window: the sharpest picture, and the speckliest",
-                SpectrumTapers::Three => "three looks at the same audio: about half the \
-                     speckle, ~4.7 dB less room between a partial and the haze",
-                SpectrumTapers::Five => "five looks: steadier again, and coarser at the \
-                     bottom of the axis",
+                SpectrumTapers::Three => {
+                    "three looks at the same audio: about half the \
+                     speckle, ~4.7 dB less room between a partial and the haze"
+                }
+                SpectrumTapers::Five => {
+                    "five looks: steadier again, and coarser at the \
+                     bottom of the axis"
+                }
             });
         }
     });
@@ -258,12 +261,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              short spans get most of the drag. Or drag the roll along its time \
              axis — away from the now-line zooms in.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width")
-        .show(ui)
-        .on_hover_text(
-            "Ribbon width, in semitones of the pitch axis — a note is as wide \
+    ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width").show(ui).on_hover_text(
+        "Ribbon width, in semitones of the pitch axis — a note is as wide \
              as the interval it would cover, at any zoom.",
-        );
+    );
     edge_bar(
         ui,
         (&mut cfg.roll_outline, &mut cfg.roll_outline_fade),

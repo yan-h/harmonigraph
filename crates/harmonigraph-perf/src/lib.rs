@@ -396,14 +396,14 @@ impl Stage {
         const fn covered(s: Stage) {
             match s {
                 Frame | Tick | Egui | Shell | Ui | Render | Tess | Texture | BufUp | Ubuf
-                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit
-                | EguiGpu | Gpu => (),
+                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit | EguiGpu
+                | Gpu => (),
             }
         }
         covered(Gpu);
         [
-            Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll,
-            Write, Scene, Around, Acquire, Encode, Submit, EguiGpu, Gpu,
+            Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll, Write,
+            Scene, Around, Acquire, Encode, Submit, EguiGpu, Gpu,
         ]
         .len()
     };
@@ -936,11 +936,7 @@ mod tests {
     fn feed(perf: &mut PerfStats, now: &mut f64, frames: usize, cpu_ms: f32) {
         for _ in 0..frames {
             *now += 1.0 / 60.0;
-            perf.record(
-                FrameCosts { cpu_ms, ..Default::default() },
-                *now,
-                Workload::default(),
-            );
+            perf.record(FrameCosts { cpu_ms, ..Default::default() }, *now, Workload::default());
         }
     }
 
@@ -1004,19 +1000,12 @@ mod tests {
             heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
             now += 1.0 / 60.0;
             perf.record(
-                FrameCosts {
-                    spectrogram_fallbacks: (heavier.0, &heavier.1),
-                    ..Default::default()
-                },
+                FrameCosts { spectrogram_fallbacks: (heavier.0, &heavier.1), ..Default::default() },
                 now,
                 Workload::default(),
             );
         }
-        assert_eq!(
-            perf.spec_restart_slot,
-            Some(1),
-            "the dominant reason must follow the counts",
-        );
+        assert_eq!(perf.spec_restart_slot, Some(1), "the dominant reason must follow the counts",);
     }
 
     #[test]
@@ -1026,7 +1015,11 @@ mod tests {
         assert!((perf.fps() - 60.0).abs() < 1.0);
         for i in 1..=500 {
             let now = i as f64 / 30.0;
-            perf.record(FrameCosts { cpu_ms: 2.0, ..Default::default() }, now, Workload { animating: true, ..Default::default() });
+            perf.record(
+                FrameCosts { cpu_ms: 2.0, ..Default::default() },
+                now,
+                Workload { animating: true, ..Default::default() },
+            );
         }
         assert!((perf.fps() - 30.0).abs() < 0.5, "fps = {}", perf.fps());
     }
@@ -1074,15 +1067,16 @@ mod tests {
     /// reading, so what reaches the digits is where memory actually sits.
     #[test]
     fn memory_eases_toward_a_new_reading() {
-        let mut perf = PerfStats {
-            rss_bytes: 400 * 1024 * 1024,
-            last_mem_read: 0.0,
-            ..Default::default()
-        };
+        let mut perf =
+            PerfStats { rss_bytes: 400 * 1024 * 1024, last_mem_read: 0.0, ..Default::default() };
         // Force a read whose sample is whatever the platform reports; what is
         // under test is that the stored value MOVES but does not teleport.
         let before = perf.rss_bytes;
-        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, MEM_INTERVAL, Workload::default());
+        perf.record(
+            FrameCosts { cpu_ms: 1.0, ..Default::default() },
+            MEM_INTERVAL,
+            Workload::default(),
+        );
         let after = perf.rss_bytes as f64;
         let sample = super::rss_bytes() as f64;
         if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
@@ -1100,10 +1094,18 @@ mod tests {
         let first = perf.last_mem_read;
         assert_eq!(first, 10.0);
         // A read less than MEM_INTERVAL later must not refresh the timestamp.
-        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
+        perf.record(
+            FrameCosts { cpu_ms: 1.0, ..Default::default() },
+            10.0 + MEM_INTERVAL / 2.0,
+            Workload::default(),
+        );
         assert_eq!(perf.last_mem_read, first, "read again too soon");
         // Past the interval, it refreshes.
-        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, 10.0 + MEM_INTERVAL, Workload::default());
+        perf.record(
+            FrameCosts { cpu_ms: 1.0, ..Default::default() },
+            10.0 + MEM_INTERVAL,
+            Workload::default(),
+        );
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
     }
 
@@ -1128,11 +1130,8 @@ mod tests {
         let costs = [1.0f32, 3.0, 2.0, 8.0, 1.0, 1.0, 4.0, 2.0, 3.0, 5.0, 6.0];
         let last = costs.len() - 1;
         for (i, cpu_ms) in costs.iter().enumerate() {
-            let now = if i == last {
-                READOUT_INTERVAL
-            } else {
-                (i + 1) as f64 * READOUT_INTERVAL / 20.0
-            };
+            let now =
+                if i == last { READOUT_INTERVAL } else { (i + 1) as f64 * READOUT_INTERVAL / 20.0 };
             perf.record(
                 FrameCosts { cpu_ms: *cpu_ms, ..Default::default() },
                 now,
@@ -1250,14 +1249,22 @@ mod tests {
         // Frames well inside the interval: they accumulate, the printed value
         // does not budge.
         for i in 1..=10 {
-            perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
+            perf.record(
+                FrameCosts { cpu_ms: 20.0, ..Default::default() },
+                i as f64 * READOUT_INTERVAL / 20.0,
+                Workload::default(),
+            );
         }
         assert_eq!(perf.window(Stage::Ui).n, 10, "the frames should have accumulated");
         assert_eq!(mean(&perf, Stage::Ui), shown, "the printed value must hold");
 
         // Past the interval it catches up — to the mean of that window, which
         // holds nothing but the 20s.
-        perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, READOUT_INTERVAL, Workload::default());
+        perf.record(
+            FrameCosts { cpu_ms: 20.0, ..Default::default() },
+            READOUT_INTERVAL,
+            Workload::default(),
+        );
         assert_eq!(mean(&perf, Stage::Ui), 20.0, "and then it latches");
     }
 
@@ -1277,7 +1284,11 @@ mod tests {
     fn fps_is_read_off_the_held_frame_time() {
         let mut perf = PerfStats::default();
         for i in 1..=200 {
-            perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, i as f64 / 120.0, Workload::default());
+            perf.record(
+                FrameCosts { cpu_ms: 1.0, ..Default::default() },
+                i as f64 / 120.0,
+                Workload::default(),
+            );
         }
         let from_row = 1000.0 / mean(&perf, Stage::Frame);
         assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());

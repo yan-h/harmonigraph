@@ -434,13 +434,9 @@ pub(super) fn note_instances(
     // What that costs is sorting the notes that are inside the WINDOW but off
     // the octave zoom — a comparison each. What it buys is a cull that is
     // exact instead of one that is wrong by however steep the picture is.
-    let mut notes: Vec<&RollNote> =
-        roll.notes().filter(|note| note.stop(now) >= edge).collect();
+    let mut notes: Vec<&RollNote> = roll.notes().filter(|note| note.stop(now) >= edge).collect();
     notes.sort_unstable_by(|a, b| {
-        a.start
-            .total_cmp(&b.start)
-            .then(a.channel.cmp(&b.channel))
-            .then(a.note.cmp(&b.note))
+        a.start.total_cmp(&b.start).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
     });
 
     // One segment per note is the common case (a note is bent rarely), so the
@@ -471,8 +467,7 @@ pub(super) fn note_instances(
         // A note with no duration at all — pressed this frame — has nothing to
         // scale up, so the floor reaches its one segment directly instead.
         let zero_span = span_px <= 1e-6;
-        let stretch =
-            if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
+        let stretch = if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
         // What the note covers either side of its own midpoint once drawn, in
         // points: the floor where it is too brief to have a length of its own,
         // its own half span where it is long enough to draw honestly.
@@ -586,8 +581,7 @@ pub(super) fn note_instances(
             // Then `shift`, which takes back however much of that centering
             // would have landed past `now` — nothing, for a note far enough
             // from the line to have the room. See it above.
-            let (d0, d1) =
-                (mid + (d0 - mid) * stretch + shift, mid + (d1 - mid) * stretch + shift);
+            let (d0, d1) = (mid + (d0 - mid) * stretch + shift, mid + (d1 - mid) * stretch + shift);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             // Whether this segment carries a lead at all — which is not the
@@ -737,11 +731,8 @@ pub(super) fn note_instances(
             // overstated the denominator on purpose; overstating the numerator
             // to match would put ink where no note was, and pitch is the axis
             // this pane exists to be read precisely on.
-            let slope = if depth_px.abs() > 1e-6 {
-                (a1 - a0) * axes.pitch_len() / depth_px
-            } else {
-                0.0
-            };
+            let slope =
+                if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
             // Off the octave zoom entirely, tested against the ink this
             // segment actually reaches rather than the note's endpoints — the
             // cull the filter above deliberately leaves undone.
@@ -835,7 +826,6 @@ pub(crate) fn note_color(state: &SharedState, pitch: f32, alpha: f32) -> Color32
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
     scene_color(pitch_lut_color(pitch, darkest, brightest, state.view.pitch_gradient), alpha)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1271,8 +1261,7 @@ mod tests {
             // the roll scrolled between the two frames — a jump is the snap
             // this test exists for, whichever direction it is in.
             let scrolled = 0.05
-                / super::super::axes::TimeAxis::new(&state, split, now)
-                    .seconds_per_point(&axes);
+                / super::super::axes::TimeAxis::new(&state, split, now).seconds_per_point(&axes);
             assert!(
                 leading >= previous - 1e-3 && leading - previous <= scrolled as f32 + 1e-3,
                 "{now}s: the note's near end jumped from {previous} pt to {leading}",
@@ -1398,11 +1387,7 @@ mod tests {
         // To float error rather than to the bit: the floor is reached by
         // scaling the note's own span up to it, not by a `max` against it.
         assert!((at(1.0) - 0.5 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3, "1x: two points, {}", at(1.0));
-        assert!(
-            (at(2.0) - 0.25 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3,
-            "2x: one point, {}",
-            at(2.0),
-        );
+        assert!((at(2.0) - 0.25 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3, "2x: one point, {}", at(2.0),);
         assert!(at(1.0) > at(2.0), "the floor did not follow the density at all");
     }
 
@@ -2141,11 +2126,7 @@ mod tests {
             px(0.05),
             px(0.04),
         );
-        assert_eq!(
-            lead(&cfg, &axes, true, 0.45),
-            (0.0, 0.0),
-            "the whole-song layout drew a lead",
-        );
+        assert_eq!(lead(&cfg, &axes, true, 0.45), (0.0, 0.0), "the whole-song layout drew a lead",);
         assert_eq!(
             lead(&cfg, &axes, false, 0.0),
             (0.0, 0.0),
@@ -2228,9 +2209,7 @@ mod tests {
             kind: NoteEventKind::Tuning { semitones: 1.0 },
         });
         let bent = instances(&state, 2.0);
-        bent.iter()
-            .find(|n| n.shear != 0.0)
-            .expect("the bent segment should be sheared");
+        bent.iter().find(|n| n.shear != 0.0).expect("the bent segment should be sheared");
     }
 
     /// Notes are placed sub-pixel, and that is load-bearing. egui snaps rects

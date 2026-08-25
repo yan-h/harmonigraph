@@ -97,9 +97,8 @@ pub(super) fn gradient_strip(
     let rect = rect.round_to_pixels(painter.ctx().pixels_per_point());
     let cap = (rect.height() * 0.5).min(rect.width() * 0.5);
     let (left_r, right_r) = (radii.0.clamp(0.0, cap), radii.1.clamp(0.0, cap));
-    let mut xs: Vec<f32> = (0..=segments)
-        .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
-        .collect();
+    let mut xs: Vec<f32> =
+        (0..=segments).map(|i| rect.left() + rect.width() * i as f32 / segments as f32).collect();
     // A squared end has no arc to sample, and asking for one puts a whole run
     // of samples on the end itself for the loop below to throw away again.
     //
@@ -135,8 +134,8 @@ pub(super) fn gradient_strip(
         // The nearer end's own profile: each is 0 beyond its own radius, so a
         // band rounded the same both ways gets the one arc it would from a
         // single radius, and a squared end simply never pinches.
-        let inset = corner_inset(x - rect.left(), left_r)
-            .max(corner_inset(rect.right() - x, right_r));
+        let inset =
+            corner_inset(x - rect.left(), left_r).max(corner_inset(rect.right() - x, right_r));
         let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
         columns.push((x, inset, color(p)));
     }
@@ -307,10 +306,8 @@ pub(super) fn fades_out_at_its_edges(which: &str, mesh: &egui::Mesh) {
         // else in the mesh can be mistaken for it.
         let last = (mesh.vertices.len() as u32 / 4 - 1) * 4;
         for (side, base) in [("near", 0), ("far", last)] {
-            let closed = mesh
-                .indices
-                .chunks(3)
-                .any(|tri| tri.iter().all(|i| (base..base + 4).contains(i)));
+            let closed =
+                mesh.indices.chunks(3).any(|tri| tri.iter().all(|i| (base..base + 4).contains(i)));
             assert!(
                 closed,
                 "{which}: the {side} end has its ring of vertices and no triangle across it",
@@ -318,8 +315,7 @@ pub(super) fn fades_out_at_its_edges(which: &str, mesh: &egui::Mesh) {
         }
         for vertex in &mesh.vertices {
             assert!(
-                vertex.color == Color32::TRANSPARENT
-                    || band.expand(1e-3).contains(vertex.pos),
+                vertex.color == Color32::TRANSPARENT || band.expand(1e-3).contains(vertex.pos),
                 "{which}: color at {:?} stands outside the band {band:?}",
                 vertex.pos,
             );
@@ -333,10 +329,7 @@ pub(super) fn fades_out_at_its_edges(which: &str, mesh: &egui::Mesh) {
                 panic!("{which}: {} vertices is not whole columns", mesh.vertices.len());
             };
             assert_eq!(out_top.color, Color32::TRANSPARENT, "{which}: an outer vertex is lit");
-            assert_eq!(
-                out_bottom.color, Color32::TRANSPARENT,
-                "{which}: an outer vertex is lit",
-            );
+            assert_eq!(out_bottom.color, Color32::TRANSPARENT, "{which}: an outer vertex is lit",);
             assert_eq!(in_top.color, in_bottom.color, "{which}: a column is two colors");
             assert!(in_top.color.a() > 0, "{which}: a column carries no color at all");
             // Well past the corners: a column whose NEIGHBOURS are flat too,
@@ -347,10 +340,9 @@ pub(super) fn fades_out_at_its_edges(which: &str, mesh: &egui::Mesh) {
             // make here.
             if i > 0 && i + 1 < outline.len() && flat(i - 1) && flat(i) && flat(i + 1) {
                 straight += 1;
-                for (end, outer, inner, away) in [
-                    ("top", out_top, in_top, -feather),
-                    ("bottom", out_bottom, in_bottom, feather),
-                ] {
+                for (end, outer, inner, away) in
+                    [("top", out_top, in_top, -feather), ("bottom", out_bottom, in_bottom, feather)]
+                {
                     let across = outer.pos - inner.pos;
                     assert!(
                         across.x.abs() < 1e-3 && (across.y - away).abs() < 1e-3,

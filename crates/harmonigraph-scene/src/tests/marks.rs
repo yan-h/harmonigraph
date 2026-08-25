@@ -2,10 +2,10 @@
 //! take, how they ease in, and what happens when the note under one is
 //! released.
 
-use crate::*;
-use crate::derive::held_extremes;
-use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, Tuning};
 use super::harness::*;
+use crate::derive::held_extremes;
+use crate::*;
+use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, Tuning};
 
 /// Play `notes` on channel 0 and derive a scene marking both extremes.
 fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
@@ -144,11 +144,8 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
     // core can't say which is which -- but they sound in different
     // octave slots, which is what keeps them tellable apart.
     let scene = marked_scene(&[48, 72], true, true);
-    let marked: Vec<_> = scene
-        .nodes
-        .iter()
-        .filter(|n| n.melody_slots != 0 || n.bass_slots != 0)
-        .collect();
+    let marked: Vec<_> =
+        scene.nodes.iter().filter(|n| n.melody_slots != 0 || n.bass_slots != 0).collect();
     assert!(!marked.is_empty(), "C should be marked");
     for n in &marked {
         // Slot = MIDI octave + 1, so C5 (72) is one above middle C's slot
@@ -788,7 +785,6 @@ fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
     assert_ne!(node.color, node.melody_color, "the fold is what puts them on different pitches");
 }
 
-
 /// The marks' shimmer folds off with the marks themselves.
 ///
 /// A depth of 0 is the marks' documented off position, where `mark_extension`
@@ -819,14 +815,7 @@ fn the_mark_pulse_folds_off_when_the_marks_are_off() {
             pulse_marks,
             ..ViewConfig::default()
         };
-        scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &view,
-            &plain_frame(),
-            0.0,
-        )
-        .pulse_marks
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0).pulse_marks
     };
 
     for mode in [Pulse::Bands, Pulse::Checker, Pulse::Hex] {
@@ -842,11 +831,7 @@ fn the_mark_pulse_folds_off_when_the_marks_are_off() {
             "{mode:?} survived both marks coming off, where there is no mark for it \
              to animate and the pane has grayed its row",
         );
-        assert_eq!(
-            pulse(0.09, true, mode),
-            mode,
-            "{mode:?} must survive a mark it can animate",
-        );
+        assert_eq!(pulse(0.09, true, mode), mode, "{mode:?} must survive a mark it can animate",);
     }
 }
 
@@ -868,31 +853,15 @@ fn the_mark_pulse_folds_off_when_the_marks_are_off() {
 #[test]
 fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
     let sweep = |shimmer_speed: f32, shimmer_width: f32, shimmer_intensity: f32| {
-        let view = ViewConfig {
-            shimmer_speed,
-            shimmer_width,
-            shimmer_intensity,
-            ..ViewConfig::default()
-        };
-        let scene = scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &view,
-            &plain_frame(),
-            0.0,
-        );
+        let view =
+            ViewConfig { shimmer_speed, shimmer_width, shimmer_intensity, ..ViewConfig::default() };
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
         (scene.shimmer_speed, scene.shimmer_width, scene.shimmer_intensity)
     };
     let softness = |shimmer_softness: f32| {
         let view = ViewConfig { shimmer_softness, ..ViewConfig::default() };
-        scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &view,
-            &plain_frame(),
-            0.0,
-        )
-        .shimmer_softness
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
+            .shimmer_softness
     };
 
     assert_eq!(sweep(3.0, 8.0, 0.5), (3.0, 8.0, 0.5), "a settable set passes through untouched");
@@ -923,4 +892,3 @@ fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
     assert_eq!(softness(4.0), 1.0, "and both ends stop at the bar: this one is an exponent");
     assert_eq!(softness(-1.0), 0.0, "including the low end, which would flatten the shape");
 }
-

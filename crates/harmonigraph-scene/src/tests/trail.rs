@@ -3,17 +3,14 @@
 //! LABEL layer and nothing else — that is what keeps it from reading as a
 //! note.
 
+use super::harness::*;
 use crate::*;
 use harmonigraph_core::{Envelope, NoteEvent, NoteEventKind, NoteTracker, Tuning};
-use super::harness::*;
 
 /// Play `note` from `on` to `off` and let its fade finish, which is what
 /// moves it out of the live voices and into history.
 fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
-    for (time, kind) in [
-        (on, NoteEventKind::On { velocity: 1.0 }),
-        (off, NoteEventKind::Off),
-    ] {
+    for (time, kind) in [(on, NoteEventKind::On { velocity: 1.0 }), (off, NoteEventKind::Off)] {
         tracker.handle_event(NoteEvent { time, channel: 0, note, kind });
     }
     tracker.prune(off + 2.0, &Envelope::default());
@@ -60,11 +57,7 @@ fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
         assert_eq!(origin_node(&scene).trail, 1.0, "at t={now}");
     }
     let scene = scene_of(&tracker, &tuning, &view, &frame, 5.0);
-    let elsewhere = scene
-        .nodes
-        .iter()
-        .find(|n| n.lattice_pos == LatticePos::new(0, 1, 0))
-        .unwrap();
+    let elsewhere = scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(0, 1, 0)).unwrap();
     assert_eq!(elsewhere.trail, 0.0);
 }
 
@@ -160,8 +153,7 @@ fn a_remembered_position_loses_its_marker_to_its_own_name() {
         &plain_frame(),
         10.0,
     );
-    let remembered: Vec<&NodeInstance> =
-        scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
+    let remembered: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
     assert!(!remembered.is_empty(), "nothing was remembered at all");
     for node in &remembered {
         assert!(
@@ -171,11 +163,8 @@ fn a_remembered_position_loses_its_marker_to_its_own_name() {
         );
     }
     // Only the remembered ones: a memory takes its own marker and no others.
-    let unvisited = scene
-        .nodes
-        .iter()
-        .filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0)
-        .count();
+    let unvisited =
+        scene.nodes.iter().filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0).count();
     assert_eq!(scene.pluses.len(), unvisited, "a memory reached past its own position");
 }
 
@@ -224,14 +213,8 @@ fn clearing_the_history_wipes_every_mark() {
     let view = trail_view(true);
     let frame = plain_frame();
     let tuning = Tuning::default();
-    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0)
-        .nodes
-        .iter()
-        .any(|n| n.trail > 0.0));
+    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0).nodes.iter().any(|n| n.trail > 0.0));
 
     tracker.clear_history();
-    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0)
-        .nodes
-        .iter()
-        .all(|n| n.trail == 0.0));
+    assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0).nodes.iter().all(|n| n.trail == 0.0));
 }

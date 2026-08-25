@@ -47,8 +47,8 @@ pub use octaves::{
 };
 pub use spectral::{
     bucket_pitch, ring_gradient, RingFade, RingGate, SpectralLevels, SpectralPaint,
-    SpectralReading, SPECTRAL_AXIS, SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SpectralReading, SPECTRAL_AXIS, SPECTRAL_BALLISTICS_MAX, SPECTRAL_BUCKETS,
+    SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, NoteNames, Pulse, SevensLabel};
@@ -60,11 +60,7 @@ use harmonigraph_core::{Envelope, LatticePos};
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
 fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
-    Vec3::new(
-        pos.fives as f32 * spacing,
-        pos.threes as f32 * spacing,
-        pos.sevens as f32 * spacing,
-    )
+    Vec3::new(pos.fives as f32 * spacing, pos.threes as f32 * spacing, pos.sevens as f32 * spacing)
 }
 
 /// Node radius as a fraction of the lattice spacing.
@@ -1113,7 +1109,11 @@ impl Scene {
         let slide = (self.now * self.shimmer_speed as f64).rem_euclid(cycle);
         // A clock or a speed that is not finite reaches here as a NaN, and a
         // NaN slide is a lattice of NaN colors rather than a wrong sheet.
-        if slide.is_finite() { slide as f32 } else { 0.0 }
+        if slide.is_finite() {
+            slide as f32
+        } else {
+            0.0
+        }
     }
 
     /// Decide how much of the audio ring each node wears — [`SpectralPaint::gate`]

@@ -441,10 +441,7 @@ mod tests {
         // number every retention decision above it is made against.
         let held = history.back().unwrap().time - history.front().unwrap().time;
         let want = SpectrumHistory::reach(INTERVAL);
-        assert!(
-            (held - want).abs() < want * 0.05,
-            "reaches back {held} s, advertised {want} s",
-        );
+        assert!((held - want).abs() < want * 0.05, "reaches back {held} s, advertised {want} s",);
     }
 
     /// Merging is MAX, so a brief loud moment survives into the coarse tiers

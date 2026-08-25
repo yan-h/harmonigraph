@@ -1,8 +1,8 @@
 //! The chrome scale — what it resizes and what it deliberately does not —
 //! and that pointing at a control does not move the row it sits in.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// The content width [`settings_pane_at_scale`] gives a pane — the column, not
 /// the tab body, which is a margin wider on each side.
@@ -52,8 +52,7 @@ fn the_ui_scale_shrinks_the_panel_chrome() {
         SettingsPane::Page(DisplayPage::System),
         SettingsPane::Page(DisplayPage::Lattice),
     ] {
-        let (full, small) =
-            (settings_pane_at_scale(pane, 1.0), settings_pane_at_scale(pane, 0.7));
+        let (full, small) = (settings_pane_at_scale(pane, 1.0), settings_pane_at_scale(pane, 0.7));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
         assert!(tall > 0.0, "{pane:?} drew no text to measure");
@@ -223,30 +222,31 @@ fn control_row(
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| {
-            row = ui.horizontal(|ui| {
-                for i in 0..4 {
-                    let label = format!("Item {i}");
-                    let response = match kind {
-                        Control::Button => ui.button(label),
-                        Control::Selectable => ui.selectable_value(&mut selected, i, label),
-                        Control::Checkbox => ui.checkbox(&mut flag, label),
-                        // The Tuning pane's preset-name field, at the width it
-                        // asks for there.
-                        Control::Field => {
-                            let field = crate::widgets::row_field(ui, &mut name)
-                                .desired_width(110.0 * scale);
-                            ui.add(field)
-                        }
-                        Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
-                        Control::Record => {
-                            crate::widgets::record_button(ui, &mut flag, false, &label)
-                        }
-                    };
-                    rects.borrow_mut().push(response.rect);
-                }
-            })
-            .response
-            .rect;
+            row = ui
+                .horizontal(|ui| {
+                    for i in 0..4 {
+                        let label = format!("Item {i}");
+                        let response = match kind {
+                            Control::Button => ui.button(label),
+                            Control::Selectable => ui.selectable_value(&mut selected, i, label),
+                            Control::Checkbox => ui.checkbox(&mut flag, label),
+                            // The Tuning pane's preset-name field, at the width it
+                            // asks for there.
+                            Control::Field => {
+                                let field = crate::widgets::row_field(ui, &mut name)
+                                    .desired_width(110.0 * scale);
+                                ui.add(field)
+                            }
+                            Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
+                            Control::Record => {
+                                crate::widgets::record_button(ui, &mut flag, false, &label)
+                            }
+                        };
+                        rects.borrow_mut().push(response.rect);
+                    }
+                })
+                .response
+                .rect;
         });
     }
     (row, rects.into_inner())
@@ -279,10 +279,7 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
             let target = resting.1[0].center();
             for (state, pressed) in [("hovered", false), ("pressed", true)] {
                 let pointed = control_row(kind, scale, Some(target), pressed);
-                assert_eq!(
-                    resting, pointed,
-                    "a {state} {kind:?} at scale {scale} moved the row",
-                );
+                assert_eq!(resting, pointed, "a {state} {kind:?} at scale {scale} moved the row",);
             }
         }
     }

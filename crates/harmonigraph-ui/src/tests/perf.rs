@@ -1,8 +1,8 @@
 //! The performance overlay: where it opens, that it is dragged from there,
 //! that nothing else moves it, and that it ships off.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// The HUD's backing plate, which is its actual extent — the rows inside it
 /// are left-aligned, so no single string reveals where the box sits.

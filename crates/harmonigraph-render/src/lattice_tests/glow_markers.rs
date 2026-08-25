@@ -1,7 +1,7 @@
 //! The marker field's own light, and the shadow a cross casts in it.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// A resting marker lights the position it stands at: what `marker_light` lays
 /// down, on a lattice with no node sounding anywhere in it.
@@ -43,23 +43,17 @@ fn a_resting_marker_lights_its_own_position() {
     // The ground the crosses do not reach: every pixel the marker draw leaves
     // exactly as the empty frame had it. The pool is what arrives THERE, so
     // reading it here is reading the light and not the ink over it.
-    let ground: Vec<usize> = (0..bare.len())
-        .step_by(4)
-        .filter(|&i| off[i..i + 4] == bare[i..i + 4])
-        .collect();
-    let lit = ground
-        .iter()
-        .filter(|&&i| brightness(&on[i..i + 3]) > brightness(&off[i..i + 3]))
-        .count();
+    let ground: Vec<usize> =
+        (0..bare.len()).step_by(4).filter(|&i| off[i..i + 4] == bare[i..i + 4]).collect();
+    let lit =
+        ground.iter().filter(|&&i| brightness(&on[i..i + 3]) > brightness(&off[i..i + 3])).count();
     assert!(
         lit > 200,
         "the markers' light reached {lit} of the {} pixels their ink does not",
         ground.len(),
     );
-    let dimmed = ground
-        .iter()
-        .filter(|&&i| brightness(&on[i..i + 3]) < brightness(&off[i..i + 3]))
-        .count();
+    let dimmed =
+        ground.iter().filter(|&&i| brightness(&on[i..i + 3]) < brightness(&off[i..i + 3])).count();
     assert_eq!(dimmed, 0, "a pool took light off the ground it landed on");
 }
 
@@ -217,18 +211,15 @@ fn a_markers_pool_does_not_take_the_reach() {
     let far = shooter.shot(&at(harmonigraph_scene::GLOW_REACH_MAX));
     // The fixture has to be lighting something, or two dark frames agree.
     assert!(
-        total_light(&near) > total_light(&shooter.shot(&{
-            let mut s = at(0.4);
-            s.marker_light = 0.0;
-            s
-        })),
+        total_light(&near)
+            > total_light(&shooter.shot(&{
+                let mut s = at(0.4);
+                s.marker_light = 0.0;
+                s
+            })),
         "the fixture must light its markers",
     );
-    assert_eq!(
-        differing_pixels(&near, &far),
-        0,
-        "twenty times the Reach moved a marker's pool",
-    );
+    assert_eq!(differing_pixels(&near, &far), 0, "twenty times the Reach moved a marker's pool",);
 }
 
 /// Which pixels of `ground` the markers DARKEN, against the same frame with no
@@ -245,10 +236,8 @@ fn shadowed_ground(shooter: &mut Shooter, gap: f32, taper_start: f32) -> (Vec<us
         s
     });
     let flat = shooter.shot(&shadowed_markers(0.0, gap, taper_start));
-    let ground: Vec<usize> = (0..flat.len())
-        .step_by(4)
-        .filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4])
-        .collect();
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
     let deep_bare = shooter.shot(&{
         let mut s = shadowed_markers(1.0, gap, taper_start);
         s.pluses.clear();
@@ -348,10 +337,8 @@ fn a_crosss_shadow_is_worth_its_ink() {
     // picture around it, not the cross itself.
     let flat_bare = bare(&mut shooter, 0.0);
     let flat = shooter.shot(&at(1.0, 0.0));
-    let ground: Vec<usize> = (0..flat.len())
-        .step_by(4)
-        .filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4])
-        .collect();
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
     assert!(
         ground.len() > 1000,
         "the fixture must leave halo for a bite to land in, not {}",
@@ -362,9 +349,7 @@ fn a_crosss_shadow_is_worth_its_ink() {
     let taken = |frame: &[u8]| -> i64 {
         ground
             .iter()
-            .map(|&i| {
-                (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0)
-            })
+            .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
             .sum()
     };
     let whole = taken(&shooter.shot(&at(1.0, 1.0)));
@@ -453,10 +438,7 @@ fn a_markers_shadow_is_cast_by_the_arm_that_has_ink() {
     };
     let (_, square) = shadowed_ground(&mut shooter, 0.5, 1.0);
     let (_, tapered) = shadowed_ground(&mut shooter, 0.5, 0.25);
-    assert!(
-        tapered > 0,
-        "an arm tapering from a quarter of its length cast no shadow at all",
-    );
+    assert!(tapered > 0, "an arm tapering from a quarter of its length cast no shadow at all",);
     assert!(
         square > tapered,
         "a square-ended marker shadowed {square} against the tapered one's {tapered}",
@@ -620,8 +602,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     // through.
     let full: [u8; 3] =
         std::array::from_fn(|c| drawn.iter().map(|&i| off[i + c]).max().unwrap_or(0));
-    let marker: Vec<usize> =
-        drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
+    let marker: Vec<usize> = drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
     assert!(
         marker.len() > 300,
         "the marker covers {} pixels the node had not already covered",
@@ -640,8 +621,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
          light it stands in",
         marker.len(),
     );
-    let dimmed =
-        marker.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    let dimmed = marker.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
     assert_eq!(
         dimmed,
         0,
@@ -704,12 +684,7 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.glow.level = 1.0;
         scene.pluses = if marker {
-            vec![one_marker(
-                glam::Vec3::ZERO,
-                0.35,
-                glam::Vec4::new(0.6, 0.6, 0.6, 1.0),
-                1.0,
-            )]
+            vec![one_marker(glam::Vec3::ZERO, 0.35, glam::Vec4::new(0.6, 0.6, 0.6, 1.0), 1.0)]
         } else {
             Vec::new()
         };
@@ -719,17 +694,10 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
     let mut inked = |gutter: f32| -> Vec<usize> {
         let with = gpu.shot(&build(gutter, true));
         let without = gpu.shot(&build(gutter, false));
-        (0..with.len())
-            .step_by(4)
-            .filter(|&i| with[i..i + 4] != without[i..i + 4])
-            .collect()
+        (0..with.len()).step_by(4).filter(|&i| with[i..i + 4] != without[i..i + 4]).collect()
     };
     let bare = inked(0.0);
-    assert!(
-        bare.len() > 50,
-        "the fixture draws no cross to lose: {} pixels",
-        bare.len(),
-    );
+    assert!(bare.len() > 50, "the fixture draws no cross to lose: {} pixels", bare.len(),);
     for gutter in [0.2f32, 0.5, 1.0] {
         let cut = inked(gutter);
         assert!(

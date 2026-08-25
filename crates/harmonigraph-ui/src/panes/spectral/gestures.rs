@@ -14,9 +14,9 @@
 //! spectrum's own size. [`spectrum_split`] is where the two meet, and it is the
 //! one answer every layer of the pane takes its boundary from.
 
+use super::axes::{spectrum_share, widest_span, Axes};
 use crate::panes::zoom_gesture;
 use crate::SharedState;
-use super::axes::{spectrum_share, widest_span, Axes};
 use egui::Sense;
 
 /// Half-width of the divider's grab band, in points. Wider than the hairline
@@ -212,8 +212,7 @@ pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
         return;
     }
     let held = match state.spectrum_hold.0 {
-        Some(held)
-            if held.dial == cfg.roll_fraction && held.vertical == vertical => held,
+        Some(held) if held.dial == cfg.roll_fraction && held.vertical == vertical => held,
         // Dialled since this last looked — so THIS is the picture to keep, at
         // the size and along the axis it was set on. A dial is already the
         // answer for the pane it was made on, so nothing is derived from it
@@ -353,10 +352,8 @@ pub(super) fn drag_zoom(
     if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
         let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
         if (factor - 1.0).abs() > 1e-4 {
-            let anchor = ui
-                .ctx()
-                .pointer_hover_pos()
-                .map_or(0.5, |p| axes.pitch_at(p).clamp(0.0, 1.0));
+            let anchor =
+                ui.ctx().pointer_hover_pos().map_or(0.5, |p| axes.pitch_at(p).clamp(0.0, 1.0));
             let held = low + anchor * span;
             span = (span / factor).clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
             low = held - anchor * span;

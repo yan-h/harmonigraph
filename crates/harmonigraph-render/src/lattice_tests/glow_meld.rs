@@ -1,7 +1,7 @@
 //! How two nodes' overlapping light adds up.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// Two nodes' halos MELD where they overlap: brighter than either alone, and
 /// bounded — screen (`src + dst * (1 - src)`), not a sum.
@@ -55,9 +55,7 @@ fn two_nodes_light_melds_rather_than_summing() {
     // Found rather than named, so the probe follows the camera instead of a
     // pixel coordinate that a change of fixture would quietly move off the
     // overlap.
-    let at = |shot: &[u8], i: usize| -> [u8; 3] {
-        std::array::from_fn(|c| shot[i * 4 + c])
-    };
+    let at = |shot: &[u8], i: usize| -> [u8; 3] { std::array::from_fn(|c| shot[i * 4 + c]) };
     let probe = (0..(SIZE[0] * SIZE[1]) as usize)
         .max_by_key(|&i| {
             let (l, r) = (at(&left, i), at(&right, i));
@@ -79,10 +77,7 @@ fn two_nodes_light_melds_rather_than_summing() {
         // Screen is strictly under the sum wherever both sides carry light;
         // the slack is 8-bit rounding on three composited values.
         if l > 25 && r > 25 {
-            assert!(
-                b < l + r - 1,
-                "channel {c} summed rather than melded: {b} against {l} + {r}",
-            );
+            assert!(b < l + r - 1, "channel {c} summed rather than melded: {b} against {l} + {r}",);
         }
     }
 }
@@ -202,11 +197,7 @@ fn the_meld_leaves_a_node_lighting_a_pixel_alone_untouched() {
     };
     let melded = shooter.shot(&at(1.0));
     let brightest = shooter.shot(&at(0.0));
-    let differ = melded
-        .chunks(4)
-        .zip(brightest.chunks(4))
-        .filter(|(a, b)| a != b)
-        .count();
+    let differ = melded.chunks(4).zip(brightest.chunks(4)).filter(|(a, b)| a != b).count();
     assert_eq!(differ, 0, "the Meld moved {differ} pixels of a lone node's own light");
     // Non-vacuous: there has to BE light for the equality to be about anything,
     // the fixture's node being the only thing lighting the frame.
@@ -278,10 +269,7 @@ fn the_meld_reaches_the_light_a_node_paints_over_its_own_body() {
         .max_by_key(|&i| brightness(&at(&lone, i)))
         .expect("a non-empty frame");
     let (l, m, b) = (at(&lone, probe), at(&melded, probe), at(&brightest, probe));
-    assert!(
-        brightness(&l) > 24,
-        "the probe {l:?} is not on the node the frame was searched for",
-    );
+    assert!(brightness(&l) > 24, "the probe {l:?} is not on the node the frame was searched for",);
     // The neighbour has to be lighting this pixel for the mix to have anything
     // to do here: without that, both blends see one contribution and agree.
     assert!(

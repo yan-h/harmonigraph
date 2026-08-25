@@ -8,12 +8,12 @@
 //! tab called Tuning is not where anyone looks for a camera. Everything else in
 //! the settings dock is about how what is there gets drawn.
 
+use super::learn_pulse;
 use super::param_bar;
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, SharedState};
-use super::learn_pulse;
 use harmonigraph_core::tuning;
 
 /// The param bar for the axis a comma derives — the one whose tuning is not
@@ -218,23 +218,27 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                 // the ratio: it is the thing a reader came to this section for,
                 // and the switch beside it says only which temperament drops it.
                 let auto_on = state.view.temper_auto(comma);
-                crate::widgets::toggle_switch(ui, state.view.temper_mut(comma), comma.temperament())
-                    .on_hover_text(format!(
-                        "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
+                crate::widgets::toggle_switch(
+                    ui,
+                    state.view.temper_mut(comma),
+                    comma.temperament(),
+                )
+                .on_hover_text(format!(
+                    "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
                          respelled to match{}",
-                        comma.ratio(),
-                        comma.comma_name(),
-                        comma.size_cents(),
-                        comma.temperament(),
-                        comma.derived_axis_name(),
-                        comma.derived_from(),
-                        if auto_on {
-                            ". Auto engages it too, and switching it off here holds until the \
+                    comma.ratio(),
+                    comma.comma_name(),
+                    comma.size_cents(),
+                    comma.temperament(),
+                    comma.derived_axis_name(),
+                    comma.derived_from(),
+                    if auto_on {
+                        ". Auto engages it too, and switching it off here holds until the \
                              tuning changes"
-                        } else {
-                            ""
-                        },
-                    ));
+                    } else {
+                        ""
+                    },
+                ));
                 // Auto-detect. Switching it ON re-opens the question on the tuning
                 // already loaded — without clearing the verdict it would engage
                 // nothing until the tuning next moved, since `begin_frame` records

@@ -30,12 +30,13 @@ fn main() -> eframe::Result {
     let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
         let base = setup.device_descriptor.clone();
-        setup.device_descriptor = std::sync::Arc::new(move |adapter: &harmonigraph_render::wgpu::Adapter| {
-            use harmonigraph_render::wgpu::Features;
-            let mut descriptor = base(adapter);
-            descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
-            descriptor
-        });
+        setup.device_descriptor =
+            std::sync::Arc::new(move |adapter: &harmonigraph_render::wgpu::Adapter| {
+                use harmonigraph_render::wgpu::Features;
+                let mut descriptor = base(adapter);
+                descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
+                descriptor
+            });
     }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -49,10 +50,8 @@ fn main() -> eframe::Result {
         "Harmonigraph — dev harness",
         options,
         Box::new(|cc| {
-            let render_state = cc
-                .wgpu_render_state
-                .as_ref()
-                .expect("eframe was built with the wgpu backend");
+            let render_state =
+                cc.wgpu_render_state.as_ref().expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
             // Everything a shell owes a context it has just built: theme, the
             // release of the previous context's textures, the fold floor, and
@@ -152,7 +151,9 @@ impl Recorder {
         let kind = match event.kind {
             NoteEventKind::On { velocity } => harmonigraph_take::NoteKind::On { velocity },
             NoteEventKind::Off => harmonigraph_take::NoteKind::Off,
-            NoteEventKind::Tuning { semitones } => harmonigraph_take::NoteKind::Tuning { semitones },
+            NoteEventKind::Tuning { semitones } => {
+                harmonigraph_take::NoteKind::Tuning { semitones }
+            }
             NoteEventKind::AllOff => harmonigraph_take::NoteKind::AllOff,
         };
         let _ = self.writer.note(harmonigraph_take::NoteRecord {
@@ -235,11 +236,7 @@ impl SelfShot {
 
 fn enumerate_ports() -> Result<Vec<String>, midir::InitError> {
     let input = midir::MidiInput::new("harmonigraph")?;
-    Ok(input
-        .ports()
-        .iter()
-        .filter_map(|p| input.port_name(p).ok())
-        .collect())
+    Ok(input.ports().iter().filter_map(|p| input.port_name(p).ok()).collect())
 }
 
 impl App {
@@ -250,10 +247,8 @@ impl App {
             self.source = MidiSource::Mock;
             return;
         };
-        let Some(port) = input
-            .ports()
-            .into_iter()
-            .find(|p| input.port_name(p).as_deref() == Ok(name))
+        let Some(port) =
+            input.ports().into_iter().find(|p| input.port_name(p).as_deref() == Ok(name))
         else {
             self.state.log(format!("MIDI port not found: {name}"));
             self.source = MidiSource::Mock;
@@ -358,8 +353,7 @@ impl MidiDecoder {
             0xE0 => {
                 // 14-bit bend, center 8192.
                 let value = u16::from(d1) | (u16::from(d2) << 7);
-                let semitones =
-                    (f32::from(value) - 8192.0) / 8192.0 * self.bend_range;
+                let semitones = (f32::from(value) - 8192.0) / 8192.0 * self.bend_range;
                 self.bend[channel as usize] = semitones;
                 for &(ch, note) in &self.held {
                     if ch == channel {
@@ -434,18 +428,15 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(self.source == MidiSource::Mock, "Mock")
-                        .clicked()
-                    {
+                    if ui.selectable_label(self.source == MidiSource::Mock, "Mock").clicked() {
                         switch_to = Some(MidiSource::Mock);
                     }
                     if ui.button("rescan").on_hover_text("Re-enumerate ports").clicked() {
                         match enumerate_ports() {
                             Ok(ports) => self.known_ports = ports,
-                            Err(err) => self
-                                .state
-                                .log(format!("MIDI port enumeration failed: {err}")),
+                            Err(err) => {
+                                self.state.log(format!("MIDI port enumeration failed: {err}"))
+                            }
                         }
                     }
                     ui.checkbox(&mut self.log_events, "Log events");
@@ -547,9 +538,7 @@ impl eframe::App for App {
         // Spectral pane's audio overlay is demoable without a DAW.
         self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
         let config = self.state.spectrum_config;
-        self.state
-            .spectrum
-            .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
+        self.state.spectrum.push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
 
         // `viewport_rect` is eframe's window in the same points the fold
         // measures in, which is what a fold has to be priced against.
@@ -635,12 +624,12 @@ struct MockMidi {
 
 /// (notes, channel); one entry per chord, played round-robin.
 const CHORDS: &[(&[u8], u8)] = &[
-    (&[48, 60, 64, 67], 0),      // C major, doubled root
-    (&[50, 57, 65, 69], 1),      // D minor 7 flavor
-    (&[43, 55, 62, 67, 71], 2),  // G major spread
-    (&[48, 60, 64, 67, 70], 3),  // C dominant 7
-    (&[45, 57, 60, 64], 1),      // A minor
-    (&[41, 53, 60, 65, 69], 4),  // F major spread
+    (&[48, 60, 64, 67], 0),     // C major, doubled root
+    (&[50, 57, 65, 69], 1),     // D minor 7 flavor
+    (&[43, 55, 62, 67, 71], 2), // G major spread
+    (&[48, 60, 64, 67, 70], 3), // C dominant 7
+    (&[45, 57, 60, 64], 1),     // A minor
+    (&[41, 53, 60, 65, 69], 4), // F major spread
 ];
 
 const CHORD_PERIOD: f64 = 2.0;
@@ -723,8 +712,8 @@ impl MockSynth {
             let mut sample = 0.0f64;
             for &(freq, amp) in &voices {
                 let phase = std::f64::consts::TAU * freq * t;
-                sample += amp
-                    * (phase.sin() + 0.35 * (2.0 * phase).sin() + 0.2 * (3.0 * phase).sin());
+                sample +=
+                    amp * (phase.sin() + 0.35 * (2.0 * phase).sin() + 0.2 * (3.0 * phase).sin());
             }
             out.push(sample as f32);
         }
@@ -809,8 +798,7 @@ mod tests {
         let mut decoder = MidiDecoder { bend_range: 48.0, ..MidiDecoder::default() };
         // MPE order: bend arrives on the member channel BEFORE the note.
         // Half up-bend (8192 + 4096 = 12288): +24 of 48 semitones.
-        let events =
-            decode_all(&mut decoder, &[[0xE2, 0x00, 0x60], [0x92, 60, 100]]);
+        let events = decode_all(&mut decoder, &[[0xE2, 0x00, 0x60], [0x92, 60, 100]]);
         assert!(matches!(events[0].kind, NoteEventKind::On { .. }));
         assert!(matches!(
             events[1].kind,

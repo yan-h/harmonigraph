@@ -128,9 +128,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // numbers, not one enum value, so there is nothing for choice_row's
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
-        ui.label("Aspect").on_hover_text(
-            "The frame's shape. Resolution below sets how big it renders.",
-        );
+        ui.label("Aspect")
+            .on_hover_text("The frame's shape. Resolution below sets how big it renders.");
         let f = &mut state.take.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;

@@ -228,7 +228,11 @@ impl<'a> ValueBar<'a> {
         } else {
             min + t.powi(3) * (max - min)
         };
-        if self.integer { v.round() } else { v }
+        if self.integer {
+            v.round()
+        } else {
+            v
+        }
     }
 
     /// The value as text to TYPE: always a bare number, so the text-entry
@@ -397,9 +401,8 @@ impl<'a> ValueBar<'a> {
         job.append(self.label, 0.0, egui::TextFormat::simple(body, text_color));
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered = |galley: &egui::Galley, x: f32| {
-            egui::pos2(x, rect.center().y - galley.size().y * 0.5)
-        };
+        let centered =
+            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
         painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
         painter.galley(
             centered(&value, rect.right() - text_pad - value.size().x),
@@ -609,10 +612,7 @@ mod tests {
     #[test]
     fn a_bar_with_no_curve_paints_no_line() {
         let shapes = paint_value_bar(240.0, 0.35, None);
-        assert!(
-            curve_points(&shapes).is_empty(),
-            "a plain bar painted a preview line",
-        );
+        assert!(curve_points(&shapes).is_empty(), "a plain bar painted a preview line",);
     }
 
     fn round_trips(range: RangeInclusive<f32>, eased: bool) {
@@ -621,11 +621,7 @@ mod tests {
         for i in 0..=10 {
             let t = i as f32 / 10.0;
             let v = bar.value_at(t);
-            assert!(
-                (bar.to_t(v) - t).abs() < 1e-4,
-                "t {t} -> value {v} -> t {}",
-                bar.to_t(v)
-            );
+            assert!((bar.to_t(v) - t).abs() < 1e-4, "t {t} -> value {v} -> t {}", bar.to_t(v));
         }
     }
 

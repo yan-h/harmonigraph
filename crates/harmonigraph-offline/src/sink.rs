@@ -126,7 +126,9 @@ impl Writer {
     fn collect(&mut self) -> Result<bool, String> {
         self.frames = None;
         match self.thread.take() {
-            Some(thread) => thread.join().unwrap_or_else(|_| Err("the frame writer panicked".into())),
+            Some(thread) => {
+                thread.join().unwrap_or_else(|_| Err("the frame writer panicked".into()))
+            }
             // Already collected, by an earlier `push` that found the channel
             // shut: the verdict was returned then.
             None => Ok(false),
@@ -152,20 +154,13 @@ pub struct VideoOptions<'a> {
 impl Sink {
     /// Pick a sink from the output path.
     pub fn create(path: &std::path::Path, options: &VideoOptions) -> Result<Sink, String> {
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let extension =
+            path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "png" => {
                 let dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
                 std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("frame")
-                    .to_string();
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("frame").to_string();
                 Ok(Sink::Pngs { dir, stem, index: 0, size: options.size })
             }
             "rgba" | "raw" => {
@@ -183,9 +178,7 @@ impl Sink {
         // dimensions. Caught here rather than 900 frames later, when
         // ffmpeg finally fails at mux time.
         if !w.is_multiple_of(2) || !h.is_multiple_of(2) {
-            return Err(format!(
-                "video output needs even dimensions for yuv420p; {w}x{h} is odd"
-            ));
+            return Err(format!("video output needs even dimensions for yuv420p; {w}x{h} is odd"));
         }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
         let mut command = Command::new(&ffmpeg);
@@ -222,9 +215,8 @@ impl Sink {
         }
         command.arg(path).stdin(Stdio::piped());
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
+        let mut child =
+            command.spawn().map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
         // The writer thread OWNS the pipe from here. Nothing else may hold a
         // handle on it: ffmpeg reaches EOF when the last one drops, so a
         // second copy left in `child` would keep the encoder waiting for
@@ -353,7 +345,8 @@ mod tests {
     /// writer, and an in-process stand-in for it would have neither the
     /// blocking nor the broken-pipe end that the two tests below turn on.
     fn fake_ffmpeg(name: &str, body: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("harmonigraph-sink-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-sink-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         let script = dir.join("ffmpeg.sh");

@@ -47,9 +47,7 @@ pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Col
     shapes
         .iter()
         .filter_map(|s| match s {
-            egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT => {
-                Some((r.rect, r.fill))
-            }
+            egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT => Some((r.rect, r.fill)),
             _ => None,
         })
         .collect()

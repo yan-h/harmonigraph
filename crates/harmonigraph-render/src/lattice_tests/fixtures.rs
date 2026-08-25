@@ -1,7 +1,7 @@
 //! Scenes, shooters and readings shared by the modules beside this one.
 
-use crate::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 /// One marker for the fixtures below.
 ///
@@ -324,8 +324,7 @@ impl Shooter {
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
-        let cb =
-            LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
+        let cb = LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let bufs =
             cb.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);

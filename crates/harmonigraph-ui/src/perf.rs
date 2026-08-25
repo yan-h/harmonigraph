@@ -81,27 +81,30 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         // named by a range, so a stage appears in the breakdown by having been
         // added to [`STAGES`], and cannot be measured every frame and then
         // left off the list.
-        rows.extend(
-            STAGES.iter().enumerate().filter(|(_, s)| s.breakdown).map(|(i, _)| timed(i)),
-        );
+        rows.extend(STAGES.iter().enumerate().filter(|(_, s)| s.breakdown).map(|(i, _)| timed(i)));
         let gpu = &STAGES[Stage::Gpu as usize];
-        rows.push((gpu.depth, gpu.label, {
-            // Both passes on one line, at the depth the table gives them: the
-            // top level, because they run alongside the CPU stages rather than
-            // inside any of them.
-            //
-            // Means only. Two peaks as well would be four numbers on one row,
-            // and the row would stop being readable long before it became more
-            // useful.
-            let lattice = if !perf.gpu_supported {
-                "n/a".to_owned()
-            } else if perf.have_gpu {
-                format!("{:.1}", perf.window(Stage::Gpu).shown_mean)
-            } else {
-                "—".to_owned()
-            };
-            format!("{:.1} ui · {lattice} 3d", perf.window(Stage::EguiGpu).shown_mean)
-        }, None));
+        rows.push((
+            gpu.depth,
+            gpu.label,
+            {
+                // Both passes on one line, at the depth the table gives them: the
+                // top level, because they run alongside the CPU stages rather than
+                // inside any of them.
+                //
+                // Means only. Two peaks as well would be four numbers on one row,
+                // and the row would stop being readable long before it became more
+                // useful.
+                let lattice = if !perf.gpu_supported {
+                    "n/a".to_owned()
+                } else if perf.have_gpu {
+                    format!("{:.1}", perf.window(Stage::Gpu).shown_mean)
+                } else {
+                    "—".to_owned()
+                };
+                format!("{:.1} ui · {lattice} 3d", perf.window(Stage::EguiGpu).shown_mean)
+            },
+            None,
+        ));
         rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims), None));
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
@@ -126,19 +129,11 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes), None),
-        (
-            0,
-            "voices",
-            format!("{} held · {fading} fading", perf.workload.held_voices),
-            None,
-        ),
+        (0, "voices", format!("{} held · {fading} fading", perf.workload.held_voices), None),
         (
             0,
             "nodes",
-            format!(
-                "{}  ·  {:.2}× scale",
-                perf.workload.visible_nodes, perf.workload.render_scale
-            ),
+            format!("{}  ·  {:.2}× scale", perf.workload.visible_nodes, perf.workload.render_scale),
             None,
         ),
     ]);
@@ -233,17 +228,12 @@ pub(crate) fn draw_overlay(
         })
         .collect();
     let values: Vec<_> = rows.iter().map(|(_, _, v, _)| layout(v, &mono, bright)).collect();
-    let peaks: Vec<_> = rows
-        .iter()
-        .map(|(_, _, _, p)| p.as_ref().map(|p| layout(p, &mono, peak_ink)))
-        .collect();
+    let peaks: Vec<_> =
+        rows.iter().map(|(_, _, _, p)| p.as_ref().map(|p| layout(p, &mono, peak_ink))).collect();
 
     let label_col = labels.iter().map(|g| g.rect.width()).fold(0.0f32, f32::max);
-    let peak_col = peaks
-        .iter()
-        .flatten()
-        .map(|g| g.rect.width())
-        .fold(head_peak.rect.width(), f32::max);
+    let peak_col =
+        peaks.iter().flatten().map(|g| g.rect.width()).fold(head_peak.rect.width(), f32::max);
     // Sized over the rows that HAVE a peak only. A row without one (memory,
     // voices) spans both number columns instead, so letting "3 held · 1
     // fading" set this width would shove the peaks off the right edge for
@@ -267,10 +257,7 @@ pub(crate) fn draw_overlay(
     let peak_right = nums_x + (mean_col + col_gap + peak_col).max(spanned);
 
     let mut lines: Vec<Vec<(f32, std::sync::Arc<egui::Galley>)>> = Vec::new();
-    lines.push(vec![
-        (0.0, head_fps.clone()),
-        (head_fps.rect.width() + 4.0 * scale, head_state),
-    ]);
+    lines.push(vec![(0.0, head_fps.clone()), (head_fps.rect.width() + 4.0 * scale, head_state)]);
     lines.push(vec![
         (mean_right - head_mean.rect.width(), head_mean),
         (peak_right - head_peak.rect.width(), head_peak),
@@ -325,10 +312,7 @@ pub(crate) fn draw_overlay(
     let inset = OVERLAY_INSET * scale;
     // Where an undragged HUD opens — this function's docs say why it is this
     // corner, and why it is a starting point rather than a rule.
-    let home = egui::pos2(
-        editor.right() - inset - size.x,
-        editor.bottom() - inset - size.y,
-    );
+    let home = egui::pos2(editor.right() - inset - size.x, editor.bottom() - inset - size.y);
 
     // Held inside the editor here, against the size measured THIS frame,
     // rather than by the Area's own `constrain_to`. An Area measures its
@@ -379,8 +363,7 @@ pub(crate) fn draw_overlay(
 
             let mut y = plate.top() + margin.y;
             for parts in lines {
-                let row_height =
-                    parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
+                let row_height = parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
                 for (dx, galley) in parts {
                     painter.galley(egui::pos2(plate.left() + margin.x + dx, y), galley, bright);
                 }
@@ -453,7 +436,6 @@ mod tests {
             basic[1..],
             "the workload rows belong at the foot of both lists",
         );
-
     }
 
     /// The breakdown, written out: every row, in order, at its depth.
@@ -756,10 +738,7 @@ mod tests {
             if (a.top() - b.top()).abs() > 0.5 {
                 continue; // different rows
             }
-            assert!(
-                b.left() >= a.right(),
-                "{at:?} and {bt:?} overlap: {a:?} then {b:?}",
-            );
+            assert!(b.left() >= a.right(), "{at:?} and {bt:?} overlap: {a:?} then {b:?}",);
         }
     }
 

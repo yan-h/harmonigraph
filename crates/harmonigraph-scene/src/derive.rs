@@ -8,8 +8,8 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, PlusInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
-    PLUS_SIZE_MAX, MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
+    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Pulse, Scene, SpectralPaint,
+    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
 };
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
@@ -147,10 +147,9 @@ fn marks(
                 |end: Option<HeldEnd>| end.filter(|end| end.key == key).map(|end| end.since);
             (wears(live.0), wears(live.1))
         }
-        harmonigraph_core::VoiceState::Released { .. } => (
-            voice.wore_high.filter(|_| mark_melody),
-            voice.wore_low.filter(|_| mark_bass),
-        ),
+        harmonigraph_core::VoiceState::Released { .. } => {
+            (voice.wore_high.filter(|_| mark_melody), voice.wore_low.filter(|_| mark_bass))
+        }
     }
 }
 
@@ -369,9 +368,8 @@ pub fn derive_scene(
                 // least two octaves wide and its middle is a playable pitch —
                 // so this lands on a slice that is drawn.
                 let sounding = ((voice.pitch - node_cents / 100.0) / 12.0).round() as i32;
-                let slot = sounding
-                    .clamp(low_slot, high_slot)
-                    .clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
+                let slot =
+                    sounding.clamp(low_slot, high_slot).clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
                 // The voice's envelope entire — the attack is already in it
                 // ([`Voice::activation`]), and the release still fades on the
                 // octave's own voice rather than on the node's.
@@ -451,10 +449,7 @@ pub fn derive_scene(
             // carries is exactly what separates them.
             let namesake =
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
-            (
-                sevens_size.powi(sheets as i32),
-                wrapped_cents(node_pc, tuning.pitch_class(namesake)),
-            )
+            (sevens_size.powi(sheets as i32), wrapped_cents(node_pc, tuning.pitch_class(namesake)))
         };
         // EVERY node that DRAWS clears what is behind it, the home sheet
         // included. Leaving the home sheet out is what let the sheets

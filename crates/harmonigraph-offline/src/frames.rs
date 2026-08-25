@@ -66,11 +66,7 @@ impl Renderer {
 
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offline frame"),
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -126,10 +122,8 @@ impl Renderer {
             self.egui.update_texture(&self.device, &self.queue, *id, delta);
         }
 
-        let descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: self.size,
-            pixels_per_point,
-        };
+        let descriptor =
+            egui_wgpu::ScreenDescriptor { size_in_pixels: self.size, pixels_per_point };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         // This is also where the lattice's paint callback runs its scene
         // and bloom passes — `update_buffers` dispatches `prepare` on our
@@ -177,11 +171,7 @@ impl Renderer {
                     rows_per_image: None,
                 },
             },
-            wgpu::Extent3d {
-                width: self.size[0],
-                height: self.size[1],
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width: self.size[0], height: self.size[1], depth_or_array_layers: 1 },
         );
         self.queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
 
@@ -218,12 +208,7 @@ impl Renderer {
 /// dark, and only where the clear shows through.
 fn clear_value(color: egui::Color32) -> wgpu::Color {
     let channel = |byte: u8| f64::from(byte) / 255.0;
-    wgpu::Color {
-        r: channel(color.r()),
-        g: channel(color.g()),
-        b: channel(color.b()),
-        a: 1.0,
-    }
+    wgpu::Color { r: channel(color.r()), g: channel(color.g()), b: channel(color.b()), a: 1.0 }
 }
 
 #[cfg(test)]
@@ -342,11 +327,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
@@ -451,11 +433,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
@@ -572,11 +551,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
@@ -661,11 +637,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
@@ -787,11 +760,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
 
         // One luma out of a pixel, the same weighting for both points.
         let at = |b: &[u8], x: u32, y: u32| {
@@ -937,11 +907,8 @@ mod tests {
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
-        let background = egui::Color32::from_rgb(
-            layout.background.0,
-            layout.background.1,
-            layout.background.2,
-        );
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 

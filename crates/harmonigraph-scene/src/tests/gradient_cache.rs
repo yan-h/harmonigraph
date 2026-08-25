@@ -133,19 +133,43 @@ fn one_gradient_too_many_evicts_the_stalest() {
         gradient_color(0.5, g);
     }
     for &g in &held {
-        assert_eq!(rebuilds(|| { gradient_color(0.5, g); }), 0, "a full cache holds all of them");
+        assert_eq!(
+            rebuilds(|| {
+                gradient_color(0.5, g);
+            }),
+            0,
+            "a full cache holds all of them"
+        );
     }
     // Asking for all of them in that order left `held[0]` the least recently
     // used, so it is the one the newcomer displaces.
     let extra = nth(20 + LUT_SLOTS as u32);
-    assert_eq!(rebuilds(|| { gradient_color(0.5, extra); }), 1, "the newcomer is built");
+    assert_eq!(
+        rebuilds(|| {
+            gradient_color(0.5, extra);
+        }),
+        1,
+        "the newcomer is built"
+    );
     // The survivors BEFORE the evicted one, because asking for a gradient that
     // is gone rebuilds it — which evicts in its turn, and would leave this loop
     // measuring the damage its own previous line did.
     for &g in &held[1..] {
-        assert_eq!(rebuilds(|| { gradient_color(0.5, g); }), 0, "the fresher ones stayed");
+        assert_eq!(
+            rebuilds(|| {
+                gradient_color(0.5, g);
+            }),
+            0,
+            "the fresher ones stayed"
+        );
     }
-    assert_eq!(rebuilds(|| { gradient_color(0.5, held[0]); }), 1, "and the stalest was dropped");
+    assert_eq!(
+        rebuilds(|| {
+            gradient_color(0.5, held[0]);
+        }),
+        1,
+        "and the stalest was dropped"
+    );
 }
 
 /// A level off the end of the range, or off the number line entirely, is drawn
@@ -213,13 +237,29 @@ fn gradients_drawing_one_picture_are_one_entry() {
     // A span past a full turn and a hue past a full circle both come back to
     // what is already in the slot.
     let same = Gradient { hue_start: g.hue_start + 360.0, hue_span: g.hue_span, ..g };
-    assert_eq!(rebuilds(|| { gradient_color(0.5, same); }), 0);
+    assert_eq!(
+        rebuilds(|| {
+            gradient_color(0.5, same);
+        }),
+        0
+    );
     // And a NaN, which is the case that would break the cache rather than only
     // cost it: NaN is not equal to itself, so an unsanitized key would MISS
     // against the entry it just wrote and rebuild on every single call.
     // `nth` builds off the type's own defaults, so the repair lands back on
     // exactly `g` and the same entry serves.
     let nonfinite = Gradient { lightness: f32::NAN, ..g };
-    assert_eq!(rebuilds(|| { gradient_color(0.5, nonfinite); }), 0);
-    assert_eq!(rebuilds(|| { gradient_color(0.5, nonfinite); }), 0, "and again, not just once");
+    assert_eq!(
+        rebuilds(|| {
+            gradient_color(0.5, nonfinite);
+        }),
+        0
+    );
+    assert_eq!(
+        rebuilds(|| {
+            gradient_color(0.5, nonfinite);
+        }),
+        0,
+        "and again, not just once"
+    );
 }

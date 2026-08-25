@@ -347,11 +347,7 @@ impl MirroredAtlas {
         if recreated {
             self.texture = Some(device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("text_font_atlas"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
-                },
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -452,17 +448,17 @@ pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 }
 
 impl TextResources {
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        target_format: wgpu::TextureFormat,
-    ) -> Self {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let layout = glyph_bind_group_layout(device);
-        let rim_pipeline = create_text_pipeline(
-            device, target_format, &layout, "fs_rim", None, crate::EGUI_BLEND,
-        );
+        let rim_pipeline =
+            create_text_pipeline(device, target_format, &layout, "fs_rim", None, crate::EGUI_BLEND);
         let fill_pipeline = create_text_pipeline(
-            device, target_format, &layout, "fs_fill", None, crate::EGUI_BLEND,
+            device,
+            target_format,
+            &layout,
+            "fs_fill",
+            None,
+            crate::EGUI_BLEND,
         );
         TextResources {
             rim_pipeline,
@@ -551,14 +547,8 @@ impl TextResources {
                 ATLAS_SIZES_OFFSET,
                 bytemuck::cast_slice(&sizes),
             );
-            pane.bind_group = Some(bind_group(
-                device,
-                layout,
-                sampler,
-                &view,
-                &mark_view,
-                &pane.uniform_buffer,
-            ));
+            pane.bind_group =
+                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
         }
     }
 
@@ -597,14 +587,8 @@ pub(crate) fn bind_group(
         label: Some("text_bind_group"),
         layout,
         entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
+            wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -794,14 +778,8 @@ impl CallbackTrait for TextCallback {
             count: 0,
         });
         if pane.bind_group.is_none() {
-            pane.bind_group = Some(bind_group(
-                device,
-                layout,
-                sampler,
-                &view,
-                &mark_view,
-                &pane.uniform_buffer,
-            ));
+            pane.bind_group =
+                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -936,11 +914,7 @@ pub(crate) mod tests {
     /// The mark of [`mark_sheet`], drawn 8 points wide at (24, 24) — the same
     /// place and size as [`glyph`], off the other sheet.
     pub(crate) fn mark() -> GlyphInstance {
-        GlyphInstance {
-            uv: [16.0, 0.0, 24.0, 8.0],
-            atlas: GlyphInstance::MARK,
-            ..glyph()
-        }
+        GlyphInstance { uv: [16.0, 0.0, 24.0, 8.0], atlas: GlyphInstance::MARK, ..glyph() }
     }
 
     /// Draw one glyph through both passes and read the frame back.
@@ -981,13 +955,8 @@ pub(crate) mod tests {
 
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-        let texture = render_to_texture(
-            device,
-            queue,
-            SIZE,
-            FORMAT,
-            wgpu::Color::TRANSPARENT,
-            |pass| {
+        let texture =
+            render_to_texture(device, queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
                 cb.paint(
                     egui::PaintCallbackInfo {
                         viewport: rect,
@@ -998,8 +967,7 @@ pub(crate) mod tests {
                     pass,
                     &resources,
                 );
-            },
-        );
+            });
         readback(device, queue, &texture, SIZE)
     }
 
@@ -1318,8 +1286,13 @@ pub(crate) mod tests {
                 buffers.extend(callback.prepare(&device, &queue, &screen, &mut encoder, resources));
             }
             queue.submit(buffers.into_iter().chain([encoder.finish()]));
-            let texture =
-                render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
+            let texture = render_to_texture(
+                &device,
+                &queue,
+                SIZE,
+                FORMAT,
+                wgpu::Color::TRANSPARENT,
+                |pass| {
                     for callback in &callbacks {
                         callback.paint(
                             egui::PaintCallbackInfo {
@@ -1332,21 +1305,20 @@ pub(crate) mod tests {
                             resources,
                         );
                     }
-                });
+                },
+            );
             readback(&device, &queue, &texture, SIZE)
         };
 
         // The first pane brings the atlas and the second rides on it, which is
         // the ordinary frame and the baseline the second one is read against.
-        let first =
-            frame(&mut resources, [at(8.0, 0, Some(atlas_of(32, 1))), at(40.0, 1, None)]);
+        let first = frame(&mut resources, [at(8.0, 0, Some(atlas_of(32, 1))), at(40.0, 1, None)]);
         assert_eq!(pixel(&first, 12, 28), [255, 255, 255, 255], "the leading pane's glyph");
         assert_eq!(pixel(&first, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
 
         // Now the other way round: the leading pane has nothing new to say and
         // the trailing one grows the atlas out from under it.
-        let grown =
-            frame(&mut resources, [at(8.0, 0, None), at(40.0, 1, Some(atlas_of(64, 2)))]);
+        let grown = frame(&mut resources, [at(8.0, 0, None), at(40.0, 1, Some(atlas_of(64, 2)))]);
         assert_eq!(
             pixel(&grown, 12, 28),
             [255, 255, 255, 255],
@@ -1365,18 +1337,21 @@ pub(crate) mod tests {
             uv: [8.0, GROWN_PATCH_TOP as f32, 16.0, GROWN_PATCH_TOP as f32 + 8.0],
             ..glyph()
         };
-        let deeper = frame(&mut resources, [
-            TextCallback {
-                glyphs: vec![reaching],
-                rings: bare,
-                atlas: None,
-                marks: None,
-                slide: SlideAxis::default(),
-                target_format: FORMAT,
-                pane_id: 0,
-            },
-            at(40.0, 1, Some(atlas_of(64, 3))),
-        ]);
+        let deeper = frame(
+            &mut resources,
+            [
+                TextCallback {
+                    glyphs: vec![reaching],
+                    rings: bare,
+                    atlas: None,
+                    marks: None,
+                    slide: SlideAxis::default(),
+                    target_format: FORMAT,
+                    pane_id: 0,
+                },
+                at(40.0, 1, Some(atlas_of(64, 3))),
+            ],
+        );
         assert_eq!(
             pixel(&deeper, 12, 28),
             [255, 255, 255, 255],
@@ -1423,10 +1398,7 @@ pub(crate) mod tests {
         // opaque edge and the reading is a sum of two samples again — which
         // is a fine picture and a poor test of telling one from two.
         let one = pixel(&frame, 24, 28);
-        assert!(
-            one[3].abs_diff(128) <= 2,
-            "one half-alpha sample should read 50%, got {one:?}",
-        );
+        assert!(one[3].abs_diff(128) <= 2, "one half-alpha sample should read 50%, got {one:?}",);
     }
 
     /// A label that slides moves smoothly: over a whole physical pixel of

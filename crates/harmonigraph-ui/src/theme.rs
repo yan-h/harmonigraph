@@ -325,14 +325,9 @@ fn install_fonts(ctx: &egui::Context) {
             "AtkinsonHyperlegibleBold",
             &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf")[..],
         ),
-        (
-            "IosevkaFixed",
-            &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..],
-        ),
+        ("IosevkaFixed", &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..]),
     ] {
-        fonts
-            .font_data
-            .insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
+        fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
     }
 
     // This runs inside the plugin's editor-open path, where a panic takes
@@ -347,9 +342,7 @@ fn install_fonts(ctx: &egui::Context) {
         // as fallback for any glyph Bold lacks.
         let mut heading = proportional.clone();
         heading.insert(0, "AtkinsonHyperlegibleBold".to_owned());
-        fonts
-            .families
-            .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
+        fonts.families.insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
     }
     if let Some(monospace) = fonts.families.get_mut(&FontFamily::Monospace) {
         monospace.insert(0, "IosevkaFixed".to_owned());
@@ -389,10 +382,7 @@ fn style_at(scale: f32) -> egui::Style {
     let mut style = egui::Style {
         text_styles: [
             // Headings differentiate by WEIGHT (Atkinson Bold), not size.
-            (
-                TextStyle::Heading,
-                FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into())),
-            ),
+            (TextStyle::Heading, FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into()))),
             (TextStyle::Body, FontId::proportional(13.5)),
             (TextStyle::Button, FontId::proportional(13.5)),
             (TextStyle::Small, FontId::proportional(11.0)),
@@ -547,12 +537,9 @@ fn scale_chrome(style: &mut egui::Style, scale: f32) {
     }
 
     let s = &mut style.spacing;
-    for v in [
-        &mut s.item_spacing,
-        &mut s.button_padding,
-        &mut s.interact_size,
-        &mut s.default_area_size,
-    ] {
+    for v in
+        [&mut s.item_spacing, &mut s.button_padding, &mut s.interact_size, &mut s.default_area_size]
+    {
         *v *= scale;
     }
     for f in [
@@ -635,7 +622,11 @@ fn scale_margin(margin: egui::Margin, scale: f32) -> egui::Margin {
 /// same one bigger.
 pub(crate) fn scaled_points(value: u8, scale: f32) -> u8 {
     let scaled = (f32::from(value) * scale).round();
-    if value > 0 { scaled.max(1.0) as u8 } else { 0 }
+    if value > 0 {
+        scaled.max(1.0) as u8
+    } else {
+        0
+    }
 }
 
 /// [`scaled_points`] for a signed length (a shadow offset, a margin side),

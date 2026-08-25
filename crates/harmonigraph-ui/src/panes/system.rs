@@ -26,13 +26,11 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
-    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
-        .show(ui)
-        .on_hover_text(
-            "How many pixels the lattice renders at: 1.0 native, 0.5 a quarter \
+    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale").show(ui).on_hover_text(
+        "How many pixels the lattice renders at: 1.0 native, 0.5 a quarter \
              as many. A cost dial, not a look dial — turn it down if the plugin \
              works the machine hard.",
-        );
+    );
     // The other half of the cost dial: render scale sets what each frame
     // costs, this sets how many of them there are. Presented as a ceiling
     // rather than a target — the shell decides the actual cadence, and a
@@ -83,10 +81,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     button_row(ui, |ui| {
         // Escape hatch for the persisted dock arrangement (it survives
         // every reopen, so a new default layout is otherwise unreachable).
-        if ui
-            .button("Reset layout")
-            .on_hover_text("Restore the default pane arrangement")
-            .clicked()
+        if ui.button("Reset layout").on_hover_text("Restore the default pane arrangement").clicked()
         {
             state.workspace.reset_dock_layout();
         }

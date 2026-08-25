@@ -5,10 +5,9 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
-    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_THICKNESS_MAX,
-    MAX_DRAWN_NODES,
-    NODE_RADIUS_FACTOR, RING_INNER_MAX, RING_WIDTH_MAX,
+    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX, GLOW_REACH_MAX, GLOW_STRENGTH_MAX,
+    MARKER_REACH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -2340,8 +2339,9 @@ impl ViewConfig {
         // Times repair to the fresh pair rather than to zero: zero is a legal
         // setting (no smoothing) but it is not the safe reading of a broken
         // one, since it puts the flicker back with nothing on screen saying so.
-        self.spectral_ring_attack = finite_or(self.spectral_ring_attack, fresh.spectral_ring_attack)
-            .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
+        self.spectral_ring_attack =
+            finite_or(self.spectral_ring_attack, fresh.spectral_ring_attack)
+                .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
         self.spectral_ring_release =
             finite_or(self.spectral_ring_release, fresh.spectral_ring_release)
                 .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
@@ -2372,8 +2372,7 @@ impl ViewConfig {
         // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
         // a NaN quad, and every node's glow vanishes with nothing on screen to
         // say why.
-        self.glow_reach =
-            finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
+        self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
@@ -2390,13 +2389,11 @@ impl ViewConfig {
         // fade's own WIDTH rather than a width itself — the exponent it maps
         // to is the shader's business (`glow_gap_shape` in lattice.wgsl), and
         // a bar reading 0..1 is what keeps its neutral point at the middle.
-        self.glow_gap_shape =
-            finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
+        self.glow_gap_shape = finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
         // The SHARES — of the light the standoff stands in, of the light a
         // node's ink stands in, of the light's own peak, of a whole turn — so
         // their range is the unit interval.
-        self.glow_gap_depth =
-            finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
+        self.glow_gap_depth = finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.marker_light = finite_or(self.marker_light, fresh.marker_light).clamp(0.0, 1.0);
         self.marker_reach =
@@ -2789,10 +2786,6 @@ pub struct FrameParams {
 
 impl Default for FrameParams {
     fn default() -> Self {
-        FrameParams {
-            fade_time: 1.0,
-            darkest_pitch: 24.0,
-            brightest_pitch: 108.0,
-        }
+        FrameParams { fade_time: 1.0, darkest_pitch: 24.0, brightest_pitch: 108.0 }
     }
 }

@@ -18,11 +18,15 @@ pub type Time = f64;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum NoteEventKind {
-    On { velocity: f32 },
+    On {
+        velocity: f32,
+    },
     Off,
     /// Per-note tuning offset in semitones (CLAP note expression / MPE),
     /// relative to the note's equal-tempered pitch. v1's PolyTuning.
-    Tuning { semitones: f32 },
+    Tuning {
+        semitones: f32,
+    },
     /// Release every held voice at once (transport reset: per-note offs
     /// may never arrive). `channel` and `note` are meaningless here.
     AllOff,
@@ -542,13 +546,7 @@ impl NoteTracker {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
                 let voice = Voice::new(event.channel, event.note, velocity, event.time);
-                self.roll.note_on(
-                    event.channel,
-                    event.note,
-                    velocity,
-                    voice.pitch,
-                    event.time,
-                );
+                self.roll.note_on(event.channel, event.note, velocity, voice.pitch, event.time);
                 self.held.insert((event.channel, event.note), voice);
             }
             NoteEventKind::Off => {
@@ -840,7 +838,7 @@ mod tests {
     fn tuning_bends_pitch_class_and_octave() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60)); // C4
-        // Bend up a whole tone: D, still octave 4.
+                                           // Bend up a whole tone: D, still octave 4.
         tracker.handle_event(NoteEvent {
             time: 0.1,
             channel: 0,
@@ -917,7 +915,7 @@ mod tests {
         assert_eq!(released.activation(12.0, &fade(2.0)), 0.0); // fully faded
         assert_eq!(released.activation(20.0, &fade(2.0)), 0.0); // clamps, not negative
         assert_eq!(released.activation(9.0, &fade(2.0)), 1.0); // `now` before release
-        // A non-positive fade time releases instantly (guards div-by-zero).
+                                                               // A non-positive fade time releases instantly (guards div-by-zero).
         assert_eq!(released.activation(10.0, &fade(0.0)), 0.0);
         assert_eq!(released.activation(10.0, &fade(-1.0)), 0.0);
     }
@@ -964,8 +962,9 @@ mod tests {
     /// the property the bar promises instead of restating the formula.
     #[test]
     fn a_higher_shape_front_loads_the_fade() {
-        let level = |shape: f32| Envelope { fade_time: 2.0, shape, ..Envelope::default() }
-            .release(1.0, 0.0);
+        let level = |shape: f32| {
+            Envelope { fade_time: 2.0, shape, ..Envelope::default() }.release(1.0, 0.0)
+        };
         assert!((level(0.0) - 0.5).abs() < 1e-6, "0 is the straight line: half gone at half way");
         let mut prev = level(0.0);
         for shape in [0.25, 0.5, 0.75, 1.0] {
@@ -999,9 +998,8 @@ mod tests {
 
         // The peak over the note's whole life, so nothing above depends on
         // having guessed where it is.
-        let peak = (0..=100)
-            .map(|i| voice.activation(f64::from(i) * 0.01, &env))
-            .fold(0.0f32, f32::max);
+        let peak =
+            (0..=100).map(|i| voice.activation(f64::from(i) * 0.01, &env)).fold(0.0f32, f32::max);
         assert_eq!(peak, 1.0, "a note is never dimmed for having been short");
     }
 
@@ -1197,5 +1195,4 @@ mod tests {
         tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
     }
-
 }

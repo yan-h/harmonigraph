@@ -769,10 +769,7 @@ mod tests {
         let samples: Vec<f32> = (0..fft_size + 1234)
             .map(|i| {
                 let t = i as f32 / sample_rate;
-                freqs_amps
-                    .iter()
-                    .map(|(f, a)| a * (std::f32::consts::TAU * f * t).sin())
-                    .sum()
+                freqs_amps.iter().map(|(f, a)| a * (std::f32::consts::TAU * f * t).sin()).sum()
             })
             .collect();
         for chunk in samples.chunks(701) {
@@ -1092,7 +1089,10 @@ mod tests {
     }
 
     /// Feed a stereo pair through a bank and return the combined spectrum.
-    fn analyze_stereo(left: impl Fn(f32) -> f32, right: impl Fn(f32) -> f32) -> [f32; SPECTRUM_BINS] {
+    fn analyze_stereo(
+        left: impl Fn(f32) -> f32,
+        right: impl Fn(f32) -> f32,
+    ) -> [f32; SPECTRUM_BINS] {
         let sr = 48_000.0f32;
         let mut bank = ChannelBank::new(sr, 2);
         let interleaved: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
@@ -1255,9 +1255,8 @@ mod tests {
         // 2 and 4 are the degenerate stages (one block, or one twiddle); the
         // rest are every window `SpectrumWindow::samples` can ask for.
         for n in [2usize, 4, 16, 256, 4096, DEFAULT_FFT_SIZE, 16384] {
-            let signal: Vec<f32> = (0..n)
-                .map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos())
-                .collect();
+            let signal: Vec<f32> =
+                (0..n).map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos()).collect();
             let (mut ar, mut ai) = (signal.clone(), vec![0.0f32; n]);
             let (mut br, mut bi) = (signal.clone(), vec![0.0f32; n]);
             fft_in_place(&mut ar, &mut ai);
@@ -1365,10 +1364,7 @@ mod tests {
             let buckets = analyzer.pitch_spectrum().expect("window filled");
             let peak = buckets[peak_bucket(&buckets)];
             let db = 10.0 * peak.max(1e-12).log10();
-            assert!(
-                db.abs() < 1.5,
-                "{tapers} tapers read a full-scale sine at {db:.2} dB, not 0"
-            );
+            assert!(db.abs() < 1.5, "{tapers} tapers read a full-scale sine at {db:.2} dB, not 0");
         }
     }
 

@@ -28,7 +28,6 @@ pub fn seconds(v: f32) -> String {
     format!("{v:.2} s")
 }
 
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamKey {
     /// Offset of the lattice origin (C) in cents.
@@ -80,13 +79,8 @@ impl ParamKey {
     };
 
     /// The structural tuning parameters (Tuning section of the UI).
-    pub const TUNING: [ParamKey; 5] = [
-        ParamKey::COffset,
-        ParamKey::Three,
-        ParamKey::Five,
-        ParamKey::Seven,
-        ParamKey::Tolerance,
-    ];
+    pub const TUNING: [ParamKey; 5] =
+        [ParamKey::COffset, ParamKey::Three, ParamKey::Five, ParamKey::Seven, ParamKey::Tolerance];
 
     /// Pitch->color gradient endpoints (the Color range on Display's Colors
     /// page).

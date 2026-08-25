@@ -186,7 +186,6 @@ impl ShaderWatcher {
         }
     }
 
-
     /// Returns the new shader source when the file changed since last poll.
     fn poll(&mut self) -> Option<String> {
         let now = std::time::Instant::now();
@@ -211,8 +210,7 @@ impl ShaderWatcher {
 /// a DAW at first paint.
 #[cfg(any(test, feature = "hot-reload"))]
 fn validate_wgsl(source: &str) -> Result<(), String> {
-    let module = naga::front::wgsl::parse_str(source)
-        .map_err(|e| e.emit_to_string(source))?;
+    let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -861,13 +859,9 @@ fn place_labels(
             {
                 last.count += count as u32
             }
-            _ => seams.push(GlyphSeam {
-                at,
-                start: first,
-                count: count as u32,
-                after_pluses,
-                sheet,
-            }),
+            _ => {
+                seams.push(GlyphSeam { at, start: first, count: count as u32, after_pluses, sheet })
+            }
         }
     }
     (placed, seams)
@@ -883,9 +877,7 @@ impl LatticeCallback {
         stats: Option<std::sync::Arc<LatticeStats>>,
     ) -> Self {
         let aspect = size_points.x / size_points.y.max(1.0);
-        let render_scale = scene
-            .render_scale
-            .clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
+        let render_scale = scene.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
@@ -953,31 +945,25 @@ impl LatticeCallback {
         // under every projection rather than only the face-on one.
         let to_gpu = |n: &harmonigraph_scene::NodeInstance, gutter: f32| GpuInstance {
             world_pos: n.world_pos.to_array(),
-                color: n.color.to_array(),
-                params: [n.activation, n.melody_level, n.bass_level],
-                octaves: pack_octaves(&n.octaves),
-                cents: n.cents,
-                marks: [n.melody_slots, n.bass_slots],
-                melody_color: n.melody_color.to_array(),
-                bass_color: n.bass_color.to_array(),
-                sevens: [n.scale, gutter],
-                ring: n.audio_ring,
-                glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
-                paint: PAINT_WHOLE,
+            color: n.color.to_array(),
+            params: [n.activation, n.melody_level, n.bass_level],
+            octaves: pack_octaves(&n.octaves),
+            cents: n.cents,
+            marks: [n.melody_slots, n.bass_slots],
+            melody_color: n.melody_color.to_array(),
+            bass_color: n.bass_color.to_array(),
+            sevens: [n.scale, gutter],
+            ring: n.audio_ring,
+            glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
+            paint: PAINT_WHOLE,
         };
 
-        let split = order
-            .iter()
-            .position(|&(plane, _, _)| plane <= 0.0)
-            .unwrap_or(order.len());
+        let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());
         // And where it ENDS: the sheets in front are the negative half of the
         // same axis, so the home run is exactly the nodes at a depth of 0. A
         // sheet in FRONT keeps its clearing whole — hiding the markers is the
         // ordinary occlusion every sheet does to the one behind it.
-        let home_end = order
-            .iter()
-            .position(|&(plane, _, _)| plane < 0.0)
-            .unwrap_or(order.len());
+        let home_end = order.iter().position(|&(plane, _, _)| plane < 0.0).unwrap_or(order.len());
         // A node that can paint nothing is not shipped at all. The shader
         // already discards it per fragment, but the billboard is deliberately
         // bigger than the node (QUAD_MARGIN and then some), so the discard is
@@ -1229,12 +1215,7 @@ impl LatticeCallback {
                 // Zeroed whole rather than packed where the glow does not
                 // draw — see `Uniforms::misc10`.
                 misc10: if lights {
-                    [
-                        scene.glow_reach,
-                        scene.glow_strength,
-                        scene.glow_feather,
-                        scene.glow_blend,
-                    ]
+                    [scene.glow_reach, scene.glow_strength, scene.glow_feather, scene.glow_blend]
                 } else {
                     [0.0; 4]
                 },
@@ -1254,12 +1235,7 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc13: if lights {
-                    [
-                        scene.glow_wash,
-                        scene.marker_light,
-                        scene.marker_span,
-                        scene.marker_unit,
-                    ]
+                    [scene.glow_wash, scene.marker_light, scene.marker_span, scene.marker_unit]
                 } else {
                     [0.0; 4]
                 },
@@ -1951,12 +1927,7 @@ impl BloomChain {
     ///
     /// This is the only place that ordering is written down; the pipelines
     /// themselves are built by each caller.
-    fn run(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipelines: BloomPipelines<'_>,
-        label: &str,
-    ) {
+    fn run(&self, encoder: &mut wgpu::CommandEncoder, pipelines: BloomPipelines<'_>, label: &str) {
         let steps: [BloomStep; 4] = [
             (pipelines.bright, &self.bright_bind_group, &self.half_view),
             (pipelines.downsample, &self.downsample_bind_group, &self.quarter_a_view),
@@ -2051,10 +2022,7 @@ impl Offscreen {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&bloom.quarter_a_view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 3, resource: uniform_buffer.as_entire_binding() },
             ],
         });
 
@@ -2131,12 +2099,7 @@ impl GlowTarget {
     /// at its own fragment's coordinate: a target at any fraction of the scene
     /// would have to be sampled, and a filtered read of the light under a
     /// node's clearing is a blur nobody asked for.
-    fn new(
-        device: &wgpu::Device,
-        shared: &OffscreenShared<'_>,
-        size: [u32; 2],
-        rows: u32,
-    ) -> Self {
+    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2], rows: u32) -> Self {
         let OffscreenShared { format, glow_layout, strip_layout, sampler, .. } = *shared;
         // Every attachment at the same SIZE, the standoff included: it is read
         // at the same coordinate as the light it scales, so a target at any
@@ -2213,11 +2176,7 @@ impl InkStrip {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
-                    size: wgpu::Extent3d {
-                        width,
-                        height: rows.max(1),
-                        depth_or_array_layers: 1,
-                    },
+                    size: wgpu::Extent3d { width, height: rows.max(1), depth_or_array_layers: 1 },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
@@ -2386,11 +2345,8 @@ fn create_pipelines(
     layouts: SceneLayouts<'_>,
     offscreen: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (node, plus) = if offscreen {
-        ("fs_main_scene", "fs_plus_scene")
-    } else {
-        ("fs_main", "fs_plus")
-    };
+    let (node, plus) =
+        if offscreen { ("fs_main_scene", "fs_plus_scene") } else { ("fs_main", "fs_plus") };
     (
         create_pipeline(
             device,
@@ -2673,18 +2629,8 @@ fn create_ink_strip_pipelines(
         ..Default::default()
     });
     (
-        build(
-            "fs_ink_strip",
-            ("vs_ink_strip", "fs_ink_strip"),
-            &layout,
-            &[GpuInstance::LAYOUT],
-        ),
-        build(
-            "fs_ink_blur",
-            ("vs_ink_blur", "fs_ink_blur"),
-            &layout,
-            &[GpuInstance::LAYOUT],
-        ),
+        build("fs_ink_strip", ("vs_ink_strip", "fs_ink_strip"), &layout, &[GpuInstance::LAYOUT]),
+        build("fs_ink_blur", ("vs_ink_blur", "fs_ink_blur"), &layout, &[GpuInstance::LAYOUT]),
     )
 }
 
@@ -2844,11 +2790,7 @@ fn create_post_pipeline(
 }
 
 impl LatticeResources {
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        target_format: wgpu::TextureFormat,
-    ) -> Self {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -2900,12 +2842,7 @@ impl LatticeResources {
         // one binding both layouts share means the same thing in both.
         let glow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_glow_bind_group_layout"),
-            entries: &[
-                texture_entry(0),
-                sampler_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-            ],
+            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), texture_entry(3)],
         });
         // Ahead of the scene pipelines because they take it at group 1: a
         // node paints the finished light over the ground and washes its own ink
@@ -2946,12 +2883,7 @@ impl LatticeResources {
 
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_composite_bind_group_layout"),
-            entries: &[
-                texture_entry(0),
-                sampler_entry(1),
-                texture_entry(2),
-                uniform_entry(3),
-            ],
+            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), uniform_entry(3)],
         });
         let composite_pipeline = create_post_pipeline(
             device,
@@ -2962,7 +2894,8 @@ impl LatticeResources {
         );
         let glow_over_pipeline =
             create_glow_over_pipeline(device, target_format, &glow_layout, &bind_group_layout);
-        let filter = |entry| create_post_pipeline(device, entry, target_format, &filter_layout, None);
+        let filter =
+            |entry| create_post_pipeline(device, entry, target_format, &filter_layout, None);
         let bright_pipeline = filter("fs_bright");
         let downsample_pipeline = filter("fs_blit");
         let blur_h_pipeline = filter("fs_blur_h");
@@ -3322,9 +3255,8 @@ impl CallbackTrait for LatticeCallback {
         if recreate {
             callback_resources.insert(LatticeResources::new(device, queue, self.target_format));
         }
-        let resources: &mut LatticeResources = callback_resources
-            .get_mut()
-            .expect("inserted above when missing");
+        let resources: &mut LatticeResources =
+            callback_resources.get_mut().expect("inserted above when missing");
 
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
@@ -3463,11 +3395,7 @@ impl CallbackTrait for LatticeCallback {
         pane.instance_count = self.instances.len() as u32;
         pane.pluses_at = self.pluses_at.min(pane.instance_count);
         if !self.instances.is_empty() {
-            queue.write_buffer(
-                &pane.instance_buffer,
-                0,
-                bytemuck::cast_slice(&self.instances),
-            );
+            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         }
 
         if self.clearings.len() > pane.clearing_capacity {
@@ -3479,11 +3407,7 @@ impl CallbackTrait for LatticeCallback {
             );
         }
         if !self.clearings.is_empty() {
-            queue.write_buffer(
-                &pane.clearing_buffer,
-                0,
-                bytemuck::cast_slice(&self.clearings),
-            );
+            queue.write_buffer(&pane.clearing_buffer, 0, bytemuck::cast_slice(&self.clearings));
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -3567,17 +3491,11 @@ impl CallbackTrait for LatticeCallback {
         // Mutable, for the one thing a pane carries from one frame to the next:
         // which of the ink strip's two raw textures this frame writes (see
         // [`InkStrip`]).
-        let pane = resources
-            .panes
-            .get_mut(&self.pane_id)
-            .expect("created by pane_buffers above");
+        let pane = resources.panes.get_mut(&self.pane_id).expect("created by pane_buffers above");
         if let Some(glow) = pane.offscreen.as_mut().and_then(|o| o.glow.as_mut()) {
             glow.strip.parity ^= 1;
         }
-        let pane = resources
-            .panes
-            .get(&self.pane_id)
-            .expect("created by pane_buffers above");
+        let pane = resources.panes.get(&self.pane_id).expect("created by pane_buffers above");
         let draws = pane.instance_count > 0 || pane.plus_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket the scene pass and the bloom chain together: what the
@@ -3586,11 +3504,8 @@ impl CallbackTrait for LatticeCallback {
             // never overwritten mid-cycle.
             let timing =
                 self.drives_timer() && resources.timer.as_ref().is_some_and(GpuTimer::arming);
-            let opening = if timing {
-                resources.timer.as_ref().and_then(GpuTimer::opening)
-            } else {
-                None
-            };
+            let opening =
+                if timing { resources.timer.as_ref().and_then(GpuTimer::opening) } else { None };
 
             // The node glow, into a target of its own and BEFORE the scene
             // pass, which composites it at its bottom and samples it per node.
@@ -3807,10 +3722,8 @@ impl CallbackTrait for LatticeCallback {
             // exist at all, which is the Reach bar at 0 — a transparent read
             // is the plain ground, so nothing branches (see
             // `glow_dummy_bind_group`).
-            let light = offscreen
-                .glow
-                .as_ref()
-                .map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
+            let light =
+                offscreen.glow.as_ref().map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
 
             // The marker field sits at the home sheet's own depth, so it goes
             // between the sheets behind it and the home sheet itself —

@@ -1079,14 +1079,13 @@ pub(crate) struct UiPersist {
 /// whose own clamp cannot repair a NaN — see
 /// [`RenderFrame::sanitize`](crate::RenderFrame::sanitize).
 pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
-    ron::from_str::<UiPersist>(serialized)
-        .ok()
-        .filter(|p| p.version >= UI_PERSIST_VERSION)
-        .map(|persist| {
+    ron::from_str::<UiPersist>(serialized).ok().filter(|p| p.version >= UI_PERSIST_VERSION).map(
+        |persist| {
             let mut render = persist.render;
             render.sanitize();
             render
-        })
+        },
+    )
 }
 
 impl SharedState {

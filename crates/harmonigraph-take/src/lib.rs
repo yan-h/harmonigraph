@@ -36,7 +36,7 @@
 pub mod params;
 pub mod render;
 
-pub use params::{MAX_TUNING_OFFSET, ParamKey};
+pub use params::{ParamKey, MAX_TUNING_OFFSET};
 pub use render::{LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger};
 
 use std::io::{BufRead, Write};
@@ -115,10 +115,14 @@ impl Default for Header {
 /// outlive an internal enum, which reusing one would forfeit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum NoteKind {
-    On { velocity: f32 },
+    On {
+        velocity: f32,
+    },
     Off,
     /// Per-note tuning offset in semitones (MPE / CLAP note expression).
-    Tuning { semitones: f32 },
+    Tuning {
+        semitones: f32,
+    },
     /// Release everything (transport reset).
     AllOff,
 }
@@ -186,10 +190,9 @@ impl std::fmt::Display for ReadError {
             ReadError::Io(e) => write!(f, "{e}"),
             ReadError::Parse(line, e) => write!(f, "line {line}: {e}"),
             ReadError::MissingHeader => write!(f, "no Header record (is this a take file?)"),
-            ReadError::Version(v) => write!(
-                f,
-                "take is format version {v}, this build understands {FORMAT_VERSION}"
-            ),
+            ReadError::Version(v) => {
+                write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")
+            }
         }
     }
 }
@@ -307,10 +310,7 @@ pub struct Writer {
 
 impl Writer {
     /// Create (or truncate) `path` and write the header.
-    pub fn create(
-        path: impl AsRef<std::path::Path>,
-        header: &Header,
-    ) -> std::io::Result<Writer> {
+    pub fn create(path: impl AsRef<std::path::Path>, header: &Header) -> std::io::Result<Writer> {
         let file = std::fs::File::create(path)?;
         let mut writer = Writer { out: std::io::BufWriter::new(file) };
         writer.write(&Record::Header(header.clone()))?;
@@ -434,8 +434,7 @@ mod tests {
             NoteRecord { t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
             NoteRecord { t: 2.0, channel: 3, note: 0, kind: NoteKind::AllOff },
         ];
-        let params =
-            vec![ParamRecord { t: 0.0, id: "pitch-class-fade".into(), value: 2.5 }];
+        let params = vec![ParamRecord { t: 0.0, id: "pitch-class-fade".into(), value: 2.5 }];
         (header, notes, params)
     }
 

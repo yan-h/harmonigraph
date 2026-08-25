@@ -18,7 +18,11 @@ use glam::Vec4;
 fn oklch(c: Vec4) -> (f64, f64, f64) {
     let lin = |v: f32| {
         let v = f64::from(v);
-        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
     };
     let (r, g, b) = (lin(c.x), lin(c.y), lin(c.z));
     let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
@@ -372,9 +376,14 @@ fn the_crate_222_names_does_not_work() {
     println!("\n=== hct-cam16 0.1.0: the most colorful colors sRGB has ===");
     println!("(the crate documents chroma as [0, ~150]; CAM16 puts sRGB red near 110)");
     for (name, hex) in [
-        ("red", "#FF0000"), ("green", "#00FF00"), ("blue", "#0000FF"),
-        ("magenta", "#FF00FF"), ("cyan", "#00FFFF"), ("yellow", "#FFFF00"),
-        ("mid grey", "#808080"), ("M3 seed", "#6750A4"),
+        ("red", "#FF0000"),
+        ("green", "#00FF00"),
+        ("blue", "#0000FF"),
+        ("magenta", "#FF00FF"),
+        ("cyan", "#00FFFF"),
+        ("yellow", "#FFFF00"),
+        ("mid grey", "#808080"),
+        ("M3 seed", "#6750A4"),
     ] {
         let c = hct_cam16::Hct::from_hex(hex).expect("literal hex");
         println!("  {name:9} {hex}  h {:6.2}  c {:6.2}  t {:6.2}", c.hue(), c.chroma(), c.tone());
@@ -386,7 +395,11 @@ fn the_crate_222_names_does_not_work() {
         let b = hct_cam16::Hct::new(a.hue(), a.chroma(), a.tone());
         println!(
             "  {hex} reads h{:.1} c{:.1} t{:.1}, and that asked for again is {} (c{:.1})",
-            a.hue(), a.chroma(), a.tone(), b.to_hex(), b.chroma(),
+            a.hue(),
+            a.chroma(),
+            a.tone(),
+            b.to_hex(),
+            b.chroma(),
         );
     }
     println!(
@@ -623,11 +636,9 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
         // above both of the others and is where the headline claim is actually
         // made. Without it the suite would not notice the default drifting up
         // to a setting where the fix buys almost nothing.
-        for (fraction, bound) in [
-            (0.25f64, 1.30f64),
-            (0.5, 1.70),
-            (f64::from(Gradient::default().chroma), 2.15),
-        ] {
+        for (fraction, bound) in
+            [(0.25f64, 1.30f64), (0.5, 1.70), (f64::from(Gradient::default().chroma), 2.15)]
+        {
             let got = spread(&|h| crate::color::chroma_of_for_docs(fraction, l, h));
             let ceiling = spread(&|h| fraction * crate::color::max_chroma_for_docs(l, h));
             assert!(

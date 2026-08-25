@@ -443,9 +443,8 @@ impl<'a> StackBar<'a> {
         let inset = HANDLE_INSET * scale;
         let track = rect.shrink2(Vec2::new(inset, 0.0));
         let x_of = |v: f32| track.left() + track.width() * (v / AXIS_TOP).clamp(0.0, 1.0);
-        let value_at = |x: f32| {
-            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * AXIS_TOP
-        };
+        let value_at =
+            |x: f32| ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * AXIS_TOP;
         let sep = THUMB_SEP * scale;
         let half_thumb = HANDLE_W * 0.5 * scale;
         let thumbs_of = |rings: &RingStack| {
@@ -540,11 +539,7 @@ impl<'a> StackBar<'a> {
         // The quad edge, where a ring stops fitting and the margin the marks
         // run out into begins. A hairline and not a cell: nothing is drawn
         // there, it is where the drawing stops being possible.
-        painter.vline(
-            x_of(1.0),
-            rect.y_range(),
-            egui::Stroke::new(1.0, theme::hairline()),
-        );
+        painter.vline(x_of(1.0), rect.y_range(), egui::Stroke::new(1.0, theme::hairline()));
 
         // Every layer that is on the node wears its own name, laid at the
         // handle that OPENS it — the inner end of the stretch of bar that means
@@ -898,8 +893,7 @@ mod tests {
             (axis(0.0) * W, axis(AXIS_TOP) * W),
             THUMB_SEP,
         );
-        let taken: Vec<Layer> =
-            thumbs.iter().map(|&x| aimed(x, thumbs, HANDLE_W * 0.5)).collect();
+        let taken: Vec<Layer> = thumbs.iter().map(|&x| aimed(x, thumbs, HANDLE_W * 0.5)).collect();
         assert_eq!(taken, LAYERS.to_vec(), "a press on each thumb did not take each layer");
     }
 
@@ -939,7 +933,11 @@ mod tests {
             (230.0, Layer::Mark),
             (390.0, Layer::Mark),
         ] {
-            assert_eq!(aimed(x, thumbs, HANDLE_W * 0.5), want, "a press at {x} took the wrong layer");
+            assert_eq!(
+                aimed(x, thumbs, HANDLE_W * 0.5),
+                want,
+                "a press at {x} took the wrong layer"
+            );
         }
     }
 
@@ -1230,10 +1228,8 @@ mod tests {
             });
             let mut runs = text_boxes(&shapes);
             runs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
-            let order: Vec<usize> = runs
-                .iter()
-                .map(|(_, s)| NAMES.iter().position(|n| n == s).unwrap())
-                .collect();
+            let order: Vec<usize> =
+                runs.iter().map(|(_, s)| NAMES.iter().position(|n| n == s).unwrap()).collect();
             assert!(
                 order.windows(2).all(|p| p[0] < p[1]),
                 "at {w}, the bar reads left to right as {order:?}",

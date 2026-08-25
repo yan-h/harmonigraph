@@ -927,12 +927,8 @@ fn names(
     // rung crosses back into its terms here — a conversion, not a second snap.
     let scale = NAME_PT * raster / crate::marks::NAME_SIZE;
     for voice in named {
-        let name = super::spectral::names::note_name(
-            &state.view,
-            &shown,
-            &state.tuning,
-            voice.pitch,
-        );
+        let name =
+            super::spectral::names::note_name(&state.view, &shown, &state.tuning, voice.pitch);
         crate::marks::draw_stacked_name(
             batch,
             painter,
@@ -1136,11 +1132,7 @@ mod tests {
             // screen offsets carries their lengths, which grow with the turn,
             // so an unnormalized one measures the radius as much as the angle.
             let sin = (near.x * far.y - near.y * far.x) / (near.length() * far.length());
-            assert!(
-                sin.abs() < 1e-5,
-                "midi {midi} and {} are {sin} off one ray",
-                midi + 12.0,
-            );
+            assert!(sin.abs() < 1e-5, "midi {midi} and {} are {sin} off one ray", midi + 12.0,);
             assert!(far.length() > near.length(), "the octave above must be further out");
             assert!(
                 (far.length() - near.length() - s.dr).abs() < 1e-3,
@@ -1356,10 +1348,7 @@ mod tests {
             );
             // And the coloured fill is still inside its own backing, so the
             // pair reads as a dot with an edge rather than as one flat disc.
-            assert!(
-                fill > 0.0 && fill < backed,
-                "a {side}pt pane fills {fill} of a {backed} dot",
-            );
+            assert!(fill > 0.0 && fill < backed, "a {side}pt pane fills {fill} of a {backed} dot",);
         }
     }
 
@@ -1380,10 +1369,7 @@ mod tests {
             assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
             for shape in &shapes {
                 let bounds = shape.visual_bounding_rect();
-                assert!(
-                    !bounds.any_nan(),
-                    "{low}..{high} painted NaN geometry: {shape:?}",
-                );
+                assert!(!bounds.any_nan(), "{low}..{high} painted NaN geometry: {shape:?}",);
             }
         }
     }
@@ -2130,13 +2116,12 @@ mod tests {
         state.spiral_view = view(ZOOM.1, egui::Vec2::ZERO);
         let cfg = state.spectrum_config;
         let span = cfg.high_midi - cfg.low_midi;
-        let shapes: Vec<egui::Shape> = painted_into(rect.size(), rect, |ui| {
-            spiral_pane(ui, &mut state, 0.1)
-        })
-        .shapes
-        .into_iter()
-        .map(|s| s.shape)
-        .collect();
+        let shapes: Vec<egui::Shape> =
+            painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, 0.1))
+                .shapes
+                .into_iter()
+                .map(|s| s.shape)
+                .collect();
 
         // One step per bucket, two vertices a step, and the step count is
         // inclusive of both ends.

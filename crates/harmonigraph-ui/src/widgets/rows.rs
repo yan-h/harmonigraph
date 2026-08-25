@@ -72,10 +72,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
                 egui::StrokeKind::Inside,
             );
         }
-        let knob_x = egui::lerp(
-            (track.left() + radius)..=(track.right() - radius),
-            t,
-        );
+        let knob_x = egui::lerp((track.left() + radius)..=(track.right() - radius), t);
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
             radius - 2.5 * scale,
@@ -162,7 +159,10 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            egui::pos2(rect.left() + pad_x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(
+                rect.left() + pad_x + dot_r * 2.0 + gap,
+                rect.center().y - galley.size().y / 2.0,
+            ),
             galley,
             theme::text(),
         );

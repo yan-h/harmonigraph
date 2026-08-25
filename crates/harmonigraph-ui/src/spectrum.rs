@@ -183,10 +183,7 @@ impl SpectrogramKey {
 }
 
 impl SpectrogramCache {
-    pub(crate) fn new(
-        key: SpectrogramKey,
-        layout: crate::spectrogram::TexLayout,
-    ) -> Self {
+    pub(crate) fn new(key: SpectrogramKey, layout: crate::spectrogram::TexLayout) -> Self {
         SpectrogramCache { key, layout }
     }
 
@@ -270,7 +267,8 @@ impl WholeSong {
         analyzer.set_tapers(config.tapers.count());
         let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
-        let hop = (span / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
+        let hop = (span
+            / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
             / crate::spectrogram::COLUMNS_PER_SLAB)
             .max(AudioSpectrum::FFT_INTERVAL);
         let total = samples.len() / channels; // frames
@@ -580,9 +578,7 @@ impl AudioSpectrum {
     /// maintained per column by [`push_samples`](Self::push_samples); this
     /// only decides whether they are still live.
     pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
-        self.last_samples
-            .is_some_and(|t| now - t <= Self::HOLD_SECONDS)
-            .then_some(&self.display)
+        self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS).then_some(&self.display)
     }
 
     /// The most history ever kept, span-independent: the longest span the roll
@@ -631,9 +627,7 @@ impl AudioSpectrum {
     /// they draw the right picture at many times the cost, so nothing on screen
     /// distinguishes a working cache from one that has quietly stopped. The
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
-    pub(crate) fn spectrogram_fallbacks(
-        &self,
-    ) -> (u32, [u32; crate::spectrogram::Restart::COUNT]) {
+    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, [u32; crate::spectrogram::Restart::COUNT]) {
         self.spectrogram.iter().fold(
             (0, [0; crate::spectrogram::Restart::COUNT]),
             |(rebuilds, mut restarts), s| {

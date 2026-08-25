@@ -489,7 +489,11 @@ fn learn_c_offset(classes: &[PitchClass]) -> Option<f32> {
     }
     best_c.map(|pc| {
         let cents = pc.to_cents();
-        if cents > 600.0 { cents - 1200.0 } else { cents }
+        if cents > 600.0 {
+            cents - 1200.0
+        } else {
+            cents
+        }
     })
 }
 
@@ -577,7 +581,9 @@ mod tests {
         let tuning = Tuning::just();
         // Two just fifths = 1403.91¢ ≡ 203.91¢ (a just major second).
         let pc = tuning.pitch_class(LatticePos::new(2, 0, 0));
-        assert!(pc.distance_to(PitchClass::from_cents(203.91)) <= PitchClassDistance::from_cents(0.01));
+        assert!(
+            pc.distance_to(PitchClass::from_cents(203.91)) <= PitchClassDistance::from_cents(0.01)
+        );
     }
 
     #[test]
@@ -749,10 +755,7 @@ mod tests {
     #[test]
     fn fourth_implies_fifth() {
         // C and the F below it (inverted just fifth).
-        let classes = [
-            PitchClass::from_cents(0.0),
-            PitchClass::from_cents(1200.0 - THREE_JUST),
-        ];
+        let classes = [PitchClass::from_cents(0.0), PitchClass::from_cents(1200.0 - THREE_JUST)];
         let learned = learn_tuning(&classes);
         let three = learned.three.unwrap();
         assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
@@ -761,10 +764,7 @@ mod tests {
     #[test]
     fn nothing_close_learns_nothing() {
         // A tritone-ish dyad: no prime interval within range, no C.
-        let classes = [
-            PitchClass::from_cents(300.0),
-            PitchClass::from_cents(900.0),
-        ];
+        let classes = [PitchClass::from_cents(300.0), PitchClass::from_cents(900.0)];
         assert_eq!(learn_tuning(&classes), LearnedTuning::default());
     }
 

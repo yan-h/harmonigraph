@@ -1,7 +1,7 @@
 //! The Gap: how far a ring holds light off itself, and how that decays.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// A node STANDS ITS LIGHT OFF the rings it draws, and the Gap depth is the
 /// one switch on it.
@@ -77,8 +77,7 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     assert!(band_px > 20, "the node inked only {band_px}px of radius; there is nothing to read");
     // Half a Gap past the band's outer edge: the standoff is solid there and
     // the node inks nothing, so the whole of the difference below is light.
-    let probe = centre
-        + (band_px as f32 * (1.0 + 0.08 / bare.rings_outer)).round() as usize;
+    let probe = centre + (band_px as f32 * (1.0 + 0.08 / bare.rings_outer)).round() as usize;
     assert!(
         !inked(&plain, probe),
         "the probe at {probe} sits on the node's own ink, not outside it",
@@ -222,8 +221,8 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
                 if g < from || g >= to || inked(&plain, i) {
                     continue;
                 }
-                sum += brightness(&flat[i * 4..i * 4 + 3])
-                    - brightness(&stood_off[i * 4..i * 4 + 3]);
+                sum +=
+                    brightness(&flat[i * 4..i * 4 + 3]) - brightness(&stood_off[i * 4..i * 4 + 3]);
                 n += 1;
             }
         }
@@ -723,8 +722,7 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
     // The band's own outer edge is where this fixture's ink ends, and the Scene
     // names it.
     let ink_uv = at(0.0, 0.0, 0.0).rings_outer;
-    let (closed, wide) =
-        standoff_share_rings(&mut shooter, SIZE, &at, ink_uv, 0.5 * GAP, ANGLES);
+    let (closed, wide) = standoff_share_rings(&mut shooter, SIZE, &at, ink_uv, 0.5 * GAP, ANGLES);
 
     // The closed ring first, which is both the reference for the wide gap below
     // and a claim of its own.
@@ -843,8 +841,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
             "the probe sits outside half an Octave gap, where every reading agrees",
         )
     };
-    let (closed, wide) =
-        standoff_share_rings(&mut shooter, SIZE, &at, BAND_OUTER, PAST, ANGLES);
+    let (closed, wide) = standoff_share_rings(&mut shooter, SIZE, &at, BAND_OUTER, PAST, ANGLES);
 
     let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
     assert!(
@@ -938,14 +935,8 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
             "the widest gap is too narrow for its middle to be clear of the ink",
         )
     };
-    let (closed, wide) = standoff_share_rings(
-        &mut shooter,
-        SIZE,
-        &at,
-        STRIP_IN + STRIP_THICK,
-        0.5 * GAP,
-        ANGLES,
-    );
+    let (closed, wide) =
+        standoff_share_rings(&mut shooter, SIZE, &at, STRIP_IN + STRIP_THICK, 0.5 * GAP, ANGLES);
 
     let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
     assert!(

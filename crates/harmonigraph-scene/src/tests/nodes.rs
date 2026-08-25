@@ -1,10 +1,10 @@
 //! What a sounding note puts on its node: the pitch gradient, and the fades
 //! each layer runs on.
 
+use super::harness::*;
 use crate::*;
 use glam::Vec3;
 use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
-use super::harness::*;
 
 #[test]
 fn a_notes_color_varies_with_pitch() {
@@ -709,8 +709,7 @@ fn octaves_fade_independently() {
     // rather than when the key came up — a tap this short is still arriving
     // at the key, and is not dimmed for it (`Voice::release_level`).
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-    let scene =
-        scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.5);
+    let scene = scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
@@ -773,11 +772,7 @@ fn one_fade_time_carries_every_layer_of_the_node() {
         tracker.handle_event(NoteEvent::off(2.0, 0, note));
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    let view = ViewConfig {
-        mark_melody: true,
-        mark_bass: true,
-        ..plain_view()
-    };
+    let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
     tracker.prune(3.0, &view.envelope(&frame));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 3.0);
 
@@ -833,12 +828,7 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
         // Mid-fade, well within one fade time — and past the arrival the same
         // second bought, so the discs below are on their way out.
         let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-        let view = ViewConfig {
-            mark_melody: true,
-            mark_bass: true,
-            mark_delay,
-            ..plain_view()
-        };
+        let view = ViewConfig { mark_melody: true, mark_bass: true, mark_delay, ..plain_view() };
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.5);
         assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
         // Distinct PITCH CLASSES wearing a ring, not nodes: one class lights
@@ -889,22 +879,14 @@ fn window_center_pans_which_nodes_display() {
     let positions: Vec<_> = view.reach().positions().collect();
     assert_eq!(
         positions,
-        vec![
-            LatticePos::new(4, 0, 0),
-            LatticePos::new(5, 0, 0),
-            LatticePos::new(6, 0, 0)
-        ]
+        vec![LatticePos::new(4, 0, 0), LatticePos::new(5, 0, 0), LatticePos::new(6, 0, 0)]
     );
 
     // The center node renders at the world origin.
     let tracker = NoteTracker::new();
-    let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
-    let center_node = scene
-        .nodes
-        .iter()
-        .find(|n| n.lattice_pos == LatticePos::new(5, 0, 0))
-        .unwrap();
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
+    let center_node =
+        scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::new(5, 0, 0)).unwrap();
     assert_eq!(center_node.world_pos, Vec3::ZERO);
 }
 
@@ -922,13 +904,7 @@ fn every_channel_draws_the_same_node() {
     let drawn = |channel: u8| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, channel, 60, 1.0));
-        let scene = scene_of(
-            &tracker,
-            &Tuning::default(),
-            &plain_view(),
-            &plain_frame(),
-            0.0,
-        );
+        let scene = scene_of(&tracker, &Tuning::default(), &plain_view(), &plain_frame(), 0.0);
         format!("{:?}", origin_node(&scene))
     };
     let lit = drawn(0);
@@ -945,15 +921,9 @@ fn held_note_lights_matching_nodes() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0)); // C4: pitch class 0, octave 4
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled past the view's attack: every layer of a node eases in, so at
-    // the note-on instant itself the whole thing is still at zero.
-    let scene = scene_of(
-        &tracker,
-        &tuning,
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.5,
-    );
+                                    // Sampled past the view's attack: every layer of a node eases in, so at
+                                    // the note-on instant itself the whole thing is still at zero.
+    let scene = scene_of(&tracker, &tuning, &ViewConfig::default(), &plain_frame(), 0.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0);
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0);
@@ -969,8 +939,12 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
     // fresh-view look is Yan's and is free to ship a fringe, but this test is
     // about the fold at the ring's own edge, which a fringe would move.
-    let view =
-        ViewConfig { octave_count: 5, octave_center: 60.0, octave_extras: 0, ..ViewConfig::default() };
+    let view = ViewConfig {
+        octave_count: 5,
+        octave_center: 60.0,
+        octave_extras: 0,
+        ..ViewConfig::default()
+    };
     // Five octaves with middle C at the top, so a C node draws five
     // indicators: middle C's octave and two either side. MIDI 36..95 — every
     // note from C1 to B5 in the DAW's numbering — has one of its own, and only
@@ -1027,8 +1001,12 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
     // fresh-view look is Yan's and is free to ship a fringe, but this test is
     // about the packing's own edge, which a fringe would move.
-    let view =
-        ViewConfig { octave_count: 5, octave_center: 12.0, octave_extras: 0, ..ViewConfig::default() };
+    let view = ViewConfig {
+        octave_count: 5,
+        octave_center: 12.0,
+        octave_extras: 0,
+        ..ViewConfig::default()
+    };
     let scene = scene_of(&held(0), &tuning, &view, &plain_frame(), 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
@@ -1098,13 +1076,7 @@ fn the_views_fringe_reaches_the_wheel() {
         octave_extra_blend: 0.25,
         ..ViewConfig::default()
     };
-    let scene = scene_of(
-        &sounding(),
-        &Tuning::default(),
-        &view,
-        &plain_frame(),
-        0.5,
-    );
+    let scene = scene_of(&sounding(), &Tuning::default(), &view, &plain_frame(), 0.5);
     assert_eq!(
         scene.octave_layout,
         octave_layout(5, 60.0, 2, 0.4, 0.25),
@@ -1336,11 +1308,7 @@ fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
         }
     }
     scene.spectral = paint;
-    scene.wear_audio_rings(
-        &mut RingFade::default(),
-        &view.envelope(&plain_frame()),
-        0.5,
-    );
+    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
     scene
 }
 

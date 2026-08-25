@@ -291,14 +291,12 @@ fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
         }
         // Per-note tuning (CLAP note expression / MPE via the host); v1
         // supported this as PolyTuning.
-        NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => {
-            Some(MappedNote {
-                timing,
-                channel,
-                note,
-                kind: NoteEventKind::Tuning { semitones: tuning },
-            })
-        }
+        NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => Some(MappedNote {
+            timing,
+            channel,
+            note,
+            kind: NoteEventKind::Tuning { semitones: tuning },
+        }),
         _ => None,
     }
 }
@@ -419,7 +417,6 @@ impl Plugin for Harmonigraph {
             note: 0,
             kind: NoteEventKind::AllOff,
         });
-
     }
 
     fn process(
@@ -501,8 +498,7 @@ impl Plugin for Harmonigraph {
         }
 
         if let Some(origin) = take_origin {
-            self.take
-                .params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+            self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
             // The take's own audio, when asked for: the input bus exactly
             // as it arrives, so the render gets a spectrum and a
@@ -530,16 +526,12 @@ impl Plugin for Harmonigraph {
 
 impl ClapPlugin for Harmonigraph {
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
-    const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("Tonnetz harmony and spectrum visualizer");
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("Tonnetz harmony and spectrum visualizer");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
     const CLAP_SUPPORT_URL: Option<&'static str> =
         Some("https://github.com/yan-h/harmonigraph/issues");
-    const CLAP_FEATURES: &'static [ClapFeature] = &[
-        ClapFeature::NoteEffect,
-        ClapFeature::Analyzer,
-        ClapFeature::Utility,
-    ];
+    const CLAP_FEATURES: &'static [ClapFeature] =
+        &[ClapFeature::NoteEffect, ClapFeature::Analyzer, ClapFeature::Utility];
 }
 
 impl Vst3Plugin for Harmonigraph {
@@ -629,8 +621,7 @@ mod tests {
             0.5 * window.samples() as f64 / f64::from(DEFAULT_SAMPLE_RATE as f32)
         };
         let blob = {
-            let mut saved =
-                harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+            let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
             saved.spectrum_config.window = SpectrumWindow::Precise;
             harmonigraph_ui::shell::close(&saved)
         };
@@ -673,8 +664,7 @@ mod tests {
     #[test]
     fn every_param_key_id_matches_the_host_facing_id() {
         let params = HarmonigraphParams::default();
-        let host_ids: Vec<String> =
-            params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        let host_ids: Vec<String> = params.param_map().into_iter().map(|(id, _, _)| id).collect();
         for key in ParamKey::ALL {
             assert!(
                 host_ids.iter().any(|id| id == key.id()),
@@ -722,7 +712,11 @@ mod tests {
         );
 
         let tuning = NoteEvent::PolyTuning {
-            timing: 13, voice_id: None, channel: 1, note: 67, tuning: -0.25,
+            timing: 13,
+            voice_id: None,
+            channel: 1,
+            note: 67,
+            tuning: -0.25,
         };
         assert_eq!(
             mapped_note(tuning),
@@ -745,22 +739,34 @@ mod tests {
     fn the_poly_expressions_are_not_notes() {
         let not_notes = [
             NoteEvent::PolyPressure {
-                timing: 5, voice_id: None, channel: 1, note: 67, pressure: 0.5,
+                timing: 5,
+                voice_id: None,
+                channel: 1,
+                note: 67,
+                pressure: 0.5,
             },
-            NoteEvent::PolyVolume {
-                timing: 5, voice_id: None, channel: 1, note: 67, gain: 0.5,
-            },
-            NoteEvent::PolyPan {
-                timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5,
-            },
+            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: 0.5 },
+            NoteEvent::PolyPan { timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5 },
             NoteEvent::PolyVibrato {
-                timing: 5, voice_id: None, channel: 1, note: 67, vibrato: 0.5,
+                timing: 5,
+                voice_id: None,
+                channel: 1,
+                note: 67,
+                vibrato: 0.5,
             },
             NoteEvent::PolyExpression {
-                timing: 5, voice_id: None, channel: 1, note: 67, expression: 0.5,
+                timing: 5,
+                voice_id: None,
+                channel: 1,
+                note: 67,
+                expression: 0.5,
             },
             NoteEvent::PolyBrightness {
-                timing: 5, voice_id: None, channel: 1, note: 67, brightness: 0.5,
+                timing: 5,
+                voice_id: None,
+                channel: 1,
+                note: 67,
+                brightness: 0.5,
             },
             // Plugin-to-host: this one cannot arrive on the path at all.
             NoteEvent::VoiceTerminated { timing: 5, voice_id: None, channel: 1, note: 67 },

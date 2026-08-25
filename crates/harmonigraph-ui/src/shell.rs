@@ -299,8 +299,7 @@ mod tests {
         Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
         assert_eq!(reopened.ui_scale, 1.25);
         assert_eq!(
-            reopened.workspace.min_window_width,
-            MIN_WINDOW_WIDTH,
+            reopened.workspace.min_window_width, MIN_WINDOW_WIDTH,
             "and the floor survives a load",
         );
     }

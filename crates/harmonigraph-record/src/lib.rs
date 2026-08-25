@@ -129,10 +129,19 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
 #[derive(Clone, Copy)]
 pub enum Entry {
-    Note { t: f64, channel: u8, note: u8, kind: NoteEventKind },
+    Note {
+        t: f64,
+        channel: u8,
+        note: u8,
+        kind: NoteEventKind,
+    },
     /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
     /// allocating on the audio thread.
-    Param { t: f64, key: usize, value: f32 },
+    Param {
+        t: f64,
+        key: usize,
+        value: f32,
+    },
     /// The take time of the first audio sample about to be written.
     /// Sent once per pass, before any audio, so the header can say where
     /// the WAV sits relative to the notes.
@@ -339,11 +348,8 @@ impl Recorder {
     /// that commits everything), but nothing declares that, and an odd
     /// capacity or a partial drain would end the argument silently.
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
-        let room = interleaved_reservation(
-            self.audio.slots(),
-            samples / TAKE_CHANNELS,
-            TAKE_CHANNELS,
-        );
+        let room =
+            interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
@@ -518,15 +524,13 @@ impl Control {
     /// (which carries the current look, bounce, and offset).
     pub fn render_now(&self, request: RenderRequest) {
         match self.last_take() {
-            Some(path) => {
-                spawn_render(
-                    request,
-                    path,
-                    self.status.clone(),
-                    self.progress.clone(),
-                    self.render.clone(),
-                )
-            }
+            Some(path) => spawn_render(
+                request,
+                path,
+                self.status.clone(),
+                self.progress.clone(),
+                self.render.clone(),
+            ),
             None => *self.status.lock() = "no take recorded yet to render".into(),
         }
     }
@@ -679,46 +683,44 @@ pub fn channel() -> (Recorder, Control) {
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
     let thread_render = render.clone();
-    let _ = std::thread::Builder::new()
-        .name("harmonigraph-take-writer".into())
-        .spawn(move || {
-            let mut open: Option<Open> = None;
-            loop {
-                match orders.try_recv() {
-                    Ok(Command::Start(header, path, spec)) => {
-                        open = Open::create(*header, path, 1, spec, &thread_status);
+    let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
+        let mut open: Option<Open> = None;
+        loop {
+            match orders.try_recv() {
+                Ok(Command::Start(header, path, spec)) => {
+                    open = Open::create(*header, path, 1, spec, &thread_status);
+                }
+                Ok(Command::Stop(render)) => {
+                    // Drain what the audio thread already queued
+                    // before closing, or the tail of the take is lost.
+                    drain(&mut consumer, &mut open, &thread_status);
+                    let finished = open.take().map(|o| o.finish());
+                    if let Some(path) = &finished {
+                        *thread_last_take.lock() = Some(path.clone());
                     }
-                    Ok(Command::Stop(render)) => {
-                        // Drain what the audio thread already queued
-                        // before closing, or the tail of the take is lost.
-                        drain(&mut consumer, &mut open, &thread_status);
-                        let finished = open.take().map(|o| o.finish());
-                        if let Some(path) = &finished {
-                            *thread_last_take.lock() = Some(path.clone());
-                        }
-                        if let (Some(path), Some(render)) = (finished, render) {
-                            spawn_render(
-                                *render,
-                                path,
-                                thread_status.clone(),
-                                thread_progress.clone(),
-                                thread_render.clone(),
-                            );
-                        }
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        drain(&mut consumer, &mut open, &thread_status);
-                        return;
+                    if let (Some(path), Some(render)) = (finished, render) {
+                        spawn_render(
+                            *render,
+                            path,
+                            thread_status.clone(),
+                            thread_progress.clone(),
+                            thread_render.clone(),
+                        );
                     }
                 }
-                let had_records = drain(&mut consumer, &mut open, &thread_status);
-                let had_audio = drain_audio(&mut audio_consumer, &mut open);
-                if !had_records && !had_audio {
-                    std::thread::sleep(DRAIN_IDLE);
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    drain(&mut consumer, &mut open, &thread_status);
+                    return;
                 }
             }
-        });
+            let had_records = drain(&mut consumer, &mut open, &thread_status);
+            let had_audio = drain_audio(&mut audio_consumer, &mut open);
+            if !had_records && !had_audio {
+                std::thread::sleep(DRAIN_IDLE);
+            }
+        }
+    });
 
     (
         Recorder {
@@ -801,8 +803,7 @@ impl Open {
             let wav = path.with_extension("wav");
             match harmonigraph_take::WavWriter::create(&wav, spec.sample_rate, spec.channels) {
                 Ok(writer) => {
-                    header.audio_file =
-                        wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+                    header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                     Some(writer)
                 }
                 Err(err) => {
@@ -1176,151 +1177,148 @@ fn spawn_render(
     // starts queueing behind a run that now has no reason to finish.
     control.cancel_in_flight(&take_path);
 
-    let _ = std::thread::Builder::new()
-        .name("harmonigraph-take-render".into())
-        .spawn(move || {
-            let _claim = Claim { control: &control, take: &take_path, generation };
-            // Wait out the run being cancelled, so its process is reaped
-            // before this one starts. Held for the whole render, which is what
-            // makes "one render at a time" true rather than hoped for — and
-            // what a render of ANOTHER take queues on instead of cancelling.
-            let _flight = control.running.lock();
-            if control.superseded(&take_path, generation) {
-                // Another request arrived while this one queued. It is already
-                // waiting on the same lock, and rendering here would only be
-                // work to throw away.
+    let _ = std::thread::Builder::new().name("harmonigraph-take-render".into()).spawn(move || {
+        let _claim = Claim { control: &control, take: &take_path, generation };
+        // Wait out the run being cancelled, so its process is reaped
+        // before this one starts. Held for the whole render, which is what
+        // makes "one render at a time" true rather than hoped for — and
+        // what a render of ANOTHER take queues on instead of cancelling.
+        let _flight = control.running.lock();
+        if control.superseded(&take_path, generation) {
+            // Another request arrived while this one queued. It is already
+            // waiting on the same lock, and rendering here would only be
+            // work to throw away.
+            return;
+        }
+
+        let out = take_path.with_extension("mp4");
+        // Written under a name of this run's own, and moved onto `out`
+        // only once it has succeeded.
+        //
+        // Killing the renderer does not kill the ffmpeg it is piping to —
+        // that is a grandchild, and it outlives the kill by however long
+        // finalizing takes. Sharing one output path with it is how a
+        // cancelled render corrupts the video that replaces it. A path per
+        // run means the straggler writes somewhere nobody is reading, and
+        // the file at `out` is only ever produced whole, by rename.
+        let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
+        // A "Re-render take" carries the current look as a persist blob; write
+        // it beside the take and pass --ui-state so post-record settings
+        // override the take's record-time snapshot. Per-run for the same
+        // reason as `partial`, and removed after the run.
+        let ui_state_file = request.ui_state.as_ref().and_then(|blob| {
+            let path = take_path.with_extension(format!("rendernow-{generation}.ron"));
+            std::fs::write(&path, blob).ok().map(|()| path)
+        });
+
+        let mut command = std::process::Command::new(&request.program);
+        command.arg(&take_path).arg("--out").arg(&partial);
+        if let Some(audio) = &request.audio {
+            command.arg("--audio").arg(audio);
+        }
+        if let Some(align) = &request.align {
+            command.arg("--align").arg(align);
+        }
+        if let Some(file) = &ui_state_file {
+            command.arg("--ui-state").arg(file);
+        }
+        let [w, h] = request.size;
+        command.arg("--size").arg(format!("{w}x{h}"));
+        // Only when something forces it. The renderer turns the whole-song
+        // playhead on for `--playhead` OR the take's own recorded setting,
+        // so a flag passed unconditionally here is one the Video pane's
+        // Spectrogram row can never turn back off — which is exactly what
+        // it was, and why picking "Live" did nothing. Left alone, the
+        // take's setting is the whole answer, in both directions.
+        if request.playhead == Some(true) {
+            command.arg("--playhead");
+        }
+
+        // stdout is the renderer's `--dump-layout` channel and nothing
+        // else; stderr carries everything this cares about, so pipe that
+        // one and follow it.
+        command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+
+        *status.lock() = format!("rendering {}...", out.display());
+        let spawned = command.spawn();
+        let cleanup = || {
+            if let Some(file) = &ui_state_file {
+                let _ = std::fs::remove_file(file);
+            }
+            let _ = std::fs::remove_file(&partial);
+        };
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(err) => {
+                cleanup();
+                *status.lock() = format!(
+                    "could not run {}: {err} — check the Renderer path",
+                    request.program.display()
+                );
                 return;
             }
+        };
 
-            let out = take_path.with_extension("mp4");
-            // Written under a name of this run's own, and moved onto `out`
-            // only once it has succeeded.
-            //
-            // Killing the renderer does not kill the ffmpeg it is piping to —
-            // that is a grandchild, and it outlives the kill by however long
-            // finalizing takes. Sharing one output path with it is how a
-            // cancelled render corrupts the video that replaces it. A path per
-            // run means the straggler writes somewhere nobody is reading, and
-            // the file at `out` is only ever produced whole, by rename.
-            let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
-            // A "Re-render take" carries the current look as a persist blob; write
-            // it beside the take and pass --ui-state so post-record settings
-            // override the take's record-time snapshot. Per-run for the same
-            // reason as `partial`, and removed after the run.
-            let ui_state_file = request.ui_state.as_ref().and_then(|blob| {
-                let path = take_path.with_extension(format!("rendernow-{generation}.ron"));
-                std::fs::write(&path, blob).ok().map(|()| path)
-            });
+        progress.begin();
+        let stderr = child.stderr.take();
+        // Hand the process over so a later request can reach it. Under the
+        // same lock a canceller takes, and re-checking the generation
+        // inside it: a request that arrived between the spawn and here
+        // found no child to kill, so this is where that one gets killed
+        // instead of running to completion unnoticed.
+        {
+            let mut in_flight = control.child.lock();
+            if control.superseded(&take_path, generation) {
+                let _ = child.kill();
+            }
+            *in_flight = Some(InFlight { take: take_path.clone(), child });
+        }
+        // Ends at EOF on the pipe, which a kill brings about immediately.
+        let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
+        let result = match control.child.lock().take() {
+            Some(mut flight) => flight.child.wait(),
+            // Unreachable in practice: nothing else takes the child, only
+            // kills it. Reported rather than unwrapped, since a render
+            // thread panicking in a DAW is not worth the tidier code.
+            None => Err(std::io::Error::other("the render process went missing")),
+        };
+        progress.end();
 
-            let mut command = std::process::Command::new(&request.program);
-            command.arg(&take_path).arg("--out").arg(&partial);
-            if let Some(audio) = &request.audio {
-                command.arg("--audio").arg(audio);
-            }
-            if let Some(align) = &request.align {
-                command.arg("--align").arg(align);
-            }
-            if let Some(file) = &ui_state_file {
-                command.arg("--ui-state").arg(file);
-            }
-            let [w, h] = request.size;
-            command.arg("--size").arg(format!("{w}x{h}"));
-            // Only when something forces it. The renderer turns the whole-song
-            // playhead on for `--playhead` OR the take's own recorded setting,
-            // so a flag passed unconditionally here is one the Video pane's
-            // Spectrogram row can never turn back off — which is exactly what
-            // it was, and why picking "Live" did nothing. Left alone, the
-            // take's setting is the whole answer, in both directions.
-            if request.playhead == Some(true) {
-                command.arg("--playhead");
-            }
+        // A cancelled render has nothing to say: its replacement is
+        // already running and the failure is one we caused on purpose.
+        // Its partial output goes, and the status line stays the new
+        // render's.
+        if control.superseded(&take_path, generation) {
+            cleanup();
+            return;
+        }
 
-            // stdout is the renderer's `--dump-layout` channel and nothing
-            // else; stderr carries everything this cares about, so pipe that
-            // one and follow it.
-            command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
-
-            *status.lock() = format!("rendering {}...", out.display());
-            let spawned = command.spawn();
-            let cleanup = || {
+        match result {
+            Ok(exit) if exit.success() => {
+                // Whole, and only now under the name anything else reads.
+                match std::fs::rename(&partial, &out) {
+                    Ok(()) => *status.lock() = format!("rendered {}", out.display()),
+                    Err(err) => {
+                        *status.lock() = format!("rendered, but could not move into place: {err}")
+                    }
+                }
                 if let Some(file) = &ui_state_file {
                     let _ = std::fs::remove_file(file);
                 }
-                let _ = std::fs::remove_file(&partial);
-            };
-            let mut child = match spawned {
-                Ok(child) => child,
-                Err(err) => {
-                    cleanup();
-                    *status.lock() = format!(
-                        "could not run {}: {err} — check the Renderer path",
-                        request.program.display()
-                    );
-                    return;
-                }
-            };
-
-            progress.begin();
-            let stderr = child.stderr.take();
-            // Hand the process over so a later request can reach it. Under the
-            // same lock a canceller takes, and re-checking the generation
-            // inside it: a request that arrived between the spawn and here
-            // found no child to kill, so this is where that one gets killed
-            // instead of running to completion unnoticed.
-            {
-                let mut in_flight = control.child.lock();
-                if control.superseded(&take_path, generation) {
-                    let _ = child.kill();
-                }
-                *in_flight = Some(InFlight { take: take_path.clone(), child });
             }
-            // Ends at EOF on the pipe, which a kill brings about immediately.
-            let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
-            let result = match control.child.lock().take() {
-                Some(mut flight) => flight.child.wait(),
-                // Unreachable in practice: nothing else takes the child, only
-                // kills it. Reported rather than unwrapped, since a render
-                // thread panicking in a DAW is not worth the tidier code.
-                None => Err(std::io::Error::other("the render process went missing")),
-            };
-            progress.end();
-
-            // A cancelled render has nothing to say: its replacement is
-            // already running and the failure is one we caused on purpose.
-            // Its partial output goes, and the status line stays the new
-            // render's.
-            if control.superseded(&take_path, generation) {
+            // The renderer's own diagnostics are far more useful than the
+            // exit code, and this is the only place a plugin user will
+            // ever see them.
+            Ok(_) => {
                 cleanup();
-                return;
+                *status.lock() = format!("render failed: {last}");
             }
-
-            match result {
-                Ok(exit) if exit.success() => {
-                    // Whole, and only now under the name anything else reads.
-                    match std::fs::rename(&partial, &out) {
-                        Ok(()) => *status.lock() = format!("rendered {}", out.display()),
-                        Err(err) => {
-                            *status.lock() =
-                                format!("rendered, but could not move into place: {err}")
-                        }
-                    }
-                    if let Some(file) = &ui_state_file {
-                        let _ = std::fs::remove_file(file);
-                    }
-                }
-                // The renderer's own diagnostics are far more useful than the
-                // exit code, and this is the only place a plugin user will
-                // ever see them.
-                Ok(_) => {
-                    cleanup();
-                    *status.lock() = format!("render failed: {last}");
-                }
-                Err(err) => {
-                    cleanup();
-                    *status.lock() = format!("render failed: {err}");
-                }
+            Err(err) => {
+                cleanup();
+                *status.lock() = format!("render failed: {err}");
             }
-        });
+        }
+    });
 }
 
 #[cfg(test)]
