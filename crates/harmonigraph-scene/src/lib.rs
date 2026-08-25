@@ -179,12 +179,12 @@ pub const RING_INNER_MAX: f32 = 0.9;
 /// It is the RADIAL one ([`ViewConfig::ring_gap`]) the number is sized for,
 /// that being the one spent out of the quad, and spent twice over on one node
 /// (between the audio ring and the band, and between the band and the marks):
-/// at the top of the bar the gaps alone are half of it. The ANGULAR one
+/// at the top of the bar the gaps alone are two fifths of it. The ANGULAR one
 /// ([`ViewConfig::octave_gap`]) costs the stack
 /// nothing and wants a ceiling for a different reason — a gap of a whole
 /// sector's arc is every indicator erased — and lands near enough the same
 /// place that a second constant would be two numbers saying one thing.
-pub const GAP_MAX: f32 = 0.4;
+pub const GAP_MAX: f32 = 0.2;
 
 /// How far a resting marker may be asked to reach on EITHER of its two axes —
 /// the length of an arm ([`ViewConfig::plus_arm`]) and the thickness across

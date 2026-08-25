@@ -805,7 +805,7 @@ mod tests {
     /// Reachable from the bars alone, which is what makes it worth a fixture:
     /// the middle at its own maximum, an audio ring that just reaches the quad
     /// edge from there, and the Ring gap at its own maximum puts the band's slot
-    /// at 1.4. The band is OFF there rather than refused, so the guard above
+    /// at 1.2. The band is OFF there rather than refused, so the guard above
     /// does not stand in front of this one.
     #[test]
     fn a_slot_starting_past_the_quad_edge_leaves_no_room() {
