@@ -292,17 +292,14 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     );
 }
 
-/// What the NODES' glow is a layer of is a node, and a lattice drawing none has
-/// none of it — with the markers' own light dialled off, the glow's target is
-/// cleared and nothing writes to it, and the composite lays exactly nothing over
-/// the picture.
+/// What the glow is a layer of is a node, and a lattice drawing none has none of
+/// it: the glow's target is cleared, nothing writes to it, and the composite
+/// lays exactly nothing over the picture.
 ///
 /// The guard is against the light ever becoming a POST-PROCESS over the finished
 /// picture. One of those would find the markers' ink and bloom it here whatever
-/// any bar said; a draw off an instance buffer cannot, and `marker_light` at 0
-/// is what makes the marker draw say nothing while its buffer is full.
-/// `a_resting_marker_lights_its_own_position` is the same fixture with that bar
-/// up, and is where the markers' own light is measured.
+/// any bar said; a draw off an instance buffer cannot, and the fixture's buffer
+/// is full of markers while the Reach is dialled right up.
 ///
 /// Byte-identical rather than nearly so, which is what a cleared target and a
 /// draw discarding every fragment are worth together.
@@ -317,7 +314,6 @@ fn a_lattice_with_no_node_grows_no_glow() {
         scene.nodes.clear();
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.marker_light = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -389,7 +385,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.glow_strength = 1.5;
         // A clearing, so the near node's knockout covers the far node's ink
         // in the scene pass; what is measured is the light, not the knockout.
-        scene.glow_gap = 0.4;
+        scene.glow_shadow = 0.4;
         scene
     };
     let covering = |wash: f32| -> Scene {
@@ -549,7 +545,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = 0.16;
+        scene.glow_shadow = 0.16;
         scene
     };
     // The fixture's one node sits at the origin, which the camera is pointed

@@ -80,13 +80,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // A WIDER clearing than the fixture's own, which is what reaches
     // `node_clearing`'s skip: the clearing's shape is the rings' disc unioned
     // with one wedge per mark, and inside that disc the walk over the wedges is
-    // skipped as an answer already arrived at. At the Gap `parity_scene` ships,
+    // skipped as an answer already arrived at. At the Shadow `parity_scene` ships,
     // a marked node's wedge stands outside the disc over most of its own
     // sector, so the skip is compiled on both pipelines and rarely decides
     // anything; a reach this wide swallows the strip and takes it.
     let clearing = || {
         let mut scene = parity_scene();
-        scene.glow_gap = 0.6;
+        scene.glow_shadow = 0.6;
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside
@@ -101,7 +101,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
     // skip — the same one as `node_clearing`'s, over the same wedges, taken
     // once the band has held the pixel's light off in full. The REACH is what
-    // puts it in the comparison at all, and no fixture above has one: the Gap
+    // puts it in the comparison at all, and no fixture above has one: the Shadow
     // dials ride to the GPU only while the light does (`misc11` is zeroed at
     // reach 0), and there is no light draw to compare without a glow target
     // for it to write into. Both are the same switch, which is why one line
@@ -134,18 +134,15 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.octave_gap = 0.0;
         scene
     };
-    // A marker's standoff reaching PAST its own pool, which is the only way
-    // `fs_plus_glow`'s early-out decides anything: inside the pool the light
-    // keeps every fragment on its own, and a fragment the standoff holds and
-    // the light does not exists only out here. Every fixture above sizes the
-    // marker's pool wider than its Gap, so without this the switch is compiled
-    // on the markers and never once taken — a relaxation dropping the
-    // standoff's term from it passes them all.
+    // A marker casting a standoff at all, which is what gives `fs_plus_glow`'s
+    // early-out something to keep: every fragment inside a cross's own Shadow is
+    // one the switch must not discard. The fixtures above sit at the fresh Shadow,
+    // where the shadow is a rind on the ink and a sampling of pixels can miss
+    // it whole.
     let marker_standoff = || {
         let mut scene = standing_off();
-        scene.glow_gap = 1.0;
-        scene.glow_gap_soft = 1.0;
-        scene.marker_light = 0.5;
+        scene.glow_shadow = 1.0;
+        scene.glow_shadow_soft = 1.0;
         scene
     };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
@@ -428,16 +425,21 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         };
         // BOTH draws that write the glow's three attachments. The marker's is a
         // pipeline of its own off the same shader, with an early-out of its own
-        // (`fs_plus_glow`) weighing a standoff and a pool that a node's never
-        // sees — so without this the switch is compiled on the markers and
-        // never once compared, which is the whole claim this test makes.
-        for (pass_name, entries, buffers, buffer, count) in [
+        // (`fs_plus_glow`) weighing a standoff a node's never sees — so without
+        // this the switch is compiled on the markers and never once compared,
+        // which is the whole claim this test makes.
+        //
+        // `lights` is which of the two writes the light at all: a marker's draw
+        // is the shadow it casts and nothing else, so the guard below asking
+        // for a lit layer is the node pass's alone.
+        for (pass_name, entries, buffers, buffer, count, lights) in [
             (
                 "node",
                 ("vs_glow", "fs_glow"),
                 GpuInstance::LAYOUT,
                 &pane.instance_buffer,
                 pane.instance_count,
+                true,
             ),
             (
                 "marker",
@@ -445,6 +447,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 GpuPlus::LAYOUT,
                 &pane.plus_buffer,
                 pane.plus_count,
+                false,
             ),
         ] {
             assert!(count > 0, "the {name} scene ships no {pass_name} to compare");
@@ -462,7 +465,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                  the standoff comparison is vacuous",
             );
             assert!(
-                light_slow.iter().any(|&b| b != 0),
+                !lights || light_slow.iter().any(|&b| b != 0),
                 "the {name} scene's {pass_name} lit nothing; the light comparison is vacuous",
             );
 

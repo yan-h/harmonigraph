@@ -246,9 +246,9 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                 crate::panes::edge_bar(
                     ui,
                     (reach, fade),
-                    harmonigraph_scene::GLOW_GAP_MAX,
-                    "Gap",
-                    (fresh.glow_gap, fresh.glow_gap_soft),
+                    harmonigraph_scene::GLOW_SHADOW_MAX,
+                    "Shadow",
+                    (fresh.glow_shadow, fresh.glow_shadow_soft),
                     |v| format!("{v:.2}"),
                 );
             },
@@ -268,12 +268,12 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     }
     assert_eq!(
         (reach, fade),
-        (fresh.glow_gap, fresh.glow_gap_soft),
+        (fresh.glow_shadow, fresh.glow_shadow_soft),
         "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
     );
 }
 
-/// Every soft edge — the lattice's Gap, the resting marker's arm and the taper
+/// Every soft edge — the lattice's Shadow, the resting marker's arm and the taper
 /// on its ends, the roll's note outline, and the lead a held note carries over
 /// the now-line — opens on a pair its own bar can reach: a fade no wider than
 /// the reach it is measured back from.
@@ -291,8 +291,11 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     state.camera.yaw = 1.23;
     let saved = state.save_persist();
     let edited = saved
-        .replace(&format!("glow_gap_soft:{:?},", state.view.glow_gap_soft), "glow_gap_soft:0.5,")
-        .replace(&format!("glow_gap:{:?},", state.view.glow_gap), "glow_gap:0.1,")
+        .replace(
+            &format!("glow_shadow_soft:{:?},", state.view.glow_shadow_soft),
+            "glow_shadow_soft:0.5,",
+        )
+        .replace(&format!("glow_shadow:{:?},", state.view.glow_shadow), "glow_shadow:0.1,")
         .replace(
             &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
             "roll_outline_fade:9.0,",
@@ -313,9 +316,9 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let mut restored = fresh();
     restored.load_persist(&edited);
     assert_eq!(
-        (restored.view.glow_gap, restored.view.glow_gap_soft),
+        (restored.view.glow_shadow, restored.view.glow_shadow_soft),
         (0.1, 0.1),
-        "the Gap's fade opened wider than the Gap",
+        "the Shadow's fade opened wider than the Shadow",
     );
     assert_eq!(
         (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
@@ -356,8 +359,8 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
     let cases: [(&str, &str, &str); 9] = [
-        ("glow_gap", "NaN", "a NaN Gap"),
-        ("glow_gap_soft", "NaN", "a NaN Gap fade"),
+        ("glow_shadow", "NaN", "a NaN Shadow"),
+        ("glow_shadow_soft", "NaN", "a NaN Shadow fade"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
@@ -374,8 +377,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         state.camera.yaw = 1.23;
         let saved = state.save_persist();
         let was = match key {
-            "glow_gap" => state.view.glow_gap,
-            "glow_gap_soft" => state.view.glow_gap_soft,
+            "glow_shadow" => state.view.glow_shadow,
+            "glow_shadow_soft" => state.view.glow_shadow_soft,
             "roll_outline" => state.spectrum_config.roll_outline,
             "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
@@ -392,8 +395,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let view = &restored.view;
         let cfg = &restored.spectrum_config;
         for (name, v) in [
-            ("glow_gap", view.glow_gap),
-            ("glow_gap_soft", view.glow_gap_soft),
+            ("glow_shadow", view.glow_shadow),
+            ("glow_shadow_soft", view.glow_shadow_soft),
             ("roll_outline", cfg.roll_outline),
             ("roll_outline_fade", cfg.roll_outline_fade),
             ("roll_lead", cfg.roll_lead),
@@ -405,7 +408,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
-            view.glow_gap_soft <= view.glow_gap
+            view.glow_shadow_soft <= view.glow_shadow
                 && cfg.roll_outline_fade <= cfg.roll_outline
                 && cfg.roll_lead_fade <= cfg.roll_lead
                 && view.plus_taper <= view.plus_arm,
@@ -1152,7 +1155,7 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
 /// dock, the camera and the entire `ViewConfig` along with itself, and the
 /// project opens on defaults with no error anywhere. Retiring a setting is
 /// therefore a persistence change, and this is the guard on it: `roll_gap` went
-/// with the Gap feature and `roll_color` with the roll's Color row, and every
+/// with the roll's Gap feature and `roll_color` with its Color row, and every
 /// project saved before each still carries its key.
 ///
 /// Both SHAPES of value, because they are not the same risk. A retired key

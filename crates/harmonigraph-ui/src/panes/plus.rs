@@ -103,10 +103,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              difference is read straight off the pair. Hold it above the \
              Ground to keep the structure legible while a node's empty rings \
              sink away — which is what a strong glow wants, the light behind \
-             the notes reading best over a dark node. This is the marker's \
-             INK; the pool of light it sits in is Marker light, over on the \
-             Glow section, and the two are separate ways of finding a position \
-             in a dark picture.",
+             the notes reading best over a dark node.",
         );
     // Length first, then thickness, in the order the shape is built: an arm
     // reaches, and then it has a width. Both are in the same quad UV a node's

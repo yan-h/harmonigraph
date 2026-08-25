@@ -136,7 +136,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 /// the two — a rescale of how hard the setting bends, say — and the picture
 /// drifts from the lattice with this still green.
 ///
-/// The Glow section's Feather and Gap curve bars draw a line the same way, and
+/// The Glow section's Feather and Shadow curve bars draw a line the same way, and
 /// are checked in the same pass: against the scene's own function of the
 /// view's own field, which is as near the picture as the CPU can get — those
 /// two curves run on the GPU, and the render crate is what holds the scene's
@@ -190,7 +190,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     );
 
     // The Glow section's two, in the order the section lays them: the Feather
-    // drawing the light's falloff at the fresh feather, then the Gap curve
+    // drawing the light's falloff at the fresh feather, then the Shadow curve
     // drawing the standoff's recovery at the fresh curve. Each against the
     // scene's own function of the view's own field, so a bar handed the other's
     // curve, or its own curve of the wrong field, is caught here and nowhere
@@ -202,7 +202,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     type Curve = fn(f32, f32) -> f32;
     let curves: [(&str, f32, Curve); 2] = [
         ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
-        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::standoff_recovery),
+        ("Shadow curve", view.glow_shadow_shape, harmonigraph_scene::standoff_recovery),
     ];
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);
@@ -486,8 +486,8 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
 /// and is not, the Analyzer's piano-roll group having a bar of that name too,
-/// and "Octave gap" is the Lattice page's own where a bare "Gap" would not be
-/// — nor a bare "Release", which the Glow section and the analyzer both draw.
+/// nor would a bare "Release", which the Glow section and the analyzer both
+/// draw. "Octave gap" is the Lattice page's own.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     const CASES: [(DisplayPage, &str); 4] = [

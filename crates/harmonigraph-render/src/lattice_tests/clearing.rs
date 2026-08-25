@@ -231,14 +231,14 @@ fn middled_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
 /// Cut back to the INK instead, the lattice would show through every gap on the
 /// node, which reads as neither a hole nor a node.
 ///
-/// RADIALLY, which is the direction this sweep reads and the one the Gap closes:
-/// the padding between one ring and the next is a length the Gap outreaches at
+/// RADIALLY, which is the direction this sweep reads and the one the Shadow closes:
+/// the padding between one ring and the next is a length the Shadow outreaches at
 /// the fixture's own settings, so the hole is one band across the whole stack.
 /// The ANGULAR direction is the other question and is answered the other way —
 /// the hole is cut back to the slices there, and a padding wide enough to
-/// outreach the Gap opens it (`a_wide_octave_gap_opens_the_hole_in_the_sectors
+/// outreach the Shadow opens it (`a_wide_octave_gap_opens_the_hole_in_the_sectors
 /// _the_node_leaves_empty`). This fixture sits at the shipped Octave gap, where
-/// the gaps are a fraction of a Gap wide and the hole closes over every one.
+/// the gaps are a fraction of a Shadow wide and the hole closes over every one.
 ///
 /// So the two numbers are where the hole STARTS and whether it has a gap in it.
 /// The first is read off the clearing's own footprint — the difference the
@@ -614,7 +614,7 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         // wrong: at full coverage a clearing repaints the ground it already
         // stands on, so only the band where it is partial can tell one
         // application from two. The fixture's own default is a hairline.
-        scene.glow_gap_soft = 0.3;
+        scene.glow_shadow_soft = 0.3;
         // Nothing between the halves, so the only thing under test is whether
         // the two of them add up.
         scene.pluses.clear();
@@ -627,7 +627,7 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         // then the clearing has nothing to cover in the band where its coverage
         // is partial — which is the only band where painting it twice differs
         // from painting it once.
-        // It clears at the same Gap this one does, that being the view's — its
+        // It clears at the same Shadow this one does, that being the view's — its
         // own hole lands on the ground behind it and moves nothing either shot
         // reads, both shots carrying it identically.
         let mut behind = scene.nodes[0];
@@ -701,7 +701,7 @@ const BESIDE_REACHES: [f32; 2] = [0.15, 0.35];
 /// is a picture indistinguishable from no hole at the one setting anybody
 /// checks.
 ///
-/// With the GLOW OFF, and that is load-bearing rather than tidiness: the Gap is
+/// With the GLOW OFF, and that is load-bearing rather than tidiness: the Shadow is
 /// the light's row of uniforms (`Uniforms::misc11` in harmonigraph-render), and
 /// every other row under the glow is zeroed whole where the Reach is 0. Zeroed
 /// with them this row would take every node's hole off with the light — sheets
@@ -714,7 +714,7 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    // Both nodes clear at the same reach, the Gap being the view's, and only
+    // Both nodes clear at the same reach, the Shadow being the view's, and only
     // the NEAR one's hole can move the reading: the far node's own lands on the
     // shot's black ground, which is what a clearing paints there anyway.
     let build = |gap: f32, beside: bool| -> Scene {
@@ -775,18 +775,18 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
     );
 }
 
-/// How wide an Octave gap the sweep below opens the hole at, and the Gap it
+/// How wide an Octave gap the sweep below opens the hole at, and the Shadow it
 /// cuts that hole with.
 ///
 /// The pair is what makes the reading possible at all: a slice's own gap has to
 /// outreach the hole around the ink beside it, or the two lobes of the clearing
 /// either side of a boundary meet across it and the hole is a closed annulus
-/// however empty the sector is. Half the Octave gap against one Gap is that
+/// however empty the sector is. Half the Octave gap against one Shadow is that
 /// condition (`slice_gap_half` and `standoff_coverage` in lattice.wgsl), so the
-/// gap is dialled to a good deal more than twice the Gap rather than to the two
+/// gap is dialled to a good deal more than twice the Shadow rather than to the two
 /// being close.
 ///
-/// The Gap is narrower than [`CLEAR_REACH`] for the same reason, and it is the
+/// The Shadow is narrower than [`CLEAR_REACH`] for the same reason, and it is the
 /// only fixture here that does not take the file's own reach: at that reach the
 /// Octave gap this asks for is past what the bar can be dragged to.
 const SLICE_OCTAVE_GAP: f32 = 0.40;
@@ -813,7 +813,7 @@ const SLICE_CLEAR_GAP: f32 = 0.08;
 ///
 /// The claim is the implication and not a correlation: every angle the hole is
 /// open at is an angle the node inks nothing at. The converse is deliberately
-/// NOT claimed — the hole is the ink DILATED by the Gap, so it closes over the
+/// NOT claimed — the hole is the ink DILATED by the Shadow, so it closes over the
 /// narrow end of each gap and is open across fewer angles than the ink is
 /// absent from. A test asserting both would be asserting the reach is zero.
 ///
@@ -850,10 +850,10 @@ fn a_wide_octave_gap_opens_the_hole_in_the_sectors_the_node_leaves_empty() {
         assert!(hole.far > 8.0, "{name}: no clearing to read, {:.1} px", hole.far);
         // Pixels per uv off the hole's own outer edge, as every reading in this
         // file takes it: the furthest the clearing reaches is the band's outer
-        // edge one Gap out.
+        // edge one Shadow out.
         let scale = hole.far / (rings.band.1 + SLICE_CLEAR_GAP) as f64;
         let ink_r = 0.5 * (rings.band.0 + rings.band.1) as f64 * scale;
-        // Two fifths of a Gap past the band, which is inside the solid part of
+        // Two fifths of a Shadow past the band, which is inside the solid part of
         // the hole and outside every layer the node draws.
         let hole_r = (rings.band.1 + 0.4 * SLICE_CLEAR_GAP) as f64 * scale;
 
@@ -912,7 +912,7 @@ const OFF_SHEET_SIZE: f32 = 0.5;
 /// A node's hole SHRINKS with the node: it is a share of the node's radius, so
 /// an off-sheet node clears in proportion to what it draws.
 ///
-/// The Gap is dialled as a fraction of a node's radius, which is what quad uv is
+/// The Shadow is dialled as a fraction of a node's radius, which is what quad uv is
 /// — the same unit the Ring gap and the Octave gap beside it read in — and the
 /// hole is that reach around the node's own ink. So the whole picture a node
 /// draws scales as one thing, and a sheet stepped back is the home sheet drawn
@@ -924,8 +924,8 @@ const OFF_SHEET_SIZE: f32 = 0.5;
 /// second is the one that decides it. A gap that does not shrink reads as a
 /// property of the sheet rather than of the node, and at a small `sevens_size`
 /// it is most of what an off-sheet node covers — the ink is a quarter of the
-/// area and the margin round it is the rest. And the Gap is ONE length for the
-/// hole and the shadow over it (`glow_gap` in lattice.wgsl); the shadow was
+/// area and the margin round it is the rest. And the Shadow is ONE length for the
+/// hole and the shadow over it (`glow_shadow` in lattice.wgsl); the shadow was
 /// always the node's own share, so a hole in screen units would be the two
 /// disagreeing on every sheet but the home one.
 ///

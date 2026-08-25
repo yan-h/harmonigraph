@@ -180,10 +180,9 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
 /// held to the shader's text: the two rates the bar mixes between and the two
 /// lines that spend them. A preview that drifted from the picture would be
 /// worse than none, and nothing on screen would show the drift.
-/// One WGSL function's text, from its `fn` line to the start of the next. What
-/// a needle asked of the whole file cannot say is WHICH copy answered it, and
-/// the skirt is spelled twice on purpose — once for a node's light and once
-/// for a marker's.
+/// One WGSL function's text, from its `fn` line to the start of the next: what
+/// pins a needle to the function that has to carry it, where the same line asked
+/// of the whole file is answered by any copy of it anywhere.
 fn wgsl_fn_body(name: &str) -> &'static str {
     let open = format!("\nfn {name}(");
     let at = SHADER_SRC.find(&open).unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
@@ -205,54 +204,51 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
              is a change to both",
         );
     }
-    // Asked of EACH function that spends them, not of the file. A node's light
-    // and a marker's pool carry the same three lines term for term, so a needle
-    // put to the whole file is answered by whichever copy still has it, and the
-    // other is free to drift — the preview then draws a curve one of the two
-    // does not, with nothing on screen showing it.
-    for shape in ["glow_layer", "plus_glow_layer"] {
-        let body = wgsl_fn_body(shape);
-        for needle in [
-            "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
-            "let window = 1.0 - smoothstep(span * 0.5, span, d);",
-            "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
-        ] {
-            assert!(
-                body.contains(needle),
-                "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
-                 the skirt line for line to draw the Feather bar's preview, and both lights \
-                 run on that one shape, so a change to any of the three is a change to all",
-            );
-        }
+    // Asked of the function that spends them, not of the file: the constants
+    // above are declared at the top and a needle put to the whole text is
+    // answered by the declaration itself, whatever the light does with it.
+    let shape = "glow_layer";
+    let body = wgsl_fn_body(shape);
+    for needle in [
+        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
+        "let window = 1.0 - smoothstep(span * 0.5, span, d);",
+        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
+             the skirt line for line to draw the Feather bar's preview, so a change to \
+             either is a change to both",
+        );
     }
 }
 
-/// The same contract for the Gap curve bar, whose preview is a copy of the
+/// The same contract for the Shadow curve bar, whose preview is a copy of the
 /// standoff's ramp and the exponent it is raised to
 /// (`harmonigraph_scene::standoff_recovery`).
 ///
 /// The preview draws the bar's own width alone — `p` runs 0..=1, which is the
-/// fade between the Gap's two handles — so the window the shader shuts its tail
+/// fade between the Shadow's two handles — so the window the shader shuts its tail
 /// with is 1 across every point it draws and does not appear in the copy. It is
 /// pinned here all the same: the day that window moves inside the fade is the
 /// day the preview stops being the shape.
 #[test]
-fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
+fn the_shadow_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
-        format!("const GAP_SHAPE_RIND: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_RIND),
-        format!("const GAP_SHAPE_PLAIN: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_PLAIN),
-        format!("const GAP_TAIL: f32 = {:?};", harmonigraph_scene::GAP_TAIL),
-        "return GAP_SHAPE_RIND * pow(GAP_SHAPE_PLAIN / GAP_SHAPE_RIND, t);".to_owned(),
+        format!("const SHADOW_SHAPE_RIND: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_RIND),
+        format!("const SHADOW_SHAPE_PLAIN: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_PLAIN),
+        format!("const SHADOW_TAIL: f32 = {:?};", harmonigraph_scene::SHADOW_TAIL),
+        "return SHADOW_SHAPE_RIND * pow(SHADOW_SHAPE_PLAIN / SHADOW_SHAPE_RIND, t);".to_owned(),
         "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
-        "return exp(-GAP_TAIL * pow(u, glow_gap_shape())) * (1.0 - smoothstep(1.0, GAP_STOP, u));"
+        "return exp(-SHADOW_TAIL * pow(u, glow_shadow_shape())) * (1.0 - smoothstep(1.0, SHADOW_STOP, u));"
             .to_owned(),
-        "const GAP_STOP: f32 = 2.0;".to_owned(),
+        "const SHADOW_STOP: f32 = 2.0;".to_owned(),
     ];
     for needle in &needles {
         assert!(
             SHADER_SRC.contains(needle),
             "lattice.wgsl must contain `{needle}`: harmonigraph_scene::standoff_recovery mirrors \
-             the standoff's ramp to draw the Gap curve bar's preview, so a change to either is \
+             the standoff's ramp to draw the Shadow curve bar's preview, so a change to either is \
              a change to both",
         );
     }
