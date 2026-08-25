@@ -1170,3 +1170,168 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
          share: the standoff is following something narrower than the mark",
     );
 }
+
+/// A mark stands light off NO boundary but the two its own slice has.
+///
+/// The angular term every ring's standoff is measured across is a walk to the
+/// nearest boundary ray (`slice_gap_distance` in the shader), and a ring can
+/// have it because a ring is drawn at every slice: whichever the walk lands on,
+/// there is ink in it. A mark is drawn at the slices two voices took, so the same
+/// walk answers for a slice the mark has nothing in — half an Octave gap at every
+/// boundary on the node, wherever the mark's own wedge is still within a Gap of
+/// the fragment.
+///
+/// What that draws is a SECOND shadow, detached from the mark and lying half an
+/// Octave gap the far side of the neighbouring boundary, over a slice wearing no
+/// mark at all. It is a hump and not a spread: the walk's answer falls as the
+/// fragment leaves that boundary while the wedge's own distance rises, so their
+/// max dips to half a gap midway between the two and the shadow is DEEPEST out
+/// where the mark is not.
+///
+/// So what is measured is the SHAPE of the share around the turn rather than its
+/// value anywhere: walking away from the mark's ink, a standoff cast by that ink
+/// can only ever thin. A rise means a second caster, and the only other caster
+/// here is a boundary the mark does not draw at.
+///
+/// Probed at the strip's own mid radius, where the mark's ink is, so the ink
+/// itself marks out the arc to walk away FROM and each walk starts where the
+/// standoff is deepest. The band and the analyzer's ring are both dialled off,
+/// leaving the marks as the only term the standoff has, and the Octave gap is at
+/// its widest, which is what puts the detached hump a whole slice clear of the
+/// mark rather than in the fringe of it.
+#[test]
+fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
+    const SIZE: [u32; 2] = [1024, 1024];
+    const GAP: f32 = 0.16;
+    const STRIP_IN: f32 = 0.5;
+    const STRIP_THICK: f32 = 0.12;
+    const ANGLES: usize = 720;
+    // The pixel grid quantizes the probe ring's radius by up to half a pixel,
+    // which on the standoff's own slope is a few thousandths of the share. The
+    // hump this is here to catch is worth 0.32.
+    const WOBBLE: f64 = 0.02;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(1 << harmonigraph_scene::MIDDLE_C_SLOT, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.octave_layout = harmonigraph_scene::octave_layout(
+            harmonigraph_scene::DEFAULT_COUNT,
+            harmonigraph_scene::DEFAULT_CENTER,
+            2,
+            harmonigraph_scene::DEFAULT_EXTRA_SIZE,
+            harmonigraph_scene::DEFAULT_EXTRA_BLEND,
+        );
+        scene.outer_inner = 0.0;
+        scene.outer_outer = 0.0;
+        scene.spectral.inner = 0.0;
+        scene.spectral.outer = 0.0;
+        scene.mark_inner = STRIP_IN;
+        scene.mark_thickness = STRIP_THICK;
+        scene.octave_gap = harmonigraph_scene::GAP_MAX;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = GAP;
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let cx = 0.5 * SIZE[0] as f32;
+    let cy = 0.5 * SIZE[1] as f32;
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+
+    // The scale, off the fixture's own ink: with no clearing to paint the ground
+    // past it, the furthest inked pixel from the node's centre IS the strip's
+    // outer edge, so the probe follows the fixture instead of naming a radius.
+    // Taken over the frame rather than along an axis, one mark being the only
+    // thing drawn and no axis obliged to cross it.
+    let mut bare = at(0.0, 0.0);
+    bare.nodes[0].gutter = 0.0;
+    let plain = shooter.shot(&bare);
+    let mut ink_px = 0.0f32;
+    for y in 0..SIZE[1] as usize {
+        for x in 0..SIZE[0] as usize {
+            if inked(&plain, y * row + x) {
+                let dx = x as f32 + 0.5 - cx;
+                let dy = y as f32 + 0.5 - cy;
+                ink_px = ink_px.max((dx * dx + dy * dy).sqrt());
+            }
+        }
+    }
+    assert!(ink_px > 20.0, "the fixture's mark inked only {ink_px:.1}px of radius");
+    let mid_px = ink_px * (STRIP_IN + 0.5 * STRIP_THICK) / (STRIP_IN + STRIP_THICK);
+
+    let probe = |k: usize| -> usize {
+        let a = std::f32::consts::TAU * k as f32 / ANGLES as f32;
+        // The framebuffer's rows run down where the node's own uv runs up.
+        let y = (cy - mid_px * a.sin()).floor() as usize;
+        y * row + (cx + mid_px * a.cos()).floor() as usize
+    };
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
+    let flat = shooter.shot(&at(0.8, 0.0));
+    let stood = shooter.shot(&at(0.8, 1.0));
+    let share: Vec<f64> = (0..ANGLES)
+        .map(|k| {
+            let i = probe(k);
+            let light = lit(&flat, i);
+            assert!(
+                light > 60,
+                "the fixture lit the probe {k} steps round to only {light}: there is too \
+                 little light there to measure a share of",
+            );
+            (light - lit(&stood, i)) as f64 / light as f64
+        })
+        .collect();
+    // The ink is where the share means nothing — the mark is opaque there and
+    // both shots draw it identically — so it is skipped rather than read, and it
+    // is also what says where the two walks below start.
+    let on_ink: Vec<bool> = (0..ANGLES).map(|k| inked(&plain, probe(k))).collect();
+    let ink_steps = on_ink.iter().filter(|b| **b).count();
+    assert!(
+        ink_steps > 4 && ink_steps < ANGLES / 2,
+        "the probe ring crossed the mark's ink for {ink_steps} of {ANGLES} steps; it is not \
+         reading one wedge on a ring that is otherwise clear",
+    );
+
+    // One walk per edge of the mark, each leaving the ink and going half a turn.
+    for dir in [1isize, -1] {
+        let step_at = |start: usize, step: usize| {
+            (start as isize - dir * step as isize).rem_euclid(ANGLES as isize) as usize
+        };
+        let start = (0..ANGLES)
+            .find(|&k| on_ink[k] && !on_ink[step_at(k, 1)])
+            .expect("the mark's ink has an edge to walk away from");
+        let mut least = f64::MAX;
+        let mut rise: f64 = 0.0;
+        let mut deepest: f64 = 0.0;
+        for step in 0..ANGLES / 2 {
+            let k = step_at(start, step);
+            if on_ink[k] {
+                continue;
+            }
+            least = least.min(share[k]);
+            rise = rise.max(share[k] - least);
+            deepest = deepest.max(share[k]);
+        }
+        assert!(
+            deepest > 0.5,
+            "the mark took only {deepest:.3} of the light at its own edge walking {dir:+}; \
+             there is no standoff here for a second one to stand out of",
+        );
+        assert!(
+            rise <= WOBBLE,
+            "walking {dir:+} off the mark the standoff thinned to {least:.3} and then came \
+             back by {rise:.3}: something with no mark in it is casting a shadow there, and \
+             the only thing out there is the neighbouring slice's boundary",
+        );
+    }
+}
