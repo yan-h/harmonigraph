@@ -17,32 +17,32 @@ pub(crate) mod axes;
 mod gestures;
 pub(crate) mod names;
 pub(crate) mod roll;
-pub(crate) mod spectrogram;
 pub(super) mod settings;
+pub(crate) mod spectrogram;
 
-pub(super) use settings::spectrum_settings_pane;
-pub(crate) use gestures::{hold_spectrum, SpectrumHold};
-/// The wheel's gain, shared with the [`spiral`](super::spiral) pane so that one
-/// wheel over one analyzer drawn two ways spins at one rate — see
-/// [`ZOOM_PER_SCROLL_POINT`](gestures::ZOOM_PER_SCROLL_POINT) for the rate and
-/// [`navigate`](super::spiral::navigate) for why the two panes do different
-/// things with it.
-pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 /// The Span drag's gain, reached by `spectrogram`'s
 /// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
 /// rate the pane drags at rather than at a copy of it — the whole claim there
 /// is about how far a drag travels between ladder rungs, which this sets.
 #[cfg(test)]
 pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
+/// The wheel's gain, shared with the [`spiral`](super::spiral) pane so that one
+/// wheel over one analyzer drawn two ways spins at one rate — see
+/// [`ZOOM_PER_SCROLL_POINT`](gestures::ZOOM_PER_SCROLL_POINT) for the rate and
+/// [`navigate`](super::spiral::navigate) for why the two panes do different
+/// things with it.
+pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
+pub(crate) use gestures::{hold_spectrum, SpectrumHold};
+pub(super) use settings::spectrum_settings_pane;
 
-use crate::{theme, SharedState};
 use crate::panes::window_shows_node;
+use crate::{theme, SharedState};
 use axes::{
-    frequency_grid, label_anchor, level_grid, loudness, plot_budget, text_scales,
-    Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, level_grid, loudness, plot_budget, text_scales, Axes, PitchScale,
+    TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
 };
-use gestures::{drag_split, drag_zoom, spectrum_split};
 use egui::Sense;
+use gestures::{drag_split, drag_zoom, spectrum_split};
 
 /// How faint a ruling is drawn against [`theme::hairline`], the pane's
 /// quietest line already: the marks that anchor a ladder first, the steps
@@ -456,10 +456,7 @@ pub(crate) fn spectral_pane(
                 continue;
             }
             let t = scale.t_of(voice.pitch);
-            let band = egui::Rect::from_two_pos(
-                axes.at(t - half, 0.0),
-                axes.at(t + half, split),
-            );
+            let band = egui::Rect::from_two_pos(axes.at(t - half, 0.0), axes.at(t + half, split));
             painter.rect_filled(band, 0.0, theme::warning_text().gamma_multiply(0.3 * strength));
         }
     }
@@ -569,8 +566,7 @@ pub(crate) fn spectral_pane(
         let toward_line = -level_depth * into.signum();
         let pos = pos
             + level_edge * crate::text::ink_inset(&painter, &label, &marking_font, level_edge)
-            + toward_line
-                * crate::text::ink_inset(&painter, &label, &marking_font, toward_line);
+            + toward_line * crate::text::ink_inset(&painter, &label, &marking_font, toward_line);
         labels.text(
             &painter,
             pos,

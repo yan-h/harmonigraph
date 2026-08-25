@@ -1,8 +1,8 @@
 //! The lattice pane's own input — wheel and zoom gestures onto the camera
 //! — and the learn mode that writes tuning params back from held notes.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// Drive the real root_ui (dock, hover, everything) with a synthetic wheel
 /// event over the lattice pane and return the camera distance after it.
@@ -117,6 +117,7 @@ fn learn_disables_meantone_from_a_just_triad() {
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.meantone = true; // start engaged
+
     // C + a JUST major third (386.31¢) + G. The just third sits a full
     // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
@@ -227,18 +228,15 @@ fn a_meantone_tuning_engages_the_mode_by_itself() {
     let mut state = fresh();
     assert!(state.view.meantone_auto, "the auto-detect is on out of the box");
     assert!(!state.view.meantone, "and the mode starts off");
-    let three = harmonigraph_core::tuning::THREE_JUST
-        - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
+    let three =
+        harmonigraph_core::tuning::THREE_JUST - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
     let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST);
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "quarter-comma meantone should engage the mode");
     // Engaging it is only half the job: the lattice has to be using the
     // derived third, exactly, or comma-equivalent nodes stay two pitches.
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
-    assert_eq!(
-        i64::from(state.tuning.five),
-        4 * i64::from(state.tuning.three) - 2 * octave,
-    );
+    assert_eq!(i64::from(state.tuning.five), 4 * i64::from(state.tuning.three) - 2 * octave,);
 }
 
 /// Just intonation keeps the syntonic comma, so nothing engages: this is the
@@ -333,10 +331,7 @@ fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
     // Snapped: the lattice's third is four fifths, not the just third the
     // param still holds.
     let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
-    assert_eq!(
-        i64::from(state.tuning.five),
-        4 * i64::from(state.tuning.three) - 2 * octave,
-    );
+    assert_eq!(i64::from(state.tuning.five), 4 * i64::from(state.tuning.three) - 2 * octave,);
 }
 
 /// And the OFF direction, which is the one the detect could undo — the
@@ -362,8 +357,8 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
 
     // A tuning that has moved is a fresh question, and this one is still a
     // meantone: quarter-comma, both axes written together.
-    let three = harmonigraph_core::tuning::THREE_JUST
-        - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
+    let three =
+        harmonigraph_core::tuning::THREE_JUST - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
     params.set(params::ParamKey::Three, three);
     params.set(params::ParamKey::Five, harmonigraph_core::tuning::meantone_third(three));
     params.flush();
@@ -482,8 +477,8 @@ fn the_two_locks_compose_into_septimal_meantone() {
     let mut state = fresh();
     // Quarter-comma meantone, whose derived third is the just one — and a
     // seventh param nowhere near anything, to prove it is not being read.
-    let three = harmonigraph_core::tuning::THREE_JUST
-        - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
+    let three =
+        harmonigraph_core::tuning::THREE_JUST - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
     let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST).with_seven(940.0);
     state.view.marvel = true;
     begin_frame(&mut state, &params, 0.0);

@@ -215,7 +215,8 @@ pub fn render(
             // from the frame index — so the spectrum is as deterministic as
             // everything else, and its column rate does not depend on the
             // render's fps the way a frame-clock throttle would make it.
-            let chunk = audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
+            let chunk =
+                audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
             if !chunk.is_empty() {
                 let config = state.spectrum_config;
                 state.spectrum.push_samples(chunk, audio.channels, audio.sample_rate, now, &config);
@@ -226,18 +227,15 @@ pub fn render(
         // No panels and no dock: the layout owns the frame, and the
         // background is the render pass's clear color rather than a
         // painted rect.
-        let output = context.run_ui(
-            frame_input(screen, now, max_texture_side),
-            |ui| {
-                for (pane, rect) in &placements {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                    draw_pane(&mut child, *pane, &mut state, now);
-                }
-                // Last, over the gaps the panes left: the seam that keeps the
-                // lattice and the spectral pane from reading as one field.
-                settings.layout.paint_dividers(ui.painter(), &placements);
-            },
-        );
+        let output = context.run_ui(frame_input(screen, now, max_texture_side), |ui| {
+            for (pane, rect) in &placements {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                draw_pane(&mut child, *pane, &mut state, now);
+            }
+            // Last, over the gaps the panes left: the seam that keeps the
+            // lattice and the spectral pane from reading as one field.
+            settings.layout.paint_dividers(ui.painter(), &placements);
+        });
 
         let primitives = context.tessellate(output.shapes, settings.pixels_per_point);
         let bytes = renderer.render(
@@ -551,13 +549,8 @@ mod tests {
                     }
                 },
             );
-            let rows = output
-                .textures_delta
-                .set
-                .iter()
-                .map(|(_, d)| d.image.height())
-                .max()
-                .unwrap_or(0);
+            let rows =
+                output.textures_delta.set.iter().map(|(_, d)| d.image.height()).max().unwrap_or(0);
             let primitives = context.tessellate(output.shapes, PPP);
             let pixels = renderer.render(&primitives, &output.textures_delta, PPP, background);
             Some((pixels, rows))

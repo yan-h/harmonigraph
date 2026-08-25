@@ -1,8 +1,8 @@
 //! Which colour a node's light takes, and which layer it takes it from.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::headless_device;
+use crate::*;
 
 /// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare
 /// ground: the two are one field asked for twice, and the answers are free of
@@ -98,18 +98,15 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         "with no wash the glow reached {moved} of the ring's {} opaque pixels",
         ink.len(),
     );
-    let lifted = ink
-        .iter()
-        .filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3]))
-        .count();
+    let lifted =
+        ink.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
     assert!(
         lifted * 2 > ink.len(),
         "inside a pool cleared to the bare ground, a full wash lifted {lifted} of the ring's {} \
          opaque pixels",
         ink.len(),
     );
-    let dimmed =
-        ink.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    let dimmed = ink.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
     assert_eq!(
         dimmed,
         0,
@@ -902,10 +899,7 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
     // Non-vacuous first, on the WHOLE halo rather than on its red: the defect
     // takes the red to nothing, so a red-only check here reports "nothing is
     // lit" for a frame that is brightly lit in the wrong colour.
-    assert!(
-        light.iter().sum::<i64>() > 64,
-        "the lit node lit nothing at all: {light:?}",
-    );
+    assert!(light.iter().sum::<i64>() > 64, "the lit node lit nothing at all: {light:?}",);
     assert!(
         light[0] > light[1] * 4,
         "the lit node's halo came out {light:?}: it is drawing the RED band and no mark, so \
@@ -982,10 +976,7 @@ fn a_light_in_its_release_survives_the_pane_changing_size() {
 
     // Non-vacuous first: the release has to light the halo at all, or the
     // comparison below is between two nothings.
-    assert!(
-        kept[0] > 64,
-        "a releasing node lit nothing to begin with: {kept:?}",
-    );
+    assert!(kept[0] > 64, "a releasing node lit nothing to begin with: {kept:?}",);
     // The claim. Half is generous — the frame is a little larger, and the
     // light is stepped once more — where the failure takes it to zero.
     assert!(
@@ -1047,10 +1038,7 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
 
     // Non-vacuous first: each layer alone has to light the halo in its own
     // colour, or the reading below is measuring nothing.
-    assert!(
-        all_red[0] > all_red[1] * 4,
-        "the band alone must light the halo red: {all_red:?}",
-    );
+    assert!(all_red[0] > all_red[1] * 4, "the band alone must light the halo red: {all_red:?}",);
     assert!(
         all_green[1] > all_green[0] * 4,
         "the ring alone must light the halo green: {all_green:?}",

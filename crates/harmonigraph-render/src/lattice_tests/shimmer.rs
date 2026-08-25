@@ -1,8 +1,8 @@
 //! The shimmer: its patterns, the clock it travels on, and how wide a band
 //! it lays across a node.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// Every pattern in the row draws its OWN picture — pairwise, at one instant.
 ///
@@ -158,9 +158,8 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
         scene.now = 0.4;
         scene
     };
-    let light = |px: &[u8]| -> u64 {
-        px.chunks(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum()
-    };
+    let light =
+        |px: &[u8]| -> u64 { px.chunks(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum() };
 
     let crisp = gpu.shot(&at(0.0));
     let gradual = gpu.shot(&at(1.0));
@@ -470,10 +469,7 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
     // total light falls with intensity there while the sweep gets deeper. That
     // is the bar working, and a total-light reading would call it broken.
     let departure = |shot: &[u8]| -> f64 {
-        shot.chunks(4)
-            .zip(steady.chunks(4))
-            .map(|(a, b)| (lightness(a) - lightness(b)).abs())
-            .sum()
+        shot.chunks(4).zip(steady.chunks(4)).map(|(a, b)| (lightness(a) - lightness(b)).abs()).sum()
     };
     let (dim, mid, deep) = (departure(&steady), departure(&half), departure(&full));
     eprintln!("the sweep departs from steady by {dim:.0}/{mid:.0}/{deep:.0} at intensity 0/0.5/1");

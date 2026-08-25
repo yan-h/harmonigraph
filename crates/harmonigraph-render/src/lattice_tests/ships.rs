@@ -1,8 +1,8 @@
 //! Which instances reach the GPU at all, and the early-outs that drop them.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 /// The fragment shader's early-outs — skipping the fragments outside
 /// anything a node can paint, and the whole note path for an idle node —
@@ -20,10 +20,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let reference_src = SHADER_SRC.replace(
-        "const EARLY_OUT: bool = true;",
-        "const EARLY_OUT: bool = false;",
-    );
+    let reference_src =
+        SHADER_SRC.replace("const EARLY_OUT: bool = true;", "const EARLY_OUT: bool = false;");
     assert_ne!(
         reference_src, SHADER_SRC,
         "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
@@ -190,8 +188,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
-        let layouts =
-            SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+        let layouts = SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
         let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
@@ -310,11 +307,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the {name} scene drew nothing; the comparison is vacuous",
         );
 
-        let differing = with_early_out
-            .iter()
-            .zip(&without)
-            .enumerate()
-            .find(|(_, (&a, &b))| a != b);
+        let differing =
+            with_early_out.iter().zip(&without).enumerate().find(|(_, (&a, &b))| a != b);
         assert!(
             differing.is_none(),
             "the {name} scene changed when the early-outs were enabled: byte {:?}",
@@ -362,8 +356,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_SRC,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 })
             };
@@ -372,7 +365,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 attachment("parity_glow_max", format),
                 attachment("parity_glow_shade", GLOW_SHADE_FORMAT),
             ];
-            let views: Vec<_> = targets.iter().map(|t| t.create_view(&Default::default())).collect();
+            let views: Vec<_> =
+                targets.iter().map(|t| t.create_view(&Default::default())).collect();
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -485,8 +479,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             for (layer, fast, slow) in
                 [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
             {
-                let differing =
-                    fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
+                let differing = fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
                 assert!(
                     differing.is_none(),
                     "the {name} scene's {pass_name} {layer} changed when the early-outs \
@@ -774,11 +767,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
         let mut spread = bare();
         spread.nodes[0].octaves[a] = 1.0;
         spread.nodes[0].octaves[b] = 1.0;
-        assert_eq!(
-            ships(&spread),
-            1,
-            "octaves {a} and {b} held at one level keep their node",
-        );
+        assert_eq!(ships(&spread), 1, "octaves {a} and {b} held at one level keep their node",);
     }
 }
 

@@ -309,11 +309,8 @@ mod tests {
         };
 
         let ref_rate = 44_100.0;
-        let ref_events: Vec<f64> = events
-            .iter()
-            .map(|&e| e - reference_start)
-            .filter(|&t| t >= 0.0)
-            .collect();
+        let ref_events: Vec<f64> =
+            events.iter().map(|&e| e - reference_start).filter(|&t| t >= 0.0).collect();
         let mut ref_samples = clicks(&ref_events, span - reference_start + 1.0, ref_rate);
         // Quieter, and crackly: occasional sharp spikes, a few per second
         // as a real dropout would be — not a wall of noise.

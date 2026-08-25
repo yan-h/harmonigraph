@@ -95,22 +95,14 @@ impl LatticePos {
 impl std::ops::Sub for LatticePos {
     type Output = LatticePos;
     fn sub(self, rhs: LatticePos) -> LatticePos {
-        LatticePos::new(
-            self.threes - rhs.threes,
-            self.fives - rhs.fives,
-            self.sevens - rhs.sevens,
-        )
+        LatticePos::new(self.threes - rhs.threes, self.fives - rhs.fives, self.sevens - rhs.sevens)
     }
 }
 
 impl std::ops::Add for LatticePos {
     type Output = LatticePos;
     fn add(self, rhs: LatticePos) -> LatticePos {
-        LatticePos::new(
-            self.threes + rhs.threes,
-            self.fives + rhs.fives,
-            self.sevens + rhs.sevens,
-        )
+        LatticePos::new(self.threes + rhs.threes, self.fives + rhs.fives, self.sevens + rhs.sevens)
     }
 }
 
@@ -165,10 +157,7 @@ impl NoteName {
 
     /// The septimal-comma mark alone: `↑`, `↓2`, ..., empty for none.
     pub fn septimal_mark(&self) -> String {
-        mark(
-            if self.septimal_commas > 0 { '\u{2191}' } else { '\u{2193}' },
-            self.septimal_commas,
-        )
+        mark(if self.septimal_commas > 0 { '\u{2191}' } else { '\u{2193}' }, self.septimal_commas)
     }
 }
 

@@ -485,10 +485,9 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
     let size = key.size_px as f32;
     let thick = key.weight_16 as f32 / 16.0;
     let (w, h) = match key.kind {
-        MarkKind::Septimal(_) => (
-            MARK_INK_W * size * SEPTIMAL_BULK,
-            PLUS_INK_H * size * SEPTIMAL_BULK,
-        ),
+        MarkKind::Septimal(_) => {
+            (MARK_INK_W * size * SEPTIMAL_BULK, PLUS_INK_H * size * SEPTIMAL_BULK)
+        }
         MarkKind::Sharp => (MARK_INK_W * size, SHARP_INK_H * size),
         MarkKind::Flat => (FLAT_INK_W * size, FLAT_INK_H * size),
         _ => (MARK_INK_W * size, PLUS_INK_H * size),
@@ -531,10 +530,9 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
     let c = egui::pos2(bw / 2.0, bh / 2.0);
     let (hw, hh) = (w / 2.0, h / 2.0);
     let pieces = match key.kind {
-        MarkKind::Minus => vec![MarkPiece::Bar(egui::Rect::from_center_size(
-            c,
-            egui::vec2(w, thick),
-        ))],
+        MarkKind::Minus => {
+            vec![MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(w, thick)))]
+        }
         MarkKind::Plus => vec![
             MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(w, thick))),
             MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(thick, h))),
@@ -565,8 +563,7 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             // the upright's own edge.
             let bar = |side: f32| {
                 let mid = c.y + side * SHARP_BAR_Y * h;
-                let (left, right) =
-                    (mid + SHARP_SLANT * w / 2.0, mid - SHARP_SLANT * w / 2.0);
+                let (left, right) = (mid + SHARP_SLANT * w / 2.0, mid - SHARP_SLANT * w / 2.0);
                 MarkPiece::Quad([
                     egui::pos2(c.x - hw, left - thick / 2.0),
                     egui::pos2(c.x + hw, right - thick / 2.0),
@@ -968,7 +965,11 @@ fn stacked_name(
     // A sign and its count read as ONE mark, so the count follows its sign's
     // cell tracked in rather than a clear cell away -- see MARK_TRACK.
     let tracked_width = |sign: f32, count: &str| {
-        if count.is_empty() { sign } else { sign + measure(count, &mark_font).x - track }
+        if count.is_empty() {
+            sign
+        } else {
+            sign + measure(count, &mark_font).x - track
+        }
     };
     // A drawn sign claims one cell; its count follows in the same column.
     let signed_width =
@@ -1023,15 +1024,10 @@ fn stacked_name(
 
     // Drawn sign, then its count: same column, same line, so the pair reads
     // as one mark rather than as a glyph with a number after it.
-    let mut draw_signed = |x: f32,
-                           direction: f32,
-                           count: &str,
-                           kind: MarkKind|
-     -> f32 {
+    let mut draw_signed = |x: f32, direction: f32, count: &str, kind: MarkKind| -> f32 {
         let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        let half_height =
-            paint_mark(batch, painter.ctx(), ppp, key, center, color, outline);
+        let half_height = paint_mark(batch, painter.ctx(), ppp, key, center, color, outline);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -1045,8 +1041,11 @@ fn stacked_name(
         }
         // Whichever reaches lower: the mark's own bitmap from its center, or
         // the count's digits from theirs.
-        let ink = half_height
-            .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
+        let ink = half_height.max(if count.is_empty() {
+            0.0
+        } else {
+            ink_below(count, &mark_font, line)
+        });
         direction * rise + ink
     };
 
@@ -1057,8 +1056,7 @@ fn stacked_name(
         bottom = bottom.max(draw_signed(left + letter.x, -1.0, &accidental, kind));
     }
     if name.syntonic_commas != 0 {
-        let kind =
-            if name.syntonic_commas > 0 { MarkKind::Plus } else { MarkKind::Minus };
+        let kind = if name.syntonic_commas > 0 { MarkKind::Plus } else { MarkKind::Minus };
         bottom = bottom.max(draw_signed(left + letter.x, 1.0, &syntonic, kind));
     }
     if name.septimal_commas != 0 {
@@ -1095,9 +1093,8 @@ pub(crate) fn draw_plain_name(
     magnify: f32,
 ) -> f32 {
     let font = egui::FontId::monospace(NAME_SIZE * scale);
-    let size = painter
-        .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
-        .size();
+    let size =
+        painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size();
     batch.magnified(anchor, magnify, |batch| {
         batch.text(
             painter,
@@ -1117,9 +1114,7 @@ pub(crate) fn draw_plain_name(
 /// full line box; laying two pieces of text out edge to edge by their boxes
 /// leaves a visible gap that neither piece's ink accounts for.
 pub(crate) fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui::Rect {
-    painter
-        .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
-        .mesh_bounds
+    painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).mesh_bounds
 }
 
 #[cfg(test)]
@@ -1148,11 +1143,7 @@ mod tests {
             .flat_map(|y| (0..cw).map(move |x| (x, y)))
             .map(|(x, y)| img.pixels[(y + pad) * w + x + pad])
             .collect();
-        egui::ColorImage {
-            size: [cw, ch],
-            pixels,
-            source_size: egui::vec2(cw as f32, ch as f32),
-        }
+        egui::ColorImage { size: [cw, ch], pixels, source_size: egui::vec2(cw as f32, ch as f32) }
     }
 
     /// A `+` rasterizes to its own mirror, both ways.
@@ -1346,8 +1337,7 @@ mod tests {
                 let bounds = piece.bounds();
                 for step_y in 0..=h * 8 {
                     for step_x in 0..=w * 8 {
-                        let p =
-                            egui::pos2(step_x as f32 / 8.0, step_y as f32 / 8.0);
+                        let p = egui::pos2(step_x as f32 / 8.0, step_y as f32 / 8.0);
                         assert!(
                             !piece.covers(p) || bounds.contains(p),
                             "{kind:?} covers {p:?} outside its bounds {bounds:?}"
@@ -1459,8 +1449,7 @@ mod tests {
             let n = edges.len() as f32;
             let mx = (n - 1.0) / 2.0;
             let my = edges.iter().sum::<f32>() / n;
-            let sxy: f32 =
-                edges.iter().enumerate().map(|(i, e)| (i as f32 - mx) * (e - my)).sum();
+            let sxy: f32 = edges.iter().enumerate().map(|(i, e)| (i as f32 - mx) * (e - my)).sum();
             let sxx: f32 = (0..edges.len()).map(|i| (i as f32 - mx).powi(2)).sum();
             let slope = sxy / sxx;
             assert!(
@@ -1623,7 +1612,11 @@ mod tests {
         /// does -- a blend of the two texels either side of each pixel.
         fn shifted(&self, t: f32) -> Grid {
             let at = |x: isize, y: usize| {
-                if x < 0 || x >= self.w as isize { 0.0 } else { self.a[y * self.w + x as usize] }
+                if x < 0 || x >= self.w as isize {
+                    0.0
+                } else {
+                    self.a[y * self.w + x as usize]
+                }
             };
             let mut a = Vec::with_capacity((self.w + 2) * self.h);
             for y in 0..self.h {
@@ -1659,7 +1652,6 @@ mod tests {
             }
             (hi - lo) / hi.max(1e-6)
         }
-
     }
 
     fn drawn_coverage(kind: MarkKind, size: f32, ppp: f32) -> Grid {

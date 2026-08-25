@@ -368,8 +368,7 @@ impl Folds {
         // to watch it get that wide: the folds came off the persist blob,
         // and each one remembers the window it was taken at.
         if dial.widest <= 0.0 {
-            dial.widest =
-                self.0.iter().fold(0.0_f32, |widest, fold| widest.max(fold.window));
+            dial.widest = self.0.iter().fold(0.0_f32, |widest, fold| widest.max(fold.window));
         }
         let (want, fixed) = wants(tree, &holds, &points.at, rail, separator);
         // The window moved without this pass asking it to — the user
@@ -450,11 +449,7 @@ impl Folds {
             // of on its own condition. The floor is a window width and this
             // is an area, so it is a bound rather than a boundary — which
             // is all it is asked to be.
-            let at = if wait.shuts {
-                (area + asking).max(floor)
-            } else {
-                area + asking.max(0.0)
-            };
+            let at = if wait.shuts { (area + asking).max(floor) } else { area + asking.max(0.0) };
             dial.wait = Some(Wait { at: Some(at), ..wait });
         }
         // What this pass has actually put to the window, which is what the
@@ -709,20 +704,18 @@ fn hold_flags(
     area: f32,
     settled: bool,
 ) -> (Vec<Hold>, Option<Wait>, bool) {
-    let moving = wait.is_none()
-        && was.len() == tree.len()
-        && {
-            // What the window is asked for is what the HOLDS say, not what the
-            // flags say. A pane folded downwards moves a flag and moves no hold
-            // — `folded_side` reads horizontal splits and nothing else, so
-            // egui_dock does the whole of that one and there is no width to take
-            // off the window. Waiting on a resize nobody is going to ask for
-            // costs the click a frame and buys nothing, and the settings
-            // column's Notes/Console bar is the arrow it would be bought on.
-            let mut had = tree.clone();
-            restore(&mut had, was);
-            self::holds(&had).iter().map(|hold| hold.side).ne(holds.iter().map(|hold| hold.side))
-        };
+    let moving = wait.is_none() && was.len() == tree.len() && {
+        // What the window is asked for is what the HOLDS say, not what the
+        // flags say. A pane folded downwards moves a flag and moves no hold
+        // — `folded_side` reads horizontal splits and nothing else, so
+        // egui_dock does the whole of that one and there is no width to take
+        // off the window. Waiting on a resize nobody is going to ask for
+        // costs the click a frame and buys nothing, and the settings
+        // column's Notes/Console bar is the arrow it would be bought on.
+        let mut had = tree.clone();
+        restore(&mut had, was);
+        self::holds(&had).iter().map(|hold| hold.side).ne(holds.iter().map(|hold| hold.side))
+    };
     if moving {
         // The tree goes back to where the last pass left it, and what the
         // gesture did is kept for the frame that can afford it.
@@ -967,9 +960,7 @@ impl Points {
         match &tree[node] {
             Node::Leaf(_) => self.at.get(node.0).copied().unwrap_or(0.0),
             _ if right.0 >= tree.len() => 0.0,
-            Node::Vertical(_) => {
-                self.span(tree, holds, left).max(self.span(tree, holds, right))
-            }
+            Node::Vertical(_) => self.span(tree, holds, left).max(self.span(tree, holds, right)),
             Node::Horizontal(_) => self.span(tree, holds, left) + self.span(tree, holds, right),
             Node::Empty => 0.0,
         }
@@ -1249,10 +1240,9 @@ fn wants(
         (want[index], fixed[index]) = match &tree[node] {
             Node::Leaf(_) => (at.get(index).copied().unwrap_or(0.0), 0.0),
             _ if right.0 >= tree.len() => (0.0, 0.0),
-            Node::Vertical(_) => (
-                want[left.0].max(want[right.0]),
-                fixed[left.0].max(fixed[right.0]),
-            ),
+            Node::Vertical(_) => {
+                (want[left.0].max(want[right.0]), fixed[left.0].max(fixed[right.0]))
+            }
             Node::Horizontal(_) => (
                 want[left.0] + separator + want[right.0],
                 fixed[left.0] + separator + fixed[right.0],
@@ -1437,9 +1427,7 @@ fn min_widths(tree: &Tree<Tab>, floor: f32, rail: f32, separator: f32) -> Vec<f3
         let (left, right) = (node.left(), node.right());
         mins[index] = match &tree[node] {
             Node::Leaf(_) => floor,
-            Node::Horizontal(_) if right.0 < tree.len() => {
-                mins[left.0] + separator + mins[right.0]
-            }
+            Node::Horizontal(_) if right.0 < tree.len() => mins[left.0] + separator + mins[right.0],
             Node::Vertical(_) if right.0 < tree.len() => mins[left.0].max(mins[right.0]),
             _ => 0.0,
         };
@@ -1563,12 +1551,8 @@ fn rail_columns(tree: &Tree<Tab>, node: NodeIndex) -> i32 {
     }
     match &tree[node] {
         Node::Leaf(_) => 1,
-        Node::Horizontal(_) => {
-            rail_columns(tree, node.left()) + rail_columns(tree, node.right())
-        }
-        Node::Vertical(_) => {
-            rail_columns(tree, node.left()).max(rail_columns(tree, node.right()))
-        }
+        Node::Horizontal(_) => rail_columns(tree, node.left()) + rail_columns(tree, node.right()),
+        Node::Vertical(_) => rail_columns(tree, node.left()).max(rail_columns(tree, node.right())),
         Node::Empty => 0,
     }
 }

@@ -34,11 +34,7 @@ pub(crate) fn render_to_texture(
 ) -> wgpu::Texture {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("parity_target"),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
+        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -98,11 +94,7 @@ pub(crate) fn readback(
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
+        wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
     );
     queue.submit([encoder.finish()]);
     let slice = buffer.slice(..);

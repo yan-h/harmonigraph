@@ -1,8 +1,8 @@
 //! Bloom, and the order the sheets reach the frame in.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 #[test]
 fn bloom_adds_light_over_the_plain_composite() {
@@ -20,10 +20,7 @@ fn bloom_adds_light_over_the_plain_composite() {
     scene_on.bloom_strength = 1.0;
 
     let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor {
-        size_in_pixels: SIZE,
-        pixels_per_point: 1.0,
-    };
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut total = |scene: &Scene, pane_id: u64| -> u64 {
         let cb = LatticeCallback::from_scene(
             scene,
@@ -73,14 +70,9 @@ fn bloom_adds_light_over_the_plain_composite() {
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use harmonigraph_scene::{Camera, FrameParams, Projection, ViewConfig};
 
-    let view = ViewConfig {
-        extent_threes: 1,
-        extent_fives: 1,
-        extent_sevens: 2,
-        ..ViewConfig::default()
-    };
-    for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
-    {
+    let view =
+        ViewConfig { extent_threes: 1, extent_fives: 1, extent_sevens: 2, ..ViewConfig::default() };
+    for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic] {
         let mut scene = harmonigraph_scene::derive_scene(
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
@@ -124,9 +116,8 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         // sheet's worth of identical depths, where every pair below holds
         // whatever the sort did — which is what culling the off-sheet nodes
         // reduced this to, silently, while it went on reading as coverage.
-        let (lo, hi) = depths.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &d| {
-            (lo.min(d), hi.max(d))
-        });
+        let (lo, hi) =
+            depths.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &d| (lo.min(d), hi.max(d)));
         assert!(
             hi - lo > 1e-6,
             "{projection:?}: every node drawn is at one depth ({lo}), so the order \

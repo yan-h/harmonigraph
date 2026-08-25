@@ -1,12 +1,12 @@
 //! Tests for the Spectral pane: its axes in every orientation, the
 //! gestures that move them, and what the whole pane paints.
 
-use super::*;
 use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
+use super::*;
 use crate::tests::probe::{
-    events_into, fresh, frame_full, frame_into, painted_full, painted_into, press, themed,
+    events_into, frame_full, frame_into, fresh, painted_full, painted_into, press, themed,
     themed_at,
 };
 use crate::{SpectralOrientation, SpectrumConfig};
@@ -14,10 +14,8 @@ use harmonigraph_core::{NoteEvent, NoteEventKind};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
 /// rect starts at zero shows up.
-const WIDE: egui::Rect =
-    egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
-const TALL: egui::Rect =
-    egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
+const WIDE: egui::Rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
+const TALL: egui::Rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
 
 /// The window the pane is painted into. Bigger than [`WIDE`] and [`TALL`] on
 /// both axes on purpose: a pane that draws outside its own rect then leaves
@@ -167,8 +165,7 @@ fn the_span_readout_names_its_own_unit() {
 #[test]
 fn the_level_range_maps_floor_to_zero_and_ceiling_to_one() {
     // No tilt, so the pivot pitch drops out and dB is dB.
-    let cfg =
-        SpectrumConfig { floor_db: -60.0, ceiling_db: 0.0, tilt: 0.0, ..Default::default() };
+    let cfg = SpectrumConfig { floor_db: -60.0, ceiling_db: 0.0, tilt: 0.0, ..Default::default() };
     let at = |db| loudness(&cfg, power_at(db), TILT_PIVOT_MIDI);
     assert!(at(-60.0).abs() < 1e-4, "the floor is silence");
     assert!((at(0.0) - 1.0).abs() < 1e-4, "the ceiling is full height");
@@ -306,10 +303,9 @@ fn the_names_filter_follows_the_axis_time_runs_along() {
 /// what they are for is the same picture arriving from the other side.
 #[test]
 fn pitch_climbs_the_same_way_in_the_pair_that_shares_an_axis() {
-    for (o, low, high) in [
-        (SpectralOrientation::Left, 120.0, 20.0),
-        (SpectralOrientation::Right, 120.0, 20.0),
-    ] {
+    for (o, low, high) in
+        [(SpectralOrientation::Left, 120.0, 20.0), (SpectralOrientation::Right, 120.0, 20.0)]
+    {
         let a = axes(WIDE, o);
         assert_eq!(a.at(0.0, 0.5).y, low, "{o:?}: low pitch is not at the bottom");
         assert_eq!(a.at(1.0, 0.5).y, high, "{o:?}: high pitch is not at the top");
@@ -492,8 +488,7 @@ fn drag_divider(
     roll_fraction: f32,
     delta: egui::Vec2,
 ) -> f32 {
-    let cfg =
-        SpectrumConfig { orientation, roll_fraction, show_roll: true, ..Default::default() };
+    let cfg = SpectrumConfig { orientation, roll_fraction, show_roll: true, ..Default::default() };
     drag_pane(rect, cfg, 1.0 - roll_fraction, delta).roll_fraction
 }
 
@@ -738,7 +733,11 @@ fn a_pane_with_no_depth_writes_nothing() {
 /// The pane whose depth axis is its LONG side, for the orientation given —
 /// which is the one a depth gesture has room to run along.
 fn along_depth(orientation: SpectralOrientation) -> egui::Rect {
-    if orientation.is_time_vertical() { TALL } else { WIDE }
+    if orientation.is_time_vertical() {
+        TALL
+    } else {
+        WIDE
+    }
 }
 
 /// Press at depth `grab` on the pane's own depth axis, drag by `delta`, and
@@ -781,7 +780,11 @@ fn drag_pane(
 /// picture, and these tests read the layout, so a sign error in one does
 /// not cancel in the other.
 fn curve_grows(a: &Axes, joined: bool) -> egui::Vec2 {
-    if joined { -a.dir_depth() } else { a.dir_depth() }
+    if joined {
+        -a.dir_depth()
+    } else {
+        a.dir_depth()
+    }
 }
 
 /// Dragging the spectrum away from its baseline spreads the curve out, so
@@ -1411,11 +1414,7 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
         vec![-60.0, -50.0, -40.0, -30.0],
         "the lines coarsened too",
     );
-    assert_eq!(
-        numbered_db(&cfg, 200.0, 80.0),
-        vec![-60.0, -40.0],
-        "the numbers did not thin",
-    );
+    assert_eq!(numbered_db(&cfg, 200.0, 80.0), vec![-60.0, -40.0], "the numbers did not thin",);
 
     // On an axis long enough that the lines subdivide to fives, the numbers
     // follow them down rather than staying on the tens: there is room, and a
@@ -1427,10 +1426,7 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
     // ...and closed to the narrowest window the Level range bar allows, the numbers
     // reach 2 dB. Pinned to tens this axis would carry exactly one number.
     let tight = level_cfg(-32.0, -20.0);
-    assert_eq!(
-        numbered_db(&tight, 400.0, 60.0),
-        vec![-32.0, -30.0, -28.0, -26.0, -24.0, -22.0],
-    );
+    assert_eq!(numbered_db(&tight, 400.0, 60.0), vec![-32.0, -30.0, -28.0, -26.0, -24.0, -22.0],);
 }
 
 /// A number is only ever written beside a line that was drawn, is never closer
@@ -1458,8 +1454,7 @@ fn the_lowest_ruling_always_carries_a_number() {
                 );
 
                 let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();
-                let numbered: Vec<f32> =
-                    grid.iter().filter(|r| r.numbered).map(|r| r.db).collect();
+                let numbered: Vec<f32> = grid.iter().filter(|r| r.numbered).map(|r| r.db).collect();
                 for db in &numbered {
                     assert!(ruled.contains(db), "{db} dB was numbered and never ruled");
                 }
@@ -1586,11 +1581,8 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
     // with the roll and spectrogram both off it owns the axis and grows from
     // depth 0 toward 1. A headroom applied to the wrong end shows up in one and
     // not the other.
-    let alone = SpectrumConfig {
-        show_roll: false,
-        show_spectrogram: false,
-        ..SpectrumConfig::default()
-    };
+    let alone =
+        SpectrumConfig { show_roll: false, show_spectrogram: false, ..SpectrumConfig::default() };
     for (cfg, edge, layout) in
         [(SpectrumConfig::default(), 0.0, "joined"), (alone, 1.0, "whole-axis")]
     {
@@ -1614,9 +1606,8 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let mut state = fresh();
     state.spectrum_config = cfg;
     let sr = 48_000.0;
-    let samples: Vec<f32> = (0..48_000)
-        .map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
-        .collect();
+    let samples: Vec<f32> =
+        (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
     state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
 
     // A screen of its own: `rect` here runs to 1200x400, which SCREEN could
@@ -1683,8 +1674,7 @@ fn a_cached_spectrogram_frame_matches_the_cold_build() {
     // back a texture handle owned by this context.
     let ctx = themed();
     let now = 94.0;
-    let mut frame =
-        || frame_into(&ctx, SCREEN, WIDE, |ui| spectral_pane(ui, &mut state, now, 0));
+    let mut frame = || frame_into(&ctx, SCREEN, WIDE, |ui| spectral_pane(ui, &mut state, now, 0));
     let cold = quad(&frame());
     assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
     let hit = quad(&frame());
@@ -2453,9 +2443,9 @@ fn whole_song_mode_rules_no_levels() {
         roll: state.tracker.roll().clone(),
     });
     let out = painted_pane(WIDE, &mut state, 1.0);
-    let ruled = out.shapes.iter().any(|s| {
-        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
-    });
+    let ruled = out.shapes.iter().any(
+        |s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color)),
+    );
     assert!(!ruled, "a whole-song frame ruled a grid across a pane with no spectrum on it");
 }
 
@@ -2518,9 +2508,9 @@ fn whole_song_mode_rules_no_frequencies() {
         roll: state.tracker.roll().clone(),
     });
     let out = painted_pane(WIDE, &mut state, 1.0);
-    let ruled = out.shapes.iter().any(|s| {
-        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
-    });
+    let ruled = out.shapes.iter().any(
+        |s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color)),
+    );
     assert!(!ruled, "a whole-song frame ruled a frequency across a pane with no spectrum on it");
 }
 
@@ -2552,10 +2542,7 @@ struct PaintedRuling {
 
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
-fn painted_rulings(
-    rect: egui::Rect,
-    cfg: SpectrumConfig,
-) -> (Vec<PaintedRuling>, Vec<usize>) {
+fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
     let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
@@ -2609,8 +2596,10 @@ fn the_hz_readout_carries_its_unit() {
 /// Painted at both the widest and the narrowest range it allows.
 #[test]
 fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
-    let axis =
-        (harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI, harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI);
+    let axis = (
+        harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
+        harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
+    );
     for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
         let mut state = fresh();
         state.spectrum_config.low_midi = low;
@@ -2648,6 +2637,7 @@ fn paint(
     state.spectrum_config.roll_fraction = roll_fraction;
     state.spectrum_config.roll_seconds = 10.0;
     state.view.bloom_strength = 1.2; // exercise the note-glow passes
+
     // Exercise the spectrogram's mesh path in every orientation too, with
     // energy at both axis extremes (where cell clamping is most likely to
     // fold a quad to zero area — which egui panics on).

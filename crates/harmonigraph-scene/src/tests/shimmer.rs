@@ -6,9 +6,9 @@
 //! plugin to be: a render of a long take starts at 0 and ends wherever the
 //! music does.
 
+use super::harness::*;
 use crate::*;
 use harmonigraph_core::Tuning;
-use super::harness::*;
 
 /// The sheet's position at `now`, taken the way a frame takes it — through
 /// `derive_scene`, so the clock's route into the scene is under test as much
@@ -86,9 +86,8 @@ fn the_shimmer_still_has_a_phase_to_land_on_late_in_a_song() {
     // the phase collapses these onto each other.
     const STEPS: usize = 128;
     let band = (width / speed) as f64;
-    let mut seen: Vec<f32> = (0..STEPS)
-        .map(|k| slide_at(speed, width, NOW + band * k as f64 / STEPS as f64))
-        .collect();
+    let mut seen: Vec<f32> =
+        (0..STEPS).map(|k| slide_at(speed, width, NOW + band * k as f64 / STEPS as f64)).collect();
     seen.sort_by(f32::total_cmp);
     seen.dedup();
     assert!(

@@ -186,9 +186,7 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
 /// for a marker's.
 fn wgsl_fn_body(name: &str) -> &'static str {
     let open = format!("\nfn {name}(");
-    let at = SHADER_SRC
-        .find(&open)
-        .unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
+    let at = SHADER_SRC.find(&open).unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
     let rest = &SHADER_SRC[at + 1..];
     &rest[..rest[1..].find("\nfn ").map_or(rest.len(), |end| end + 1)]
 }

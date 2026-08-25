@@ -6,8 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab, track_fill,
-    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -37,7 +38,10 @@ pub(super) enum Grab {
     /// the width from the CURRENT pair instead would re-measure an already
     /// squished span every frame and shrink it further while the pointer sat
     /// perfectly still.
-    Span { offset: f32, width: f32 },
+    Span {
+        offset: f32,
+        width: f32,
+    },
 }
 
 impl Grab {
@@ -95,18 +99,18 @@ impl Grab {
         // what a bar PRODUCES, so a closed or inverted pair still arrives from
         // a host param or a blob. `apply` floors the slid width there.
         if hi <= lo {
-            return if v < lo {
-                Grab::Low
-            } else {
-                Grab::Span { offset: v - lo, width: 0.0 }
-            };
+            return if v < lo { Grab::Low } else { Grab::Span { offset: v - lo, width: 0.0 } };
         }
         // A handle's reach cannot eat the whole span, or a narrow range would
         // have no middle left to grab and could never be slid along the axis.
         let near = near.min((hi - lo) * HANDLE_REACH_SHARE);
         let (dl, dh) = ((v - lo).abs(), (v - hi).abs());
         if dl.min(dh) <= near {
-            if dl <= dh { Grab::Low } else { Grab::High }
+            if dl <= dh {
+                Grab::Low
+            } else {
+                Grab::High
+            }
         } else if v > lo && v < hi {
             Grab::Span { offset: v - lo, width: hi - lo }
         } else if dl <= dh {
@@ -120,7 +124,13 @@ impl Grab {
     /// so the invariants that actually matter — the ends never cross, the
     /// span never closes past `min_span`, and a slid span keeps its width
     /// while staying inside the range — are testable without a pointer.
-    fn apply(self, v: f32, (lo, hi): (f32, f32), (min, max): (f32, f32), min_span: f32) -> (f32, f32) {
+    fn apply(
+        self,
+        v: f32,
+        (lo, hi): (f32, f32),
+        (min, max): (f32, f32),
+        min_span: f32,
+    ) -> (f32, f32) {
         match self {
             Grab::Low => (v.clamp(min, (hi - min_span).max(min)), hi),
             Grab::High => (lo, v.clamp((lo + min_span).min(max), max)),
@@ -198,9 +208,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
     // — a handle parked under the name (the low end at the bottom of its
     // axis, where the two bars that open at the full range both sit) would
     // otherwise open a run that starts inside the name's own letters.
-    let clipped = |(start, end): (f32, f32)| {
-        (start.max(region_left), end.min(region_right))
-    };
+    let clipped = |(start, end): (f32, f32)| (start.max(region_left), end.min(region_right));
     let gaps = [
         clipped((region_left, lgx - reach)),
         clipped((lgx + reach, hgx - reach)),
@@ -213,8 +221,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
     // the fill. (At the full range there is no empty track at all, so both
     // go inside.)
     let low_left = if gaps[0].1 - gaps[0].0 >= low_w { gaps[0].1 - low_w } else { gaps[1].0 };
-    let high_left =
-        if gaps[2].1 - gaps[2].0 >= high_w { gaps[2].0 } else { gaps[1].1 - high_w };
+    let high_left = if gaps[2].1 - gaps[2].0 >= high_w { gaps[2].0 } else { gaps[1].1 - high_w };
     // A number with a thumb standing in it is the one arrangement this bar
     // cannot ship: the thumb is drawn in the same near-white as the digits,
     // so the crossing swallows a character whichever paints last, and "-60
@@ -226,9 +233,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
     let uncrossed = |left: f32, w: f32| {
         left >= region_left
             && left + w <= region_right
-            && [lgx, hgx]
-                .iter()
-                .all(|&x| x + half_handle <= left || x - half_handle >= left + w)
+            && [lgx, hgx].iter().all(|&x| x + half_handle <= left || x - half_handle >= left + w)
     };
     let apart = low_left + low_w + text_gap <= high_left;
     let (low_left, high_left) =
@@ -246,9 +251,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
                 // either of the others, so the pair sits as near the span
                 // it names as the run allows.
                 Some((0, gap)) if gap.1 - gap.0 >= pair => (gap.1 - pair, gap.1 - high_w),
-                Some((_, gap)) if gap.1 - gap.0 >= pair => {
-                    (gap.0, gap.0 + low_w + text_gap)
-                }
+                Some((_, gap)) if gap.1 - gap.0 >= pair => (gap.0, gap.0 + low_w + text_gap),
                 // No run holds both — a row this narrow has none left that
                 // does. What survives is reading ORDER: low then high,
                 // as near the span as the region allows, and a thumb
@@ -256,9 +259,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
                 // range rather than two numbers, and it is the last thing
                 // worth spending the room on.
                 _ => {
-                    let start = low_left
-                        .max(region_left)
-                        .min((region_right - pair).max(region_left));
+                    let start =
+                        low_left.max(region_left).min((region_right - pair).max(region_left));
                     (start, start + low_w + text_gap)
                 }
             }
@@ -608,11 +610,7 @@ impl<'a> RangeBar<'a> {
                 // Square where the ramp continues it, round where the bar is:
                 // a rounded right end here would cut a notch out of a fill that
                 // does not stop there.
-                painter.rect_filled(
-                    head,
-                    CornerRadius { nw: r, sw: r, ne: 0, se: 0 },
-                    fill_color,
-                );
+                painter.rect_filled(head, CornerRadius { nw: r, sw: r, ne: 0, se: 0 }, fill_color);
                 let mut ramp = fill;
                 ramp.min.x = ramp_start;
                 // A hard edge closes the span, which leaves the head the whole
@@ -662,8 +660,7 @@ impl<'a> RangeBar<'a> {
         };
         let reserve = widest_end(*self.low) + text_gap + widest_end(*self.high);
         let body = TextStyle::Body.resolve(ui.style());
-        let job =
-            egui::text::LayoutJob::simple_singleline(self.label.to_owned(), body, text_color);
+        let job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), body, text_color);
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
         let label_width = label.size().x;
@@ -761,9 +758,8 @@ impl<'a> RangeBar<'a> {
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
         // the middle picks the whole range up and slides it.
-        let would_start = response
-            .hover_pos()
-            .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), near));
+        let would_start =
+            response.hover_pos().map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), near));
         match would_start {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
@@ -795,11 +791,7 @@ mod tests {
     /// origin, so string, box and position are all identical to the run it
     /// doubles, and the clip rect is the only thing that says it is confined to
     /// a thumb rather than painted over the whole name.
-    fn paint_range_bar_clipped(
-        width: f32,
-        low: f32,
-        high: f32,
-    ) -> Vec<egui::epaint::ClippedShape> {
+    fn paint_range_bar_clipped(width: f32, low: f32, high: f32) -> Vec<egui::epaint::ClippedShape> {
         let (mut lo, mut hi) = (low, high);
         painted(width, |ui| {
             RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE).show(ui);
@@ -901,15 +893,19 @@ mod tests {
         let bar = track.get();
         let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from))]);
-        frame(&mut lo, &mut hi, vec![
-            egui::Event::PointerMoved(at(from)),
-            egui::Event::PointerButton {
-                pos: at(from),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            },
-        ]);
+        frame(
+            &mut lo,
+            &mut hi,
+            vec![
+                egui::Event::PointerMoved(at(from)),
+                egui::Event::PointerButton {
+                    pos: at(from),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
         // A step clear of egui's drag threshold first, then the rest of the
         // way, because that is what a real hand delivers: egui calls the press
         // a drag only once the pointer has left the threshold, so the first
@@ -987,9 +983,10 @@ mod tests {
         let (texts, handles) = (text_boxes(&shapes), handles(&shapes));
         let bar = filled_rects(&shapes)[0].0;
         assert_eq!(texts.len(), 3, "a name and both ends, and nothing else: {texts:?}");
-        assert_eq!((texts[0].1.as_str(), texts[1].1.as_str(), texts[2].1.as_str()), (
-            NAME, "60.00", "72.00",
-        ));
+        assert_eq!(
+            (texts[0].1.as_str(), texts[1].1.as_str(), texts[2].1.as_str()),
+            (NAME, "60.00", "72.00",)
+        );
         assert!(texts[0].0.right() <= texts[1].0.left(), "a number ran into the name");
         assert!(texts[1].0.right() <= handles[0].left(), "low value sits outside its handle");
         assert!(texts[2].0.left() >= handles[1].right(), "high value sits outside its handle");
@@ -1367,7 +1364,11 @@ mod tests {
             let (mut lo, mut hi) = (AXIS.0, AXIS.1);
             let drawn = shapes(0.0, |ui| {
                 let bar = RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME);
-                if fade { bar.fade_span().show(ui) } else { bar.show(ui) };
+                if fade {
+                    bar.fade_span().show(ui)
+                } else {
+                    bar.show(ui)
+                };
             });
             assert!(!filled_rects(&drawn).is_empty(), "fade={fade}: the well was not painted");
         }
@@ -1589,10 +1590,7 @@ mod tests {
         );
         let mut previous = f32::INFINITY;
         for (x, color) in ramp {
-            assert!(
-                from_well(color) <= previous + 0.01,
-                "the fill brightens again at {x}",
-            );
+            assert!(from_well(color) <= previous + 0.01, "the fill brightens again at {x}",);
             previous = from_well(color);
         }
     }
@@ -1727,10 +1725,7 @@ mod tests {
             _ => 0.0,
         };
         assert!(width < 0.01, "an edge of no reach paints {width:.2}pt of ramp");
-        assert!(
-            fade_head(&shapes).is_none(),
-            "an edge of no reach paints a solid head of fill",
-        );
+        assert!(fade_head(&shapes).is_none(), "an edge of no reach paints a solid head of fill",);
     }
 
     /// A hard edge closes the span, and the fill is then solid the whole way

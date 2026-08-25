@@ -755,11 +755,8 @@ mod tests {
         let mut h = harness();
         h.push_audio(20_000);
 
-        let analyzer = BackgroundAnalyzer::spawn(
-            h.shared.clone(),
-            h.editor_state.clone(),
-            h.ui_state.clone(),
-        );
+        let analyzer =
+            BackgroundAnalyzer::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
         // Generous against POLL, so a loaded machine cannot fail this for being
         // slow — it is asserting that rounds happen at all, not how fast.
         std::thread::sleep(POLL * 10);

@@ -62,8 +62,18 @@ pub(super) fn normalize_deg(deg: f32) -> f32 {
 /// color range's ends in [`color`]). Octave numbers next to these use
 /// Bitwig's convention (middle C = C3).
 pub(super) const KEY_NAMES: [&str; 12] = [
-    "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
-    "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
+    "C",
+    "C\u{266F}",
+    "D",
+    "D\u{266F}",
+    "E",
+    "F",
+    "F\u{266F}",
+    "G",
+    "G\u{266F}",
+    "A",
+    "A\u{266F}",
+    "B",
 ];
 
 /// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
@@ -292,7 +302,6 @@ pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(byte(c.x), byte(c.y), byte(c.z), byte(alpha))
 }
 
-
 /// A lattice node's note name for display, spelled against whatever commas
 /// are being tempered out: a tempered comma makes two positions one pitch, so
 /// the name is the one its collapsed position carries (meantone names E- and
@@ -389,9 +398,8 @@ pub(super) fn param_bar(
     key: ParamKey,
 ) -> egui::Response {
     let mut value = params.get(key);
-    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
-        .eased(key.logarithmic())
-        .decimals(2);
+    let mut bar =
+        ValueBar::new(&mut value, key.range(), key.label()).eased(key.logarithmic()).decimals(2);
     if let Some(display) = key.display() {
         bar = bar.display(display);
     }

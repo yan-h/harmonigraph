@@ -759,9 +759,7 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
     // exactly these two numbers.
     let unlit = g.lightness_ramp == 0.0 && (g.lightness == 0.0 || g.lightness == 100.0);
     match (toneless, unlit) {
-        (_, true) => {
-            Gradient { hue_start: 0.0, hue_span: 0.0, chroma: 0.0, chroma_ramp: 0.0, ..g }
-        }
+        (_, true) => Gradient { hue_start: 0.0, hue_span: 0.0, chroma: 0.0, chroma_ramp: 0.0, ..g },
         (true, false) => Gradient { hue_start: 0.0, hue_span: 0.0, ..g },
         (false, false) => g,
     }
@@ -1077,7 +1075,11 @@ pub(crate) fn bins_for(rows: usize, scale: &PitchScale, coarse: bool) -> Vec<Bin
             let midi = scale.min_midi + t * scale.span;
             let read = if last > idx {
                 let (from, to) = (idx, (last + 1).min(SPECTRUM_BINS));
-                if coarse { RowRead::Max { from, to } } else { RowRead::Mean { from, to } }
+                if coarse {
+                    RowRead::Max { from, to }
+                } else {
+                    RowRead::Mean { from, to }
+                }
             } else {
                 // Narrower than a bucket: read between the two whose centers
                 // straddle this row's center. A bucket's center sits half a
@@ -1571,7 +1573,6 @@ impl SpectrogramAgg {
         (centers, power)
     }
 }
-
 
 /// Texture `u` for an absolute time.
 ///
@@ -2232,7 +2233,10 @@ mod tests {
         assert_eq!(at(4), q(0.5), "the column after it");
         // Evenly spaced centers are exactly what the texture mapping assumes.
         for pair in centers.windows(2) {
-            assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
+            assert!(
+                (pair[1] - pair[0] - 0.25).abs() < 1e-9,
+                "slabs must stay uniform: {centers:?}"
+            );
         }
     }
 
@@ -2500,16 +2504,16 @@ mod tests {
         let window_span = 1.0;
         // Exercises: cluster (0.30, 0.31), 1-slab gap (0.55->0.80 is 1 apart;
         // 0.80->1.60 is a multi-slab gap), then steady scroll.
-        let times: [f64; 14] = [
-            0.05, 0.10, 0.30, 0.31, 0.55, 0.80, 1.60, 1.62, 1.90, 2.15, 2.40, 2.65, 2.90, 3.15,
-        ];
+        let times: [f64; 14] =
+            [0.05, 0.10, 0.30, 0.31, 0.55, 0.80, 1.60, 1.62, 1.90, 2.15, 2.40, 2.65, 2.90, 3.15];
 
         let mut agg = SpectrogramAgg::new();
         let mut history = crate::SpectrumHistory::default();
         for (i, &t) in times.iter().enumerate() {
             // Per-column, per-bin energy, so a wrong slab or a stale hold surfaces
             // as a value mismatch, not just a shape one.
-            let e = [(4, 0.1 * (i as f32 + 1.0)), (7, 0.05 * i as f32), (10, 1.0 - 0.03 * i as f32)];
+            let e =
+                [(4, 0.1 * (i as f32 + 1.0)), (7, 0.05 * i as f32), (10, 1.0 - 0.03 * i as f32)];
             history.push(col(t, &e));
             // Trim the store, so `first` indices shift under the aggregator.
             history.trim_older_than(t - (window_span + 0.5));
@@ -2653,6 +2657,7 @@ mod tests {
         // demonstrate nothing.
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
+
         // Long enough that nothing scrolls out: the whole run stays in window,
         // so any mismatch is the merge and not the front trim.
         let window_span = 60.0;
@@ -2795,7 +2800,8 @@ mod tests {
         // density it will be drawn at, rather than upsampled from half of it.
         // Rounded up to a quantum, so never coarser than the pane and never
         // more than a quantum finer — see [`PANE_QUANTUM`].
-        let rows_at = |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
+        let rows_at =
+            |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
         for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.0, 517.0), (2.0, 517.0)] {
             let rows = rows_at(ppp, pitch);
             let want = pitch * ppp;
@@ -2877,23 +2883,27 @@ mod tests {
     fn no_pane_plans_an_image_past_what_the_gpu_takes() {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let columns = Columns { first: 3, len: 4000, newest: 12.0 };
-        let plan_for = |max_side: usize, whole: bool, ppp: f32, pitch: f32, depth: f32, win: f64| {
-            Plan::new(
-                &PaneView {
-                    ppp,
-                    max_side,
-                    max_rows: max_side,
-                    pitch_len: pitch,
-                    depth_len: depth,
-                    window: win,
-                    scale,
-                    cfg: SpectrumConfig { roll_seconds: win as f32, ..SpectrumConfig::default() },
-                    whole,
-                    coarse: false,
-                },
-                &columns,
-            )
-        };
+        let plan_for =
+            |max_side: usize, whole: bool, ppp: f32, pitch: f32, depth: f32, win: f64| {
+                Plan::new(
+                    &PaneView {
+                        ppp,
+                        max_side,
+                        max_rows: max_side,
+                        pitch_len: pitch,
+                        depth_len: depth,
+                        window: win,
+                        scale,
+                        cfg: SpectrumConfig {
+                            roll_seconds: win as f32,
+                            ..SpectrumConfig::default()
+                        },
+                        whole,
+                        coarse: false,
+                    },
+                    &columns,
+                )
+            };
         // The texture each build actually uploads, derived the way `build`
         // derives it rather than restated. The slabs the fold emits are
         // `floor(span / bucket) + 1`, since the slab keys are absolute and both
@@ -2915,7 +2925,11 @@ mod tests {
         // from `window` — see [`slab_ceiling`].
         let tex_width = |p: &Plan, whole: bool, win: f64| {
             let visible = (win / p.bucket).floor() as usize + 1;
-            if whole { visible } else { 2 * ring_capacity(p.capacity, visible) }
+            if whole {
+                visible
+            } else {
+                2 * ring_capacity(p.capacity, visible)
+            }
         };
 
         for max_side in [BARE_MAX_SIDE, EDITOR_MAX_SIDE, 4096] {
@@ -3018,10 +3032,7 @@ mod tests {
                     depth_len: depth,
                     window: span,
                     scale: SWEEP_SCALE,
-                    cfg: SpectrumConfig {
-                        roll_seconds: span as f32,
-                        ..SpectrumConfig::default()
-                    },
+                    cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
                     whole: true,
                     coarse: false,
                 },
@@ -3037,8 +3048,7 @@ mod tests {
                             ws.start = offset.min(TAKE - span);
                             ws.span = span;
                             let p = plan_for(max_side, ppp, depth, span);
-                            let (centers, _) =
-                                aggregate_slabs(ws.drawn_columns(span), p.bucket);
+                            let (centers, _) = aggregate_slabs(ws.drawn_columns(span), p.bucket);
                             assert!(
                                 centers.len() <= max_side,
                                 "a {span} s window at {} of a {TAKE} s take folds to {} texels, \
@@ -3128,12 +3138,8 @@ mod tests {
         let columns: Vec<_> = (0..40)
             .map(|i| col(59.9 + i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
             .collect();
-        let ws = crate::WholeSong {
-            start,
-            span,
-            columns,
-            roll: harmonigraph_core::NoteRoll::default(),
-        };
+        let ws =
+            crate::WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() };
         // What the pane hands the plan: `time.window()`, the FLOORED one.
         let window = ws.span.max(FLOOR);
         let view = PaneView {
@@ -3787,10 +3793,8 @@ mod tests {
         // re-folds when the style changes (rows or slab width), and the ring
         // restarts when the style OR its capacity does.
         let layouts = |sizes: &dyn Fn(f32) -> PaneView, from: i32, to: i32| {
-            let (mut styles, mut rings) = (
-                std::collections::BTreeSet::new(),
-                std::collections::BTreeSet::new(),
-            );
+            let (mut styles, mut rings) =
+                (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
             for px in from..=to {
                 let plan = Plan::new(&sizes(px as f32), &columns);
                 styles.insert(format!("{:?}", plan.key.style()));
@@ -3949,7 +3953,11 @@ mod tests {
             } else {
                 dragged += 1;
                 let phase = (dragged as f64 / 600.0).min(2.0);
-                if phase <= 1.0 { hi - (hi - lo) * phase } else { lo + (hi - lo) * (phase - 1.0) }
+                if phase <= 1.0 {
+                    hi - (hi - lo) * phase
+                } else {
+                    lo + (hi - lo) * (phase - 1.0)
+                }
             };
 
             let bucket = live_slab(span, cols);
@@ -4208,10 +4216,9 @@ mod tests {
     #[test]
     fn the_key_is_sensitive_to_every_input() {
         let cfg = SpectrumConfig::default();
-        let style =
-            |rows, bucket, min, span, cfg: &SpectrumConfig| {
-                ColumnStyle::new(rows, false, bucket, min, span, cfg)
-            };
+        let style = |rows, bucket, min, span, cfg: &SpectrumConfig| {
+            ColumnStyle::new(rows, false, bucket, min, span, cfg)
+        };
         let base_style = || style(100, 0.1, 40.0, 48.0, &cfg);
         let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
         // Same inputs -> equal: this is the hit that skips the rebuild.
@@ -4233,6 +4240,7 @@ mod tests {
             assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
         };
         styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
+
         // The coarse read: a gesture image's wide rows are a max, not the
         // mean, so its floor sits high — the settle must repaint, not carry.
         // On a pane short enough that the gesture never caps its rows, this
@@ -4244,6 +4252,7 @@ mod tests {
         styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
         styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
+
         // Every colour input, one at a time: the palette, either end of the
         // Level window, or the tilt recolours every pixel without moving a
         // column. Spelled out one by one because [`ColumnColor`] is a list kept
@@ -4287,6 +4296,7 @@ mod tests {
         };
         carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
         carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
+
         // And the hue pair at NO CHROMA, which is the Mono preset and the one
         // place a gradient knob decides nothing. `chroma_at` is 0 at every
         // level, so the absolute chroma is 0 whatever the hue, and Oklab's `a`
@@ -4467,10 +4477,7 @@ mod tests {
 
         let read = RowRead::Mean { from: 0, to: 8 }.of(&slab, &ROW_WEIGHT);
         assert_eq!(column[0], shades.at(0, read), "the compose reads through `ROW_WEIGHT`");
-        assert!(
-            read < top,
-            "a weighted mean of a spread run sits below its max: {read} vs {top}",
-        );
+        assert!(read < top, "a weighted mean of a spread run sits below its max: {read} vs {top}",);
     }
 
     /// Every texel the window reads holds ITS OWN slab's column — asserted
@@ -4595,7 +4602,11 @@ mod tests {
         // half texel the quad overruns past the oldest slab's leading edge.
         let x = ring.x_of(first - 1);
         let got: Vec<Color32> = (0..h).map(|y| model[y * tex_w + x]).collect();
-        assert_eq!(got, expect(first), "the far guard at texel {x} does not duplicate slab {first}");
+        assert_eq!(
+            got,
+            expect(first),
+            "the far guard at texel {x} does not duplicate slab {first}"
+        );
     }
 
     /// Columns are placed by absolute slab key, and every one is written twice
@@ -4788,21 +4799,16 @@ mod tests {
         let ring = SpectrogramRing::restarted(CAPACITY, style, 10);
         // One flat colour per column, so where each lands is readable.
         let shade = |i: usize| Color32::from_gray(10 * (i as u8 + 1));
-        let pixels =
-            restart_pixels(&ring, tex_w, H, 10, 12, |i, out| {
-                out.clear();
-                out.extend(std::iter::repeat_n(shade(i), H));
-            });
+        let pixels = restart_pixels(&ring, tex_w, H, 10, 12, |i, out| {
+            out.clear();
+            out.extend(std::iter::repeat_n(shade(i), H));
+        });
 
         for (i, key) in (10..=12).enumerate() {
             let x = ring.x_of(key);
             for row in 0..H {
                 assert_eq!(pixels[row * tex_w + x], shade(i), "column {key} at {x}");
-                assert_eq!(
-                    pixels[row * tex_w + x + CAPACITY],
-                    shade(i),
-                    "column {key}'s twin",
-                );
+                assert_eq!(pixels[row * tex_w + x + CAPACITY], shade(i), "column {key}'s twin",);
             }
         }
         // The guard duplicates the oldest slab, one texel before the run.
@@ -4811,9 +4817,8 @@ mod tests {
         assert_eq!(pixels[guard + CAPACITY], shade(0), "and its twin");
         // Everything the run does not reach stays silent rather than showing
         // whatever the allocation held.
-        let painted: Vec<usize> = (9..=12)
-            .flat_map(|key| [ring.x_of(key), ring.x_of(key) + CAPACITY])
-            .collect();
+        let painted: Vec<usize> =
+            (9..=12).flat_map(|key| [ring.x_of(key), ring.x_of(key) + CAPACITY]).collect();
         for (x, texel) in pixels.iter().take(tex_w).enumerate() {
             if !painted.contains(&x) {
                 assert_eq!(*texel, Color32::BLACK, "unwritten column {x}");
@@ -5165,8 +5170,7 @@ mod tests {
 
         let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
         let bins = bins_for(1408, &full, false);
-        let means =
-            bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
+        let means = bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
         // A slab with something in every bucket, so no run is degenerate.
         let mut slab = [0u8; SPECTRUM_BINS];
         for (i, v) in slab.iter_mut().enumerate() {
@@ -5338,8 +5342,7 @@ mod tests {
                 history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
             }
             let newest = history.back().unwrap().time;
-            let first =
-                history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
+            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
 
             for (scale_label, scale) in [("out", &full), ("in", &tight)] {
                 let t0 = Instant::now();
@@ -5383,10 +5386,14 @@ mod tests {
                     for _ in 0..6 {
                         let shades = Shades::new(&cfg, bins);
                         let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
-                        let px =
-                            restart_pixels(&ring, capacity * 2, h, first_key, last_key, |i, out| {
-                                fill_column_into(&shades, bins, slab_of(&power, i), out)
-                            });
+                        let px = restart_pixels(
+                            &ring,
+                            capacity * 2,
+                            h,
+                            first_key,
+                            last_key,
+                            |i, out| fill_column_into(&shades, bins, slab_of(&power, i), out),
+                        );
                         sink += px.len();
                     }
                     (t0.elapsed().as_secs_f64() * 1000.0 / 6.0, sink)

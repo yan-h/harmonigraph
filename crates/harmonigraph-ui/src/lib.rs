@@ -3,16 +3,16 @@
 //! editor call [`root_ui`] once per egui frame; everything else is internal.
 
 pub mod layout;
+mod marks;
+mod panes;
 pub mod params;
+mod perf;
 /// The open/frame/close sequence a windowed shell runs around [`root_ui`],
 /// and the one window floor both shells hold.
 pub mod shell;
-pub mod theme;
 pub(crate) mod text;
+pub mod theme;
 pub mod widgets;
-mod marks;
-mod panes;
-mod perf;
 
 mod fold;
 
@@ -20,12 +20,12 @@ mod fold;
 /// defaults behind them. The render settings persist too but live in
 /// `harmonigraph-take` — see the re-export below.
 mod config;
-/// The analyzer and its heatmap caches, none of it persisted.
-mod spectrum;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
 /// draws it, `panes::spectral::spectrogram`, holds only the mesh and the
 /// draw call.
 mod spectrogram;
+/// The analyzer and its heatmap caches, none of it persisted.
+mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
 
@@ -44,8 +44,7 @@ pub use layout::{Layout, Placement, PRESETS};
 // which nothing outside their own module wanted at all.
 pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers, SpectrumWindow,
-    SCALE_BAR_RANGE,
-    TILT_STEPS,
+    SCALE_BAR_RANGE, TILT_STEPS,
 };
 // The Spiral pane's framing, which is `SharedState::spiral_view`'s type. `panes`
 // is private, so a public field of a type from in there is a field nothing
@@ -62,17 +61,17 @@ pub use panes::spiral::SpiralView;
 //
 // Re-exported here because every pane, shell and test already reaches them
 // through this crate, and where a type is defined is not their business.
-pub use harmonigraph_take::{
-    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
-};
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
     ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_OUTLINE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
+pub use harmonigraph_take::{
+    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
+};
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
-pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 pub(crate) use state::default_dock;
+pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell
@@ -265,10 +264,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // leaving is a drag that is still ours, but the focus leaving is not (see
     // `kept_focus`).
     let (gesturing, at) = ui.input(|i| {
-        (
-            i.pointer.any_down() || i.pointer.any_released(),
-            i.pointer.latest_pos().map(|at| at.x),
-        )
+        (i.pointer.any_down() || i.pointer.any_released(), i.pointer.latest_pos().map(|at| at.x))
     });
     state.workspace.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
     let area = fold::area_width(ui, &dock_style);
@@ -448,11 +444,8 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
             && state.temper_judged[comma.index()] != Some(axes)
         {
             let tuning = &state.tuning;
-            *state.view.temper_mut(comma) = comma.is_tempered(
-                tuning.three_cents(),
-                tuning.five_cents(),
-                tuning.seven_cents(),
-            );
+            *state.view.temper_mut(comma) =
+                comma.is_tempered(tuning.three_cents(), tuning.five_cents(), tuning.seven_cents());
         }
         // Every frame, engaged or not: an engaged mode that is switched off
         // must find its own tuning already judged, or the frame after the
@@ -643,9 +636,7 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
                 *state.view.temper_mut(comma) = comma.is_tempered(three, five, seven);
             }
         }
-        state
-            .console
-            .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
+        state.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
     }
     state.last_learned_classes = Some(classes);
 }

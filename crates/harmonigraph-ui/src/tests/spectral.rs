@@ -314,7 +314,8 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
     let far = now - kept;
     assert!(
         (far - (was - dialled) - (now - was)).abs() < 1.0,
-        "the spectrogram got {far} of a pane that gained {}", now - was,
+        "the spectrogram got {far} of a pane that gained {}",
+        now - was,
     );
     // And the dial the render composes from never moved.
     assert_eq!(

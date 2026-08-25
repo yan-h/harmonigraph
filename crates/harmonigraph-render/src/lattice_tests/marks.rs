@@ -1,7 +1,7 @@
 //! The melody and bass marks, and the audio ring worn under them.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 #[test]
 fn a_melody_bass_mark_extends_the_slice_it_names() {
@@ -12,11 +12,7 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 
     let unmarked = gpu.shot(&single_marked_node(0, 0));
     let changed_px = |other: &[u8]| -> usize {
-        unmarked
-            .chunks(4)
-            .zip(other.chunks(4))
-            .filter(|(a, b)| a != b)
-            .count()
+        unmarked.chunks(4).zip(other.chunks(4)).filter(|(a, b)| a != b).count()
     };
 
     // Measure against the node's OWN footprint, not an absolute pixel
@@ -162,9 +158,7 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
     let sharp = fresh_range / 4.0;
     let detuned = wedge(None, Some(slot_pitch(UP) + sharp / 100.0), fresh_range);
     let shift = signed_apart(detuned.angle, ring.angle);
-    eprintln!(
-        "{sharp:.0}¢ sharp moved the wedge {shift:.1}°, an octave of band {rising:.1}°",
-    );
+    eprintln!("{sharp:.0}¢ sharp moved the wedge {shift:.1}°, an octave of band {rising:.1}°",);
     assert!(
         shift * rising > 0.0,
         "{sharp:.0}¢ SHARP moved the wedge {shift:.1}° where rising pitch moves it \
@@ -534,12 +528,8 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     // A small window so the nodes draw big enough to measure.
-    let base = ViewConfig {
-        extent_threes: 2,
-        extent_fives: 2,
-        extent_sevens: 0,
-        ..ViewConfig::default()
-    };
+    let base =
+        ViewConfig { extent_threes: 2, extent_fives: 2, extent_sevens: 0, ..ViewConfig::default() };
     let scene_for = |marks: bool| {
         derive_scene(
             &tracker,
@@ -569,11 +559,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     let off = gpu.shot(&scene_for(false));
     let on = gpu.shot(&marked);
     let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
-    let changed = off
-        .chunks(4)
-        .zip(on.chunks(4))
-        .filter(|(a, b)| a != b)
-        .count();
+    let changed = off.chunks(4).zip(on.chunks(4)).filter(|(a, b)| a != b).count();
     eprintln!("chord: {lit} lit px, {changed} changed by the marks");
     // Same reasoning as the by-hand test above; at this node density the
     // ring's screen-space minimum (MARK_RING_MIN_AA) is what keeps it from
@@ -662,7 +648,8 @@ fn the_shader_spends_a_markers_proportions_on_the_shape_they_name() {
     let taper = |gpu: &mut Shooter, start: f32| {
         total_light(&gpu.shot(&lone_marker_scene(0.275, start))) as f64
     };
-    let (square_end, half, whole) = (taper(&mut gpu, 1.0), taper(&mut gpu, 0.5), taper(&mut gpu, 0.0));
+    let (square_end, half, whole) =
+        (taper(&mut gpu, 1.0), taper(&mut gpu, 0.5), taper(&mut gpu, 0.0));
     assert!(
         square_end > half && half > whole,
         "a longer taper has to take more ink, not less: {square_end} {half} {whole}",

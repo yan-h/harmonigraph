@@ -136,10 +136,7 @@ pub(crate) fn frame_full(
 }
 
 /// [`frame_full`] on a themed context of its own.
-pub(crate) fn painted_full(
-    screen: egui::Vec2,
-    add: impl FnMut(&mut egui::Ui),
-) -> egui::FullOutput {
+pub(crate) fn painted_full(screen: egui::Vec2, add: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
     frame_full(&themed(), screen, add)
 }
 

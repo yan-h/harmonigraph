@@ -1,8 +1,8 @@
 //! The root shell itself: the tab registry, and the repaint pacing
 //! [`root_ui`] asks for.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: egui_dock's default `id()` is the title text, and that id keys the
@@ -93,7 +93,11 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
         fn luminance(c: egui::Color32) -> f32 {
             let channel = |v: u8| {
                 let v = f32::from(v) / 255.0;
-                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
         }
@@ -110,8 +114,10 @@ fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
         ("hovered", style.separator.color_hovered),
         ("dragged", style.separator.color_dragged),
     ] {
-        for (ground, fill) in [("the picture panes' well", theme::well()),
-                               ("a settings pane's panel", theme::panel())] {
+        for (ground, fill) in [
+            ("the picture panes' well", theme::well()),
+            ("a settings pane's panel", theme::panel()),
+        ] {
             let ratio = contrast(color, fill);
             assert!(
                 ratio >= FLOOR,
@@ -159,66 +165,61 @@ fn every_settings_tab_fits_on_its_tab_bar() {
     // so a bar that overflows there is one a new user never sees whole; that
     // is issue #287, and this row of the sweep is what holds the fix.
     for window in [egui::vec2(1512.0, 886.0), egui::vec2(1000.0, 700.0)] {
-    let mut state = fresh();
-    let mut harness = DockHarness::new();
-    harness.screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), window);
-    harness.settle(&mut state);
-    let output = harness.frame(&mut state, vec![]);
+        let mut state = fresh();
+        let mut harness = DockHarness::new();
+        harness.screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), window);
+        harness.settle(&mut state);
+        let output = harness.frame(&mut state, vec![]);
 
-    let column = [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video];
-    // The settings leaf's own rect, so a title is only counted where this bar
-    // drew it. Scoping rather than matching text anywhere on screen is what
-    // makes the Analyzer row mean anything: `tab_title` gives the display pane
-    // the same name, that pane is a leaf of its own with one tab and room to
-    // spare, and an unscoped search would find ITS unclipped copy and pass no
-    // matter what the settings column did.
-    let path = state.workspace.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
-    let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
-    for tab in column {
-        let title = panes::tab_title(&tab);
-        // The bar paints the title of every tab in the leaf, not just the
-        // selected one, so each is findable by its own text.
-        let drawn: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|cs| match &cs.shape {
-                egui::Shape::Text(t)
-                    if t.galley.text() == title
-                        && t.pos.x >= leaf.left()
-                        && t.pos.x <= leaf.right() =>
-                {
-                    Some((t.pos, t.galley.size(), cs.clip_rect))
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(!drawn.is_empty(), "the settings tab bar drew no title for {tab:?}");
-        let whole = drawn.iter().any(|&(pos, size, clip)| {
-            let rect = egui::Rect::from_min_size(pos, size);
-            clip.contains_rect(rect)
-        });
-        assert!(
-            whole,
-            "{tab:?}'s tab title is clipped on the bar at {window:?} — the settings \
+        let column = [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video];
+        // The settings leaf's own rect, so a title is only counted where this bar
+        // drew it. Scoping rather than matching text anywhere on screen is what
+        // makes the Analyzer row mean anything: `tab_title` gives the display pane
+        // the same name, that pane is a leaf of its own with one tab and room to
+        // spare, and an unscoped search would find ITS unclipped copy and pass no
+        // matter what the settings column did.
+        let path = state.workspace.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
+        let leaf =
+            state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+        for tab in column {
+            let title = panes::tab_title(&tab);
+            // The bar paints the title of every tab in the leaf, not just the
+            // selected one, so each is findable by its own text.
+            let drawn: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t)
+                        if t.galley.text() == title
+                            && t.pos.x >= leaf.left()
+                            && t.pos.x <= leaf.right() =>
+                    {
+                        Some((t.pos, t.galley.size(), cs.clip_rect))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!drawn.is_empty(), "the settings tab bar drew no title for {tab:?}");
+            let whole = drawn.iter().any(|&(pos, size, clip)| {
+                let rect = egui::Rect::from_min_size(pos, size);
+                clip.contains_rect(rect)
+            });
+            assert!(
+                whole,
+                "{tab:?}'s tab title is clipped on the bar at {window:?} — the settings \
              column has run out of room for {} tabs. Shorten a name or merge a tab; \
              a clipped tab is one a user cannot read. (drawn: {drawn:?})",
-            column.len(),
-        );
-    }
+                column.len(),
+            );
+        }
     }
 }
 
 #[test]
 fn frame_interval_converts_a_cap_to_a_spacing() {
     assert_eq!(frame_interval(None), None, "uncapped asks for no spacing");
-    assert_eq!(
-        frame_interval(Some(30.0)),
-        Some(std::time::Duration::from_secs_f32(1.0 / 30.0)),
-    );
-    assert_eq!(
-        frame_interval(Some(144.0)),
-        Some(std::time::Duration::from_secs_f32(1.0 / 144.0)),
-    );
+    assert_eq!(frame_interval(Some(30.0)), Some(std::time::Duration::from_secs_f32(1.0 / 30.0)),);
+    assert_eq!(frame_interval(Some(144.0)), Some(std::time::Duration::from_secs_f32(1.0 / 144.0)),);
 }
 
 #[test]

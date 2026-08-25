@@ -1,8 +1,8 @@
 //! The analyzer and its spectrogram history: what is stored, when it is
 //! stamped, and how the live path and the offline precompute agree.
 
-use crate::*;
 use super::probe::fresh;
+use crate::*;
 
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
@@ -16,12 +16,8 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         .collect();
     spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
     let levels = spectrum.display(1.0).expect("audio is flowing");
-    let peak = levels
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(i, _)| i as i32)
-        .unwrap();
+    let peak =
+        levels.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i as i32).unwrap();
     // A4 is MIDI 69; its bucket scales with the axis resolution.
     let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
         * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
@@ -102,9 +98,8 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     // one to have moved a few percent.
     let window = SpectrumConfig::default().window.samples();
     let phase = window + 10 * (AudioSpectrum::FFT_INTERVAL * f64::from(sr)) as usize;
-    let tone: Vec<f32> = (0..phase)
-        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin())
-        .collect();
+    let tone: Vec<f32> =
+        (0..phase).map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
     let silence = vec![0.0; phase];
     let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
         * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
@@ -278,8 +273,8 @@ fn columns_are_evenly_spaced_however_the_shell_batches_them() {
             })
             .collect();
         written += n;
-        let now = f64::from(written as u32) / f64::from(sr)
-            + if batch % 2 == 0 { 0.004 } else { -0.004 };
+        let now =
+            f64::from(written as u32) / f64::from(sr) + if batch % 2 == 0 { 0.004 } else { -0.004 };
         spectrum.push_samples(&chunk, 1, sr, now, &config);
     }
 
@@ -342,7 +337,8 @@ fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
     // And both really did keep the anti-phase partial — otherwise the two could
     // agree by both being wrong in the same way.
     let bucket_of = |hz: f32| {
-        ((harmonigraph_core::spectrum::hz_to_midi(hz) - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
+        ((harmonigraph_core::spectrum::hz_to_midi(hz)
+            - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
             * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32)
             .round() as usize
     };
@@ -478,7 +474,9 @@ fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
 
 #[test]
 fn whole_song_precompute_lays_the_take_out_deterministically() {
-    use harmonigraph_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::{
+        midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
+    };
     let sr = 48_000.0f32;
     let seconds = 2.0;
     let n = (sr as f64 * seconds) as usize;

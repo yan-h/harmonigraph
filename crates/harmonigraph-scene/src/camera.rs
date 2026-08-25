@@ -2,8 +2,8 @@
 //! label placement and node picking.
 
 use crate::Scene;
-use harmonigraph_core::LatticePos;
 use glam::{Mat4, Vec2, Vec3};
+use harmonigraph_core::LatticePos;
 
 /// How the camera maps depth to the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -159,11 +159,8 @@ impl Camera {
                 fallback
             }
         };
-        let distance = sane(
-            self.distance,
-            Self::MIN_DISTANCE..=Self::MAX_DISTANCE,
-            Self::DEFAULT_DISTANCE,
-        );
+        let distance =
+            sane(self.distance, Self::MIN_DISTANCE..=Self::MAX_DISTANCE, Self::DEFAULT_DISTANCE);
         // Well short of the half-turn where `tan` changes sign, and off zero,
         // which would divide by it.
         let fov_y = sane(self.fov_y, 0.2..=2.0, Self::DEFAULT_FOV_Y);
@@ -174,8 +171,8 @@ impl Camera {
     /// Orbit around the target by a drag delta in pixels.
     pub fn orbit(&mut self, delta: Vec2) {
         self.yaw -= delta.x * Self::ORBIT_SPEED;
-        self.pitch = (self.pitch + delta.y * Self::ORBIT_SPEED)
-            .clamp(-Self::PITCH_LIMIT, Self::PITCH_LIMIT);
+        self.pitch =
+            (self.pitch + delta.y * Self::ORBIT_SPEED).clamp(-Self::PITCH_LIMIT, Self::PITCH_LIMIT);
     }
 
     /// Pan the target by a drag delta in pixels, grab-style: the content
@@ -199,8 +196,7 @@ impl Camera {
     /// factor rather than a scroll delta, and the lattice honors both.
     pub fn zoom_by(&mut self, factor: f32) {
         if factor > 0.0 {
-            self.distance =
-                (self.distance / factor).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+            self.distance = (self.distance / factor).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
         }
     }
 
@@ -303,12 +299,7 @@ impl Camera {
     /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) is what bounds the work
     /// there. This one case is the degenerate matrix, and the caller wants its
     /// own fallback for it.
-    pub fn visible_world_bounds(
-        &self,
-        aspect: f32,
-        z_lo: f32,
-        z_hi: f32,
-    ) -> Option<VisibleSheet> {
+    pub fn visible_world_bounds(&self, aspect: f32, z_lo: f32, z_hi: f32) -> Option<VisibleSheet> {
         let inverse = self.view_proj(aspect).inverse();
         // A world point from a clip-space one, perspective divide included —
         // orthographic and cabinet both leave w at 1, so this is a no-op for
@@ -407,8 +398,7 @@ impl Camera {
         // ("Sevenths angle" 0..=90°, "Sevenths length" 0.1..=1.0).
         self.cabinet_angle = finite_or(self.cabinet_angle, fresh.cabinet_angle)
             .clamp(0.0, std::f32::consts::FRAC_PI_2);
-        self.cabinet_scale =
-            finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(0.1, 1.0);
+        self.cabinet_scale = finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(0.1, 1.0);
     }
 }
 
@@ -416,7 +406,11 @@ impl Camera {
 /// — the guard `clamp` cannot be, NaN being its own answer to every
 /// comparison a clamp makes.
 fn finite_or(value: f32, fallback: f32) -> f32 {
-    if value.is_finite() { value } else { fallback }
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
 }
 
 /// Camera clip planes; must bracket Camera::MIN/MAX_DISTANCE with margin.

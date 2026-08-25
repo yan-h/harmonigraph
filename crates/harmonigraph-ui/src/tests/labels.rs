@@ -1,15 +1,14 @@
 //! Note labels: how a name and its comma marks stack over a node.
 
-use crate::*;
 use super::probe::{self, fresh};
+use crate::*;
 
 /// The window a stacked name is drawn on. Room for a label at the anchors
 /// below and no more: nothing here reads the window, only the ink.
 const NAME_SCREEN: egui::Vec2 = egui::vec2(400.0, 400.0);
 
 /// The pane the lattice's own labels are drawn into.
-const PANE: egui::Rect =
-    egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(1000.0, 800.0) };
+const PANE: egui::Rect = egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(1000.0, 800.0) };
 
 /// One stacked name drawn into a [`crate::text::TextBatch`], and what
 /// [`marks::draw_stacked_name`] reported as its reach below the anchor.
@@ -474,9 +473,7 @@ fn both_comma_marks_get_their_own_column() {
     // further still and is SUPPOSED to run back over the letter, the way a
     // glyph's does. Neither says which column the mark is in.
     let fills = mark_fills(&marks);
-    let [syntonic, septimal] = fills[..] else {
-        panic!("both commas should be drawn: {marks:?}")
-    };
+    let [syntonic, septimal] = fills[..] else { panic!("both commas should be drawn: {marks:?}") };
     let left = syntonic.union(septimal);
     assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
 
@@ -596,8 +593,7 @@ fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
                 (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
                 (1.0, harmonigraph_core::NoteEventKind::Off),
             ] {
-                let event =
-                    harmonigraph_core::NoteEvent { time, channel: 0, note: 60, kind };
+                let event = harmonigraph_core::NoteEvent { time, channel: 0, note: 60, kind };
                 state.tracker.handle_event(event);
             }
             state.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
@@ -729,9 +725,8 @@ fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
 
     // So the ink must match too. It is the magnification that differs, and it
     // is the magnification that should have been clamped alongside the raster.
-    let tallest = |v: &[(f32, egui::Rect)]| {
-        v.iter().map(|(_, ink)| ink.height()).fold(0.0, f32::max)
-    };
+    let tallest =
+        |v: &[(f32, egui::Rect)]| v.iter().map(|(_, ink)| ink.height()).fold(0.0, f32::max);
     let (a, b) = (tallest(&just_past), tallest(&far_past));
     assert!(
         (a - b).abs() <= a * 0.01,
@@ -961,8 +956,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     // Every size here scales with the pane and the camera together, so read
     // that scale off the biggest piece drawn rather than assuming the pane is
     // the one the constants are quoted at.
-    let scale = batch.pieces().iter().map(|p| p.font_size).fold(0.0, f32::max)
-        / marks::NAME_SIZE;
+    let scale = batch.pieces().iter().map(|p| p.font_size).fold(0.0, f32::max) / marks::NAME_SIZE;
     // Letter and marks together: the readout has to clear the comma, which
     // hangs lower than the letter does.
     let names = ink_of(&[marks::NAME_SIZE * scale, marks::MARK_SIZE * scale]);

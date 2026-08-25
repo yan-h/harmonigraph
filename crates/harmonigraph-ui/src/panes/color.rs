@@ -79,12 +79,10 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 fn bloom_bar(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // 0 = off (the renderer skips the whole post-process chain), so the bar
     // doubles as the toggle.
-    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
-        .show(ui)
-        .on_hover_text(
-            "Soft halo around bright notes — on the lattice, the Analyzer's \
+    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom").show(ui).on_hover_text(
+        "Soft halo around bright notes — on the lattice, the Analyzer's \
              ribbons and the Spiral's dots alike. 0 turns it off.",
-        );
+    );
 }
 
 /// The pitch gradient as a picture over three bars: the gradient itself across
@@ -189,11 +187,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
              picture.",
         );
         for preset in SpectrogramPreset::ALL {
-            if ui
-                .button(preset.label())
-                .on_hover_text(preset.hint())
-                .clicked()
-            {
+            if ui.button(preset.label()).on_hover_text(preset.hint()).clicked() {
                 cfg.spectrogram_gradient = preset.gradient();
             }
         }

@@ -1,7 +1,7 @@
 //! What a sweep peak is worth on top of the colour a layer already has.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// Where a pixel sits on the hue circle in degrees, or `None` for one too near
 /// grey to have a hue at all.
@@ -245,11 +245,7 @@ fn between_peaks_the_layer_sits_at_its_own_color() {
         let (mut dip, mut base) = (0.0, 0.0);
         for &i in &moved {
             let steady = lightness(&shot.0[i * 4..i * 4 + 4]);
-            let low = shot
-                .1
-                .iter()
-                .map(|f| lightness(&f[i * 4..i * 4 + 4]))
-                .fold(steady, f64::min);
+            let low = shot.1.iter().map(|f| lightness(&f[i * 4..i * 4 + 4])).fold(steady, f64::min);
             dip += steady - low;
             base += steady;
         }

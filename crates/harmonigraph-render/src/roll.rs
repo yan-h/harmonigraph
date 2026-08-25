@@ -46,13 +46,8 @@ const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 /// between. Its entry point is assembled from those two words, so a rename in
 /// the WGSL is a panic at pipeline creation and nothing sooner.
 #[cfg(test)]
-pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
-    "vs_note",
-    "fs_outline_gamma",
-    "fs_outline_linear",
-    "fs_core_gamma",
-    "fs_core_linear",
-];
+pub(crate) const ROLL_ENTRY_POINTS: &[&str] =
+    &["vs_note", "fs_outline_gamma", "fs_outline_linear", "fs_core_gamma", "fs_core_linear"];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
 /// color, and the outline standing outside every one of its sides.
@@ -422,14 +417,12 @@ impl RollResources {
                 },
             ],
         });
-        let note_pipeline =
-            |layer| create_roll_pipeline(device, target_format, &layout, layer);
+        let note_pipeline = |layer| create_roll_pipeline(device, target_format, &layout, layer);
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way every other thing
         // the roll draws does.
-        let filter = |entry| {
-            crate::create_post_pipeline(device, entry, target_format, &filter_layout, None)
-        };
+        let filter =
+            |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
         RollResources {
             outline_pipeline: note_pipeline("outline"),
             core_pipeline: note_pipeline("core"),
@@ -463,7 +456,6 @@ impl RollResources {
             prepares: 0,
         }
     }
-
 }
 
 /// What a [`RollBloom`] needs from [`RollResources`], as a borrow narrow
@@ -788,9 +780,7 @@ impl CallbackTrait for RollCallback {
         let Some(notes_uniforms) = bloom_pass else {
             return Vec::new();
         };
-        let bloom = pane
-            .bloom
-            .get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
+        let bloom = pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
         queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
         queue.write_buffer(
             &bloom.strength_buffer,
@@ -995,14 +985,7 @@ mod tests {
         // here as it is everywhere else in these tests.
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-        let cb = RollCallback {
-            rect,
-            instances,
-            axes,
-            bloom,
-            target_format: FORMAT,
-            pane_id: 0,
-        };
+        let cb = RollCallback { rect, instances, axes, bloom, target_format: FORMAT, pane_id: 0 };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1157,8 +1140,7 @@ mod tests {
             // Read on BLUE. The background is `[64, 96, 128]`, so its own red
             // channel is already darker than a threshold picked for black —
             // the one channel the two are far apart on is the one to ask.
-            let dark: Vec<u32> =
-                (0..SIZE[0]).filter(|&x| pixel(&frame, x, 106)[2] < 60).collect();
+            let dark: Vec<u32> = (0..SIZE[0]).filter(|&x| pixel(&frame, x, 106)[2] < 60).collect();
             assert!(!dark.is_empty(), "the cap painted nothing at all at a shear of {shear}");
             f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5
         };
@@ -1197,10 +1179,7 @@ mod tests {
         // A lead at half opacity, read just outside the note's leading corner:
         // inside the cap's reach of the trimmed box, and inside the wrap's
         // reach of the full one, which the lead has taken to half.
-        let note = RollInstance {
-            outline: [128, 128, 128, 255],
-            ..led_note(40.0, 0.0, 0.5)
-        };
+        let note = RollInstance { outline: [128, 128, 128, 255], ..led_note(40.0, 0.0, 0.5) };
         let frame = draw(&device, &queue, vec![note], bg_color());
         let corner = pixel(&frame, 141, 106);
         assert!(
@@ -1446,8 +1425,7 @@ mod tests {
         // 4-point outline's reach, and that is exactly where a body-only fade
         // leaves a black ring standing in front of nothing.
         let capped = |fade: f32| {
-            let frame =
-                draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
+            let frame = draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
             pixel(&frame, 128, 66)
         };
         assert!(
@@ -1498,10 +1476,7 @@ mod tests {
                 (lead - alpha).abs() < 0.03,
                 "the lead covers {lead:.3} at an opacity of {alpha}",
             );
-            assert!(
-                body > 0.97,
-                "the note itself came out at {body:.3} with its lead at {alpha}",
-            );
+            assert!(body > 0.97, "the note itself came out at {body:.3} with its lead at {alpha}",);
         }
         // Gone entirely, and the note is still every bit of itself.
         assert!(cov(0.0, 88) < 0.03, "a lead at no opacity still painted");
@@ -1633,11 +1608,7 @@ mod tests {
         };
         // 40 points across pitch, 6 along time — the shape of a tapped key on
         // a thick ribbon. No outline, so the sample reads the shape alone.
-        let tap = RollInstance {
-            half_extent: [20.0, 3.0],
-            outline_reach: 0.0,
-            ..centered_note()
-        };
+        let tap = RollInstance { half_extent: [20.0, 3.0], outline_reach: 0.0, ..centered_note() };
         let frame = draw(&device, &queue, vec![tap], bg_color());
         // 19.5 points out along pitch and 2.5 along time: inside the square
         // note, and outside any rounding of it (a radius clamped to the note's
@@ -1778,11 +1749,7 @@ mod tests {
         // The note's edge is at x = 140; 10 points past it is inside the
         // halo's reach and well outside the note.
         assert_eq!(at(&plain, 150, 128), 0.0, "the unbloomed frame is not black beside the note");
-        assert!(
-            at(&lit, 150, 128) > 8.0,
-            "no light beside the note: {}",
-            at(&lit, 150, 128),
-        );
+        assert!(at(&lit, 150, 128) > 8.0, "no light beside the note: {}", at(&lit, 150, 128),);
         assert!(
             at(&lit, 128, 128) > at(&plain, 128, 128) + 8.0,
             "the note's own body was not brightened: {} against {}",
@@ -2148,9 +2115,7 @@ mod tests {
         let white = wgpu::Color::WHITE;
         let ink = |note: RollInstance| {
             let frame = draw(&device, &queue, vec![note], white);
-            (0..SIZE[0])
-                .map(|x| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0)
-                .sum::<f32>()
+            (0..SIZE[0]).map(|x| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0).sum::<f32>()
         };
 
         let held = ink(bare);
@@ -2187,11 +2152,7 @@ mod tests {
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
         // point of depth: steep enough that `skew` is 3.16, so the outline
         // stands 12.6 points out along pitch rather than 4.
-        let steep = RollInstance {
-            half_extent: [4.0, 20.0],
-            shear: 3.0,
-            ..centered_note()
-        };
+        let steep = RollInstance { half_extent: [4.0, 20.0], shear: 3.0, ..centered_note() };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
         // point short of its end. There the note's center line has drifted 58.5

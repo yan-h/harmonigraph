@@ -1,0 +1,9 @@
+# Revisions that changed formatting only, and so are noise in `git blame`.
+#
+# Enable it once per clone (it is not a tracked setting):
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub honours this file without any configuration.
+
+# Reformat the tree with cargo fmt
+d143035b7537ce783acae1aa9f8a2fdda1dcc160

@@ -225,9 +225,11 @@ pub(super) fn grip_over_text(
     painter.rect_filled(grip, radius, theme::text());
     for (pos, galley) in runs {
         if grip.intersects(egui::Rect::from_min_size(*pos, galley.size())) {
-            painter
-                .with_clip_rect(grip)
-                .galley_with_override_text_color(*pos, galley.clone(), theme::panel());
+            painter.with_clip_rect(grip).galley_with_override_text_color(
+                *pos,
+                galley.clone(),
+                theme::panel(),
+            );
         }
     }
 }

@@ -13,16 +13,16 @@
 //! [`harness`] answers the ones only a whole dock can, and nothing outside
 //! this directory has a dock.
 
-mod harness;
-pub(crate) mod probe;
-mod persist;
-mod shell;
-mod lattice;
-mod spectrum;
-mod labels;
-mod spectral;
 mod fold;
-mod settings;
+mod harness;
+mod labels;
+mod lattice;
 mod perf;
-mod scale;
+mod persist;
+pub(crate) mod probe;
 mod profile;
+mod scale;
+mod settings;
+mod shell;
+mod spectral;
+mod spectrum;

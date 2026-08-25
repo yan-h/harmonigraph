@@ -49,11 +49,7 @@ pub(super) fn plain_frame() -> FrameParams {
 }
 
 pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {
-    scene
-        .nodes
-        .iter()
-        .find(|n| n.lattice_pos == LatticePos::ORIGIN)
-        .unwrap()
+    scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::ORIGIN).unwrap()
 }
 
 /// A held note, for the suites that need something sounding to measure.

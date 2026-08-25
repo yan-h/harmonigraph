@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: clippy across all targets with
-# warnings denied, the full test suite, the plugin package check, baseview's
-# own tests, the doc-link check, the harmonigraph-core dependency guard, then
-# the two script gates — the worktree-reclaim lock cases and the bundle swap.
+# Local mirror of .github/workflows/ci.yml: the formatting check, clippy across
+# all targets with warnings denied, the full test suite, the plugin package
+# check, baseview's own tests, the doc-link check, the harmonigraph-core
+# dependency guard, then the two script gates — the worktree-reclaim lock cases
+# and the bundle swap.
 # Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
 # so a green run here means a green run there.
 #
@@ -13,6 +14,16 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 run() { echo; echo "▶ $*"; "$@"; }
+
+# Formatting, first because it is the cheapest gate here and the only one whose
+# failure is fixed without reading anything: `cargo fmt --all`. The config is
+# rustfmt.toml, tuned to the density this tree already had, so the formatter
+# agrees with the code rather than fighting it.
+#
+# The point of the line is that nobody has to hold the house style in their
+# head. Before it, style was a convention kept by attention alone, which is the
+# scarcest thing in a repo whose commits mostly come from parallel sessions.
+run cargo fmt --all --check
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace

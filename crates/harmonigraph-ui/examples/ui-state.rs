@@ -40,9 +40,8 @@ fn main() -> Result<(), String> {
     let mut camera_text = ron::to_string(&state.camera).map_err(|e| e.to_string())?;
 
     for arg in std::env::args().skip(1) {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value, got `{arg}`"))?;
+        let (key, value) =
+            arg.split_once('=').ok_or_else(|| format!("expected key=value, got `{arg}`"))?;
         if let Some(spliced) = splice(&view_text, key, value) {
             ron::from_str::<ViewConfig>(&spliced).map_err(|e| format!("`{key}`: {e}"))?;
             view_text = spliced;

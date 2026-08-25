@@ -1,9 +1,9 @@
 //! The harness itself — that a device comes up, that a second view in one
 //! frame still submits, and that the offscreen composite matches a direct draw.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 /// Build the real pipelines against a headless device. This validates
 /// the vertex-layout <-> shader-input contract (attribute locations,
@@ -15,8 +15,7 @@ fn pipelines_build_against_a_headless_device() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    let _resources =
-        LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    let _resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
@@ -74,14 +73,8 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
         0,
         Some(std::sync::Arc::new(LatticeStats::default())),
     );
-    let preview = LatticeCallback::from_scene(
-        &scene,
-        LatticeLabels::default(),
-        size,
-        format,
-        1,
-        None,
-    );
+    let preview =
+        LatticeCallback::from_scene(&scene, LatticeLabels::default(), size, format, 1, None);
 
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -120,20 +113,12 @@ fn offscreen_composite_matches_direct_draw() {
 
     // prepare(): uploads buffers and renders the offscreen scene pass.
     let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor {
-        size_in_pixels: SIZE,
-        pixels_per_point: 1.0,
-    };
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut encoder = device.create_command_encoder(&Default::default());
     let user_bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
     queue.submit(user_bufs.into_iter().chain([encoder.finish()]));
 
-    let clear = wgpu::Color {
-        r: 0.07,
-        g: 0.08,
-        b: 0.09,
-        a: 1.0,
-    };
+    let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
     let rect =
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
 
@@ -154,8 +139,7 @@ fn offscreen_composite_matches_direct_draw() {
     // Path B: the pre-offscreen renderer — same buffers and draw order,
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let layouts =
-        SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+    let layouts = SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
     let (node_pipeline, plus_pipeline) =
         create_pipelines(&device, SHADER_SRC, format, layouts, false);
     // The stand-in light at group 1: this path has no glow pass to composite,
@@ -194,9 +178,7 @@ fn offscreen_composite_matches_direct_draw() {
     // over the clear color somewhere.
     let bg = [18u8, 20, 23, 255]; // clear color as 8-bit RGBA
     assert!(
-        direct
-            .chunks(4)
-            .any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
+        direct.chunks(4).any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
         "direct render drew nothing; the parity comparison is vacuous"
     );
 

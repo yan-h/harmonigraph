@@ -1,8 +1,8 @@
 //! Note names: which one draws, over what, and in which order.
 
-use crate::*;
 use super::fixtures::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::*;
 
 /// Where the pair of nodes below stands, in world units. Off-center in both
 /// axes on purpose: a label is drawn into the pane's own pass, and a mapping
@@ -86,9 +86,8 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
 
     // The pixel both discs are painted on, which is where the labels go and
     // where they are read back.
-    let on = projector
-        .project(scene.nodes[0].world_pos)
-        .expect("the stack is in front of the camera");
+    let on =
+        projector.project(scene.nodes[0].world_pos).expect("the stack is in front of the camera");
     let (x, y) = (on.x.round(), on.y.round());
     assert!(
         (x - points.x / 2.0).abs() > 8.0 && (y - points.y / 2.0).abs() > 8.0,
@@ -176,10 +175,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
         // ring" is the picture with no label in it at all.
         let (bare_ring, under, over) =
             (at(ON_RING, None), at(ON_RING, Some(FAR)), at(ON_RING, Some(NEAR)));
-        assert_eq!(
-            under, bare_ring,
-            "{what} under an opaque ring must leave no trace of itself",
-        );
+        assert_eq!(under, bare_ring, "{what} under an opaque ring must leave no trace of itself",);
         assert!(
             over.abs_diff(bare_ring) > 32,
             "{what} drawn after the ring must be plainly visible on it, \
@@ -261,9 +257,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         &scene,
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0), glyph(2.0), glyph(3.0)],
-            labels: [near, hush_a, hush_b, home]
-                .map(|node| Label { node, glyphs: 1 })
-                .to_vec(),
+            labels: [near, hush_a, hush_b, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
             rings: [TextRing::default(); 2],
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
@@ -523,19 +517,18 @@ fn a_label_adds_no_light_through_the_bloom() {
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let clear = wgpu::Color::TRANSPARENT;
-        let texture =
-            render_to_texture(&device, &queue, SCENE_SIZE, format, clear, |pass| {
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: 1.0,
-                        screen_size_px: SCENE_SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            });
+        let texture = render_to_texture(&device, &queue, SCENE_SIZE, format, clear, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SCENE_SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
         readback(&device, &queue, &texture, SCENE_SIZE)
     };
     let (lit, plain) = (frame(true, 1.0), frame(true, 0.0));

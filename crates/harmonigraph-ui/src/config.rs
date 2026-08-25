@@ -279,7 +279,6 @@ impl SpectrogramPreset {
     }
 }
 
-
 /// The longest attack or release the analyzer's own curve offers, in seconds —
 /// the bars' top end, and what a deserialized time is fit to.
 ///
@@ -675,12 +674,14 @@ impl SpectrumConfig {
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
         // `min <= max`.
-        self.roll_lead =
-            if self.roll_lead.is_finite() { self.roll_lead } else { fresh.roll_lead }
-                .clamp(0.0, ROLL_LEAD_MAX);
-        self.roll_lead_fade =
-            if self.roll_lead_fade.is_finite() { self.roll_lead_fade } else { fresh.roll_lead_fade }
-                .clamp(0.0, self.roll_lead);
+        self.roll_lead = if self.roll_lead.is_finite() { self.roll_lead } else { fresh.roll_lead }
+            .clamp(0.0, ROLL_LEAD_MAX);
+        self.roll_lead_fade = if self.roll_lead_fade.is_finite() {
+            self.roll_lead_fade
+        } else {
+            fresh.roll_lead_fade
+        }
+        .clamp(0.0, self.roll_lead);
         // Its release, which is a duration rather than a distance and so has no
         // pair to keep ordered — only its own bar's ends, and the same NaN.
         self.roll_lead_release = if self.roll_lead_release.is_finite() {
@@ -699,12 +700,10 @@ impl SpectrumConfig {
         // the spectrogram beside it (which reads the raw columns) keeps
         // drawing. The ring's own pair is fit at the same point for the same
         // reason ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)).
-        self.attack =
-            if self.attack.is_finite() { self.attack } else { fresh.attack }
-                .clamp(0.0, BALLISTICS_MAX);
-        self.release =
-            if self.release.is_finite() { self.release } else { fresh.release }
-                .clamp(0.0, BALLISTICS_MAX);
+        self.attack = if self.attack.is_finite() { self.attack } else { fresh.attack }
+            .clamp(0.0, BALLISTICS_MAX);
+        self.release = if self.release.is_finite() { self.release } else { fresh.release }
+            .clamp(0.0, BALLISTICS_MAX);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses
@@ -716,8 +715,7 @@ impl SpectrumConfig {
         self.floor_db = if self.floor_db.is_finite() { self.floor_db } else { LEVEL_MIN_DB };
         self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
         self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
-        self.ceiling_db =
-            self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
+        self.ceiling_db = self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
         // And the heatmap's gradient, which `ViewConfig::sanitize` does for the
         // lattice's one door over. Asked of the type rather than restated, so
         // the pane and the file agree about which gradients are legal.

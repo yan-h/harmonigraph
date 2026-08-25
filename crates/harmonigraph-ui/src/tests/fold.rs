@@ -1,8 +1,8 @@
 //! Folding panes sideways: what a fold banks, which separators still
 //! resize, and the rails a folded subtree leaves behind.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// The layout opens with Notes and Console folded to their tab bar, and with
 /// nothing else folded.

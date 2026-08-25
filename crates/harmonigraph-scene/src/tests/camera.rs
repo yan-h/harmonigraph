@@ -1,10 +1,10 @@
 //! The camera: what it projects, what it refuses to project, and the
 //! clamps on the input that moves it.
 
+use super::harness::*;
 use crate::*;
 use glam::{Vec2, Vec3};
 use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, Tuning};
-use super::harness::*;
 
 #[test]
 fn camera_target_projects_to_viewport_center() {
@@ -24,11 +24,7 @@ fn camera_target_projects_to_viewport_center() {
 
 #[test]
 fn points_behind_the_camera_do_not_project() {
-    for projection in [
-        Projection::Perspective,
-        Projection::Orthographic,
-        Projection::Cabinet,
-    ] {
+    for projection in [Projection::Perspective, Projection::Orthographic, Projection::Cabinet] {
         let camera = Camera { projection, ..Camera::default() };
         let mut scene = scene_of(
             &NoteTracker::new(),
@@ -40,11 +36,7 @@ fn points_behind_the_camera_do_not_project() {
         scene.camera = camera;
         // Continue from the target through the eye and beyond it.
         let behind = camera.eye() + (camera.eye() - camera.target);
-        assert_eq!(
-            scene.project(Vec2::new(800.0, 600.0), behind),
-            None,
-            "{projection:?}"
-        );
+        assert_eq!(scene.project(Vec2::new(800.0, 600.0), behind), None, "{projection:?}");
     }
 }
 
@@ -167,13 +159,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     let tuning = Tuning::default();
     let viewport = Vec2::new(800.0, 600.0);
 
-    let idle = scene_of(
-        &NoteTracker::new(),
-        &tuning,
-        &view,
-        &plain_frame(),
-        0.0,
-    );
+    let idle = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
     let off = *idle
         .nodes
         .iter()
@@ -196,11 +182,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
-    let lit_off = lit
-        .nodes
-        .iter()
-        .find(|n| n.lattice_pos == off.lattice_pos)
-        .unwrap();
+    let lit_off = lit.nodes.iter().find(|n| n.lattice_pos == off.lattice_pos).unwrap();
     assert!(lit_off.activation > 0.0, "the note should light this node");
     assert!(lit_off.is_visible());
     assert_eq!(

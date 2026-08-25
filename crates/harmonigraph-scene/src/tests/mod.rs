@@ -3,14 +3,14 @@
 //! [`harness`] holds the scene builder and node lookups more than one of
 //! them needs; everything else is grouped by what it exercises.
 
+mod camera;
+mod gradient_cache;
 mod harness;
+mod hue_space;
+mod marks;
 mod nodes;
 mod plus;
-mod marks;
-mod sheet;
-mod camera;
 mod scroll;
-mod trail;
-mod hue_space;
+mod sheet;
 mod shimmer;
-mod gradient_cache;
+mod trail;

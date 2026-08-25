@@ -391,12 +391,7 @@ impl SpectralPaint {
             ),
             // Repaired to 0 — one threshold — for the reason above it: a band
             // nobody can read falls back to the simpler rule.
-            hysteresis: clamp_or(
-                view.spectral_ring_hysteresis,
-                0.0,
-                0.0,
-                SPECTRAL_HYSTERESIS_MAX,
-            ),
+            hysteresis: clamp_or(view.spectral_ring_hysteresis, 0.0, 0.0, SPECTRAL_HYSTERESIS_MAX),
             levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
@@ -638,8 +633,7 @@ impl RingFade {
     pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
         let dt = self.at.map(|at| now - at);
         self.at = Some(now);
-        for (bucket, (level, gated)) in
-            self.open.iter_mut().zip(self.gated.iter_mut()).enumerate()
+        for (bucket, (level, gated)) in self.open.iter_mut().zip(self.gated.iter_mut()).enumerate()
         {
             let open = gate.opens(bucket, *gated);
             *gated = open;
@@ -1159,11 +1153,7 @@ mod tests {
 
     /// The fresh view at a stated gate and reading.
     fn gated(gate: f32, reading: SpectralReading) -> ViewConfig {
-        ViewConfig {
-            spectral_ring_gate: gate,
-            spectral_reading: reading,
-            ..ViewConfig::default()
-        }
+        ViewConfig { spectral_ring_gate: gate, spectral_reading: reading, ..ViewConfig::default() }
     }
 
     /// The band's whole purpose: a level between the two thresholds keeps
@@ -1177,10 +1167,8 @@ mod tests {
         let mut levels = empty();
         // 0.35 of the window: over the closing threshold, under the opening one.
         levels[bucket] = 89;
-        let view = ViewConfig {
-            spectral_ring_hysteresis: 0.1,
-            ..gated(0.4, SpectralReading::Fold)
-        };
+        let view =
+            ViewConfig { spectral_ring_hysteresis: 0.1, ..gated(0.4, SpectralReading::Fold) };
         let gate = gate_of(&view, levels);
         assert!(!gate.opens(bucket, false), "0.35 is under the gate and must not OPEN a ring");
         assert!(gate.opens(bucket, true), "0.35 is inside the band and must HOLD one");
@@ -1197,10 +1185,8 @@ mod tests {
     /// bucket is already lit.
     #[test]
     fn a_band_of_nothing_is_one_threshold() {
-        let view = ViewConfig {
-            spectral_ring_hysteresis: 0.0,
-            ..gated(0.4, SpectralReading::Fold)
-        };
+        let view =
+            ViewConfig { spectral_ring_hysteresis: 0.0, ..gated(0.4, SpectralReading::Fold) };
         for byte in [0u8, 70, 89, 102, 128, 255] {
             let mut levels = empty();
             levels[1000] = byte;
@@ -1414,10 +1400,8 @@ mod tests {
         // partial, read at a window narrow enough not to reach it, closes the
         // node again. Otherwise this passes just as well for a gate that
         // searched the whole grid.
-        let narrow = ViewConfig {
-            spectral_ring_range: 40.0,
-            ..gated(0.5, SpectralReading::Spectrum)
-        };
+        let narrow =
+            ViewConfig { spectral_ring_range: 40.0, ..gated(0.5, SpectralReading::Spectrum) };
         assert!(
             !gate_of(&narrow, partial(60.6, 10.0)).draws(&wheel, 0.0),
             "a partial 60¢ off opened a node whose wedge shows 20¢ either side",
@@ -1492,8 +1476,8 @@ mod tests {
         // The band is the whole gap between the centres, not a sliver of it.
         let (mut low, mut high) = (f32::MAX, f32::MIN);
         for i in 0..=2000 {
-            let pitch = bucket_pitch(lo)
-                + (bucket_pitch(hi) - bucket_pitch(lo)) * (i as f32 / 2000.0);
+            let pitch =
+                bucket_pitch(lo) + (bucket_pitch(hi) - bucket_pitch(lo)) * (i as f32 / 2000.0);
             let open = open_at(&fade.open, pitch);
             if open > 0.001 && open < 0.999 {
                 low = low.min(pitch);

@@ -2,8 +2,8 @@
 //! the bar it scrolls by covers nothing, that no control overruns a narrow one,
 //! and the Video pane's own rows.
 
-use crate::*;
 use super::harness::*;
+use crate::*;
 
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
 /// harnesses below are written against: they read the settings leaf as the box
@@ -79,10 +79,8 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
     for _ in 0..20 {
         after = frame(&mut state, vec![]);
     }
-    let mut deltas: Vec<f32> = before
-        .iter()
-        .filter_map(|(text, y)| after.get(text).map(|moved| moved - y))
-        .collect();
+    let mut deltas: Vec<f32> =
+        before.iter().filter_map(|(text, y)| after.get(text).map(|moved| moved - y)).collect();
     assert!(!deltas.is_empty(), "{pane:?} drew no text to measure");
     deltas.sort_by(f32::total_cmp);
     deltas[deltas.len() / 2]
@@ -209,10 +207,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);
         assert!(last.x > first.x, "the {name} line runs backwards");
-        assert!(
-            (first.y - last.y).abs() > 0.5,
-            "the {name} line is flat, and calibrates nothing",
-        );
+        assert!((first.y - last.y).abs() > 0.5, "the {name} line is flat, and calibrates nothing",);
         // The box off the two ENDS the curve itself has there, rather than off
         // the track's own top and bottom: the standoff's recovery is a decay
         // and arrives at the far end short of 1 (see `standoff_recovery`), so
@@ -442,8 +437,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                          (all of {widths:?})"
                     );
                 }
-                let want =
-                    if pane == SettingsPane::Page(DisplayPage::Colors) { 2 } else { 0 };
+                let want = if pane == SettingsPane::Page(DisplayPage::Colors) { 2 } else { 0 };
                 assert_eq!(
                     short, want,
                     "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
@@ -472,10 +466,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         PROJECTIONS[0],
     ))
     .len();
-    assert!(
-        bars >= 12,
-        "only found {bars} bar tracks on the Lattice page; has the paint changed?"
-    );
+    assert!(bars >= 12, "only found {bars} bar tracks on the Lattice page; has the paint changed?");
 }
 
 /// The page the picker holds is the body the tab draws, and it is the only body
@@ -592,22 +583,16 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             tracks[0],
             harmonigraph_scene::ViewConfig::default().pitch_gradient,
         ),
-        (
-            "heatmap colors",
-            drawn[1],
-            tracks[1],
-            SpectrumConfig::default().spectrogram_gradient,
-        ),
+        ("heatmap colors", drawn[1], tracks[1], SpectrumConfig::default().spectrogram_gradient),
     ] {
         // Read at the ends, where the ramp is the table's own first and last
         // entry and no interpolation stands between the mesh and the value.
         let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
         let columns: Vec<egui::Color32> =
             crate::widgets::band_columns(mesh).into_iter().map(|(_, _, color)| color).collect();
-        for (end, drew, want) in [
-            ("low", columns[0], lut[0]),
-            ("high", columns[columns.len() - 1], lut[lut.len() - 1]),
-        ] {
+        for (end, drew, want) in
+            [("low", columns[0], lut[0]), ("high", columns[columns.len() - 1], lut[lut.len() - 1])]
+        {
             let want = crate::panes::scene_color(want, 1.0);
             assert_eq!(
                 drew, want,
@@ -800,8 +785,10 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
     // outside the leaf is a press on the pane below.
     let screen_h = 640.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
-    let body =
-        egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
+    let body = egui::Rect::from_min_max(
+        egui::pos2(700.0, 20.0),
+        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
+    );
     // Named texts inside the settings body, as `wheel_over_settings_pane` does:
     // the position of a string drawn in both frames is the one metric a clip
     // rect and a culled shape cannot lie about. The whole position rather than
@@ -910,8 +897,10 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The settings leaf, whose bars run the width of the column at x ~700..1000:
     // from under its tab bar down to the 0.55 split.
-    let body =
-        egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
+    let body = egui::Rect::from_min_max(
+        egui::pos2(700.0, 20.0),
+        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
+    );
     // Where a named bar was drawn, so the gesture takes hold of a bar this test
     // can name rather than of whatever a fixed coordinate lands on. A bar draws
     // its name inside its own rectangle, at the left end.
@@ -928,8 +917,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // As above: an `Arc` handle on the harness's own context, so the drag
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
-    let mut frame =
-        |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     // Release: a plain 0..=0.5 bar (`settings::BALLISTICS_MAX`), so where the
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
@@ -994,20 +982,16 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 /// that every row has to make room for.
 #[test]
 fn the_commas_section_lays_its_rows_out_as_a_table() {
-    let shapes = settings_pane_at_width(
-        SettingsPane::Tab(panes::Tab::Tuning),
-        423.0,
-        PROJECTIONS[0],
-    );
+    let shapes =
+        settings_pane_at_width(SettingsPane::Tab(panes::Tab::Tuning), 423.0, PROJECTIONS[0]);
     let find = |needle: &str| {
         shapes.iter().find_map(|cs| match &cs.shape {
             egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos),
             _ => None,
         })
     };
-    let at = |needle: &str| {
-        find(needle).unwrap_or_else(|| panic!("the Tuning pane drew no {needle:?}"))
-    };
+    let at =
+        |needle: &str| find(needle).unwrap_or_else(|| panic!("the Tuning pane drew no {needle:?}"));
     let (meantone, marvel) = (at("Meantone"), at("Marvel"));
     let (temper_head, auto_head) = (at("Temper"), at("Auto"));
 
@@ -1118,97 +1102,98 @@ fn scroll_bar_width(scale: f32) -> f32 {
 #[test]
 fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
     for scale in SCALES {
-    let margin = f32::from(crate::theme::dock_pane_margin(scale));
-    let bar = scroll_bar_width(scale);
-    assert!(bar <= margin + 0.01, "at {scale} a {bar}pt bar does not fit the {margin}pt gutter");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(0.0, crate::theme::tab_bar_height(scale)),
-        (SCROLLING_PANE * scale).to_pos2(),
-    );
-    for pane in SETTINGS_PANES {
-        let shapes = scrolling_settings_pane(pane, scale);
-        // The pane's own shapes are the ones clipped to the tab BODY. The dock's
-        // chrome — the leaf fill, the body border, the tab bar and its rule — is
-        // clipped to the leaf, which starts a tab bar higher up.
-        let pane_shape = |cs: &egui::epaint::ClippedShape| {
-            let rect = cs.shape.visual_bounding_rect();
-            let mine = cs.clip_rect.top() >= body.top() - 0.5;
-            // Shapes that carry no geometry answer with an inverted or infinite
-            // rect; egui's own `is_finite` lets those through.
-            (mine && rect.is_finite() && rect.width() < 1.0e4).then_some(rect)
-        };
-        let bar_edges: Vec<f32> = shapes
-            .iter()
-            .filter_map(|cs| {
-                let rect = pane_shape(cs)?;
-                let is_rect = matches!(cs.shape, egui::Shape::Rect(_));
-                (is_rect && rect.width() <= bar + 0.5 && rect.height() >= body.height() * 0.5)
-                    .then(|| rect.right())
-            })
-            .collect();
+        let margin = f32::from(crate::theme::dock_pane_margin(scale));
+        let bar = scroll_bar_width(scale);
         assert!(
-            !bar_edges.is_empty(),
-            "{pane:?} at scale {scale} drew no scroll bar, so it never overflowed and this \
-             proves nothing about it",
+            bar <= margin + 0.01,
+            "at {scale} a {bar}pt bar does not fit the {margin}pt gutter"
         );
-        // The lane is the bar's full width in from its right edge, whatever the
-        // bar is painted at: a dormant one is a `floating_width` hairline, but
-        // egui senses the whole `bar_width` either way, so a control under the
-        // thin end of it is as unreachable as one under the fat end.
-        let right = bar_edges.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let leftmost = bar_edges.iter().copied().fold(f32::INFINITY, f32::min);
-        assert!(
+        let body = egui::Rect::from_min_max(
+            egui::pos2(0.0, crate::theme::tab_bar_height(scale)),
+            (SCROLLING_PANE * scale).to_pos2(),
+        );
+        for pane in SETTINGS_PANES {
+            let shapes = scrolling_settings_pane(pane, scale);
+            // The pane's own shapes are the ones clipped to the tab BODY. The dock's
+            // chrome — the leaf fill, the body border, the tab bar and its rule — is
+            // clipped to the leaf, which starts a tab bar higher up.
+            let pane_shape = |cs: &egui::epaint::ClippedShape| {
+                let rect = cs.shape.visual_bounding_rect();
+                let mine = cs.clip_rect.top() >= body.top() - 0.5;
+                // Shapes that carry no geometry answer with an inverted or infinite
+                // rect; egui's own `is_finite` lets those through.
+                (mine && rect.is_finite() && rect.width() < 1.0e4).then_some(rect)
+            };
+            let bar_edges: Vec<f32> = shapes
+                .iter()
+                .filter_map(|cs| {
+                    let rect = pane_shape(cs)?;
+                    let is_rect = matches!(cs.shape, egui::Shape::Rect(_));
+                    (is_rect && rect.width() <= bar + 0.5 && rect.height() >= body.height() * 0.5)
+                        .then(|| rect.right())
+                })
+                .collect();
+            assert!(
+                !bar_edges.is_empty(),
+                "{pane:?} at scale {scale} drew no scroll bar, so it never overflowed and this \
+             proves nothing about it",
+            );
+            // The lane is the bar's full width in from its right edge, whatever the
+            // bar is painted at: a dormant one is a `floating_width` hairline, but
+            // egui senses the whole `bar_width` either way, so a control under the
+            // thin end of it is as unreachable as one under the fat end.
+            let right = bar_edges.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let leftmost = bar_edges.iter().copied().fold(f32::INFINITY, f32::min);
+            assert!(
             right - leftmost < 0.5,
             "{pane:?} at {scale} drew scroll bars in two places, ending at {leftmost} and {right}",
         );
-        let left = right - bar;
+            let left = right - bar;
 
-        // Where the lane lands: against the pane edge for a pane the dock
-        // scrolls, whose area IS the body. The two readout panes scroll in an
-        // area of their own — a row that must not scroll sits above each — so
-        // theirs stands one content margin further in.
-        let own_area = matches!(
-            pane,
-            SettingsPane::Tab(panes::Tab::Console | panes::Tab::Notes)
-        );
-        let edge = body.right() - if own_area { margin } else { 0.0 };
-        assert!(
-            (right - edge).abs() < 0.5,
-            "{pane:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
-        );
+            // Where the lane lands: against the pane edge for a pane the dock
+            // scrolls, whose area IS the body. The two readout panes scroll in an
+            // area of their own — a row that must not scroll sits above each — so
+            // theirs stands one content margin further in.
+            let own_area =
+                matches!(pane, SettingsPane::Tab(panes::Tab::Console | panes::Tab::Notes));
+            let edge = body.right() - if own_area { margin } else { 0.0 };
+            assert!(
+                (right - edge).abs() < 0.5,
+                "{pane:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
+            );
 
-        let under: Vec<String> = shapes
-            .iter()
-            .filter_map(|cs| {
-                let rect = pane_shape(cs)?;
-                if rect.right() <= left + 1.0 {
-                    return None;
-                }
-                // The bar itself: a background rect and a handle, both inside
-                // the lane they define.
-                if matches!(cs.shape, egui::Shape::Rect(_))
-                    && rect.left() >= left - 0.5
-                    && rect.right() <= right + 0.5
-                {
-                    return None;
-                }
-                // The scroll area's own fade at the foot of its content, which
-                // is the width of the AREA. Every control in a pane starts at
-                // the content box, a margin in, so nothing outside it is one.
-                if rect.left() < body.left() + margin - 0.5 {
-                    return None;
-                }
-                Some(match &cs.shape {
-                    egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
-                    other => format!("{other:?}").chars().take(60).collect(),
+            let under: Vec<String> = shapes
+                .iter()
+                .filter_map(|cs| {
+                    let rect = pane_shape(cs)?;
+                    if rect.right() <= left + 1.0 {
+                        return None;
+                    }
+                    // The bar itself: a background rect and a handle, both inside
+                    // the lane they define.
+                    if matches!(cs.shape, egui::Shape::Rect(_))
+                        && rect.left() >= left - 0.5
+                        && rect.right() <= right + 0.5
+                    {
+                        return None;
+                    }
+                    // The scroll area's own fade at the foot of its content, which
+                    // is the width of the AREA. Every control in a pane starts at
+                    // the content box, a margin in, so nothing outside it is one.
+                    if rect.left() < body.left() + margin - 0.5 {
+                        return None;
+                    }
+                    Some(match &cs.shape {
+                        egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
+                        other => format!("{other:?}").chars().take(60).collect(),
+                    })
                 })
-            })
-            .collect();
-        assert!(
-            under.is_empty(),
-            "{pane:?} at {scale} draws into its scroll bar's lane {left}..{right}: {under:?}",
-        );
-    }
+                .collect();
+            assert!(
+                under.is_empty(),
+                "{pane:?} at {scale} draws into its scroll bar's lane {left}..{right}: {under:?}",
+            );
+        }
     }
 }
 

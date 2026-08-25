@@ -109,12 +109,7 @@ pub fn active_skin() -> &'static Skin {
 /// same arithmetic `harmonigraph-ui::theme` does to reach an egui `Color32`.
 /// Shells use this to hand the scene the ground they composite it over.
 pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
-    Vec4::new(
-        f32::from(rgb.0) / 255.0,
-        f32::from(rgb.1) / 255.0,
-        f32::from(rgb.2) / 255.0,
-        1.0,
-    )
+    Vec4::new(f32::from(rgb.0) / 255.0, f32::from(rgb.1) / 255.0, f32::from(rgb.2) / 255.0, 1.0)
 }
 
 /// The active skin's `well`: the recessed ground every PICTURE pane paints

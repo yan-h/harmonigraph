@@ -74,8 +74,8 @@ impl Audio {
 }
 
 pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
-    let bytes = std::fs::read(path.as_ref())
-        .map_err(|e| format!("{}: {e}", path.as_ref().display()))?;
+    let bytes =
+        std::fs::read(path.as_ref()).map_err(|e| format!("{}: {e}", path.as_ref().display()))?;
     decode(&bytes).map_err(|e| format!("{}: {e}", path.as_ref().display()))
 }
 
@@ -247,8 +247,7 @@ mod tests {
     #[test]
     fn a_stereo_slice_is_cut_on_frame_boundaries() {
         // L = 1, 2, 3, 4; R = -1, -2, -3, -4, at 4 Hz so a frame is 0.25 s.
-        let frames: Vec<Vec<f32>> =
-            (1..=4).map(|i| vec![i as f32, -(i as f32)]).collect();
+        let frames: Vec<Vec<f32>> = (1..=4).map(|i| vec![i as f32, -(i as f32)]).collect();
         let audio = Audio {
             sample_rate: 4.0,
             samples: frames.iter().flatten().copied().collect(),
@@ -269,9 +268,8 @@ mod tests {
 
     #[test]
     fn pcm16_and_pcm24_decode_to_the_same_signal() {
-        let frames: Vec<Vec<f32>> = (0..16)
-            .map(|i| vec![(i as f32 / 8.0 - 1.0).clamp(-1.0, 1.0)])
-            .collect();
+        let frames: Vec<Vec<f32>> =
+            (0..16).map(|i| vec![(i as f32 / 8.0 - 1.0).clamp(-1.0, 1.0)]).collect();
         let a = decode(&build(1, 16, 1, 44_100, &frames)).unwrap();
         let b = decode(&build(1, 24, 1, 44_100, &frames)).unwrap();
         assert_eq!(a.samples.len(), b.samples.len());

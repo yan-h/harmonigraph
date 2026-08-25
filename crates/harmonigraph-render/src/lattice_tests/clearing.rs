@@ -1,7 +1,7 @@
 //! The hole a node cuts in everything drawn behind it.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// How far the light in `weights` reaches from the centre of the frame within
 /// `cone` degrees of `toward`, in pixels.
@@ -334,7 +334,11 @@ fn light_in_band(weights: &[f64], size: [u32; 2], lo: f64, hi: f64) -> f64 {
             n += 1;
         }
     }
-    if n == 0 { 0.0 } else { sum / n as f64 }
+    if n == 0 {
+        0.0
+    } else {
+        sum / n as f64
+    }
 }
 
 /// The audio ring is worn node by node, so its part of the clearing is too: a
@@ -545,11 +549,7 @@ fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
     let px = differing_pixels(&painted, &ground);
     let light = light_about_center(&light_over(&painted, &ground), SIZE);
     eprintln!("a node with every layer off: {px} px, {:.0} of light", light.weight);
-    assert_eq!(
-        px, 0,
-        "a node with every layer off painted {px} px, {:.0} of light",
-        light.weight,
-    );
+    assert_eq!(px, 0, "a node with every layer off painted {px} px, {:.0} of light", light.weight,);
 
     // Not a vacuous fixture: hand the same node a real annulus and the same
     // measurement finds it. Without this, a node that drew nothing for some
@@ -633,10 +633,7 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         scene
     };
     let worst = |a: &[u8], b: &[u8]| -> i32 {
-        (0..a.len())
-            .map(|i| (a[i] as i32 - b[i] as i32).abs())
-            .max()
-            .unwrap_or(0)
+        (0..a.len()).map(|i| (a[i] as i32 - b[i] as i32).abs()).max().unwrap_or(0)
     };
     let split = gpu.shot(&build(0.0, CLEAR_REACH));
     let whole = gpu.shot(&build(0.001, CLEAR_REACH));
@@ -651,10 +648,8 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
     );
     // Non-vacuous: the node has to be painting a clearing for the split to have
     // anything to be exact about.
-    let cleared = (0..split.len())
-        .step_by(4)
-        .filter(|&i| split[i..i + 4] != flat_home[i..i + 4])
-        .count();
+    let cleared =
+        (0..split.len()).step_by(4).filter(|&i| split[i..i + 4] != flat_home[i..i + 4]).count();
     assert!(cleared > 100, "the fixture clears only {cleared} pixels; nothing is under test");
 
     assert!(

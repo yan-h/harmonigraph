@@ -1,7 +1,7 @@
 //! How far a node's light reaches, and how it falls off across that reach.
 
-use crate::*;
 use super::fixtures::*;
+use crate::*;
 
 /// The node glow's two claims about geometry: it puts light OUTSIDE the node it
 /// comes from, and the Reach bar is what says how far out.
@@ -273,7 +273,9 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     assert!(
         spreads[0] > spreads[1] && spreads[1] > spreads[2],
         "the Color blend bar must average further at every step: {:.4} / {:.4} / {:.4}",
-        spreads[0], spreads[1], spreads[2],
+        spreads[0],
+        spreads[1],
+        spreads[2],
     );
     // The top of it is the mean, which has no direction left in it — read as a
     // RATIO against the bottom rather than as an absolute, because the annulus
@@ -285,7 +287,8 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
         spreads[0] > spreads[2] * 3.0,
         "the top of the bar must be one tint beside the bottom, and it kept \
          {:.4} against {:.4}",
-        spreads[2], spreads[0],
+        spreads[2],
+        spreads[0],
     );
 }
 
@@ -321,11 +324,7 @@ fn a_lattice_with_no_node_grows_no_glow() {
     let on = shooter.shot(&at(0.8));
     // The markers have to be drawing something, or this passes on a blank frame.
     assert!(total_light(&off) > 0, "the fixture must draw its markers");
-    assert_eq!(
-        differing_pixels(&on, &off),
-        0,
-        "the glow lit something no node drew",
-    );
+    assert_eq!(differing_pixels(&on, &off), 0, "the glow lit something no node drew",);
 }
 
 /// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, and
@@ -436,8 +435,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         None,
     );
     assert_eq!(
-        call.instances[0].world_pos[2],
-        -1.0,
+        call.instances[0].world_pos[2], -1.0,
         "the fixture puts the second node BEHIND the first, or it is covering rather than covered",
     );
 

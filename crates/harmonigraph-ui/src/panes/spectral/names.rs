@@ -50,8 +50,8 @@ use std::collections::HashMap;
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
-use crate::marks;
 use super::axes::{Axes, PitchScale, TimeAxis};
+use crate::marks;
 use crate::{theme, SharedState};
 
 /// Point size of a name's letter. Well under the axis labels'
@@ -779,7 +779,14 @@ pub(super) fn plan(
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
             if !held.iter().any(|l| l.name == name && l.rect == rect) {
-                held.push(NoteLabel { name, rect, lead, grow, #[cfg(test)] at: edge.time });
+                held.push(NoteLabel {
+                    name,
+                    rect,
+                    lead,
+                    grow,
+                    #[cfg(test)]
+                    at: edge.time,
+                });
             }
             continue;
         }
@@ -830,7 +837,14 @@ pub(super) fn plan(
                 parked.push(placed.len());
             }
             lanes.push(key);
-            placed.push(NoteLabel { name, rect, lead, grow, #[cfg(test)] at: edge.time });
+            placed.push(NoteLabel {
+                name,
+                rect,
+                lead,
+                grow,
+                #[cfg(test)]
+                at: edge.time,
+            });
         }
     }
     // A parked name yields to one that is still at its own anchor and has
@@ -1018,11 +1032,8 @@ impl Anchor {
         if time.whole_song() {
             return Anchor::Onset;
         }
-        let reads_first = if cfg.orientation.is_time_reversed() {
-            Anchor::Onset
-        } else {
-            Anchor::Leading
-        };
+        let reads_first =
+            if cfg.orientation.is_time_reversed() { Anchor::Onset } else { Anchor::Leading };
         if cfg.note_names_travel {
             reads_first.other()
         } else {
@@ -1095,11 +1106,7 @@ fn pitch_at(note: &RollNote, now: f64, t: f64) -> f32 {
             // is sheared between them. A segment of no duration is the
             // just-pressed note, where both ends are one point anyway.
             let span = t1 - t0;
-            return if span > 0.0 {
-                p0 + (p1 - p0) * ((t - t0) / span) as f32
-            } else {
-                p1
-            };
+            return if span > 0.0 { p0 + (p1 - p0) * ((t - t0) / span) as f32 } else { p1 };
         }
         last = p1;
     }
@@ -1239,11 +1246,7 @@ fn label_rect(
     // `grow.x + grow.y` is its own sign: +1 forward (the box grows the screen's
     // own way), -1 backward. Backward is where the letter and the box disagree
     // on which end is "first" -- see above.
-    let growth = if grow.x + grow.y < 0.0 {
-        letter_along - along * 0.5
-    } else {
-        along * 0.5
-    };
+    let growth = if grow.x + grow.y < 0.0 { letter_along - along * 0.5 } else { along * 0.5 };
     let centre = axes.at(p, d) + grow * (inset + growth);
     egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * scales.label)
 }
@@ -1263,11 +1266,7 @@ fn label_rect(
 /// lets them overlap — so the error belongs on this side, and chasing a
 /// sub-point refinement would move roll layout for nothing.
 fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
-    let marks = name
-        .accidental_mark()
-        .chars()
-        .count()
-        .max(name.comma_mark().chars().count());
+    let marks = name.accidental_mark().chars().count().max(name.comma_mark().chars().count());
     let mark_size = size * marks::MARK_SIZE / marks::NAME_SIZE;
     // The septimal mark takes a column PAST those two, with air before it,
     // so a name carrying one is wider than its accidental stack suggests —
@@ -1323,9 +1322,7 @@ pub(crate) fn note_name(
     // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
     let reach = view.reach();
-    match naming_node(&reach, view, tuning, pc)
-        .or_else(|| naming_node(shown, view, tuning, pc))
-    {
+    match naming_node(&reach, view, tuning, pc).or_else(|| naming_node(shown, view, tuning, pc)) {
         Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
         None => equal_tempered_name(midi),
     }
@@ -1360,15 +1357,14 @@ fn naming_node(
     tuning: &Tuning,
     pc: PitchClass,
 ) -> Option<LatticePos> {
-    window
-        .positions()
-        .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
-        .min_by_key(|&pos| {
+    window.positions().filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos))).min_by_key(
+        |&pos| {
             (
                 pc.distance_to(tuning.pitch_class(pos)),
                 spelling_cost(crate::panes::display_note_name(pos, view.tempered()), pos),
             )
-        })
+        },
+    )
 }
 
 /// How hard a spelling is to read, worst first: comma marks, then
@@ -1495,7 +1491,7 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{fresh, frame_full, painted_full, themed_at};
+    use crate::tests::probe::{frame_full, fresh, painted_full, themed_at};
     use crate::{SpectralOrientation, SpectrumConfig};
     use harmonigraph_core::{NoteEvent, NoteEventKind};
 
@@ -1627,8 +1623,7 @@ mod tests {
             let cfg = state.spectrum_config;
             let split = super::super::axes::spectrum_share(&cfg);
             let axes = Axes::new(BIG, &cfg);
-            let labels =
-                plan(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
+            let labels = plan(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
             for label in labels {
                 let key = (label.name.to_string(), (label.at * 1000.0).round() as i64);
                 seen.entry(key).or_default().push(frame);
@@ -1847,7 +1842,8 @@ mod tests {
         let anchor = axes.at(0.5, 0.5);
         let grow = axes.dir_depth();
         let gap = |air: f32| {
-            let rect = label_rect(&axes, grow, 0.5, 0.5, &name, LABEL_PT, NameScale { label: 1.0, air });
+            let rect =
+                label_rect(&axes, grow, 0.5, 0.5, &name, LABEL_PT, NameScale { label: 1.0, air });
             let ink = egui::Rect::from_center_size(rect.center(), name_extent(&name, LABEL_PT));
             let reach = |p: egui::Pos2| (p - anchor).dot(grow);
             reach(ink.min).min(reach(ink.max))
@@ -2415,8 +2411,7 @@ mod tests {
                 .find(|p| p.text == letter)
                 .unwrap_or_else(|| panic!("no {letter} drawn"))
                 .ink;
-            let corners =
-                [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()];
+            let corners = [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()];
             corners.iter().map(|&c| (c - from).dot(label.grow)).fold(f32::INFINITY, f32::min)
         };
 
@@ -2444,9 +2439,8 @@ mod tests {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
             let mut batch = crate::text::TextBatch::default();
-            let _ = frame_full(&ctx, SCREEN, |ui| {
-                draw(ui.painter(), &placed, FLAT.label, &mut batch)
-            });
+            let _ =
+                frame_full(&ctx, SCREEN, |ui| draw(ui.painter(), &placed, FLAT.label, &mut batch));
             let ink = batch.pieces().iter().find(|p| p.text == "C").expect("a C drawn").ink;
             assert!(
                 ink.left() >= PANE.left(),
@@ -2596,9 +2590,8 @@ mod tests {
                     if !labels_in(&state, now, square).is_empty() {
                         named = now;
                     }
-                    let ribbons = super::super::roll::note_instances(
-                        &axes, &scale, &state, split, now, 2.0,
-                    );
+                    let ribbons =
+                        super::super::roll::note_instances(&axes, &scale, &state, split, now, 2.0);
                     if !ribbons.is_empty() {
                         drawn = now;
                     }
@@ -2695,14 +2688,8 @@ mod tests {
         assert!(labels(&state, 120.0).is_empty(), "a drone kept a name it had no end for");
         let cfg = &state.spectrum_config;
         let split = super::super::axes::spectrum_share(cfg);
-        let ribbons = super::super::roll::note_instances(
-            &axes,
-            &scale_of(&state),
-            &state,
-            split,
-            120.0,
-            2.0,
-        );
+        let ribbons =
+            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 120.0, 2.0);
         assert!(!ribbons.is_empty(), "the fixture is vacuous: the drone's ribbon left too");
     }
 
@@ -2730,8 +2717,7 @@ mod tests {
             state.tracker.handle_event(on(1.0, 60)); // held for the whole sweep
 
             // Square, so the same pane serves the vertical orientations.
-            let square =
-                egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
+            let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
             let axes = Axes::new(square, &state.spectrum_config);
             let depth = axes.dir_depth();
 
@@ -2933,12 +2919,8 @@ mod tests {
         state.tracker.handle_event(on(2.0, 60));
         state.tracker.handle_event(off(6.0, 60));
         let roll = state.tracker.roll().clone();
-        state.whole_song = Some(crate::WholeSong {
-            columns: Vec::new(),
-            roll,
-            start: 0.0,
-            span: 10.0,
-        });
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
 
         let placed = labels(&state, 4.0);
         assert_eq!(said(&placed), ["C"]);
@@ -3314,8 +3296,7 @@ mod tests {
     #[test]
     fn a_septimal_mark_widens_what_a_name_is_measured_at() {
         let size = LABEL_PT;
-        let plain =
-            NoteName { letter: 'B', sharps: -1, syntonic_commas: 0, septimal_commas: 0 };
+        let plain = NoteName { letter: 'B', sharps: -1, syntonic_commas: 0, septimal_commas: 0 };
         let marked = NoteName { septimal_commas: -1, ..plain };
         let (plain_box, marked_box) = (name_extent(&plain, size), name_extent(&marked, size));
 
@@ -3676,8 +3657,12 @@ mod tests {
                         // The ink's own trailing edge, against the way the name
                         // runs — projecting the corners answers all four
                         // orientations without naming a screen side.
-                        let corners =
-                            [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()];
+                        let corners = [
+                            ink.left_top(),
+                            ink.right_top(),
+                            ink.left_bottom(),
+                            ink.right_bottom(),
+                        ];
                         let gap = corners
                             .iter()
                             .map(|&corner| (corner - anchor).dot(grow))
@@ -3784,8 +3769,7 @@ mod tests {
         let axes = Axes::new(PANE, cfg);
         let scale = scale_of(&state);
         let split = super::super::axes::spectrum_share(cfg);
-        let ribbons =
-            super::super::roll::note_instances(&axes, &scale, &state, split, now, 2.0);
+        let ribbons = super::super::roll::note_instances(&axes, &scale, &state, split, now, 2.0);
         let crossing = ribbons
             .iter()
             .max_by(|a, b| a.half_extent[1].total_cmp(&b.half_extent[1]))

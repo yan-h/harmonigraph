@@ -280,9 +280,8 @@ impl GlowResources {
         });
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way egui blends.
-        let filter = |entry| {
-            crate::create_post_pipeline(device, entry, target_format, &filter_layout, None)
-        };
+        let filter =
+            |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
         GlowResources {
             disc_pipeline: create_disc_pipeline(device, target_format, &locals_layout),
             locals_layout,
@@ -678,19 +677,18 @@ mod tests {
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
-        let texture =
-            render_to_texture(device, queue, SIZE, FORMAT, wgpu::Color::BLACK, |pass| {
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: ppp,
-                        screen_size_px: SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            });
+        let texture = render_to_texture(device, queue, SIZE, FORMAT, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: ppp,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
         (readback(device, queue, &texture, SIZE), resources)
     }
 
@@ -785,8 +783,7 @@ mod tests {
         };
         let built = |dots: Vec<GlowDot>, strength: f32| {
             let (_, resources) = draw(&device, &queue, dots, strength);
-            let glow: &GlowResources =
-                resources.get().expect("the callback inserts its resources");
+            let glow: &GlowResources = resources.get().expect("the callback inserts its resources");
             glow.pane.is_some()
         };
         assert!(!built(vec![centered_dot()], 0.0), "a strength of 0 built the chain anyway");
@@ -820,12 +817,8 @@ mod tests {
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
         };
-        let lit = GlowCallback {
-            rect,
-            dots: vec![centered_dot()],
-            strength: 1.5,
-            target_format: FORMAT,
-        };
+        let lit =
+            GlowCallback { rect, dots: vec![centered_dot()], strength: 1.5, target_format: FORMAT };
         prepare(&lit, &mut resources);
         // ...and now a frame with the marks gone, over the chain the first one
         // filled.

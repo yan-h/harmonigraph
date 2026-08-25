@@ -69,12 +69,7 @@ pub struct Replay {
 
 impl Replay {
     pub fn new(take: Take) -> Replay {
-        Replay {
-            take,
-            params: ReplayParams::default(),
-            next_note: 0,
-            next_param: 0,
-        }
+        Replay { take, params: ReplayParams::default(), next_note: 0, next_param: 0 }
     }
 
     pub fn take(&self) -> &Take {
@@ -150,8 +145,8 @@ impl Replay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_take::{Header, NoteRecord, ParamRecord};
     use harmonigraph_render::wgpu::TextureFormat;
+    use harmonigraph_take::{Header, NoteRecord, ParamRecord};
 
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take { header: Header::default(), notes, params, truncated: false }

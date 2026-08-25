@@ -22,10 +22,10 @@
 //! of their own, because Cabinet hides that whole block — a section of its own
 //! would leave a heading standing over nothing.
 
+use super::normalize_deg;
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{CameraPreset, SharedState};
-use super::normalize_deg;
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
@@ -53,8 +53,8 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             (Projection::Orthographic, "Orthographic"),
             (Projection::Cabinet, "Cabinet"),
         ] {
-            ui.selectable_value(&mut state.camera.projection, proj, label)
-                .on_hover_text(match proj {
+            ui.selectable_value(&mut state.camera.projection, proj, label).on_hover_text(
+                match proj {
                     Projection::Perspective => "Depth converges and shrinks, like a real camera",
                     Projection::Orthographic => {
                         "Uniform scale at every depth; parallel lines stay parallel"
@@ -63,7 +63,8 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                         "Face-on fifths/thirds sheet, undistorted; sevenths shear \
                          to a fixed screen arrow (drag pans; orbit is disabled)"
                     }
-                });
+                },
+            );
         }
     });
     if state.camera.projection == Projection::Cabinet {
@@ -130,10 +131,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // One-click reading angles: built-ins plus user-saved presets.
         button_row(ui, |ui| {
             ui.label("Angle");
-            if ui
-                .button("Flat")
-                .on_hover_text("Face the fifths/thirds sheet straight on")
-                .clicked()
+            if ui.button("Flat").on_hover_text("Face the fifths/thirds sheet straight on").clicked()
             {
                 state.camera.yaw = 0.0;
                 state.camera.pitch = 0.0;

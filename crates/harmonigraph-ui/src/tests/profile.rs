@@ -27,9 +27,9 @@
 //! nothing. Those are the renderer's cost, and the perf overlay's `prepare`
 //! and `scene` rows are where they are read.
 
+use super::harness::*;
 use crate::*;
 use harmonigraph_core::NoteEvent;
-use super::harness::*;
 
 /// Counts what a frame takes off the heap. Two relaxed atomics per
 /// allocation, which is small enough that the timings stay readable with it
@@ -162,8 +162,7 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
             state.tracker.handle_event(NoteEvent::off(t + 0.25, 0, note));
         }
 
-        let events =
-            load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
+        let events = load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
         let (out, ui) = h.frame_timed(&mut state, events);
 
         let n = out.shapes.len();

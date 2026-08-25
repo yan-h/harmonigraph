@@ -204,9 +204,8 @@ impl EditorShared {
             // if the plugin sits where no audio reaches it.
             self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take.recording && recording {
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(
-                &self.ui.take.render_config,
-            ));
+            self.take
+                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.take.render_config));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
@@ -239,9 +238,8 @@ impl EditorShared {
             && self.take.hit_loop_end()
         {
             self.ui.take.recording = false;
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(
-                &self.ui.take.render_config,
-            ));
+            self.take
+                .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.take.render_config));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
@@ -283,9 +281,7 @@ impl EditorShared {
         let gap = self.last_frame.map(|t| t.elapsed().as_secs_f64());
         self.last_frame = Some(Instant::now());
         if let Some(gap) = gap.filter(|g| *g > 0.1) {
-            self.ui
-                .console
-                .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
+            self.ui.console.log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
         }
     }
 
@@ -443,11 +439,8 @@ fn frame(
     let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
-    let backend = PluginParamBackend {
-        params: &state.params,
-        setter: &setter,
-        gesture: &shared.gesture,
-    };
+    let backend =
+        PluginParamBackend { params: &state.params, setter: &setter, gesture: &shared.gesture };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //
@@ -531,8 +524,7 @@ fn graphics_config() -> GraphicsConfig {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
             let mut descriptor = base(adapter);
-            descriptor.required_features |=
-                adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+            descriptor.required_features |= adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
             descriptor
         });
     }
@@ -854,10 +846,7 @@ impl Editor for LatticeEditor {
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
             EguiWindowSettings::new()
-                .with_logical_size(Size::new(
-                    f64::from(unscaled_width),
-                    f64::from(unscaled_height),
-                ))
+                .with_logical_size(Size::new(f64::from(unscaled_width), f64::from(unscaled_height)))
                 .with_scale_policy(
                     scaling_factor
                         .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
@@ -865,10 +854,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics_config())
                 .with_size_source(size_source),
-            WindowState {
-                shared: self.shared.clone(),
-                params: self.params.clone(),
-            },
+            WindowState { shared: self.shared.clone(), params: self.params.clone() },
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the release of what
@@ -907,10 +893,7 @@ impl Editor for LatticeEditor {
     fn size(&self) -> (u32, u32) {
         // If a resize was requested but not yet applied, report the
         // requested size so the host resizes to it.
-        self.egui_state
-            .requested_size
-            .load()
-            .unwrap_or_else(|| self.egui_state.size())
+        self.egui_state.requested_size.load().unwrap_or_else(|| self.egui_state.size())
     }
 
     // Hosts with proper resize support (Bitwig at least) provide a native
@@ -978,7 +961,6 @@ impl Drop for LatticeEditorHandle {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1020,14 +1002,10 @@ mod tests {
         }
 
         assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
-        let mut on_times: Vec<f64> =
-            shared.ui.tracker.voices().map(|v| v.on_time).collect();
+        let mut on_times: Vec<f64> = shared.ui.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
         assert_eq!(on_times.len(), 2);
-        assert!(
-            (on_times[1] - on_times[0] - 0.045).abs() < 1e-9,
-            "spacing lost: {on_times:?}"
-        );
+        assert!((on_times[1] - on_times[0] - 0.045).abs() < 1e-9, "spacing lost: {on_times:?}");
         assert!(on_times[1] <= 7.0, "never maps into the GUI future");
 
         // Empty ring: no work, no repaint request.
@@ -1154,8 +1132,7 @@ mod tests {
         // And one that DOES bind still binds, so the guard above isn't just
         // swallowing every cap.
         assert!(
-            target_frame_interval(Some(30.0), Some(60.0))
-                > target_frame_interval(None, Some(60.0)),
+            target_frame_interval(Some(30.0), Some(60.0)) > target_frame_interval(None, Some(60.0)),
             "a binding cap must still slow the timer down",
         );
     }

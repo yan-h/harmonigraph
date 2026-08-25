@@ -160,11 +160,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, surface: usize, 
         state.glow_fade.remove(&surface);
         return;
     }
-    state
-        .glow_fade
-        .entry(surface)
-        .or_default()
-        .step(scene, &state.view, now);
+    state.glow_fade.entry(surface).or_default().step(scene, &state.view, now);
 }
 
 impl GlowFade {
@@ -198,11 +194,8 @@ impl GlowFade {
             // the same question at the same time (`ink_at` in lattice.wgsl,
             // which leaves the ring's annulus out of the walk), so the two
             // halves of one light cannot come to disagree about what lit it.
-            let target = node
-                .activation
-                .max(node.melody_level)
-                .max(node.bass_level)
-                .clamp(0.0, 1.0);
+            let target =
+                node.activation.max(node.melody_level).max(node.bass_level).clamp(0.0, 1.0);
             // Whether the node is wearing a mark AT ALL, which is what decides
             // how far its outermost drawn edge — and so its light's whole span
             // — reaches. `derive_scene` puts the bit here; what is carried is
@@ -310,11 +303,7 @@ mod tests {
 
     /// One node of a scene, by the identity the filter keys on.
     fn node_at(scene: &Scene, pos: LatticePos) -> harmonigraph_scene::NodeInstance {
-        *scene
-            .nodes
-            .iter()
-            .find(|n| n.lattice_pos == pos)
-            .expect("the window holds this node")
+        *scene.nodes.iter().find(|n| n.lattice_pos == pos).expect("the window holds this node")
     }
 
     /// A state with the light on and both of its times named, and the note

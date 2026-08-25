@@ -194,7 +194,12 @@ pub(super) struct TextScales {
     pub(super) names: super::names::NameScale,
 }
 
-pub(super) fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
+pub(super) fn text_scales(
+    cfg: &crate::SpectrumConfig,
+    axes: &Axes,
+    span: f32,
+    ppp: f32,
+) -> TextScales {
     let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
     TextScales {
         markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
@@ -345,7 +350,11 @@ impl Axes {
 
     /// Points spanned by the full pitch axis (the short side).
     pub fn pitch_len(&self) -> f32 {
-        if self.time_vertical { self.rect.width() } else { self.rect.height() }
+        if self.time_vertical {
+            self.rect.width()
+        } else {
+            self.rect.height()
+        }
     }
 
     /// Points spanned by the full depth/time axis (the long side).
@@ -356,7 +365,11 @@ impl Axes {
     /// that size on a 2x display. [`roll`](super::roll)'s `MIN_LENGTH_DEVICE_PX`
     /// is what a floor in the other unit looks like, and says so in its name.
     pub fn depth_len(&self) -> f32 {
-        if self.time_vertical { self.rect.height() } else { self.rect.width() }
+        if self.time_vertical {
+            self.rect.height()
+        } else {
+            self.rect.width()
+        }
     }
 
     /// Which way the pitch axis points on screen (unit vector).
@@ -393,7 +406,11 @@ impl Axes {
         } else {
             (pos.x - self.rect.left()) / self.rect.width().max(1.0)
         };
-        if self.time_reversed { 1.0 - d } else { d }
+        if self.time_reversed {
+            1.0 - d
+        } else {
+            d
+        }
     }
 
     /// A grab band `half` pixels either side of depth `d`, spanning the

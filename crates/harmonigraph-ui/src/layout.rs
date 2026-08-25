@@ -106,7 +106,10 @@ impl Layout {
             return Ok(preset);
         }
         let text = std::fs::read_to_string(spec).map_err(|e| {
-            format!("layout {spec:?} is not a preset ({}) and could not be read: {e}", PRESETS.join(", "))
+            format!(
+                "layout {spec:?} is not a preset ({}) and could not be read: {e}",
+                PRESETS.join(", ")
+            )
         })?;
         ron::from_str(&text).map_err(|e| format!("layout {spec:?}: {e}"))
     }

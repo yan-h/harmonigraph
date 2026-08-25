@@ -446,8 +446,7 @@ mod tests {
                 "{count}+2x{extras} spans {drawn} of the {} its slots are worth",
                 span as f32 * slot,
             );
-            let middle =
-                0.5 * (drawn_cells[0].left() + drawn_cells[drawn_cells.len() - 1].right());
+            let middle = 0.5 * (drawn_cells[0].left() + drawn_cells[drawn_cells.len() - 1].right());
             assert!((middle - bar.center().x).abs() < 0.5, "{count}+2x{extras} is off center");
         }
     }
@@ -641,15 +640,19 @@ mod tests {
         for &(press, release) in gestures {
             let toward = (release - press).signum();
             frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press))]);
-            frame(&mut count, &mut extras, vec![
-                egui::Event::PointerMoved(at(press)),
-                egui::Event::PointerButton {
-                    pos: at(press),
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ]);
+            frame(
+                &mut count,
+                &mut extras,
+                vec![
+                    egui::Event::PointerMoved(at(press)),
+                    egui::Event::PointerButton {
+                        pos: at(press),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
             // A small step first, then the rest of the way. egui does not call
             // a gesture a drag until the pointer has left a six-point click
             // threshold, so this step is where the widget first sees one — and
@@ -659,12 +662,16 @@ mod tests {
             frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(step)]);
             frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(release))]);
             // And let go, which is the only thing that forgets the grab.
-            frame(&mut count, &mut extras, vec![egui::Event::PointerButton {
-                pos: at(release),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }]);
+            frame(
+                &mut count,
+                &mut extras,
+                vec![egui::Event::PointerButton {
+                    pos: at(release),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
         }
         (count, extras)
     }

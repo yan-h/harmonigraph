@@ -1,0 +1,12 @@
+# The tree is dense: expressions run to the full line rather than exploding
+# one argument per line. rustfmt's default sub-widths (fn_call_width 60,
+# struct_lit_width 18, single_line_if_else_max_width 50) are far tighter than
+# its own max_width, and reformatting under them rewrites 108 of the 117 files
+# here. "Max" ties every sub-width to max_width, which is where this code
+# already wraps, so the formatter agrees with the tree instead of fighting it.
+max_width = 100
+use_small_heuristics = "Max"
+
+# Stable, and the tree already satisfies it -- set so that `x: x` in a struct
+# literal is a thing the formatter settles rather than a thing to notice.
+use_field_init_shorthand = true

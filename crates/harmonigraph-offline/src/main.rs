@@ -397,10 +397,7 @@ fn run() -> Result<(), String> {
         // (or the default) as a starting point for a custom .ron.
         let layout = Layout::load(args.layout.as_deref().unwrap_or("side-by-side"))?;
         let pretty = ron::ser::PrettyConfig::new().depth_limit(4);
-        println!(
-            "{}",
-            ron::ser::to_string_pretty(&layout, pretty).map_err(|e| e.to_string())?
-        );
+        println!("{}", ron::ser::to_string_pretty(&layout, pretty).map_err(|e| e.to_string())?);
         return Ok(());
     }
 
@@ -622,10 +619,7 @@ fn run() -> Result<(), String> {
         );
     }
     eprintln!("done: {rendered} frames -> {}", out.display());
-    if matches!(
-        out.extension().and_then(|e| e.to_str()),
-        Some("rgba") | Some("raw")
-    ) {
+    if matches!(out.extension().and_then(|e| e.to_str()), Some("rgba") | Some("raw")) {
         eprintln!(
             "  encode with: ffmpeg -f rawvideo -pix_fmt rgba -s {w}x{h} -r {} -i {} out.mp4",
             args.fps,

@@ -52,13 +52,10 @@ fn everything_the_pane_shows_is_in_the_window() {
     let view = ViewConfig { extent_sevens: 2, ..ViewConfig::default() };
     for projection in PROJECTIONS {
         for aspect in ASPECTS {
-            for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE]
-            {
+            for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
                 let camera = Camera { projection, distance, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
-                if projection != Projection::Cabinet
-                    && drawn.count() > MAX_DRAWN_NODES - 512
-                {
+                if projection != Projection::Cabinet && drawn.count() > MAX_DRAWN_NODES - 512 {
                     continue;
                 }
                 let drawn_set: std::collections::HashSet<_> = drawn.positions().collect();
@@ -244,8 +241,7 @@ fn the_window_is_not_much_wider_than_the_pane() {
     let center = view.center();
     for projection in PROJECTIONS {
         for aspect in ASPECTS {
-            for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE]
-            {
+            for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
                 let camera = Camera { projection, distance, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
                 // The farthest step, on each side of each axis, the pane shows.
@@ -537,10 +533,9 @@ fn following_the_camera_does_not_move_the_picture() {
     );
 
     for pos in coords::positions_within(-4..=4, -4..=4, 0..=0) {
-        let (Some(followed), Some(plain)) = (
-            ndc(&camera, &view, aspect, pos),
-            ndc(&plain_camera, &plain_view, aspect, pos),
-        ) else {
+        let (Some(followed), Some(plain)) =
+            (ndc(&camera, &view, aspect, pos), ndc(&plain_camera, &plain_view, aspect, pos))
+        else {
             continue;
         };
         assert!(
@@ -562,10 +557,7 @@ fn the_zoom_limit_lands_near_twenty_steps() {
     let camera = Camera { distance: Camera::MAX_DISTANCE, ..Camera::default() };
     let square = view.scrolled(&camera, 1.0);
     let tall = square.max.threes - square.min.threes + 1;
-    assert!(
-        (18..=26).contains(&tall),
-        "fully zoomed out the pane is {tall} steps of thirds tall",
-    );
+    assert!((18..=26).contains(&tall), "fully zoomed out the pane is {tall} steps of thirds tall",);
     // A wider pane gets its extra width, and nothing else: the height is a
     // property of the zoom, the width of the pane.
     let wide = view.scrolled(&camera, 16.0 / 9.0);
@@ -673,8 +665,7 @@ fn a_nonsense_camera_still_yields_a_drawable_window() {
 /// where the block starts.
 #[test]
 fn the_index_of_a_position_is_where_the_walk_puts_it() {
-    let window =
-        DrawnWindow { min: LatticePos::new(-7, -2, -1), max: LatticePos::new(3, 9, 2) };
+    let window = DrawnWindow { min: LatticePos::new(-7, -2, -1), max: LatticePos::new(3, 9, 2) };
     let walked: Vec<_> = window.positions().collect();
     assert_eq!(walked.len(), window.count(), "the count does not match the walk");
     for (i, pos) in walked.iter().enumerate() {
