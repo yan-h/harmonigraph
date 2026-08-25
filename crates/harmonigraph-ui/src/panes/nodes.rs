@@ -604,41 +604,13 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              on the audio ring's wedges and down a mark's sides — as a share of \
              the node's radius. 0 closes the ring into a solid annulus.",
         );
-    // Here rather than with the sevens-layer controls, where a "Sevenths" name
-    // misreads what it does: the clearance is cut by every DRAWING node on
-    // every sheet, the home one included and at any sheet count, so it belongs
-    // to the node and not to the depth axis. Named Clearance for that; the
-    // `sevens_` field names stay — they are what saved projects spell.
+    // What a node CLEARS around itself is not here: it is the Glow section's
+    // Gap directly below, which is one length for the hole and the shadow laid
+    // over it. A bar of its own here would be the same distance said twice.
     //
-    // A percentage of the node's radius, as the two gaps above it are, this
-    // being the same unit measured from the same place — a reach of 0.30 and a
-    // gap of 0.052 are two shares of one length, and a page that read one of
-    // them as a bare number would be saying they are different kinds of
-    // quantity. Whole percents, which is the resolution the readout has always
-    // had here.
-    edge_bar(
-        ui,
-        (&mut view.sevens_gutter, &mut view.sevens_gutter_soft),
-        0.5,
-        "Clearance",
-        {
-            let fresh = ViewConfig::default();
-            (fresh.sevens_gutter, fresh.sevens_gutter_soft)
-        },
-        |v| format!("{:.0}%", v * 100.0),
-    )
-    .on_hover_text(
-        "The dark gap a node clears around its own INK, over everything \
-         behind it — the resting markers, the back sheets, and any node the \
-         tilt has put under this one — around each layer it is drawing, \
-         including an audio ring with no note under it, as a share of the \
-         node's radius. Its empty middle and the gaps between its slices clear \
-         nothing, so what stands there reads on through. Solid to the inner \
-         handle, faded out by the outer. 0 draws none.",
-    );
-    // The glow is NOT here, though it is the whole node's as everything above
-    // is: it has a section of its own directly below, and a heading is what
-    // lets every bar in it drop the "Glow" from its name.
+    // The glow is NOT here either, though it is the whole node's as everything
+    // above is: it has a section of its own directly below, and a heading is
+    // what lets every bar in it drop the "Glow" from its name.
 }
 
 /// Glow: the light a node gives off — the ONLY light it has, every layer of

@@ -1258,13 +1258,12 @@ fn a_scene_derived_without_an_analyzer_carries_no_audio() {
 
 /// The MIDI picture is the SAME picture whatever the ring is asked for: the
 /// analyzer's reading is a layer added inside the octave band, and nothing
-/// about a node's own body, band, marks or clearing is a function of it.
+/// about a node's own body, band or marks is a function of it.
 ///
 /// The claim the whole selector rests on, and it is `derive_scene`'s to keep
-/// because that is where every one of those is decided. A version that read
-/// the setting here — dimming the band under the ring, say, or clearing a
-/// gutter for it — would make the two readings two pictures again rather than
-/// two fillings of one ring.
+/// because that is where every one of those is decided. A version that read the
+/// setting here — dimming the band under the ring, say — would make the two
+/// readings two pictures again rather than two fillings of one ring.
 #[test]
 fn the_reading_leaves_the_midi_picture_alone() {
     let midi = scene_of(&sounding(), &Tuning::just(), &plain_view(), &plain_frame(), 0.5);
@@ -1277,7 +1276,6 @@ fn the_reading_leaves_the_midi_picture_alone() {
             assert_eq!(now.activation, was.activation, "{reading:?} changed {at:?}'s activation");
             assert_eq!(now.octaves, was.octaves, "{reading:?} changed {at:?}'s held octaves");
             assert_eq!(now.color, was.color, "{reading:?} repainted {at:?}");
-            assert_eq!(now.gutter, was.gutter, "{reading:?} changed what {at:?} clears");
             assert_eq!(now.melody_slots, was.melody_slots, "{reading:?} moved {at:?}'s melody");
             assert_eq!(now.bass_slots, was.bass_slots, "{reading:?} moved {at:?}'s bass mark");
         }
@@ -1336,7 +1334,6 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
         assert_eq!(now.activation, was.activation, "the gate changed {at:?}'s activation");
         assert_eq!(now.octaves, was.octaves, "the gate changed {at:?}'s held octaves");
         assert_eq!(now.color, was.color, "the gate repainted {at:?}");
-        assert_eq!(now.gutter, was.gutter, "the gate changed what {at:?} clears");
         assert_eq!(now.melody_slots, was.melody_slots, "the gate moved {at:?}'s melody mark");
         // The partial is an F#, and the wheel gives every node its own octaves
         // of that class — so a node rings where its class is the partial's,
@@ -1368,7 +1365,7 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
 /// exactly as much of it as the note is drawn at.
 ///
 /// The rule that keeps the two pictures one gesture: every other layer of a
-/// node — its disc, its band, its marks, the gutter it clears — arrives and
+/// node — its disc, its band, its marks, the hole it clears — arrives and
 /// leaves on the note's own envelope, and a ring vanishing from under a note
 /// still sounding reads as a piece of the node dropping out. So the gate is a
 /// question about the nodes NOBODY IS PLAYING, which is where a ring at every

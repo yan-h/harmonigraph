@@ -58,17 +58,15 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         // The fade the whole width of the gap, which is the fresh pair.
         scene.glow_gap_soft = gap;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.16;
         scene
     };
     let row = SIZE[0] as usize;
     let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
 
-    // The scale: the node's own ink with nothing around it. The clearing is off
-    // for this shot alone — it paints the ground out past the ink, and what is
-    // wanted here is where the INK stops.
-    let mut bare = at(0.0, 0.0, 0.0);
-    bare.nodes[0].gutter = 0.0;
+    // The scale: the node's own ink with nothing around it. This shot's Gap is
+    // 0, so there is no clearing painting the ground out past the ink and the
+    // furthest inked pixel is where the INK stops.
+    let bare = at(0.0, 0.0, 0.0);
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
     let band_px = (1..(SIZE[0] / 2) as usize)
@@ -110,14 +108,12 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     // The bar's top is the bare ground: where the standoff is solid, a depth of
     // 1 leaves the pixel exactly what it is with the glow off — not nearly,
     // since the clearing at full coverage replaces what is under it and a
-    // factor of 0 on the light is no light. BOTH fades are taken off for this
-    // pair of shots: the standoff's, and the clearing's it is floored at,
-    // which at the fresh width runs nearly the whole gutter — so the probe
-    // sits in a solid band rather than on either ramp.
+    // factor of 0 on the light is no light. The fade is taken off for this pair
+    // of shots so the probe sits in a solid band rather than on the ramp; what
+    // is left under the handle is `GAP_SOFT_FLOOR`, well inside the probe.
     let solid = |reach: f32| {
         let mut scene = at(reach, 0.16, 1.0);
         scene.glow_gap_soft = 0.0;
-        scene.sevens_soft = 0.0;
         scene
     };
     let bare_ground = shooter.shot(&solid(0.8));
@@ -128,14 +124,28 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         "at a depth of 1 the stood-off pixel is not the frame with no glow in it",
     );
 
-    // And the depth is the whole switch: at 0 the Gap and its curve reach the
-    // picture nowhere.
+    // And the depth is the whole switch ON THE LIGHT: at 0 the Gap and its
+    // curve take none of it anywhere, at any width.
+    //
+    // COLOUR and not the whole pixel, because the Gap is two lengths in one —
+    // the standoff's and the KNOCKOUT's (`node_clearing`) — and the hole is cut
+    // at every depth. What a wider hole moves here is its own coverage, which
+    // is the alpha; what it paints is the light and ground already standing at
+    // the pixel, so no channel of the colour moves with it. That the hole
+    // FOLLOWS the Gap — and that it is cut with no light in the picture at all
+    // — is `a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet`.
     for (name, gap) in [("no gap", 0.0), ("a wide gap", 0.5)] {
         let other = shooter.shot(&at(0.8, gap, 0.0));
-        assert_eq!(
-            differing_pixels(&other, &flat),
-            0,
-            "at a depth of 0, {name} drew a different frame from the fresh gap",
+        let worst = other
+            .chunks(4)
+            .zip(flat.chunks(4))
+            .flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs()))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 1,
+            "at a depth of 0, {name} moved a channel by {worst}, which is more than laying \
+             one fragment down in two steps can round it by",
         );
     }
 }
@@ -188,7 +198,6 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
         scene.glow_gap_soft = GAP;
         scene.glow_gap_shape = 0.0;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
         scene
     };
     let row = SIZE[0] as usize;
@@ -298,7 +307,6 @@ fn the_standoff_ends_before_its_own_billboard() {
         scene.glow_gap_soft = GAP;
         scene.glow_gap_shape = 0.0;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
         scene
     };
     let row = SIZE[0] as usize;
@@ -496,7 +504,6 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         scene.glow_gap = GAP;
         scene.glow_gap_soft = GAP;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
         scene
     };
     let row = SIZE[0] as usize;
@@ -542,107 +549,6 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         checked += 1;
     }
     assert!(checked >= 4, "only {checked} probes had light to read; the test proves nothing");
-}
-
-/// The Gap reaches as far as it says, and the Clearance is not a lid on it.
-///
-/// The standoff is written into a layer of the LIGHT (`fs_glow`), so it dims
-/// the field wherever that field reaches. A standoff carried instead by the
-/// ground a node's own clearing paints is bounded at the Clearance's reach —
-/// solid inward, where the clearing fills every footprint to the node's centre,
-/// and gone a fraction of a node-radius outward, where the clearing has faded
-/// out — which makes a Gap wider than the Clearance half a dial: it eats inward
-/// and does nothing outward.
-///
-/// So the probe sits OUTSIDE the clearing altogether — five times further from
-/// the ring than the Clearance reaches — and the two claims are what pin the
-/// difference. The standoff dims it, which is the light being held off where no
-/// node paints. And dialling the Clearance to nothing does not move it: what
-/// holds the light off there is the Gap alone, so the pixel is identical with a
-/// clearing and with none. Under the bounded shape neither shot moves, both
-/// being the undimmed field.
-///
-/// The Clearance is deliberately not 0 in the first shot. A node that clears
-/// nothing is the easy case — there is no lid to prove the standoff has got out
-/// from under. The case worth pinning is a node whose clearing exists, ends,
-/// and does not take the standoff's reach with it.
-#[test]
-fn the_gap_reaches_past_the_clearance_the_node_cuts() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    // A narrow clearing under a wide gap, which is the pair a standoff bounded
-    // by the clearing cannot draw. The fade is left at the full gap, the fresh
-    // pairing, so the
-    // probe reads the ramp rather than a band edge.
-    const CLEARANCE: f32 = 0.02;
-    const GAP: f32 = 0.5;
-    let at = |reach: f32, depth: f32, gutter: f32| -> Scene {
-        let mut scene = single_marked_node(0, 0);
-        scene.camera = harmonigraph_scene::Camera {
-            projection: harmonigraph_scene::Projection::Orthographic,
-            yaw: 0.0,
-            pitch: 0.0,
-            ..Default::default()
-        };
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = gutter;
-        scene
-    };
-    let row = SIZE[0] as usize;
-    let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
-
-    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
-    // it: the node's own ink with no clearing and no light, whose outermost lit
-    // pixel along +x is `rings_outer` in the node's uv.
-    let bare = at(0.0, 0.0, 0.0);
-    let plain = shooter.shot(&bare);
-    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
-    let band_px = (1..(SIZE[0] / 2) as usize)
-        .rfind(|&x| inked(&plain, centre + x))
-        .expect("the fixture's node must ink something along +x");
-    let per_uv = band_px as f32 / bare.rings_outer;
-
-    // Five times the Clearance out from the ink, and well inside the Gap: no
-    // clearing of this node reaches here at any level, and the standoff still
-    // has most of its own width left to spend.
-    const PAST: f32 = CLEARANCE * 5.0;
-    const { assert!(PAST < GAP, "the probe has to sit inside the gap it is measuring") };
-    let probe = centre + (band_px as f32 + PAST * per_uv).round() as usize;
-    assert!(
-        !inked(&plain, probe),
-        "the probe at {probe} sits on the node's own ink, not outside it",
-    );
-
-    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
-    let stood_off = shooter.shot(&at(0.8, 0.85, CLEARANCE));
-    let flat = shooter.shot(&at(0.8, 0.0, CLEARANCE));
-    assert!(
-        lit(&stood_off, probe) < lit(&flat, probe),
-        "outside the clearing the standoff left the pixel at {} against {} with the depth at 0",
-        lit(&stood_off, probe),
-        lit(&flat, probe),
-    );
-    // Non-vacuous: there has to be light out there to hold off.
-    let dark = shooter.shot(&at(0.0, 0.85, CLEARANCE));
-    assert!(
-        lit(&flat, probe) > lit(&dark, probe),
-        "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
-    );
-
-    // ...and it is the Gap's own doing, not the clearing's: take the Clearance
-    // away entirely and the pixel does not move.
-    let clearless = shooter.shot(&at(0.8, 0.85, 0.0));
-    assert_eq!(
-        clearless[probe * 4..probe * 4 + 4],
-        stood_off[probe * 4..probe * 4 + 4],
-        "the standoff outside the clearing changed when the Clearance was dialled off",
-    );
 }
 
 /// The Gap reaches light this node never lit — a NEIGHBOUR's halo, out past
@@ -704,7 +610,6 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         // standoff this far out.
         scene.glow_gap_shape = 1.0;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
         scene
     };
     // ...and the neighbour that lights it. Dialled almost off, so every term of
@@ -810,7 +715,7 @@ fn standoff_share_rings(
     let centre = (size[1] / 2) as usize * row + (size[0] / 2) as usize;
 
     let mut bare = at(0.0, 0.0, 0.0);
-    bare.nodes[0].gutter = 0.0;
+    bare.glow_gap = 0.0;
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
     let ink_px = (1..(size[0] / 2) as usize)
@@ -926,8 +831,6 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
         // The fade the whole width of the gap, which is the fresh pair.
         scene.glow_gap_soft = GAP;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = GAP;
-        scene.sevens_soft = 0.0;
         scene
     };
     // The band's own outer edge is where this fixture's ink ends, and the Scene
@@ -1040,8 +943,6 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
         scene.glow_gap = GAP;
         scene.glow_gap_soft = GAP;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.16;
-        scene.sevens_soft = 0.0;
         scene
     };
     // Inside half the widest gap, which is the only radius at which the two
@@ -1134,8 +1035,6 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
         scene.glow_gap = GAP;
         scene.glow_gap_soft = GAP;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = GAP;
-        scene.sevens_soft = 0.0;
         scene
     };
     // Half an Octave gap has to outreach the Gap, or the light is held off in
@@ -1240,8 +1139,6 @@ fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
         scene.glow_gap = GAP;
         scene.glow_gap_soft = GAP;
         scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = GAP;
-        scene.sevens_soft = 0.0;
         scene
     };
     let row = SIZE[0] as usize;
@@ -1255,7 +1152,7 @@ fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
     // Taken over the frame rather than along an axis, one mark being the only
     // thing drawn and no axis obliged to cross it.
     let mut bare = at(0.0, 0.0);
-    bare.nodes[0].gutter = 0.0;
+    bare.glow_gap = 0.0;
     let plain = shooter.shot(&bare);
     let mut ink_px = 0.0f32;
     for y in 0..SIZE[1] as usize {

@@ -215,11 +215,11 @@ pub struct ViewConfig {
     pub center_fives: i32,
     pub center_sevens: i32,
     // ---- The sevens layer ------------------------------------------------
-    // How the sheets other than the home one draw. `sevens_size` and
-    // `sevens_label` go inert while `extent_sevens` is 0, which is where a
-    // fresh view starts; `sevens_gutter` does NOT — it is named for this
-    // layer but cuts the marker under a sounding node at any extent (see its
-    // own doc below, and `a_flat_lattice_still_clears_its_marker`).
+    // How the sheets other than the home one draw. Both settings go inert
+    // while `extent_sevens` is 0, which is where a fresh view starts. What
+    // makes a small node legible over a large one is the KNOCKOUT, and that is
+    // not here: it is the Glow section's Gap ([`glow_gap`](Self::glow_gap)),
+    // cut at any extent and by every drawing node on every sheet.
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -238,87 +238,6 @@ pub struct ViewConfig {
     /// against, so it stays the largest thing on screen whichever way the
     /// sevens axis runs.
     pub sevens_size: f32,
-    /// Width of the dark gutter a node clears around itself, in quad UV
-    /// units — the units a FULL-SIZE node uses, so the gap comes out the
-    /// same width on screen whatever size the node it belongs to draws at.
-    /// (The shader divides by the node's size factor to get there.) A gap
-    /// that shrank with its node read as a property of the note rather than
-    /// of the layer it sits on. 0 draws none.
-    ///
-    /// This is what lets the sevens layer OVERLAP the home sheet instead of
-    /// needing room of its own: the node punches its own footprint out of
-    /// whatever it crosses and sits in the hole, so a small node stays
-    /// legible over a large one. It costs no layout space at all, which is
-    /// the whole point — the alternative is shrinking the 5-limit sheet to
-    /// open up clearance, and the 5-limit sheet is what you came to look at.
-    ///
-    /// FOOTPRINT means the INK the node draws, this far out from it, and not a
-    /// circle sized to hold it: a node reaching a melody mark on one octave
-    /// bulges over that wedge and hugs its rings everywhere else, and the empty
-    /// middle those rings stand around clears nothing at all. A circle answers
-    /// with the widest thing the node reaches in ANY direction, which on a
-    /// marked node is a gap wider than itself all the way round — so the hole
-    /// stops reading as the node's and starts reading as empty space somebody
-    /// cut out. Filled to the centre it is worse still: a node is then an
-    /// opaque disc the size of its outermost ring, and a ring passing behind
-    /// another node's middle is erased with nothing but its own shadow in the
-    /// light left to say it was there.
-    ///
-    /// Ink and not the ANNULUS the ink is drawn in, which is the same argument
-    /// taken round the turn: a ring is slices with gaps between them, and the
-    /// gaps are [`octave_gap`](Self::octave_gap) wide. Measured off the closed
-    /// annulus a node clears the whole turn whatever it is drawing, so a wide
-    /// Octave gap lays a solid band of ground over what stands behind in the
-    /// very sectors the node is empty — a dark ring cast by ink that is not
-    /// there. The slices are cut out of it exactly as the standoff cuts them
-    /// (`glow_standoff`), which at the shipped gap moves no pixel at all.
-    ///
-    /// The shape is the shader's (`node_clearing`), off the same radii that
-    /// draw the layers, and it is built one LAYER at a time: each clears its
-    /// own footprint at the level it is drawn at, and the hole is whichever of
-    /// them claims a pixel most. Which is what lets a node wearing an audio
-    /// ring and no note clear at all — its ring's level is the gate's, where
-    /// the note's is nothing — and equally what stops that node clearing the
-    /// band-sized hole a node-wide level would give it. A layer nobody is
-    /// drawing clears nothing.
-    ///
-    /// It clears to the GROUND the pass is composited over, which the shell
-    /// hands in (see [`Scene::background`](crate::Scene::background)). With
-    /// no color of its own a premultiplied layer knocks out to black, which is
-    /// darker still than the well the pane stands on, so the clearing
-    /// announces itself as a plate sitting on the picture rather than
-    /// disappearing into the ground.
-    ///
-    /// It fades rather than ending at a rim, over a band of its own
-    /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
-    /// cutting across a lit ring reads as a bite taken out of it. And its
-    /// STRENGTH is each layer's own envelope, so a clearing fades out exactly
-    /// as the ink in it does while holding its width; a node drawing nothing
-    /// clears nothing at all.
-    ///
-    /// Named for the sevens layer it was built for, but not confined to it:
-    /// the home sheet clears too, and at any sevenths extent — with the
-    /// lattice flat there is no sheet behind to hide, but the resting markers
-    /// are still cut, which is a look worth having on its own.
-    pub sevens_gutter: f32,
-    /// How wide the clearing's fade is, same units — and deliberately NOT
-    /// derived from the reach above. Tying the two into one number (fade
-    /// pinned to twice the reach) means widening the gap also blurs it,
-    /// with no way to ask for a wide crisp one or a narrow soft one.
-    ///
-    /// One CONTROL is a different question from one number, and the Nodes
-    /// section's Clearance bar is one: both are distances from the node's rim, so
-    /// they are two points on one axis and the bar carries a handle at each.
-    ///
-    /// The clearing is solid out to `reach - fade` past the node's own rings
-    /// and gone by `reach`, so the reach is exactly where it ends whatever the
-    /// fade does — both measured from those rings rather than from a rim, so
-    /// they follow its shape (see [`sevens_gutter`](Self::sevens_gutter)).
-    /// A fade wider than the reach eats outward rather than inward: the rings
-    /// themselves are the one part that must always be cleared. Inward is the
-    /// same ramp on the far side of the same ring, so a wide reach eats into
-    /// the node's middle and a narrow one leaves the whole of it.
-    pub sevens_gutter_soft: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
     pub sevens_label: SevensLabel,
@@ -1208,19 +1127,26 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_meld: f32,
-    /// The standoff: how far past each RING a node draws its clearing dims the
-    /// light standing under it, in the same quad UV units
-    /// [`ring_gap`](Self::ring_gap) reads in — the far end of the gap, where
-    /// the light is back to a fiftieth of what the ring holds off. With
-    /// [`glow_gap_soft`](Self::glow_gap_soft) it is ONE control, the Glow
-    /// section's Gap bar, on the terms the Clearance pair
-    /// ([`sevens_gutter`](Self::sevens_gutter)) is one: solid out to
-    /// `gap - soft`, all but gone by `gap`.
+    /// The Gap: how far past each RING a node draws it holds the picture off,
+    /// in the same quad UV units [`ring_gap`](Self::ring_gap) reads in — the far
+    /// end of the gap, where what the ring holds off is back to a fiftieth.
+    /// With [`glow_gap_soft`](Self::glow_gap_soft) it is ONE control, the Glow
+    /// section's Gap bar: solid out to `gap - soft`, all but gone by `gap`.
     ///
-    /// ALL BUT, and the difference from the Clearance's own "gone" is the
-    /// point: what is spent over the fade is a DECAY rather than a ramp, so the
-    /// standoff goes on past the bar's own handle rather than stopping at it
-    /// (`standoff_coverage` in lattice.wgsl). A ramp landing on nothing puts a
+    /// TWO THINGS on one length, and that is what makes it one bar. Out from
+    /// every ring the node draws it dims the LIGHT standing there (the
+    /// standoff), and it clears everything drawn BEHIND the node down to the
+    /// ground (the knockout) — one shape (`standoff_coverage` in lattice.wgsl),
+    /// read by `glow_standoff` and by `node_clearing`. Said with two lengths the
+    /// picture could be dialled into a node floating over its own shadow, or a
+    /// hole reaching past the dark that gives it its edge; said with one it
+    /// cannot. What the two do NOT share is
+    /// [`glow_gap_depth`](Self::glow_gap_depth), a factor on the light alone: a
+    /// node hides what stands behind it at every depth.
+    ///
+    /// ALL BUT gone by `gap`, and the "all but" is the point: what is spent over
+    /// the fade is a DECAY rather than a ramp, so it goes on past the bar's own
+    /// handle rather than stopping at it. A ramp landing on nothing puts a
     /// closed contour into a field whose every other length is an exponential,
     /// and a circle is what the eye finds in a smooth field however gently the
     /// ramp meets it — which is the dark disc with a rim on it that a strong
@@ -1229,6 +1155,38 @@ pub struct ViewConfig {
     /// couple of Gaps out all the same, where a billboard would otherwise cut
     /// it at a square (`GAP_STOP`); what is left standing at the handle itself
     /// is unmoved by that at any curve.
+    ///
+    /// The KNOCKOUT is what lets the sevens layer OVERLAP the home sheet
+    /// instead of needing room of its own: a node punches its own footprint out
+    /// of whatever it crosses and sits in the hole, so a small node stays
+    /// legible over a large one at no cost in layout — the alternative being to
+    /// shrink the 5-limit sheet to open up clearance, and the 5-limit sheet is
+    /// what you came to look at. It clears to the GROUND the pass is composited
+    /// over, which the shell hands in (see
+    /// [`Scene::background`](crate::Scene::background)): with no colour of its
+    /// own a premultiplied layer knocks out to black, which is darker still than
+    /// the well the pane stands on, so the hole would announce itself as a plate
+    /// sitting on the picture rather than disappearing into the ground.
+    ///
+    /// FOOTPRINT means the INK the node draws, this far out from it, and not a
+    /// circle sized to hold it: a node reaching a melody mark on one octave
+    /// bulges over that wedge and hugs its rings everywhere else, and the empty
+    /// middle those rings stand around clears nothing at all. A circle answers
+    /// with the widest thing the node reaches in ANY direction, which on a
+    /// marked node is a gap wider than itself all the way round — so the hole
+    /// stops reading as the node's and starts reading as empty space somebody
+    /// cut out. Filled to the centre it is worse still: a node is then an
+    /// opaque disc the size of its outermost ring, and a ring passing behind
+    /// another node's middle is erased with nothing but its own shadow in the
+    /// light left to say it was there.
+    ///
+    /// Ink and not the ANNULUS the ink is drawn in, which is the same argument
+    /// taken round the turn: a ring is slices with gaps between them, and the
+    /// gaps are [`octave_gap`](Self::octave_gap) wide. Measured off the closed
+    /// annulus a node clears the whole turn whatever it is drawing, so a wide
+    /// Octave gap lays a solid band of ground over what stands behind in the
+    /// very sectors the node is empty — a dark ring cast by ink that is not
+    /// there.
     ///
     /// Without it the light is at its brightest exactly where the rings are —
     /// the falloff is measured from the node's centre, so both sides of a ring
@@ -1295,11 +1253,11 @@ pub struct ViewConfig {
     /// The fade sits on BOTH sides of a ring at once — the halo outside it and
     /// the lit middle of the node inside it — because a ring is measured from
     /// its own annulus (`annulus_distance` in lattice.wgsl) and one band
-    /// feathers both. At 0 all that is left under it is the
-    /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
-    /// a couple of screen pixels wide.
+    /// feathers both. At 0 all that is left under it is `GAP_SOFT_FLOOR`, a
+    /// hairline that exists so the gap does not end in a step.
     ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    /// Inert on the LIGHT while [`glow_reach`](Self::glow_reach) is 0; it shapes
+    /// the knockout at any reach, as [`glow_gap`](Self::glow_gap) does.
     pub glow_gap_soft: f32,
     /// How the standoff's decay is shaped across the width
     /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 1 is a plain
@@ -2298,17 +2256,6 @@ impl ViewConfig {
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        // The gutter and its fade, which are ONE control (the Note section's
-        // Clearance bar) over two numbers: the fade is a distance measured back
-        // from the reach, so a fade wider than the reach is a low end off the
-        // bottom of the axis. It draws as a fade over the whole reach either
-        // way — the shader floors it at the node's rim, which is the one part
-        // that must stay cleared — so holding it there costs the picture
-        // nothing and keeps the bar reading out the number the blob holds.
-        self.sevens_gutter = finite_or(self.sevens_gutter, fresh.sevens_gutter).clamp(0.0, 0.5);
-        self.sevens_gutter_soft = finite_or(self.sevens_gutter_soft, fresh.sevens_gutter_soft)
-            .clamp(0.0, self.sevens_gutter);
-
         // The spectral kernel's width, against that same hole and one more: it
         // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
         // makes every weight a NaN and the whole lattice reads as silent —
@@ -2515,11 +2462,6 @@ impl Default for ViewConfig {
             // septimal mark spells apart from the node two fifths down (see
             // SevensLabel) rather than repeating it.
             sevens_size: 1.0,
-            // On, even though the view opens flat (extent_sevens 0): the cut
-            // sits ready for when depth opens rather than waiting to be
-            // turned on with it, the way sevens_size still does.
-            sevens_gutter: 0.122_413_49,
-            sevens_gutter_soft: 0.122_413_49,
             sevens_label: SevensLabel::Name,
             show_labels: true,
             // Where the music has been is most of what the lattice is for, so

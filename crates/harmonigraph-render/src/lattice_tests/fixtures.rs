@@ -81,11 +81,10 @@ pub(super) fn parity_scene() -> Scene {
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
-            // The off-sheet half draws small and knocks out, so the
-            // every-draw-path scene exercises both sevens-layer branches
-            // (the scaled billboard and the gutter's extra alpha) as well.
+            // The off-sheet half draws small, so the every-draw-path scene
+            // exercises the scaled billboard as well. What every node here
+            // knocks out is `parity_scene`'s own Gap.
             scale: if i % 2 == 0 { 1.0 } else { 0.55 },
-            gutter: if i % 2 == 0 { 0.0 } else { 0.12 },
             comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass, and
@@ -131,15 +130,14 @@ pub(super) fn parity_scene() -> Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
         now: 1.25,
-        // The ground the sevens knockout clears to; the half of this
-        // scene's nodes that carry a gutter exercise it.
+        // The ground the knockout clears to, which every node in this scene
+        // paints — the Gap is one number for the view (`parity_scene`).
         background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
         lattice_ground: harmonigraph_scene::grey_of_lightness(
             harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
-        sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
         // Off: a single-instant parity image can't depend on which moment
@@ -433,7 +431,6 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         hovered: false,
         on_home: true,
         scale: 1.0,
-        gutter: 0.0,
         comma: 0.0,
         cents: 0.0,
         melody_slots,
@@ -460,6 +457,14 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         },
         trail: 0.0,
     }];
+    // BLACK, which is the colour `Shooter::shot` clears to: a node's knockout
+    // paints the ground it stands on (`node_paint`), and every reading taken off
+    // this fixture is of the node's own ink or of the light around it. Painting
+    // the pane's own well instead would put the hole into every one of them —
+    // as a ground lifted off black under a fading slice, and as pixels an ink
+    // mask counts as inked a couple of Gaps past where the ink ends. Against
+    // the clear colour the hole lands on what is already there.
+    scene.background = Vec4::new(0.0, 0.0, 0.0, 1.0);
     // One node, so one row — the strip follows the scene it is handed.
     scene.glow_rows = 1;
     scene.pluses.clear();
@@ -705,10 +710,12 @@ pub(super) fn angle_apart(a: f64, b: f64) -> f64 {
 }
 
 /// How far past its own body the clearing in the tests below reaches, in the uv
-/// of a full-size node, and — through `sevens_soft` at 0 — how gradually it
-/// gets there: not at all. A hard rim lands on a pixel or two, where the fade
-/// the app ships spreads it over the dozen a reading would then have to pick a
-/// level out of.
+/// of a node — the Gap, which is what the hole is measured in
+/// (`ViewConfig::glow_gap`) — and, through the fade at 0, how gradually it gets
+/// there: barely. What is left under that handle is `GAP_SOFT_FLOOR`, a
+/// fiftieth of a node, so the coverage is solid to within that of the reach and
+/// its tail is spent inside another one. The fade the app ships spreads the same
+/// drop over the dozen pixels a reading would then have to pick a level out of.
 pub(super) const CLEAR_REACH: f32 = 0.30;
 
 /// The audio ring's width for the clearing probe, standing in for the fresh
@@ -743,7 +750,10 @@ pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
 /// names the slot its mark extends (0 for no mark), `ring` how much of its audio
 /// ring the view's Gate leaves it, `band` whether the octave band is on, and
-/// `gutter` the clearing's reach (0 for none).
+/// `gap` the Gap the hole is cut at (0 for none).
+///
+/// The Gap is the VIEW's, so it is set on the scene rather than on the node —
+/// every node a fixture adds beside this one clears at the same reach.
 ///
 /// The ground is WHITE where the app clears to the pane's own panel: every
 /// reading below is "what changed when the gutter was turned on", and a bright
@@ -753,7 +763,7 @@ pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// The node is drawn small enough for its clearing to fit in the frame — the
 /// hole reaches a third of a node past a mark that already stands outside every
 /// ring.
-pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
+pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, gap: f32) -> Scene {
     let rings = clearing_rings();
     let mut scene = single_marked_node(melody, 0);
     scene.background = glam::Vec4::ONE;
@@ -772,10 +782,9 @@ pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> 
     // leaves it where it is.
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
-    scene.sevens_soft = 0.0;
-    let node = &mut scene.nodes[0];
-    node.gutter = gutter;
-    node.audio_ring = ring;
+    scene.glow_gap = gap;
+    scene.glow_gap_soft = 0.0;
+    scene.nodes[0].audio_ring = ring;
     scene
 }
 
