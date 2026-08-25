@@ -439,6 +439,12 @@ impl TextBatch {
     /// recessed surface (`theme::well`), which contrasts with any text color
     /// by construction; a transparent one draws the glyphs bare.
     ///
+    /// Both colors' ALPHA is the label's strength, and each is worth it in
+    /// full: a rim at half covers half, exactly as the fill does, so fading
+    /// the pair together fades one thing (`fs_rim` in `harmonigraph_render`'s
+    /// text shader). Fading only the fill leaves the halo behind, and the
+    /// halo is the letter's own shape in the skin's darkest color.
+    ///
     /// egui does the work that decides what the pixels are — shaping,
     /// rasterizing, and placing every glyph — and this reads the placement
     /// back out of the galley. The rect and rounding below are exactly what

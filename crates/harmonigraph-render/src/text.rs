@@ -1401,6 +1401,52 @@ pub(crate) mod tests {
         assert!(one[3].abs_diff(128) <= 2, "one half-alpha sample should read 50%, got {one:?}",);
     }
 
+    /// A rim is worth its color's alpha, which is the label's strength: half
+    /// the strength, half the halo.
+    ///
+    /// The reading the picture can be held to, since it is the fill's — a
+    /// glyph at half strength covers half — and the two have to agree or a
+    /// fading name is not one thing fading. Where they do not, the halo is a
+    /// dilation of the letter's own shape in the skin's darkest color, so
+    /// what stands after the ink has gone is the name as a black silhouette.
+    ///
+    /// Measured against the halo the panes draw rather than a fixture's, the
+    /// sample counts being what decides how far apart the two readings get:
+    /// with the strength inside the accumulation these read 255, 255, 250 and
+    /// 196 against the ink's own 255, 128, 64 and 26.
+    #[test]
+    fn a_faded_label_takes_its_halo_with_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // `RINGS` in `harmonigraph_ui::text`, which is the pair every pane
+        // here draws its labels with.
+        let rings = [
+            TextRing { radius: 2.0, alpha: 0.21, samples: 8 },
+            TextRing { radius: 1.2, alpha: 1.0, samples: 12 },
+        ];
+        // The rim's own pass, with no fill over it: a pixel inside the letter
+        // is covered by both, and what is being asked for is one of them.
+        let rim_at = |strength: f32| {
+            let a = (strength * 255.0).round() as u8;
+            let faded = GlyphInstance { fill: [0, 0, 0, 0], rim: [a, 0, 0, a], ..glyph() };
+            pixel(&draw(&device, &queue, faded, rings), 28, 28)[3]
+        };
+        // Every strength read before anything is asserted, so a failure
+        // reports the whole curve: what the shape of the disagreement is says
+        // where the level is being spent, and one reading does not carry it.
+        let read: Vec<(f32, u8, u8)> = [1.0f32, 0.5, 0.25, 0.1]
+            .into_iter()
+            // The ink's own arithmetic is `in.fill * coverage`, at a coverage
+            // of one — this fixture's patch being opaque.
+            .map(|strength| (strength, (strength * 255.0).round() as u8, rim_at(strength)))
+            .collect();
+        assert!(
+            read.iter().all(|(_, ink, rim)| rim.abs_diff(*ink) <= 2),
+            "a rim should read what its ink does at every strength, got {read:?}",
+        );
+    }
+
     /// A label that slides moves smoothly: over a whole physical pixel of
     /// travel, no pixel of the picture moves further in one step than the
     /// step itself can account for.
