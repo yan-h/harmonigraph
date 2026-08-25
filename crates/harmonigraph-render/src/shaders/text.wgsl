@@ -327,11 +327,25 @@ fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
 }
 
 /// Accumulate one ring of the rim: `1 - PRODUCT(1 - alpha * coverage)`,
-/// which is what stamping the text around that ring composites to.
+/// which is the shape stamping the text around that ring composites to.
 ///
-/// `alpha` is the ring's own opacity TIMES the rim color's, because that is
-/// what a stamp carried: the color handed in is already faded by the label's
-/// strength, and each stamp was drawn in it.
+/// `alpha` is the ring's own opacity ALONE. The rim color's own alpha is the
+/// label's strength, and it lands on what this returns instead ([`fs_rim`]) —
+/// the one place the rim parts company with what stamping did, and
+/// deliberately, because stamping is wrong here. A strength inside the
+/// product is spent once per STAMP, and there are twenty of them: the label's
+/// level reaches the pixel as `1 - PRODUCT(1 - alpha * s)` where its fill
+/// reaches it as `s`, so a name a tenth of the way through its release still
+/// draws three quarters of its halo while its ink draws a tenth of itself.
+/// The halo IS the letter's shape dilated, so what that paints is the name as
+/// a near-black letter with a ghost of white inside it, holding until the
+/// last frames and then letting go at once.
+///
+/// On the accumulated opacity it is what the fill's own alpha already is: a
+/// rim at half strength covers half. The RING's opacity stays here, that
+/// being the halo's construction rather than the label's level — the tuned
+/// pair of sample counts (`RINGS` in `harmonigraph_ui::text`) mean what they
+/// meant, and a label at full strength composites to the pixel it did.
 fn ring(in: VertexOut, spec: vec4<f32>, acc: f32) -> f32 {
     let samples = i32(spec.z + 0.5);
     if samples <= 0 {
@@ -344,7 +358,7 @@ fn ring(in: VertexOut, spec: vec4<f32>, acc: f32) -> f32 {
         // The stamp is the glyph drawn at +offset, so the fragment reads the
         // glyph at -offset to ask whether that stamp covers it.
         let off = vec2<f32>(cos(angle), sin(angle)) * radius;
-        open = open * (1.0 - spec.y * in.rim.a * coverage(in, in.texel - off));
+        open = open * (1.0 - spec.y * coverage(in, in.texel - off));
     }
     return 1.0 - open;
 }
@@ -358,15 +372,15 @@ fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
     if in.rim.a <= 0.0 {
         discard;
     }
-    var alpha = ring(in, locals.ring0, 0.0);
-    alpha = ring(in, locals.ring1, alpha);
-    if alpha <= 0.0 {
+    var cov = ring(in, locals.ring0, 0.0);
+    cov = ring(in, locals.ring1, cov);
+    if cov <= 0.0 {
         discard;
     }
-    // `rim` arrives premultiplied and its alpha is already inside the
-    // accumulation, so the hue is what is left to scale: un-premultiply,
-    // take the accumulated opacity, premultiply back.
-    return vec4<f32>(in.rim.rgb / in.rim.a * alpha, alpha);
+    // Where the rim color's alpha is spent (see [`ring`]), and a scale of
+    // BOTH halves because `rim` arrives premultiplied: one number over the
+    // pair is the operation that leaves it so.
+    return in.rim * cov;
 }
 
 /// The glyphs themselves, over the rim.
