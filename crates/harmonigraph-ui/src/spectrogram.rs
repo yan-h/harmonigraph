@@ -2657,8 +2657,9 @@ mod tests {
         // demonstrate nothing.
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
-                              // Long enough that nothing scrolls out: the whole run stays in window,
-                              // so any mismatch is the merge and not the front trim.
+
+        // Long enough that nothing scrolls out: the whole run stays in window,
+        // so any mismatch is the merge and not the front trim.
         let window_span = 60.0;
         let columns = crate::SpectrumHistory::FINE_COLUMNS + 64;
 
@@ -4239,22 +4240,24 @@ mod tests {
             assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
         };
         styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
-                                                   // The coarse read: a gesture image's wide rows are a max, not the
-                                                   // mean, so its floor sits high — the settle must repaint, not carry.
-                                                   // On a pane short enough that the gesture never caps its rows, this
-                                                   // flag is the ONLY field the settle moves, so it is additionally
-                                                   // pinned to the reason `differs` files it under.
+
+        // The coarse read: a gesture image's wide rows are a max, not the
+        // mean, so its floor sits high — the settle must repaint, not carry.
+        // On a pane short enough that the gesture never caps its rows, this
+        // flag is the ONLY field the settle moves, so it is additionally
+        // pinned to the reason `differs` files it under.
         let coarse = ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg);
         assert_eq!(base_style().differs(&coarse), Some(Restart::Rows));
         styled(coarse);
         styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
         styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
-                                                   // Every colour input, one at a time: the palette, either end of the
-                                                   // Level window, or the tilt recolours every pixel without moving a
-                                                   // column. Spelled out one by one because [`ColumnColor`] is a list kept
-                                                   // by hand, and a field left off it is a WRONG picture — which, unlike a
-                                                   // slow one, no frame counter reports.
+
+        // Every colour input, one at a time: the palette, either end of the
+        // Level window, or the tilt recolours every pixel without moving a
+        // column. Spelled out one by one because [`ColumnColor`] is a list kept
+        // by hand, and a field left off it is a WRONG picture — which, unlike a
+        // slow one, no frame counter reports.
         let recoloured = |edit: fn(&mut SpectrumConfig)| {
             let mut c = cfg;
             edit(&mut c);
@@ -4293,16 +4296,17 @@ mod tests {
         };
         carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
         carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
-                                              // And the hue pair at NO CHROMA, which is the Mono preset and the one
-                                              // place a gradient knob decides nothing. `chroma_at` is 0 at every
-                                              // level, so the absolute chroma is 0 whatever the hue, and Oklab's `a`
-                                              // and `b` are `c * cos(h)` and `c * sin(h)` — identically 0. Every texel
-                                              // is the same grey at every angle.
-                                              //
-                                              // Which makes the spectrum bar's track a control that redraws the whole
-                                              // heatmap per frame while changing not one byte of it, and the track is
-                                              // a DRAG. That is the shape [`ColumnStyle`] names as the cost that went
-                                              // unnoticed, reached here through the one gradient that has no hue.
+
+        // And the hue pair at NO CHROMA, which is the Mono preset and the one
+        // place a gradient knob decides nothing. `chroma_at` is 0 at every
+        // level, so the absolute chroma is 0 whatever the hue, and Oklab's `a`
+        // and `b` are `c * cos(h)` and `c * sin(h)` — identically 0. Every texel
+        // is the same grey at every angle.
+        //
+        // Which makes the spectrum bar's track a control that redraws the whole
+        // heatmap per frame while changing not one byte of it, and the track is
+        // a DRAG. That is the shape [`ColumnStyle`] names as the cost that went
+        // unnoticed, reached here through the one gradient that has no hue.
         let mono = crate::SpectrogramPreset::Mono.gradient();
         let toneless = SpectrumConfig { spectrogram_gradient: mono, ..cfg };
         for turned in [30.0f32, 180.0, 359.0] {

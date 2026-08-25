@@ -838,7 +838,8 @@ mod tests {
     fn tuning_bends_pitch_class_and_octave() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60)); // C4
-                                           // Bend up a whole tone: D, still octave 4.
+
+        // Bend up a whole tone: D, still octave 4.
         tracker.handle_event(NoteEvent {
             time: 0.1,
             channel: 0,
@@ -915,7 +916,8 @@ mod tests {
         assert_eq!(released.activation(12.0, &fade(2.0)), 0.0); // fully faded
         assert_eq!(released.activation(20.0, &fade(2.0)), 0.0); // clamps, not negative
         assert_eq!(released.activation(9.0, &fade(2.0)), 1.0); // `now` before release
-                                                               // A non-positive fade time releases instantly (guards div-by-zero).
+
+        // A non-positive fade time releases instantly (guards div-by-zero).
         assert_eq!(released.activation(10.0, &fade(0.0)), 0.0);
         assert_eq!(released.activation(10.0, &fade(-1.0)), 0.0);
     }

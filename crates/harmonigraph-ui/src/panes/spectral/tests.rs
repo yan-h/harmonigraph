@@ -2637,9 +2637,10 @@ fn paint(
     state.spectrum_config.roll_fraction = roll_fraction;
     state.spectrum_config.roll_seconds = 10.0;
     state.view.bloom_strength = 1.2; // exercise the note-glow passes
-                                     // Exercise the spectrogram's mesh path in every orientation too, with
-                                     // energy at both axis extremes (where cell clamping is most likely to
-                                     // fold a quad to zero area — which egui panics on).
+
+    // Exercise the spectrogram's mesh path in every orientation too, with
+    // energy at both axis extremes (where cell clamping is most likely to
+    // fold a quad to zero area — which egui panics on).
     state.spectrum_config.show_spectrogram = true;
     let mut spectrum_bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
     spectrum_bins[0] = 1.0;

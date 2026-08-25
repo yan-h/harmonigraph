@@ -921,8 +921,9 @@ fn held_note_lights_matching_nodes() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0)); // C4: pitch class 0, octave 4
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-                                    // Sampled past the view's attack: every layer of a node eases in, so at
-                                    // the note-on instant itself the whole thing is still at zero.
+
+    // Sampled past the view's attack: every layer of a node eases in, so at
+    // the note-on instant itself the whole thing is still at zero.
     let scene = scene_of(&tracker, &tuning, &ViewConfig::default(), &plain_frame(), 0.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0);

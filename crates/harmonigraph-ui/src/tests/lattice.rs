@@ -117,8 +117,9 @@ fn learn_disables_meantone_from_a_just_triad() {
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.meantone = true; // start engaged
-                                // C + a JUST major third (386.31¢) + G. The just third sits a full
-                                // syntonic comma below four fifths, so this is not a meantone.
+
+    // C + a JUST major third (386.31¢) + G. The just third sits a full
+    // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
     learn_step(&mut state, &backend);
