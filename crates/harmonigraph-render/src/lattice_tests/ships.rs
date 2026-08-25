@@ -80,13 +80,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // A WIDER clearing than the fixture's own, which is what reaches
     // `node_clearing`'s skip: the clearing's shape is the rings' disc unioned
     // with one wedge per mark, and inside that disc the walk over the wedges is
-    // skipped as an answer already arrived at. At the Gap `parity_scene` ships,
+    // skipped as an answer already arrived at. At the Shadow `parity_scene` ships,
     // a marked node's wedge stands outside the disc over most of its own
     // sector, so the skip is compiled on both pipelines and rarely decides
     // anything; a reach this wide swallows the strip and takes it.
     let clearing = || {
         let mut scene = parity_scene();
-        scene.glow_gap = 0.6;
+        scene.glow_shadow = 0.6;
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside
@@ -101,7 +101,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
     // skip — the same one as `node_clearing`'s, over the same wedges, taken
     // once the band has held the pixel's light off in full. The REACH is what
-    // puts it in the comparison at all, and no fixture above has one: the Gap
+    // puts it in the comparison at all, and no fixture above has one: the Shadow
     // dials ride to the GPU only while the light does (`misc11` is zeroed at
     // reach 0), and there is no light draw to compare without a glow target
     // for it to write into. Both are the same switch, which is why one line
@@ -135,14 +135,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene
     };
     // A marker casting a standoff at all, which is what gives `fs_plus_glow`'s
-    // early-out something to keep: every fragment inside a cross's own Gap is
-    // one the switch must not discard. The fixtures above sit at the fresh Gap,
+    // early-out something to keep: every fragment inside a cross's own Shadow is
+    // one the switch must not discard. The fixtures above sit at the fresh Shadow,
     // where the shadow is a rind on the ink and a sampling of pixels can miss
     // it whole.
     let marker_standoff = || {
         let mut scene = standing_off();
-        scene.glow_gap = 1.0;
-        scene.glow_gap_soft = 1.0;
+        scene.glow_shadow = 1.0;
+        scene.glow_shadow_soft = 1.0;
         scene
     };
     // No all-idle fixture: an idle node paints nothing, so the cull ships

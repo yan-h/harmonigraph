@@ -83,7 +83,7 @@ pub(super) fn parity_scene() -> Scene {
             on_home: i % 2 == 0,
             // The off-sheet half draws small, so the every-draw-path scene
             // exercises the scaled billboard as well. What every node here
-            // knocks out is `parity_scene`'s own Gap.
+            // knocks out is `parity_scene`'s own Shadow.
             scale: if i % 2 == 0 { 1.0 } else { 0.55 },
             comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
@@ -131,7 +131,7 @@ pub(super) fn parity_scene() -> Scene {
         camera: harmonigraph_scene::Camera::default(),
         now: 1.25,
         // The ground the knockout clears to, which every node in this scene
-        // paints — the Gap is one number for the view (`parity_scene`).
+        // paints — the Shadow is one number for the view (`parity_scene`).
         background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
@@ -209,10 +209,10 @@ pub(super) fn parity_scene() -> Scene {
         glow_meld: 1.0,
         // The fresh standoff and the shares that shape the light inside it and
         // over the node's own ink, inert at reach 0 and here to say so.
-        glow_gap: 0.16,
-        glow_gap_soft: 0.16,
-        glow_gap_shape: 1.0,
-        glow_gap_depth: 0.85,
+        glow_shadow: 0.16,
+        glow_shadow_soft: 0.16,
+        glow_shadow_shape: 1.0,
+        glow_shadow_depth: 0.85,
         glow_wash: 0.15,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
@@ -460,7 +460,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // this fixture is of the node's own ink or of the light around it. Painting
     // the pane's own well instead would put the hole into every one of them —
     // as a ground lifted off black under a fading slice, and as pixels an ink
-    // mask counts as inked a couple of Gaps past where the ink ends. Against
+    // mask counts as inked a couple of Shadow widths past where the ink ends. Against
     // the clear colour the hole lands on what is already there.
     scene.background = Vec4::new(0.0, 0.0, 0.0, 1.0);
     // One node, so one row — the strip follows the scene it is handed.
@@ -471,7 +471,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     scene.node_radius = 1.1;
     // The one uv both fields are in (`marker_world`): a marker's unit IS the
     // node's radius through this factor, so a scene that sets one and not the
-    // other is a scene `derive_scene` cannot build — and every Gap in it is two
+    // other is a scene `derive_scene` cannot build — and every Shadow in it is two
     // different world distances, one for a ring and one for a cross.
     scene.marker_unit = scene.node_radius * 1.8;
     scene
@@ -708,9 +708,9 @@ pub(super) fn angle_apart(a: f64, b: f64) -> f64 {
 }
 
 /// How far past its own body the clearing in the tests below reaches, in the uv
-/// of a node — the Gap, which is what the hole is measured in
-/// (`ViewConfig::glow_gap`) — and, through the fade at 0, how gradually it gets
-/// there: barely. What is left under that handle is `GAP_SOFT_FLOOR`, a
+/// of a node — the Shadow, which is what the hole is measured in
+/// (`ViewConfig::glow_shadow`) — and, through the fade at 0, how gradually it gets
+/// there: barely. What is left under that handle is `SHADOW_SOFT_FLOOR`, a
 /// fiftieth of a node, so the coverage is solid to within that of the reach and
 /// its tail is spent inside another one. The fade the app ships spreads the same
 /// drop over the dozen pixels a reading would then have to pick a level out of.
@@ -748,9 +748,9 @@ pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
 /// names the slot its mark extends (0 for no mark), `ring` how much of its audio
 /// ring the view's Gate leaves it, `band` whether the octave band is on, and
-/// `gap` the Gap the hole is cut at (0 for none).
+/// `shadow` the Shadow the hole is cut at (0 for none).
 ///
-/// The Gap is the VIEW's, so it is set on the scene rather than on the node —
+/// The Shadow is the VIEW's, so it is set on the scene rather than on the node —
 /// every node a fixture adds beside this one clears at the same reach.
 ///
 /// The ground is WHITE where the app clears to the pane's own panel: every
@@ -761,7 +761,7 @@ pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// The node is drawn small enough for its clearing to fit in the frame — the
 /// hole reaches a third of a node past a mark that already stands outside every
 /// ring.
-pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, gap: f32) -> Scene {
+pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, shadow: f32) -> Scene {
     let rings = clearing_rings();
     let mut scene = single_marked_node(melody, 0);
     scene.background = glam::Vec4::ONE;
@@ -780,8 +780,8 @@ pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, gap: f32) -> Sce
     // leaves it where it is.
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
-    scene.glow_gap = gap;
-    scene.glow_gap_soft = 0.0;
+    scene.glow_shadow = shadow;
+    scene.glow_shadow_soft = 0.0;
     scene.nodes[0].audio_ring = ring;
     scene
 }
@@ -845,7 +845,7 @@ pub(super) fn idle_scene() -> Scene {
 ///
 /// The only light in the frame is the node's, so a pixel the markers darken is
 /// a pixel where a marker held a node's halo off — the melded field.
-pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
+pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Scene {
     let mut scene = single_marked_node(0, 0);
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
@@ -858,9 +858,9 @@ pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene 
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
     scene.glow_feather = 1.0;
-    scene.glow_gap = gap;
-    scene.glow_gap_soft = gap;
-    scene.glow_gap_depth = depth;
+    scene.glow_shadow = shadow;
+    scene.glow_shadow_soft = shadow;
+    scene.glow_shadow_depth = depth;
     scene.plus_taper_start = taper_start;
     // Four markers out where the node's halo still reaches and its own standoff
     // does not. The distance is the fixture's one delicate number: the shade
@@ -873,8 +873,8 @@ pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene 
     scene
 }
 
-/// ONE square-ended marker standing out in the node's halo, with the Gap
-/// dialled to `gap` and the standoff switched by `depth`.
+/// ONE square-ended marker standing out in the node's halo, with the Shadow
+/// dialled to `shadow` and the standoff switched by `depth`.
 ///
 /// [`shadowed_markers`] with its four crosses replaced by one, so a reading can
 /// walk out from a single cross along the centre row and meet nothing else. The
@@ -885,8 +885,8 @@ pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene 
 /// It stands to the node's RIGHT, which is where a reading walks: away from the
 /// node, so the half of the frame being measured holds no other ink and no
 /// other shadow.
-pub(super) fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
-    let mut scene = shadowed_markers(depth, gap, 1.0);
+pub(super) fn lone_shadowed_marker(arm: f32, shadow: f32, depth: f32) -> Scene {
+    let mut scene = shadowed_markers(depth, shadow, 1.0);
     scene.pluses =
         vec![one_marker(glam::Vec3::new(LONE_OFFSET, 0.0, 0.0), arm, scene.lattice_ground, 1.0)];
     scene

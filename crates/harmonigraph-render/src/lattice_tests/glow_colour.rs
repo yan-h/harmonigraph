@@ -4,7 +4,7 @@ use super::fixtures::*;
 use crate::gpu_harness::headless_device;
 use crate::*;
 
-/// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare
+/// A ring WEARS THE WASH inside a pool the Shadow depth has cleared to the bare
 /// ground: the two are one field asked for twice, and the answers are free of
 /// each other.
 ///
@@ -29,7 +29,7 @@ use crate::*;
 /// arithmetic (`node_paint`): the ink takes the light as a screen, so every
 /// channel it moves it moves up.
 ///
-/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
+/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
 /// probe is the other side of this boundary — that pixel is outside the node's
 /// ink and these are inside it, and neither bar answers for both.
 ///
@@ -63,12 +63,12 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = 0.16;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = 0.16;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = 0.16;
+        // The fade the whole width of the shadow, which is the fresh pair.
+        scene.glow_shadow_soft = 0.16;
+        scene.glow_shadow_depth = depth;
         scene.glow_wash = wash;
-        scene.glow_gap = 0.16;
+        scene.glow_shadow = 0.16;
         scene
     };
     let mut on_ground = |bg: glam::Vec4| {

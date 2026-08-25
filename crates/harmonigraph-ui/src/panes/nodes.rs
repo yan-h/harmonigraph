@@ -15,8 +15,8 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX, GLOW_REACH_MAX,
-    GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
+    GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
@@ -488,7 +488,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 }
 
 /// Note: what the whole node does rather than any one layer of it — the time
-/// it takes to arrive and leave, the curve it runs on, and the gap it clears
+/// it takes to arrive and leave, the curve it runs on, and the shadow it clears
 /// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
@@ -605,7 +605,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              the node's radius. 0 closes the ring into a solid annulus.",
         );
     // What a node CLEARS around itself is not here: it is the Glow section's
-    // Gap directly below, which is one length for the hole and the shadow laid
+    // Shadow directly below, which is one length for the hole and the shadow laid
     // over it. A bar of its own here would be the same distance said twice.
     //
     // The glow is NOT here either, though it is the whole node's as everything
@@ -735,20 +735,20 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // between them. The same widget, because it is the same shape of
         // setting: two distances from one edge, and a fill that draws the
         // edge it sets. Two bars apiece would say the fade in a unit of its
-        // own with nothing on screen relating it to the gap it is spent in,
-        // and a fade is only ever read against its gap.
+        // own with nothing on screen relating it to the width it is spent in,
+        // and a fade is only ever read against that width.
         //
         // Read out like the two gaps and the Clearance: every one of them is
         // a share of the node's radius, so a person comparing them is
         // comparing one unit. A tenth of a percent, as the gaps are.
         edge_bar(
             ui,
-            (&mut view.glow_gap, &mut view.glow_gap_soft),
-            GLOW_GAP_MAX,
-            "Gap",
+            (&mut view.glow_shadow, &mut view.glow_shadow_soft),
+            GLOW_SHADOW_MAX,
+            "Shadow",
             {
                 let fresh = ViewConfig::default();
-                (fresh.glow_gap, fresh.glow_gap_soft)
+                (fresh.glow_shadow, fresh.glow_shadow_soft)
             },
             |v| format!("{:.1}%", v * 100.0),
         )
@@ -757,8 +757,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              audio ring, octave band and marks, and the cross standing at each \
              resting position — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
-             the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. It holds off the \
+             the inner to the left edge to fade the whole width, which is what \
+             keeps a wide shadow from reading as a black ring. It holds off the \
              light wherever that light reaches, a neighbour's halo as much as \
              the node's own, and however little the node's Clearance covers. \
              The node's own ink is untouched at any setting — what the ink \
@@ -772,35 +772,35 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // Note's Fade curve, which is the same kind of bar: the light coming
         // back across the fade, from the ring's edge at the left to the halo at
         // the right.
-        ValueBar::new(&mut view.glow_gap_shape, 0.0..=1.0, "Gap curve")
+        ValueBar::new(&mut view.glow_shadow_shape, 0.0..=1.0, "Shadow curve")
             .curve(harmonigraph_scene::standoff_recovery)
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "Where inside the Gap's fade the light is given back, drawn as \
+                "Where inside the Shadow's fade the light is given back, drawn as \
                  the light coming back from the ring's edge out to the halo. \
                  100% comes off the ring at the rate the light itself comes \
-                 off everything, so the gap and the halo read as one blur, and \
+                 off everything, so the shadow and the halo read as one blur, and \
                  it is the top because past it the shade turns over at a \
                  radius and reads as an annulus drawn round the node. Lower \
                  gives the light back nearer the ink and leaves the rest of \
                  the width a haze, until the dark is a rind on the ring — with \
-                 the fade set narrower than the gap, that handing-back is a \
+                 the fade set narrower than the shadow, that handing-back is a \
                  hard circle where the fade begins. It moves no boundary — the \
-                 Gap's handles still say where the standoff is. Dial it with \
+                 Shadow's handles still say where the standoff is. Dial it with \
                  the depth below: a tail is the faint end of the fade, so a \
                  shallow depth loses it and a full one turns it into a void.",
             );
-        ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Gap depth")
+        ValueBar::new(&mut view.glow_shadow_depth, 0.0..=1.0, "Shadow depth")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the gap takes away, on the ground the \
+                "How much of the light the shadow takes away, on the ground the \
                  node's Clearance paints. 100% clears to the bare ground — \
-                 where the gap is solid, the ground is exactly what it is \
+                 where the shadow is solid, the ground is exactly what it is \
                  with the glow off — and lower leaves the rings sitting in a \
                  dimmer pool of their own light rather than in a void. 0% is \
-                 the picture with no gap at all. What the rings themselves \
+                 the picture with no shadow at all. What the rings themselves \
                  wear of that light is the Wash below, which this does not \
                  touch.",
             );
@@ -820,7 +820,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  the colour of the halo around it, so the node reads as a \
                  shape inside its light rather than a silhouette cut out of \
                  it, and a marker inside a halo stops reading as a hole in it. \
-                 It reads the light before the gap takes any, so it is free of \
+                 It reads the light before the shadow takes any, so it is free of \
                  the depth above — a full depth with a wash on it is a ring \
                  standing in a dark pool and still wearing the halo's colour — \
                  and far enough up it inverts, the ink brighter than the \

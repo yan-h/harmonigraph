@@ -1,9 +1,9 @@
-//! The Gap: how far a ring holds light off itself, and how that decays.
+//! The Shadow: how far a ring holds light off itself, and how that decays.
 
 use super::fixtures::*;
 use crate::*;
 
-/// A node STANDS ITS LIGHT OFF the rings it draws, and the Gap depth is the
+/// A node STANDS ITS LIGHT OFF the rings it draws, and the Shadow depth is the
 /// one switch on it.
 ///
 /// The standoff is a term of the node's own clearing rather than a hole cut in
@@ -25,10 +25,10 @@ use crate::*;
 /// at 0, and no pixel anywhere in the frame is brighter, the term the depth
 /// scales being a factor on light that was going to be laid down anyway. And a
 /// depth of 0 is the whole feature off: the frame is byte for byte the same at
-/// any Gap, which is the one place the four dials can be proved not to leak
+/// any Shadow, which is the one place the four dials can be proved not to leak
 /// into a picture that is supposed to have no standoff in it.
 ///
-/// A Gap of 0 is deliberately NOT the off position and is not compared here: it
+/// A Shadow of 0 is deliberately NOT the off position and is not compared here: it
 /// is a standoff whose fade has collapsed onto the ring's own annulus, which is
 /// a CRISPER one, not an absent one.
 ///
@@ -39,12 +39,12 @@ use crate::*;
 /// is the scale everything below is measured in, so the probe follows the
 /// fixture instead of naming a pixel.
 #[test]
-fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
+fn the_shadow_depth_says_how_much_light_a_ring_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |reach: f32, gap: f32, depth: f32| -> Scene {
+    let at = |reach: f32, shadow: f32, depth: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -54,16 +54,16 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = gap;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = gap;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = shadow;
+        // The fade the whole width of the shadow, which is the fresh pair.
+        scene.glow_shadow_soft = shadow;
+        scene.glow_shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
     let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
 
-    // The scale: the node's own ink with nothing around it. This shot's Gap is
+    // The scale: the node's own ink with nothing around it. This shot's Shadow is
     // 0, so there is no clearing painting the ground out past the ink and the
     // furthest inked pixel is where the INK stops.
     let bare = at(0.0, 0.0, 0.0);
@@ -73,7 +73,7 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         .rfind(|&x| inked(&plain, centre + x))
         .expect("the fixture's node must ink something along +x");
     assert!(band_px > 20, "the node inked only {band_px}px of radius; there is nothing to read");
-    // Half a Gap past the band's outer edge: the standoff is solid there and
+    // Half a Shadow past the band's outer edge: the standoff is solid there and
     // the node inks nothing, so the whole of the difference below is light.
     let probe = centre + (band_px as f32 * (1.0 + 0.08 / bare.rings_outer)).round() as usize;
     assert!(
@@ -110,10 +110,10 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     // since the clearing at full coverage replaces what is under it and a
     // factor of 0 on the light is no light. The fade is taken off for this pair
     // of shots so the probe sits in a solid band rather than on the ramp; what
-    // is left under the handle is `GAP_SOFT_FLOOR`, well inside the probe.
+    // is left under the handle is `SHADOW_SOFT_FLOOR`, well inside the probe.
     let solid = |reach: f32| {
         let mut scene = at(reach, 0.16, 1.0);
-        scene.glow_gap_soft = 0.0;
+        scene.glow_shadow_soft = 0.0;
         scene
     };
     let bare_ground = shooter.shot(&solid(0.8));
@@ -124,18 +124,18 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         "at a depth of 1 the stood-off pixel is not the frame with no glow in it",
     );
 
-    // And the depth is the whole switch ON THE LIGHT: at 0 the Gap and its
+    // And the depth is the whole switch ON THE LIGHT: at 0 the Shadow and its
     // curve take none of it anywhere, at any width.
     //
-    // COLOUR and not the whole pixel, because the Gap is two lengths in one —
+    // COLOUR and not the whole pixel, because the Shadow is two lengths in one —
     // the standoff's and the KNOCKOUT's (`node_clearing`) — and the hole is cut
     // at every depth. What a wider hole moves here is its own coverage, which
     // is the alpha; what it paints is the light and ground already standing at
     // the pixel, so no channel of the colour moves with it. That the hole
-    // FOLLOWS the Gap — and that it is cut with no light in the picture at all
+    // FOLLOWS the Shadow — and that it is cut with no light in the picture at all
     // — is `a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet`.
-    for (name, gap) in [("no gap", 0.0), ("a wide gap", 0.5)] {
-        let other = shooter.shot(&at(0.8, gap, 0.0));
+    for (name, shadow) in [("no shadow", 0.0), ("a wide shadow", 0.5)] {
+        let other = shooter.shot(&at(0.8, shadow, 0.0));
         let worst = other
             .chunks(4)
             .zip(flat.chunks(4))
@@ -151,10 +151,10 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
 }
 
 /// The standoff does not stop at the handle it is dialled to: it is still
-/// taking light a tenth of a Gap PAST the Gap bar's outer handle, and less of
+/// taking light a tenth of a Shadow PAST the Shadow bar's outer handle, and less of
 /// it further out again.
 ///
-/// Where it DOES end is a couple of Gaps out, far enough past this to be a
+/// Where it DOES end is a couple of Shadow widths out, far enough past this to be a
 /// different question — [`the_standoff_ends_before_its_own_billboard`] is that
 /// one, and the two together are the whole shape of the tail.
 ///
@@ -178,9 +178,9 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
 /// (`glow_shade`), and the curve's bottom is the plain exponential. The shape
 /// is the same at every setting; what changes is whether a byte can hold it.
 #[test]
-fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
+fn the_standoff_reaches_past_the_shadow_it_is_dialled_to() {
     const SIZE: [u32; 2] = [256, 256];
-    const GAP: f32 = 0.34;
+    const SHADOW: f32 = 0.34;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -194,17 +194,17 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
         };
         scene.glow_reach = 2.5;
         scene.glow_strength = 2.0;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_shape = 0.0;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_shape = 0.0;
+        scene.glow_shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
     let (cx, cy) = ((SIZE[0] / 2) as usize, (SIZE[1] / 2) as usize);
     let centre = cy * row + cx;
 
-    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
+    // The scale, as `the_shadow_depth_says_how_much_light_a_ring_stands_off` takes
     // it: the outermost pixel the node inks along +x is the band's outer edge,
     // which is `rings_outer` in the node's own uv.
     let bare = at(0.0);
@@ -217,12 +217,12 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
     let band_px = (1..(SIZE[0] / 2) as usize)
         .rfind(|&x| inked(&plain, centre + x))
         .expect("the fixture's node must ink something along +x");
-    let gap_px = band_px as f32 * GAP / bare.rings_outer;
+    let shadow_px = band_px as f32 * SHADOW / bare.rings_outer;
 
     let flat = shooter.shot(&at(0.0));
     let stood_off = shooter.shot(&at(1.0));
     // What the standoff took per lit pixel, over the ring of pixels standing
-    // between `from` and `to` Gaps out from the band's own edge.
+    // between `from` and `to` Shadow widths out from the band's own edge.
     let took = |from: f32, to: f32| -> (f64, usize) {
         let (mut sum, mut n) = (0i64, 0usize);
         for y in 0..SIZE[1] as usize {
@@ -230,7 +230,7 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
                 let i = y * row + x;
                 let dx = x as f32 - cx as f32;
                 let dy = y as f32 - cy as f32;
-                let g = ((dx * dx + dy * dy).sqrt() - band_px as f32) / gap_px;
+                let g = ((dx * dx + dy * dy).sqrt() - band_px as f32) / shadow_px;
                 if g < from || g >= to || inked(&plain, i) {
                     continue;
                 }
@@ -247,18 +247,18 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
     assert!(near_n > 200 && far_n > 200, "the annuli hold {near_n} and {far_n} pixels to read");
     assert!(
         near > 0.5,
-        "the standoff stopped at the Gap's own handle: a tenth of a Gap past it, it took \
+        "the standoff stopped at the Shadow's own handle: a tenth of a Shadow past it, it took \
          {near:.2} of a code value per pixel",
     );
     assert!(
         far > 0.0 && far < near,
-        "the standoff took {far:.2} per pixel out at a Gap and a half against {near:.2} just \
+        "the standoff took {far:.2} per pixel out at a Shadow and a half against {near:.2} just \
          past one, which is a wider band rather than a decay",
     );
 }
 
 /// The standoff ENDS before the billboard it is drawn on does: past
-/// [`GAP_STOP`] Gaps from the node's outermost ink there is no bite left at
+/// [`SHADOW_STOP`] Shadow widths from the node's outermost ink there is no bite left at
 /// all, at the curve's floor where the tail is fattest.
 ///
 /// The other half of the decay's claim, and the half a quad forces on it. A
@@ -271,10 +271,10 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
 ///
 /// The curve's FLOOR is where this bites, and the ceiling is why it was ever
 /// safe to leave: `exp(-T u^p)` is under half a code value of the deepest light
-/// by two Gaps at the plain exponential and by seventeen at GAP_SHAPE_RIND, so
+/// by two Shadow widths at the plain exponential and by seventeen at SHADOW_SHAPE_RIND, so
 /// the tail below the exponential is the one the quad cannot afford to hold
 /// honestly. `standoff_coverage`'s own window is what ends it, and
-/// `glow_gap_stop` is what sizes both billboards to hold what is left.
+/// `glow_shadow_stop` is what sizes both billboards to hold what is left.
 ///
 /// Measured from the outermost pixel the node inks in ANY direction, which is
 /// what makes the annulus outside every ring the node draws rather than outside
@@ -284,8 +284,8 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
 #[test]
 fn the_standoff_ends_before_its_own_billboard() {
     const SIZE: [u32; 2] = [256, 256];
-    const GAP: f32 = 0.34;
-    // Mirrors lattice.wgsl's own `GAP_STOP`, which is where the window shuts.
+    const SHADOW: f32 = 0.34;
+    // Mirrors lattice.wgsl's own `SHADOW_STOP`, which is where the window shuts.
     const STOP: f32 = 2.0;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -303,10 +303,10 @@ fn the_standoff_ends_before_its_own_billboard() {
         // The flat falloff, so the halo out where the window shuts is a smooth
         // field with no gradient of its own for a step to hide in.
         scene.glow_feather = 1.0;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_shape = 0.0;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_shape = 0.0;
+        scene.glow_shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
@@ -336,18 +336,18 @@ fn the_standoff_ends_before_its_own_billboard() {
         }
     }
     assert!(ink_px > 20.0, "the node inked only {ink_px}px of radius; there is nothing to read");
-    let gap_px = ink_px * GAP / bare.rings_outer;
+    let shadow_px = ink_px * SHADOW / bare.rings_outer;
 
     let flat = shooter.shot(&at(0.0));
     let stood_off = shooter.shot(&at(1.0));
     // Pixels the standoff took light from, over the ring standing between
-    // `from` and `to` Gaps out from the node's outermost ink.
+    // `from` and `to` Shadow widths out from the node's outermost ink.
     let bitten = |from: f32, to: f32| -> (usize, usize) {
         let (mut bit, mut n) = (0usize, 0usize);
         for y in 0..SIZE[1] as usize {
             for x in 0..SIZE[0] as usize {
                 let i = y * row + x;
-                let g = (radius(x, y) - ink_px) / gap_px;
+                let g = (radius(x, y) - ink_px) / shadow_px;
                 if g < from || g >= to {
                     continue;
                 }
@@ -365,7 +365,7 @@ fn the_standoff_ends_before_its_own_billboard() {
     assert!(near_n > 200, "the inner annulus holds {near_n} pixels to read");
     assert!(
         near > near_n / 2,
-        "the standoff bit {near} of the {near_n} pixels between a Gap and a Gap and a half, so \
+        "the standoff bit {near} of the {near_n} pixels between a Shadow and a Shadow and a half, so \
          there is nothing here for the window to be the end of",
     );
     // And past the window it has ended, in every direction the frame reaches —
@@ -376,14 +376,14 @@ fn the_standoff_ends_before_its_own_billboard() {
     assert_eq!(
         past, 0,
         "the standoff took light from {past} of the {past_n} pixels standing more than \
-         {STOP} Gaps out from the node's ink, which is a tail the billboard has to cut",
+         {STOP} Shadow widths out from the node's ink, which is a tail the billboard has to cut",
     );
 }
 
 /// A ring's shadow is worth its ink: a node half way through its release holds
 /// off about half the light its whole ink holds off.
 ///
-/// The claim a release rests on, and the one the Gap depth's own domain breaks
+/// The claim a release rests on, and the one the Shadow depth's own domain breaks
 /// if the level is spent in it. The depth is a number of STOPS ([`gap_shade`]),
 /// so a level multiplying the COVERAGE is a level multiplying an exponent: at
 /// the depth's top a ring a tenth of the way through its release still holds
@@ -421,9 +421,9 @@ fn a_rings_shadow_is_worth_its_ink() {
         scene.glow_reach = 2.5;
         scene.glow_strength = 2.0;
         scene.glow_feather = 1.0;
-        scene.glow_gap = 0.34;
-        scene.glow_gap_soft = 0.34;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = 0.34;
+        scene.glow_shadow_soft = 0.34;
+        scene.glow_shadow_depth = depth;
         scene.nodes[0].activation = level;
         scene.nodes[0].audio_ring = level;
         scene
@@ -463,13 +463,13 @@ fn a_rings_shadow_is_worth_its_ink() {
     );
 }
 
-/// The Gap depth is a number of STOPS, spent geometrically across the fade, and
+/// The Shadow depth is a number of STOPS, spent geometrically across the fade, and
 /// not a share of the light taken off in proportion.
 ///
 /// What that buys is the whole of why the fade is worth spending on: sight
 /// answers ratios, so a factor walked evenly in VALUE spends most of what can
 /// be SEEN of it in the first fraction of its width, and the pool then reads as
-/// a dark ring hugging the ink with an edge on it whatever the Gap is dialled
+/// a dark ring hugging the ink with an edge on it whatever the Shadow is dialled
 /// to. See `glow_shade`, which is the one line this pins.
 ///
 /// Measured as a SQUARE, which is what makes it an identity rather than a
@@ -485,9 +485,9 @@ fn a_rings_shadow_is_worth_its_ink() {
 /// standoff keeps of it, and the ratio of two shots is the ratio of two keeps
 /// with the colour divided out.
 #[test]
-fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
+fn the_shadow_depth_is_spent_in_stops_and_not_in_proportion() {
     const SIZE: [u32; 2] = [256, 256];
-    const GAP: f32 = 0.34;
+    const SHADOW: f32 = 0.34;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -501,9 +501,9 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         };
         scene.glow_reach = 1.6;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
@@ -529,7 +529,8 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
     let mut checked = 0;
     for step in 1..=8 {
         let p = 0.15 + 0.1 * step as f32;
-        let probe = centre + (band_px as f32 * (1.0 + p * GAP / bare.rings_outer)).round() as usize;
+        let probe =
+            centre + (band_px as f32 * (1.0 + p * SHADOW / bare.rings_outer)).round() as usize;
         if inked(&plain, probe) {
             continue;
         }
@@ -543,7 +544,7 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         let got = l2 / l0;
         assert!(
             (got - want).abs() < 0.035,
-            "{p} of a Gap out the depth that leaves a quarter kept {got:.3} of the light \
+            "{p} of a Shadow out the depth that leaves a quarter kept {got:.3} of the light \
              where the depth that leaves a half, squared, is {want:.3}",
         );
         checked += 1;
@@ -551,14 +552,14 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
     assert!(checked >= 4, "only {checked} probes had light to read; the test proves nothing");
 }
 
-/// The Gap reaches light this node never lit — a NEIGHBOUR's halo, out past
+/// The Shadow reaches light this node never lit — a NEIGHBOUR's halo, out past
 /// where its own light has shut.
 ///
 /// The standoff is written per node into a layer of the light (`fs_glow`), one
 /// quad per node, so what bounds it is that node's own billboard. The billboard
-/// is sized to hold the LIGHT — the lit rim plus the Reach — and the Gap is a
-/// length of its own with a ceiling of its own (`GLOW_GAP_MAX` against
-/// `GLOW_REACH_MAX`), so a Gap dialled past the Reach asks for a standoff out
+/// is sized to hold the LIGHT — the lit rim plus the Reach — and the Shadow is a
+/// length of its own with a ceiling of its own (`GLOW_SHADOW_MAX` against
+/// `GLOW_REACH_MAX`), so a Shadow dialled past the Reach asks for a standoff out
 /// where this node draws no fragment at all. What an unheld bound looks like is
 /// not a wrong value but a DISCONTINUITY: the fade stops dead partway down its
 /// ramp, on a line that is straight and screen-aligned — `node_vertex` builds
@@ -566,27 +567,27 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
 /// camera turns while the lattice under it does not.
 ///
 /// Hence a probe past `QUAD_MARGIN`, the floor the billboard takes at this
-/// Reach, and inside `rings_outer + GAP`, where the standoff's own fade still
+/// Reach, and inside `rings_outer + SHADOW`, where the standoff's own fade still
 /// has most of its depth left. The light there is worth measuring only because
 /// it is somebody else's: a node's own light shuts at its rim plus the Reach,
 /// which is always inside its own quad, so the far side of the bound is lit by
 /// the neighbour alone — the same split `fs_glow`'s early-out turns on, where
 /// a node with no light of its own still stands its rings off a neighbour's.
 #[test]
-fn the_gap_reaches_light_the_nodes_own_never_lit() {
+fn the_shadow_reaches_light_the_nodes_own_never_lit() {
     // Wide enough for both nodes and a multiple of 64, so the readback's rows
     // stay aligned.
     const SIZE: [u32; 2] = [1408, 320];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The widest Gap the bar has against the fresh Reach — the pair that puts
+    // The widest Shadow the bar has against the fresh Reach — the pair that puts
     // the standoff outside the quad the light alone would size.
-    const GAP: f32 = harmonigraph_scene::GLOW_GAP_MAX;
+    const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
     const REACH: f32 = 0.35;
     // Where the neighbour stands, and where the light is read, both in the
     // probed node's uv. The probe is past `QUAD_MARGIN` (1.6) and inside the
-    // fixture's `rings_outer + GAP`.
+    // fixture's `rings_outer + SHADOW`.
     const APART: f32 = 2.25;
     const PROBE: f32 = 1.65;
 
@@ -604,12 +605,12 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         // An even field, so the light is still worth something out at the bound
         // rather than an exponential's tail.
         scene.glow_feather = 1.0;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
         // The fade held longest, which is what leaves a measurable share of the
         // standoff this far out.
-        scene.glow_gap_shape = 1.0;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow_shape = 1.0;
+        scene.glow_shadow_depth = depth;
         scene
     };
     // ...and the neighbour that lights it. Dialled almost off, so every term of
@@ -661,12 +662,12 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         lit(&flat, probe),
     );
 
-    // And the Gap holds it off. A tenth is far under the share the bars ask for
+    // And the Shadow holds it off. A tenth is far under the share the bars ask for
     // here and far over what the neighbour's own hundredth of a standoff can
     // account for, so the threshold is the bound and not the arithmetic.
     assert!(
         lit(&gapped, probe) * 10 < lit(&flat, probe) * 9,
-        "the Gap left a neighbour's light at {} against {} with the depth at 0, so the \
+        "the Shadow left a neighbour's light at {} against {} with the depth at 0, so the \
          standoff stopped at this node's own billboard",
         lit(&gapped, probe),
         lit(&flat, probe),
@@ -677,7 +678,7 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
 /// closed Octave gap and at the widest one — the two rings of shares every claim
 /// about the standoff following the slices is stated on.
 ///
-/// The share is `(lit - stood off) / lit` at a Gap depth of 1, which is the
+/// The share is `(lit - stood off) / lit` at a Shadow depth of 1, which is the
 /// standoff's own coverage and nothing else. Three things have to hold for that,
 /// and the fixtures below carry all three: the clearing the standoff rides is
 /// radial, so it contributes one constant factor around the turn; the light's
@@ -715,7 +716,7 @@ fn standoff_share_rings(
     let centre = (size[1] / 2) as usize * row + (size[0] / 2) as usize;
 
     let mut bare = at(0.0, 0.0, 0.0);
-    bare.glow_gap = 0.0;
+    bare.glow_shadow = 0.0;
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
     let ink_px = (1..(size[0] / 2) as usize)
@@ -760,7 +761,7 @@ fn standoff_share_rings(
 /// with gaps between them rather than a closed annulus.
 ///
 /// What this measures is the SHARE of the light one pixel loses to the standoff
-/// — `(lit - stood off) / lit` at a depth of 1 — taken at one radius half a Gap
+/// — `(lit - stood off) / lit` at a depth of 1 — taken at one radius half a Shadow
 /// outside the band, all the way round the node. That share is the standoff's
 /// own coverage and nothing else: the clearing carrying it is a disc
 /// (`node_clearing` reads the band as a rim), the light's falloff is radial
@@ -770,7 +771,7 @@ fn standoff_share_rings(
 /// TWO claims, and the second is what keeps the first from being a restyle.
 /// Against a CLOSED ring's share at the same pixel, a wide Octave gap keeps
 /// nearly all of its light in the middle of a gap — where the nearest ink is
-/// half a gap away, further off than the Gap reaches — and loses all of the
+/// half a gap away, further off than the Shadow reaches — and loses all of the
 /// same share as the closed ring over the middle of a slice, the ink there
 /// being no further off than the annulus itself. And with the gap closed the
 /// share is FLAT around the turn, which is the picture an angular term must not
@@ -782,17 +783,17 @@ fn standoff_share_rings(
 /// hence a budget rather than an equality, and the ratio in the first claim,
 /// which compares two shots at ONE pixel and so has no wobble in it at all.
 ///
-/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture and its
+/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s fixture and its
 /// probe radius, with no fade on the clearing so the probe sits in solid
 /// coverage and the share is the standoff's whole answer.
 #[test]
 fn the_standoff_follows_the_gaps_between_the_slices() {
-    // A big frame for a small measurement: the Gap's fade is 0.16 of a node's
+    // A big frame for a small measurement: the Shadow's fade is 0.16 of a node's
     // uv, so at 256 it spans some seven pixels and half of one of those is a
     // twentieth of the share below. The node is drawn at the same size in uv
     // whatever the frame, so the pixels are what buys the resolution.
     const SIZE: [u32; 2] = [1024, 1024];
-    const GAP: f32 = 0.16;
+    const SHADOW: f32 = 0.16;
     // Enough of them that one lands near the middle of a gap and one near the
     // middle of a slice, at every wheel the view can be dialled to.
     const ANGLES: usize = 360;
@@ -827,16 +828,17 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        // The fade the whole width of the shadow, which is the fresh pair.
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_depth = depth;
         scene
     };
     // The band's own outer edge is where this fixture's ink ends, and the Scene
     // names it.
     let ink_uv = at(0.0, 0.0, 0.0).rings_outer;
-    let (closed, wide) = standoff_share_rings(&mut shooter, SIZE, &at, ink_uv, 0.5 * GAP, ANGLES);
+    let (closed, wide) =
+        standoff_share_rings(&mut shooter, SIZE, &at, ink_uv, 0.5 * SHADOW, ANGLES);
 
     // The closed ring first, which is both the reference for the wide gap below
     // and a claim of its own.
@@ -903,7 +905,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
     const SIZE: [u32; 2] = [1024, 1024];
     // Small against the band's own radius, so the probe sits well inside half
     // the Octave gap with the fade still spending most of itself there.
-    const GAP: f32 = 0.05;
+    const SHADOW: f32 = 0.05;
     const BAND_OUTER: f32 = 0.15;
     const PAST: f32 = 0.01;
     const ANGLES: usize = 360;
@@ -940,9 +942,9 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_depth = depth;
         scene
     };
     // Inside half the widest gap, which is the only radius at which the two
@@ -990,7 +992,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
 ///
 /// The measurement that separates the two is the middle of a gap between two
 /// marks: the nearest ink there is half an Octave gap away, and at the widest
-/// gap that is 0.2 against a Gap of 0.16, so the light has to be fully back.
+/// gap that is 0.2 against a Shadow of 0.16, so the light has to be fully back.
 /// Read off the boundary the two wedges share, which is where the un-eroded
 /// wedge puts its own edge and so reads as a distance of nothing.
 ///
@@ -1000,7 +1002,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
 #[test]
 fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
     const SIZE: [u32; 2] = [1024, 1024];
-    const GAP: f32 = 0.16;
+    const SHADOW: f32 = 0.16;
     const STRIP_IN: f32 = 0.5;
     const STRIP_THICK: f32 = 0.12;
     const ANGLES: usize = 360;
@@ -1032,21 +1034,21 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_depth = depth;
         scene
     };
-    // Half an Octave gap has to outreach the Gap, or the light is held off in
+    // Half an Octave gap has to outreach the Shadow, or the light is held off in
     // the middle of a gap whatever the sides do.
     const {
         assert!(
-            0.5 * harmonigraph_scene::GAP_MAX > GAP,
+            0.5 * harmonigraph_scene::GAP_MAX > SHADOW,
             "the widest gap is too narrow for its middle to be clear of the ink",
         )
     };
     let (closed, wide) =
-        standoff_share_rings(&mut shooter, SIZE, &at, STRIP_IN + STRIP_THICK, 0.5 * GAP, ANGLES);
+        standoff_share_rings(&mut shooter, SIZE, &at, STRIP_IN + STRIP_THICK, 0.5 * SHADOW, ANGLES);
 
     let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
     assert!(
@@ -1077,7 +1079,7 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
 /// have it because a ring is drawn at every slice: whichever the walk lands on,
 /// there is ink in it. A mark is drawn at the slices two voices took, so the same
 /// walk answers for a slice the mark has nothing in — half an Octave gap at every
-/// boundary on the node, wherever the mark's own wedge is still within a Gap of
+/// boundary on the node, wherever the mark's own wedge is still within a Shadow of
 /// the fragment.
 ///
 /// What that draws is a SECOND shadow, detached from the mark and lying half an
@@ -1101,7 +1103,7 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
 #[test]
 fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
     const SIZE: [u32; 2] = [1024, 1024];
-    const GAP: f32 = 0.16;
+    const SHADOW: f32 = 0.16;
     const STRIP_IN: f32 = 0.5;
     const STRIP_THICK: f32 = 0.12;
     const ANGLES: usize = 720;
@@ -1136,9 +1138,9 @@ fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
         scene.octave_gap = harmonigraph_scene::GAP_MAX;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
+        scene.glow_shadow = SHADOW;
+        scene.glow_shadow_soft = SHADOW;
+        scene.glow_shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
@@ -1152,7 +1154,7 @@ fn a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at() {
     // Taken over the frame rather than along an axis, one mark being the only
     // thing drawn and no axis obliged to cross it.
     let mut bare = at(0.0, 0.0);
-    bare.glow_gap = 0.0;
+    bare.glow_shadow = 0.0;
     let plain = shooter.shot(&bare);
     let mut ink_px = 0.0f32;
     for y in 0..SIZE[1] as usize {

@@ -61,14 +61,14 @@ fn unit_of(view: &ViewConfig) -> f32 {
 ///
 /// The shader's own reason for wanting it: the markers' standoff draw is handed
 /// world lengths (a billboard, and an arm per instance) and holds the light off
-/// by the Gap, which is a node's bar and so in uv. One of the two has to be
+/// by the Shadow, which is a node's bar and so in uv. One of the two has to be
 /// converted, and the conversion is the SCENE's rather than any marker's —
 /// carrying it over is what keeps `lattice.wgsl` from spelling the uv rule a
 /// second time for one more layer.
 ///
 /// Read against the bars rather than against a formula, which is the whole
 /// point: a unit that disagreed with them would leave the marker's shadow drawn
-/// at a different Gap than every node's, on one bar.
+/// at a different Shadow than every node's, on one bar.
 #[test]
 fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
     let view = ViewConfig { plus_arm: 0.2, ..plus_view() };

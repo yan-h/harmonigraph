@@ -371,14 +371,14 @@ struct Uniforms {
     /// everything drawn behind it (`node_clearing` in lattice.wgsl), and as the
     /// light that same shape dims where it stands over a ring (`glow_standoff`).
     /// x: how far past each ring it reaches, in the same quad UV units
-    /// (`Scene::glow_gap`); y: how much of that is spent fading it back off
-    /// (`Scene::glow_gap_soft`); z: how the fade is skewed across that width
-    /// (`Scene::glow_gap_shape`); w: how much of the LIGHT it takes where it
-    /// stands (`Scene::glow_gap_depth`), off the ground the clearing paints —
+    /// (`Scene::glow_shadow`); y: how much of that is spent fading it back off
+    /// (`Scene::glow_shadow_soft`); z: how the fade is skewed across that width
+    /// (`Scene::glow_shadow_shape`); w: how much of the LIGHT it takes where it
+    /// stands (`Scene::glow_shadow_depth`), off the ground the clearing paints —
     /// what the node's own ink takes of that same field is `misc13` below.
     ///
     /// A row of its own rather than four slots scattered over the two beside
-    /// it, because the four are one control: the Gap bar's two handles, the
+    /// it, because the four are one control: the Shadow bar's two handles, the
     /// curve across them, and the depth the finished coverage is scaled by on
     /// the light's side.
     ///
@@ -387,8 +387,8 @@ struct Uniforms {
     /// or not there is a light in the picture, so zeroing this with the light
     /// would take every node's knockout off with it — sheets interpenetrating,
     /// and the resting markers uncut — the moment the Reach reached 0. What is
-    /// zeroed instead is nothing, `glow_gap` being its own off switch on both
-    /// sides (`glow_gap()` in lattice.wgsl), and the depth is the light's
+    /// zeroed instead is nothing, `glow_shadow` being its own off switch on both
+    /// sides (`glow_shadow()` in lattice.wgsl), and the depth is the light's
     /// (`glow_shade`).
     misc11: [f32; 4],
     /// The node glow's plumbing row, which is not a dial. x: how many rows this
@@ -407,16 +407,16 @@ struct Uniforms {
     /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
     /// the GROUND's share of that same field. y: one quad uv as a world length
     /// on the markers' sheet (`Scene::marker_unit`), which is what the markers'
-    /// standoff draw converts between its own world lengths and the uv the Gap
+    /// standoff draw converts between its own world lengths and the uv the Shadow
     /// it holds the light off by is dialled in. z/w unused.
     ///
     /// A row of its own because the wash is not a term of the standoff above:
-    /// the Gap bars shape the field the GROUND is painted from and this reads
+    /// the Shadow bars shape the field the GROUND is painted from and this reads
     /// that same field raw, so a dial sitting among them would carry the
     /// coupling it exists to break.
     ///
     /// A row of its own because it is not a term of the standoff, close as it
-    /// reads to the depth: the Gap bars shape what the clearing paints, and
+    /// reads to the depth: the Shadow bars shape what the clearing paints, and
     /// this reads the field raw, so a dial sitting among them would carry the
     /// coupling it exists to break. Zeroed whole with `misc10`, on the same
     /// rule — a wash with no light to lay down is a factor on nothing.
@@ -1101,13 +1101,13 @@ impl LatticeCallback {
             let node = &scene.nodes[i];
             let instance = to_gpu(node);
             if paints(&instance) {
-                // Both extra draws hang off the Gap, so a view with it dialled
+                // Both extra draws hang off the Shadow, so a view with it dialled
                 // off ships neither and the pass is the single batched marker
                 // draw it has always been. The cull is the ink's, since the two
                 // are one node — a node that paints nothing clears nothing
                 // either, every layer's hole being scaled by the level that
                 // paints it (`node_clearing`).
-                if scene.glow_gap > 0.0 {
+                if scene.glow_shadow > 0.0 {
                     let plus = plus_of[i];
                     if plus != u32::MAX {
                         home_pluses.push(plus);
@@ -1226,10 +1226,10 @@ impl LatticeCallback {
                 // `glow_draws` skips entirely, so what a light-less frame does
                 // with this row is cut its holes with it and nothing else.
                 misc11: [
-                    scene.glow_gap,
-                    scene.glow_gap_soft,
-                    scene.glow_gap_shape,
-                    scene.glow_gap_depth,
+                    scene.glow_shadow,
+                    scene.glow_shadow_soft,
+                    scene.glow_shadow_shape,
+                    scene.glow_shadow_depth,
                 ],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
@@ -1303,7 +1303,7 @@ impl LatticeCallback {
     /// already reduced to one number. False and nothing is allocated, encoded
     /// or composited: no target, no pass, and a node's clearing reading the
     /// stand-in transparent texture rather than a light. The clearing itself
-    /// still cuts — its shape is the Gap's, which this does not gate (see
+    /// still cuts — its shape is the Shadow's, which this does not gate (see
     /// [`Uniforms::misc11`]).
     fn glow_draws(&self) -> bool {
         self.uniforms.misc10[0] > 0.0
@@ -2378,7 +2378,7 @@ fn create_pipelines(
 /// They travel together for the reason the scene's pair does — one pass, one set
 /// of attachments, so a pipeline built for it is built for both — and for one
 /// more of their own: the marker's draw writes the same third attachment a
-/// node's rings write their standoff into, on the same Gap bars.
+/// node's rings write their standoff into, on the same Shadow bars.
 fn create_glow_pipelines(
     device: &wgpu::Device,
     shader_src: &str,

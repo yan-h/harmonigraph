@@ -563,16 +563,16 @@ pub fn derive_scene(
         glow_meld: view.glow_meld.clamp(0.0, 1.0),
         // The standoff on the same footing, a bar's range rather than a
         // billboard's: it is painted inside the clearing's own quad, so an
-        // absurd gap is a shape nothing can show rather than a quad nothing
+        // absurd shadow is a shape nothing can show rather than a quad nothing
         // can fill.
-        glow_gap: view.glow_gap.clamp(0.0, crate::GLOW_GAP_MAX),
-        // To the axis rather than to the gap, as `sevens_soft` above is: a fade
-        // wider than its gap draws as one exactly as wide (`standoff_coverage`
+        glow_shadow: view.glow_shadow.clamp(0.0, crate::GLOW_SHADOW_MAX),
+        // To the axis rather than to the shadow, as `sevens_soft` above is: a
+        // fade wider than its shadow draws as one exactly as wide (`standoff_coverage`
         // floors it at the ring's edge), and `sanitize` is where the stored
         // pair is held to the shape the bar can show.
-        glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_MAX),
-        glow_gap_shape: view.glow_gap_shape.clamp(0.0, 1.0),
-        glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
+        glow_shadow_soft: view.glow_shadow_soft.clamp(0.0, crate::GLOW_SHADOW_MAX),
+        glow_shadow_shape: view.glow_shadow_shape.clamp(0.0, 1.0),
+        glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
