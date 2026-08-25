@@ -213,7 +213,7 @@ pub(super) fn parity_scene() -> Scene {
         // over the node's own ink, inert at reach 0 and here to say so.
         glow_gap: 0.16,
         glow_gap_soft: 0.16,
-        glow_gap_shape: 0.75,
+        glow_gap_shape: 1.0,
         glow_gap_depth: 0.85,
         glow_wash: 0.15,
         marker_light: 0.10,

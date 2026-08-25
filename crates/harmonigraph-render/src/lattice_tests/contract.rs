@@ -233,10 +233,10 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
 #[test]
 fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
-        format!("const GAP_SHAPE_TRAIL: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_TRAIL),
-        format!("const GAP_SHAPE_HOLD: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_HOLD),
+        format!("const GAP_SHAPE_RIND: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_RIND),
+        format!("const GAP_SHAPE_PLAIN: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_PLAIN),
         format!("const GAP_TAIL: f32 = {:?};", harmonigraph_scene::GAP_TAIL),
-        "return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);".to_owned(),
+        "return GAP_SHAPE_RIND * pow(GAP_SHAPE_PLAIN / GAP_SHAPE_RIND, t);".to_owned(),
         "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
         "return exp(-GAP_TAIL * pow(u, glow_gap_shape()));".to_owned(),
     ];

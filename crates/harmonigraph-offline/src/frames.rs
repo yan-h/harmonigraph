@@ -1040,9 +1040,8 @@ mod tests {
     /// takes two shots to make: a fade NARROWER than its gap has open field
     /// where the decay begins, so the vertical an exponent under one leaves
     /// there is a circle in the light rather than a line along the ink (see
-    /// `GAP_SHAPE_TRAIL` in lattice.wgsl). Both are shot at that pairing, the
-    /// bar's floor against its middle, which is what makes the circle findable
-    /// at all.
+    /// `GAP_SHAPE_RIND` in lattice.wgsl). Both ends of the bar are shot at that
+    /// pairing, which is what makes the circle findable at all.
     ///
     /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, and
     /// for the same reasons, plus one note off it: the shade is what is being
@@ -1091,16 +1090,16 @@ mod tests {
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "gap-curve".to_owned());
 
         let fresh = harmonigraph_scene::ViewConfig::default();
-        // (shape, gap, fade). The bar's floor, its middle, the fresh view's own
-        // value and its ceiling at the fresh pairing, then the floor and the
-        // middle again over a fade a quarter of its gap.
+        // (shape, gap, fade). The bar in quarters at the fresh pairing, then
+        // its floor and its ceiling again over a fade a quarter of its gap.
         let shots: Vec<(f32, f32, f32)> = vec![
             (0.0, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.25, fresh.glow_gap, fresh.glow_gap_soft),
             (0.5, fresh.glow_gap, fresh.glow_gap_soft),
-            (fresh.glow_gap_shape, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.75, fresh.glow_gap, fresh.glow_gap_soft),
             (1.0, fresh.glow_gap, fresh.glow_gap_soft),
             (0.0, 0.48, 0.12),
-            (0.5, 0.48, 0.12),
+            (1.0, 0.48, 0.12),
         ];
         let home = state.camera;
         for (shape, gap, soft) in shots {

@@ -290,13 +290,13 @@ pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
 
 /// The two ends of the Glow section's Gap curve bar, as the exponent the
 /// standoff's decay is taken over across its own width. Mirrored in
-/// lattice.wgsl (`GAP_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair above
-/// — the shader holds the rationale, including why the bar's middle lands on
-/// the plain exponential and what the half below it costs — and the render
-/// crate asserts the copies agree. What this copy draws is the bar's preview
+/// lattice.wgsl (`GAP_SHAPE_RIND`/`PLAIN`) on the same terms as the pair above
+/// — the shader holds the rationale, including why the plain exponential is
+/// the bar's ceiling rather than a point inside it — and the render crate
+/// asserts the copies agree. What this copy draws is the bar's preview
 /// ([`standoff_recovery`]).
-pub const GAP_SHAPE_TRAIL: f32 = 0.25;
-pub const GAP_SHAPE_HOLD: f32 = 4.0;
+pub const GAP_SHAPE_RIND: f32 = 0.25;
+pub const GAP_SHAPE_PLAIN: f32 = 1.0;
 
 /// How many e-folds of the standoff the Gap's fade spends, mirrored from
 /// lattice.wgsl (`GAP_TAIL`), which holds the rationale.
@@ -334,7 +334,7 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 /// direction the fade runs in — the ring's edge at the left, the halo at the
 /// right.
 ///
-/// The low half of the bar draws a curve that is nearly a step at the left,
+/// The low end of the bar draws a curve that is nearly a step at the left,
 /// which is the shape rather than a clipped preview: an exponent under one
 /// gives the light back inside the ink and leaves the rest of the width to a
 /// haze.
@@ -348,7 +348,7 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 /// nothing (see `GAP_TAIL`), so the bar draws a curve still climbing where a
 /// ramp would have arrived.
 pub fn standoff_recovery(shape: f32, p: f32) -> f32 {
-    let exponent = GAP_SHAPE_TRAIL * (GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL).powf(shape.clamp(0.0, 1.0));
+    let exponent = GAP_SHAPE_RIND * (GAP_SHAPE_PLAIN / GAP_SHAPE_RIND).powf(shape.clamp(0.0, 1.0));
     1.0 - (-GAP_TAIL * p.clamp(0.0, 1.0).powf(exponent)).exp()
 }
 
@@ -1025,9 +1025,8 @@ pub struct Scene {
     /// already clamped to the gap.
     pub glow_gap_soft: f32,
     /// How the standoff's decay is shaped across that width (see
-    /// [`ViewConfig::glow_gap_shape`]), 0.5 a plain exponential off the ring
-    /// and 1 holding the ring dark to the end of that width; already clamped
-    /// to 0..=1.
+    /// [`ViewConfig::glow_gap_shape`]), 1 a plain exponential off the ring and
+    /// 0 handing the light back inside the ink; already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_shape: f32,
     /// How much of the light the standoff takes away where it stands (see
