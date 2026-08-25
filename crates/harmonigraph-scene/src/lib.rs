@@ -344,9 +344,10 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 /// text the same way (`the_gap_curve_bars_preview_is_the_ramp_the_shader_runs`).
 ///
 /// It does not reach 1 at the right-hand end, and that is the shape rather than
-/// a clipped preview: the fade is a decay with no width at which it lands on
-/// nothing (see `GAP_TAIL`), so the bar draws a curve still climbing where a
-/// ramp would have arrived.
+/// a clipped preview: nowhere in the bar's own width does the fade land on
+/// nothing (see `GAP_TAIL`), so it draws a curve still climbing where a ramp
+/// would have arrived. What ends the tail is a window a couple of Gaps further
+/// out again (`GAP_STOP` in lattice.wgsl), outside every point drawn here.
 pub fn standoff_recovery(shape: f32, p: f32) -> f32 {
     let exponent = GAP_SHAPE_RIND * (GAP_SHAPE_PLAIN / GAP_SHAPE_RIND).powf(shape.clamp(0.0, 1.0));
     1.0 - (-GAP_TAIL * p.clamp(0.0, 1.0).powf(exponent)).exp()
