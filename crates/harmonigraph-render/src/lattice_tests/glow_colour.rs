@@ -5,25 +5,19 @@ use crate::gpu_harness::headless_device;
 use crate::*;
 
 /// A ring WEARS THE WASH inside a pool the Shadow depth has cleared to the bare
-/// ground: the two are one field asked for twice, and the answers are free of
-/// each other.
+/// ground: the ground's share of the light and the ink's are one field asked
+/// for twice, and the answers are free of each other.
 ///
-/// The look the bar exists for. On one coupled dial a dark pool and a tinted
-/// ring are mutually exclusive — the light the ink would wear is exactly the
-/// light the standoff takes — so the first two claims below are measured at a
-/// DEPTH OF 1, where the ground around the ring is the frame with no glow in it
-/// at all and there is nothing left of the pool's light to tint anything with.
+/// The ink takes that field WHOLE and RAW, before the standoff's factor reaches
+/// it, which is what lets a dark pool and a lit ring be had together. Ink
+/// carrying the standoff's remainder instead could not: at a depth of 1 there
+/// would be nothing left of the pool's light to tint it with, and the ring
+/// would be a silhouette cut out of the frame. So the claims below are measured
+/// at a DEPTH OF 1, where the ground around the ring is the frame with no glow
+/// in it at all:
 ///
-/// Three claims, and the third is the decoupling itself:
-///
-/// - A wash of 0 leaves the ink byte for byte what it is with the glow off,
-///   whatever light is standing at it. Byte-identical rather than nearly so
-///   because a factor of 0 on the light is no light: nothing is left to round.
-/// - A wash of 1 lifts it, and lifts more than half of it.
-/// - Moving the DEPTH moves the ink not at all, the wash reading the field
-///   before the standoff's factor reaches it. A wash carried on the standoff's
-///   remainder instead cannot say this at all, and that is the reason there is
-///   a second bar.
+/// - The light lifts the ink, and lifts more than half of it.
+/// - Moving the DEPTH moves the ink not at all.
 ///
 /// Every lift is measured as a lift and never a loss, which is the wash's own
 /// arithmetic (`node_paint`): the ink takes the light as a screen, so every
@@ -44,16 +38,16 @@ use crate::*;
 /// The BOUND follows from how the set is chosen rather than from tuning —
 /// agreeing over both grounds forces that sliver's coefficient under 1/255, and
 /// the sliver is the only term the depth touches on such a pixel, so one byte
-/// is the most it can carry. A wash reading the standoff's remainder would move
-/// the ink by the light's own size instead, which is the scale the shot beside
-/// it supplies.
+/// is the most it can carry. Ink reading the standoff's remainder would move by
+/// the light's own size instead, which is the scale the shot beside it
+/// supplies.
 #[test]
 fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |reach: f32, depth: f32, wash: f32| -> Scene {
+    let at = |reach: f32, depth: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -67,12 +61,11 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         // The fade the whole width of the shadow, which is the fresh pair.
         scene.glow_shadow_soft = 0.16;
         scene.glow_shadow_depth = depth;
-        scene.glow_wash = wash;
         scene.glow_shadow = 0.16;
         scene
     };
     let mut on_ground = |bg: glam::Vec4| {
-        let mut scene = at(0.0, 1.0, 0.0);
+        let mut scene = at(0.0, 1.0);
         scene.background = bg;
         shooter.shot(&scene)
     };
@@ -87,22 +80,16 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         .collect();
     assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
 
-    let off = shooter.shot(&at(0.0, 1.0, 1.0));
-    let dry = shooter.shot(&at(0.8, 1.0, 0.0));
-    let worn = shooter.shot(&at(0.8, 1.0, 1.0));
-    let open = shooter.shot(&at(0.8, 0.0, 1.0));
-    let moved = ink.iter().filter(|&&i| dry[i..i + 4] != off[i..i + 4]).count();
-    assert_eq!(
-        moved,
-        0,
-        "with no wash the glow reached {moved} of the ring's {} opaque pixels",
-        ink.len(),
-    );
+    // The glow OFF is what the ink is measured against: no light at the pixel
+    // is the one setting left that takes the wash out of the picture.
+    let off = shooter.shot(&at(0.0, 1.0));
+    let worn = shooter.shot(&at(0.8, 1.0));
+    let open = shooter.shot(&at(0.8, 0.0));
     let lifted =
         ink.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
     assert!(
         lifted * 2 > ink.len(),
-        "inside a pool cleared to the bare ground, a full wash lifted {lifted} of the ring's {} \
+        "inside a pool cleared to the bare ground, the light lifted {lifted} of the ring's {} \
          opaque pixels",
         ink.len(),
     );
@@ -121,7 +108,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
             .max()
             .unwrap()
     };
-    let by_wash = spread(&worn, &dry);
+    let by_wash = spread(&worn, &off);
     let by_depth = spread(&worn, &open);
     assert!(
         by_wash > 20,

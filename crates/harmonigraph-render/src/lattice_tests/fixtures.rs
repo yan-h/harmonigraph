@@ -207,13 +207,12 @@ pub(super) fn parity_scene() -> Scene {
         // Melded whole, the light two overlapping halos have always made, so a
         // test that says nothing about the Meld is measuring the screen.
         glow_meld: 1.0,
-        // The fresh standoff and the shares that shape the light inside it and
-        // over the node's own ink, inert at reach 0 and here to say so.
+        // The fresh standoff and the shape of the light inside it, inert at
+        // reach 0 and here to say so.
         glow_shadow: 0.16,
         glow_shadow_soft: 0.16,
         glow_shadow_shape: 1.0,
         glow_shadow_depth: 0.85,
-        glow_wash: 0.15,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.

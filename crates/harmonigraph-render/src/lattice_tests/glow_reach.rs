@@ -340,10 +340,10 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// never take from one, so a far sheet's red halo cannot pull the green out of
 /// a white name in front of it.
 ///
-/// It rests on the fixture's fresh WASH, that being what puts any light on a
-/// node's ink at all: at a wash of 0 the near node's ink is untouchable and
-/// there is nothing here to measure. The count of pixels the hidden node
-/// brightens is asserted for that reason, and says so when it is 0.
+/// It rests on the WASH, that being what puts any light on a node's ink at all
+/// — unwashed, the near node's ink would be untouchable and there would be
+/// nothing here to measure. The count of pixels the hidden node brightens is
+/// asserted for that reason, and says so when it is 0.
 ///
 /// That set is found rather than described, and found on the GROUND rather than
 /// on the light, which reaches the ink too: a pixel the node paints opaquely is
@@ -388,9 +388,8 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.glow_shadow = 0.4;
         scene
     };
-    let covering = |wash: f32| -> Scene {
+    let covering = || -> Scene {
         let mut both = near(0.8);
-        both.glow_wash = wash;
         let mut far = both.nodes[0];
         far.world_pos.z = -1.0;
         // Smaller and off centre, so the whole of what it draws falls inside
@@ -405,8 +404,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         rows_per_node(&mut both);
         both
     };
-    let fresh_wash = single_marked_node(0, 0).glow_wash;
-    let both = covering(fresh_wash);
+    let both = covering();
     // The hidden node names itself, at the middle of the near node.
     let name = |node: u32| LatticeLabels {
         glyphs: vec![GlyphInstance {
@@ -488,8 +486,8 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     // name is drawn — and read against a shot of the same two nodes with nobody
     // named. Both carry the hidden node's halo, so what differs between them is
     // the name and only the name.
-    let unnamed = shooter.shot(&covering(fresh_wash));
-    let named_near = shooter.shot_with(&covering(fresh_wash), name(0));
+    let unnamed = shooter.shot(&covering());
+    let named_near = shooter.shot_with(&covering(), name(0));
     let glyph: Vec<usize> = (0..unnamed.len())
         .step_by(4)
         .filter(|&i| named_near[i..i + 4] != unnamed[i..i + 4])

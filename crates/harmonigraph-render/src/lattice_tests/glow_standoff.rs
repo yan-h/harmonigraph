@@ -14,9 +14,9 @@ use crate::*;
 /// otherwise at nearly its fullest, the falloff being measured from the node's
 /// centre.
 ///
-/// The GROUND is the whole of what this bar moves, a node's own ink being the
-/// Wash bar's — [`a_ring_wears_the_wash_inside_its_own_dark_pool`] holds that
-/// boundary from the other side. So the probe sits outside the ink on purpose,
+/// The GROUND is the whole of what this bar moves, a node's own ink wearing
+/// the raw field — [`a_ring_wears_the_wash_inside_its_own_dark_pool`] holds
+/// that boundary from the other side. So the probe sits outside the ink on purpose,
 /// and not merely for want of light there: a probe ON the ink would read
 /// nothing this bar does at any setting.
 ///

@@ -457,30 +457,21 @@ fn one_shadow_is_one_distance_whatever_the_cross_it_stands_off() {
     );
 }
 
-/// A RESTING MARKER wears the wash, out of the same field and off the same bar
-/// a node's ink takes it from.
+/// A RESTING MARKER wears the wash, out of the same field a node's ink takes it
+/// from.
 ///
-/// The marker field is drawn over ground the light is already under, so with no
-/// wash a marker inside a halo is the one thing in the picture that gets darker
+/// The marker field is drawn over ground the light is already under, so unwashed
+/// a marker inside a halo would be the one thing in the picture that gets darker
 /// the more light stands at it — flat ground laid over lit ground — and the
-/// lattice reads as a field of holes punched exactly where the light is
-/// brightest. That is what the bar closes here.
+/// lattice would read as a field of holes punched exactly where the light is
+/// brightest. That is what the wash closes here.
 ///
-/// Three claims, on the marker's own pixels:
+/// Two claims, on the marker's own pixels:
 ///
-/// - A wash of 1 lifts more than half of them. That claim is also what makes
+/// - The light lifts more than half of them. That claim is also what makes
 ///   the fixture honest — nothing lifts where no light reaches, so a marker
 ///   parked outside the halo fails here rather than passing vacuously.
 /// - Nothing is ever dimmed, the wash being a screen (`wash_over`).
-/// - A wash of 0 holds them where they are, against a full wash on the same
-///   light moving them twenty times as far.
-///
-/// That last one is a bound of ONE BYTE rather than an equality, and the bound
-/// follows from how the set below is chosen rather than from tuning: membership
-/// is 8-bit equality with the marker's own colour, so a member can sit a half
-/// byte short of opaque and let that much of the light through. The scale it is
-/// read against is the shot beside it — ink that took the light at a wash of 0
-/// would move by the light's own size, which is what the full wash measures.
 ///
 /// The pixels are found by DIFFING the field in and out of the scene rather
 /// than off the geometry, so a marker the node happened to cover leaves the set
@@ -500,7 +491,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     // ink, and inside a reach dialled to carry light well past it. The feather
     // is at the top of its bar so what stands out there is an even field
     // rather than the skirt of a falloff heaped on the node.
-    let at = |reach: f32, wash: f32, marker: bool| -> Scene {
+    let at = |reach: f32, marker: bool| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -511,15 +502,16 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         scene.glow_feather = 1.0;
-        scene.glow_wash = wash;
         if marker {
             scene.pluses =
                 vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];
         }
         scene
     };
-    let bare = shooter.shot(&at(0.0, 0.0, false));
-    let off = shooter.shot(&at(0.0, 0.0, true));
+    let bare = shooter.shot(&at(0.0, false));
+    // The glow OFF is what the marker is measured against: no light at the
+    // pixel is the one setting left that takes the wash out of the picture.
+    let off = shooter.shot(&at(0.0, true));
     let drawn: Vec<usize> = (0..bare.len())
         .step_by(4)
         .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && off[i..i + 4] != bare[i..i + 4])
@@ -539,15 +531,14 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         marker.len(),
     );
 
-    let dry = shooter.shot(&at(1.6, 0.0, true));
-    let worn = shooter.shot(&at(1.6, 1.0, true));
+    let worn = shooter.shot(&at(1.6, true));
     let lifted = marker
         .iter()
         .filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3]))
         .count();
     assert!(
         lifted * 2 > marker.len(),
-        "a full wash lifted {lifted} of the marker's {} pixels: the marker is not wearing the \
+        "the light lifted {lifted} of the marker's {} pixels: the marker is not wearing the \
          light it stands in",
         marker.len(),
     );
@@ -558,8 +549,8 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         "the wash took light off {dimmed} of the marker's {} pixels",
         marker.len(),
     );
-    // The furthest any one channel of the marker moves between two shots, which
-    // is what both halves of the last claim are read in.
+    // The furthest any one channel of the marker moves between the two shots,
+    // which is what the fixture's own non-vacuity is read in.
     let spread = |a: &[u8], b: &[u8]| {
         marker
             .iter()
@@ -567,16 +558,10 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
             .max()
             .unwrap()
     };
-    let by_glow = spread(&dry, &off);
     let by_wash = spread(&worn, &off);
     assert!(
         by_wash > 20,
-        "the fixture's wash moves the marker by {by_wash}; there is nothing here to hold off",
-    );
-    assert!(
-        by_glow <= 1,
-        "with the wash at 0 the glow moved the marker by {by_glow} against the wash's own \
-         {by_wash}: the light is reaching the marker's ink on a bar that says it should not",
+        "the fixture's wash moves the marker by {by_wash}; there is nothing here to measure",
     );
 }
 

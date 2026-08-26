@@ -761,8 +761,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              keeps a wide shadow from reading as a black ring. It holds off the \
              light wherever that light reaches, a neighbour's halo as much as \
              the node's own, and however little the node's Clearance covers. \
-             The node's own ink is untouched at any setting — what the ink \
-             wears is the Wash bar below. Both handles at 0 lets the glow up to \
+             The node's own ink is untouched at any setting — it wears the \
+             light whole. Both handles at 0 lets the glow up to \
              every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
@@ -800,31 +800,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  where the shadow is solid, the ground is exactly what it is \
                  with the glow off — and lower leaves the rings sitting in a \
                  dimmer pool of their own light rather than in a void. 0% is \
-                 the picture with no shadow at all. What the rings themselves \
-                 wear of that light is the Wash below, which this does not \
-                 touch.",
-            );
-        // The ink's own share of the same field, under the bar that says the
-        // ground's: the pair is one question asked twice, and the answers are
-        // free of each other on purpose — a dark pool with a tinted ring in it
-        // is a picture no single coupled dial can name.
-        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How much of the light washes over the lattice's own ink — a \
-                 node's rings, marks and glyphs, and the resting markers \
-                 standing in the same light, the note names on top being drawn \
-                 clean whatever this says. 0% draws the ink exactly as it is \
-                 with the glow off; higher lifts a silent slice's grey toward \
-                 the colour of the halo around it, so the node reads as a \
-                 shape inside its light rather than a silhouette cut out of \
-                 it, and a marker inside a halo stops reading as a hole in it. \
-                 It reads the light before the shadow takes any, so it is free of \
-                 the depth above — a full depth with a wash on it is a ring \
-                 standing in a dark pool and still wearing the halo's colour — \
-                 and far enough up it inverts, the ink brighter than the \
-                 ground around it.",
+                 the picture with no shadow at all. It moves the ground alone: \
+                 the rings, the markers and the marks over it wear the light \
+                 whole whatever this says, so a full depth is a lit ring \
+                 standing in a pool cleared to the bare ground.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
