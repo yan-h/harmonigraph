@@ -282,7 +282,7 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 }
 
 /// The ink every lattice label is drawn in — the note name, its marks and
-/// the cents under it alike — and it is white rather than the skin's
+/// the cents under it alike — rather than the skin's
 /// [`text`](theme::text)/[`text_dim`](theme::text_dim) pair.
 ///
 /// Type over the lattice is not chrome. The skin dresses the panels around
@@ -290,7 +290,33 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// node's light is where its colour lives, not its name. Two ranks of grey
 /// said something the label does not mean — the note the brighter, its cents
 /// the fainter — where they are one label naming one node.
-const LABEL_INK: egui::Color32 = egui::Color32::WHITE;
+///
+/// The RESTING FIELD's own grey, off
+/// [`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig) and through the
+/// same repair the markers take it through. A name and a cross are one claim
+/// on one position, handed between them by
+/// [`name_level`](harmonigraph_scene::NodeInstance::name_level), so they are
+/// one colour: names on a white of their own and crosses on a dialled grey
+/// read as two fields laid over each other, and the bar could move only half
+/// of it.
+///
+/// OPAQUE, as a marker's ink is (see `derive_pluses`): the grey the bar names
+/// is the grey on screen rather than a blend of it with whatever the label
+/// stands on. What varies across a label is its own strength, spent on this.
+fn label_ink(view: &harmonigraph_scene::ViewConfig) -> egui::Color32 {
+    super::scene_color(harmonigraph_scene::grey_of_lightness(view.marker_ink_lightness()), 1.0)
+}
+
+/// What a name hands the LIGHT standing under it: the shadow it holds that
+/// light off by, on the Shadow bars a node's rings and a marker's cross are
+/// held off on (`fs_glyph_glow` in `harmonigraph_render`).
+///
+/// No black is painted anywhere. This colour reaches the shader as one number
+/// — its alpha, which the caller spends the name's own strength on — because
+/// a name that is not there holds nothing off, exactly as a cross that is not
+/// there does (`PlusInstance::strength`). The channels under it are the ink a
+/// premultiplied nothing carries.
+const LABEL_SHADOW: egui::Color32 = egui::Color32::BLACK;
 
 /// How readable a label on a node that is not sounding is: exactly as
 /// readable as one that is.
@@ -419,6 +445,9 @@ pub(crate) fn draw_node_labels(
     // mode the field never fills, so a fading name has nothing to settle onto
     // and eases all the way out.
     let names = view.note_names;
+    // The resting field's grey, resolved once for the pane rather than per
+    // name: one bar, one answer, whatever the frame holds.
+    let ink = label_ink(view);
     for (index, node) in scene.nodes.iter().enumerate() {
         // Whether this node is named at all — asked of the node rather than
         // spelled out here, because the resting MARKER under it turns on the same
@@ -443,7 +472,7 @@ pub(crate) fn draw_node_labels(
         if !rect.expand(LABEL_REACH * want).contains(center) {
             continue;
         }
-        let outline = theme::well().gamma_multiply(strength);
+        let shadow = LABEL_SHADOW.gamma_multiply(strength);
         // Everything below is this node's name, and is collected as such: the
         // lattice draws a label at its own node's place in the back-to-front
         // order, so a nearer node covers it the way it covers the node behind
@@ -482,8 +511,8 @@ pub(crate) fn draw_node_labels(
                     ui.painter(),
                     center,
                     &format!("{:.0}", node.cents),
-                    LABEL_INK.gamma_multiply(strength),
-                    outline,
+                    ink.gamma_multiply(strength),
+                    shadow,
                     scale,
                     magnify,
                 ),
@@ -494,8 +523,8 @@ pub(crate) fn draw_node_labels(
                         ui.painter(),
                         center,
                         name,
-                        LABEL_INK.gamma_multiply(strength),
-                        outline,
+                        ink.gamma_multiply(strength),
+                        shadow,
                         scale,
                         magnify,
                         // A node's label sits ON its node, so the node is the
@@ -524,8 +553,8 @@ pub(crate) fn draw_node_labels(
                         egui::Align2::CENTER_TOP,
                         text,
                         font,
-                        LABEL_INK.gamma_multiply(strength),
-                        outline,
+                        ink.gamma_multiply(strength),
+                        shadow,
                     );
                 });
             }

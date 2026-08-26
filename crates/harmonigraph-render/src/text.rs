@@ -46,7 +46,7 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::{create_vertex_buffer, wgpu};
 
-const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
+pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
 /// Entry points the text shader must provide.
 #[cfg(test)]
@@ -192,10 +192,17 @@ pub(crate) struct TextUniforms {
     /// `FILTER_TAP` in the shader for what is done with it.
     pub(crate) filter_axis: [f32; 2],
     pub(crate) pixels_per_point: f32,
+    /// The lattice's Meld bar and Shadow depth, for the two entry points that
+    /// draw a name against its light (`fs_fill_lit` and `fs_glyph_glow`). Every
+    /// other surface has no light to read and leaves both at 0 — which for the
+    /// depth is a name that casts no shadow, the same nothing the bar's own
+    /// bottom draws.
+    pub(crate) meld: f32,
+    pub(crate) shadow_depth: f32,
     /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
     /// this is the gap in front of them. Named rather than derived because
     /// the mismatch is a validation error at first paint, not a compile one.
-    pub(crate) _pad: [f32; 3],
+    pub(crate) _pad: f32,
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
 }
@@ -450,12 +457,20 @@ pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 impl TextResources {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let layout = glyph_bind_group_layout(device);
-        let rim_pipeline =
-            create_text_pipeline(device, target_format, &layout, "fs_rim", None, crate::EGUI_BLEND);
+        let rim_pipeline = create_text_pipeline(
+            device,
+            target_format,
+            &layout,
+            None,
+            "fs_rim",
+            None,
+            crate::EGUI_BLEND,
+        );
         let fill_pipeline = create_text_pipeline(
             device,
             target_format,
             &layout,
+            None,
             "fs_fill",
             None,
             crate::EGUI_BLEND,
@@ -645,17 +660,23 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 ///     bright pass reads, so leaving it unwritten here is the whole of how a
 ///     name stays out of the bloom.
 ///
-/// `blend` is [`crate::EGUI_BLEND`] wherever a label is being DRAWN. Its alpha
-/// term is egui's own — `src * (1 - dst.a) + dst`, which is the same arithmetic
-/// as premultiplied `over` written from the other side, so a glyph composites
-/// into the lattice's offscreen exactly as a node does. It is a parameter
-/// because the lattice builds one more of these that draws nothing: the node
-/// glow stands its light off every name, by running this same fragment against
-/// a blend that only ever takes light away (see `create_glow_pipelines`).
+/// `blend` is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
+/// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
+/// `over` written from the other side, so a glyph composites into the lattice's
+/// offscreen exactly as a node does.
+///
+/// `glow` is the lattice's light, at group 1, and only `fs_fill_lit` reads it:
+/// a name there is ink standing in the light and takes the wash a marker's
+/// cross takes. Every other surface passes `None` — its text has no light to
+/// stand in, and the entry points it draws through name no group 1 for a layout
+/// to have to carry. The shadow that light is held off by is the other half of
+/// the same picture and is a pass of its own; see
+/// [`create_glyph_glow_pipeline`].
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
+    glow: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
     scene_depth: Option<wgpu::TextureFormat>,
     blend: wgpu::BlendState,
@@ -666,7 +687,7 @@ pub(crate) fn create_text_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("text_pipeline_layout"),
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &[Some(layout), glow],
         ..Default::default()
     });
     let mut targets = vec![Some(wgpu::ColorTargetState {
@@ -717,6 +738,58 @@ pub(crate) fn create_text_pipeline(
     })
 }
 
+/// The lattice's names in its GLOW pass: the shadow each one holds the light
+/// off by (`fs_glyph_glow`), over the same glyph buffer the name itself is
+/// drawn from.
+///
+/// `targets` is that pass's three attachments with their own blends, handed in
+/// by the caller rather than spelled here — they are the terms a node's rings
+/// and a marker's cross write the field under (`crate::glow_targets`), and a
+/// name melding into it on terms of its own would be a shadow whose depth
+/// depended on what cast it.
+///
+/// No depth, and one bind group: the glow pass carries neither a depth
+/// attachment nor a light to read, this draw being one of the writers of it.
+pub(crate) fn create_glyph_glow_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    targets: &[Option<wgpu::ColorTargetState>],
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("text_shader"),
+        source: wgpu::ShaderSource::Wgsl(TEXT_SRC.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("glyph_glow_pipeline_layout"),
+        bind_group_layouts: &[Some(layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("fs_glyph_glow"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_glyph"),
+            compilation_options: Default::default(),
+            buffers: &[GlyphInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_glyph_glow"),
+            compilation_options: Default::default(),
+            targets,
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl CallbackTrait for TextCallback {
     fn prepare(
         &self,
@@ -753,7 +826,9 @@ impl CallbackTrait for TextCallback {
             mark_atlas_size: [sizes[2], sizes[3]],
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
-            _pad: [0.0; 3],
+            meld: 0.0,
+            shadow_depth: 0.0,
+            _pad: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };

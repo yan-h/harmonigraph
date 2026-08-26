@@ -39,11 +39,18 @@ struct Locals {
     /// Physical pixels per point: both sheets are rasterized at device scale,
     /// so this converts a rim radius in points into a texel offset.
     pixels_per_point: f32,
+    /// How the light standing under a name is mixed out of the two blends it
+    /// was written under — the lattice's Meld bar, the same number every other
+    /// reader of that target takes (`glow_light` in lattice.wgsl). Read by the
+    /// lattice's entry points alone; every other surface draws no light and
+    /// leaves it at 0.
+    meld: f32,
+    /// How much of that light a name holds off, 0..1 — the lattice's Shadow
+    /// depth, spent in [`glyph_shade`].
+    shadow_depth: f32,
     /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
-    /// these three are the gap in front of them.
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    /// this is the gap in front of them.
+    _pad: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
@@ -54,6 +61,18 @@ struct Locals {
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
 @group(0) @binding(3) var mark_atlas: texture_2d<f32>;
+
+// The lattice's light, at group 1: the same target its nodes and markers read
+// back, in the same layout (`Resources::glow_layout`), so the group the scene
+// pass already has bound serves this pass unchanged. The two textures are the
+// field under both of its blends, mixed by `locals.meld`.
+//
+// Bound by the LATTICE's glyph pipelines alone. The bindings a pipeline must
+// carry are the ones its entry point reads, so `fs_rim` and `fs_fill` — the
+// two every other surface's text draws through — take a layout with group 0 and
+// nothing else, and a pane with no light has no dummy to bind.
+@group(1) @binding(0) var glow_tex: texture_2d<f32>;
+@group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
 
 /// The `atlas` an instance carries when it is a drawn mark rather than a
 /// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
@@ -391,4 +410,132 @@ fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     return in.fill * cov;
+}
+
+/// The finished light at a pixel of the lattice's glow target, mixed out of the
+/// two blends it was written under — `glow_light` in lattice.wgsl, and the same
+/// mix for the same reason: ink painting a different one from the picture it
+/// stands in is a halo drawn round every name.
+///
+/// `coord` is clamped into the texture, which is the lattice's own rule
+/// (`light_coord`): the glow target is the scene target's size, so a fragment
+/// of this pass stands at one of its texels, and the clamp is what keeps a
+/// rounding at the last row from reading nothing.
+fn glyph_light(coord: vec2<i32>) -> vec4<f32> {
+    let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
+    let at = clamp(coord, vec2<i32>(0, 0), edge);
+    let screened = textureLoad(glow_tex, at, 0);
+    let brightest = textureLoad(glow_max_tex, at, 0);
+    return mix(brightest, screened, clamp(locals.meld, 0.0, 1.0));
+}
+
+/// The whole of `light`, laid over ink already premultiplied by `alpha` —
+/// `wash_over` in lattice.wgsl at a share of 1, which is the share every piece
+/// of the lattice's RESTING field takes (see `plus_paint`).
+///
+/// A SCREEN rather than an over, and that is what a neighbour's light is
+/// allowed to do: `w + ink * (1 - w)` per channel can only brighten, where an
+/// over lets a saturated halo standing behind a name take the name's other
+/// channels down with it.
+fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
+    return light * alpha + ink * (1.0 - light);
+}
+
+/// The lattice's own glyphs: [`fs_fill`]'s ink, washed by the light it stands
+/// in.
+///
+/// A name is ink laid over ground the light is already under, exactly as a
+/// resting marker's cross is (`plus_paint` in lattice.wgsl), so unwashed it
+/// comes out DARKER inside a halo than the ground to either side of it — a
+/// name reading as a hole punched in the light precisely where the light is
+/// brightest. The wash is what makes a lit node's name stand IN its halo.
+///
+/// The WHOLE field, at any setting of the lattice's Wash bar, and the RAW
+/// light rather than the shaded one: both are the cross's terms (see
+/// `plus_paint`, which sets out why), and the resting field is one field
+/// whether a position is showing its name or its marker.
+///
+/// Its own entry point rather than a branch in [`fs_fill`], because what parts
+/// them is the BINDING: only the lattice has a light to hand a glyph pipeline,
+/// and a pipeline declares the groups its entry point reads.
+@fragment
+fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
+    let cov = coverage(in, in.texel);
+    if cov <= 0.0 {
+        discard;
+    }
+    // Premultiplied, as everything this pass draws is: the ink is the colour
+    // the Marker ink bar names, and only its coverage varies across a glyph.
+    let ink = in.fill * cov;
+    let light = glyph_light(vec2<i32>(in.position.xy));
+    return vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb), ink.a);
+}
+
+/// The three attachments the lattice's glow pass carries: the light under its
+/// two blends, and the standoff every emitter cuts into it. Named here as it is
+/// in lattice.wgsl, because it is the same target.
+struct GlowOut {
+    @location(0) screened: vec4<f32>,
+    @location(1) brightest: vec4<f32>,
+    @location(2) shade: vec4<f32>,
+}
+
+/// The floor under what a shadow may KEEP of the light: `SHADOW_KEEP_FLOOR` in
+/// lattice.wgsl, which is where its reasoning lives, and the two are one number
+/// — `the_names_shadow_spends_the_depth_the_rings_do` is what says so.
+const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
+
+/// What a standoff coverage of `cov` leaves of the light: the Shadow depth,
+/// spent geometrically over that coverage.
+///
+/// `gap_shade` in lattice.wgsl is the same mapping over the same bar, and has
+/// to be: the Shadow is ONE setting across a node's rings, a marker's cross and
+/// a name, so what differs between the three is the shape they cast and never
+/// what a covered pixel is worth.
+fn glyph_shade(cov: f32) -> f32 {
+    let keep = max(1.0 - clamp(locals.shadow_depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
+    return 1.0 - pow(keep, clamp(cov, 0.0, 1.0));
+}
+
+/// The shadow a lattice name holds the light off by, drawn into the glow pass
+/// over the same glyph quads the name itself is drawn from.
+///
+/// A name has no rim. What a cross keeps a halo off itself with is a shape in
+/// the LIGHT rather than one painted on the ink (`plus_standoff`), and a
+/// lattice where the crosses stand in the light and the names carry a black
+/// halo of their own reads as two pictures laid over each other. So the halo
+/// the rim used to stamp is cast here instead, on the Shadow bars every other
+/// emitter is held off on: dark where there is light to hold off, and nothing
+/// at all where there is none.
+///
+/// The RIM's own shape is what casts it, which is what keeps a glyph's shadow
+/// clear of its strokes: the rings are the glyph dilated (see [`ring`]), and a
+/// shadow the width of the ink alone would be a name cut out of the light
+/// rather than one standing in it. The ink's own coverage is taken with it so
+/// that a stroke the rings' samples happen to miss is still solid in the
+/// shadow — the letters are what the eye reads a name by, exactly as the arms
+/// are on a cross.
+///
+/// Closed by the name's own STRENGTH, the one number the rim colour carries
+/// here (`LABEL_SHADOW` in `harmonigraph_ui`): a name easing in as the marker
+/// under it eases out grows its shadow on the same clock its ink arrives on, so
+/// a position handing itself between the two is never twice shadowed nor
+/// briefly unshadowed.
+@fragment
+fn fs_glyph_glow(in: VertexOut) -> GlowOut {
+    if locals.shadow_depth <= 0.0 || in.rim.a <= 0.0 {
+        discard;
+    }
+    var cov = ring(in, locals.ring0, 0.0);
+    cov = ring(in, locals.ring1, cov);
+    cov = max(cov, coverage(in, in.texel));
+    let shade = glyph_shade(cov) * clamp(in.rim.a, 0.0, 1.0);
+    if shade <= 0.0 {
+        discard;
+    }
+    // Nothing into the two light attachments: a name is ink standing in the
+    // light and never a source of any, which is also what keeps it out of the
+    // bloom (`a_label_adds_no_light_through_the_bloom`).
+    let dark = vec4<f32>(0.0);
+    return GlowOut(dark, dark, vec4<f32>(shade, 0.0, 0.0, 0.0));
 }

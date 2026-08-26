@@ -560,3 +560,199 @@ fn a_label_adds_no_light_through_the_bloom() {
         (at / 4) / SCENE_SIZE[0] as usize,
     );
 }
+
+/// The name's own fixture: a lit node at the origin and a light wide enough to
+/// reach past every ring it paints.
+///
+/// The arrangement is `a_resting_marker_wears_the_wash_it_stands_in`'s, and
+/// deliberately: the two tests below are that cross's claims asked of a name, so
+/// what they are read against has to be the same picture with the cross swapped
+/// for a glyph.
+fn lit_node_and_a_name(reach: f32, depth: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.glow_reach = reach;
+    scene.glow_strength = 1.5;
+    scene.glow_feather = 1.0;
+    scene.glow_shadow_depth = depth;
+    // The markers away: a cross would write a standoff of its own into the
+    // layer both tests below read.
+    scene.pluses.clear();
+    scene
+}
+
+/// Where the name stands in that fixture: uv 1 is 1.8 node radii, so the
+/// outermost ring reaches 1.57 world units and this is well clear of it, inside
+/// a reach that carries light past both.
+const NAME_AT: glam::Vec3 = glam::Vec3::new(3.0, 0.0, 0.0);
+
+/// How wide that name's one glyph is drawn, in points. Its atlas patch is 8
+/// texels square and opaque (`text::tests::atlas`), so at this size it is a
+/// solid block of ink several pixels across — and a pixel inside it carries the
+/// label's colour exactly, which is what the wash is read on.
+const NAME_SIZE: f32 = 12.0;
+
+/// That name, in the resting field's own grey and at full strength.
+fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
+    let at = scene
+        .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
+        .project(NAME_AT)
+        .expect("the name stands in front of the camera");
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let ink = scene.lattice_ground;
+    LatticeLabels {
+        glyphs: vec![GlyphInstance {
+            rect: [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE],
+            fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
+            // The shadow's strength, which is the whole of what the glow pass
+            // reads off this colour (`fs_glyph_glow`).
+            rim: [0, 0, 0, 255],
+            ..crate::text::tests::glyph()
+        }],
+        labels: vec![Label { node: 0, glyphs: 1 }],
+        // The rings the UI sets (`RINGS` in `harmonigraph_ui::text`), because
+        // they are what gives the shadow a shape of its own: the dilation they
+        // describe is what reaches OUTSIDE the ink, and a name whose shadow
+        // stopped at its own strokes would be one the halo could still swallow
+        // — nothing of the standoff would be anywhere the type is read against.
+        rings: [
+            TextRing { radius: 2.0, alpha: 0.21, samples: 8 },
+            TextRing { radius: 1.2, alpha: 1.0, samples: 12 },
+        ],
+        atlas: Some(crate::text::tests::atlas()),
+        marks: Some(crate::text::tests::mark_sheet()),
+        slide: SlideAxis::default(),
+    }
+}
+
+/// A name wears the light it stands in, exactly as a resting cross does.
+///
+/// The pair is one field: a position shows a name or a marker and never both
+/// (`derive_pluses`), so a name that did not take the wash would read as a hole
+/// punched in the halo at precisely the positions a cross reads as standing in
+/// it — the handover between the two visible as the light flinching rather than
+/// as one shape replacing another.
+///
+/// Read against the glow OFF, which is the one setting that takes the wash out
+/// of the picture and leaves everything else where it was.
+#[test]
+fn a_name_wears_the_wash_it_stands_in() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let bare = shooter.shot(&lit_node_and_a_name(0.0, 0.0));
+    let unlit = lit_node_and_a_name(0.0, 0.0);
+    let off = shooter.shot_with(&unlit, one_name(&unlit, SIZE));
+    // The name's own pixels: what it drew where the node had left the frame
+    // black. Its ink is laid down flat and premultiplied, so a pixel it covers
+    // completely carries that colour exactly and the brightest value in the set
+    // IS the colour — every other one is a fraction of it across the edge.
+    let drawn: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && off[i..i + 4] != bare[i..i + 4])
+        .collect();
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| off[i + c]).max().unwrap_or(0));
+    let name: Vec<usize> = drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
+    assert!(name.len() > 30, "the name covers {} whole pixels of its own", name.len());
+
+    let lit = lit_node_and_a_name(1.6, 0.0);
+    let worn = shooter.shot_with(&lit, one_name(&lit, SIZE));
+    let lifted =
+        name.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
+    assert_eq!(
+        lifted,
+        name.len(),
+        "the light lifted {lifted} of the name's {} pixels: the name is not wearing the light \
+         it stands in",
+        name.len(),
+    );
+    let dimmed = name.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    assert_eq!(dimmed, 0, "the wash took light off {dimmed} of the name's {} pixels", name.len());
+    let by_wash = name
+        .iter()
+        .map(|&i| (0..3).map(|c| worn[i + c].abs_diff(off[i + c])).max().unwrap())
+        .max()
+        .unwrap();
+    assert!(
+        by_wash > 20,
+        "the fixture's wash moves the name by {by_wash}; there is nothing here to measure",
+    );
+}
+
+/// A name holds the light off itself, on the Shadow bars a node's rings and a
+/// marker's cross are held off by.
+///
+/// The other half of the pair above, and the whole of why a name needs no
+/// painted rim: what keeps a halo from swallowing the type is a shape in the
+/// LIGHT, written in the light's own pass, so it stands off whatever reaches
+/// there — a neighbour's halo as readily as the named node's.
+///
+/// Measured on the GROUND around the name rather than on the name itself, the
+/// ink being washed by the raw light and so unmoved by its own shadow, exactly
+/// as a cross's is. The pair at a depth of 0 is what says the darkening IS the
+/// standoff: with the Shadow shut, nothing a name draws may take light off
+/// anything.
+#[test]
+fn a_name_holds_the_light_off_the_ground_it_stands_on() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let shot = |shooter: &mut Shooter, depth: f32, named: bool| -> Vec<u8> {
+        let scene = lit_node_and_a_name(1.6, depth);
+        let labels = if named { one_name(&scene, SIZE) } else { LatticeLabels::default() };
+        shooter.shot_with(&scene, labels)
+    };
+    let flat_bare = shot(&mut shooter, 0.0, false);
+    let flat = shot(&mut shooter, 0.0, true);
+    // The ground: every pixel the name's own ink leaves alone, taken from the
+    // pair with the Shadow shut — where a name writes ink and nothing else. The
+    // footprint does not move with the depth, so one reading answers for both.
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
+    let flat_dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&flat[i..i + 3]) < brightness(&flat_bare[i..i + 3]))
+        .count();
+    assert_eq!(flat_dimmed, 0, "a name took light off the ground at a Shadow depth of 0");
+
+    let deep_bare = shot(&mut shooter, 1.0, false);
+    let deep = shot(&mut shooter, 1.0, true);
+    let dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
+        .count();
+    assert!(dimmed > 40, "a name at a Shadow depth of 1 dimmed only {dimmed} pixels of the light");
+}
+
+/// One Shadow, two shaders: what a name's coverage is worth of the light is
+/// what a ring's and a cross's are worth of it.
+///
+/// The mapping is written twice — `gap_shade` in lattice.wgsl, `glyph_shade` in
+/// text.wgsl — because the two draws are two shader modules and neither can
+/// call into the other. This is what that costs: the floor under what a shadow
+/// may KEEP is a tuned constant, and a copy of it drifting is a name whose
+/// shadow bottoms out where its neighbours' do not, at one end of one bar, which
+/// no picture makes obvious.
+#[test]
+fn the_names_shadow_spends_the_depth_the_rings_do() {
+    let floor = |src: &str, what: &str| -> String {
+        src.lines()
+            .find_map(|line| line.trim().strip_prefix("const SHADOW_KEEP_FLOOR: f32 = "))
+            .unwrap_or_else(|| panic!("{what} no longer defines a shadow floor"))
+            .trim_end_matches(';')
+            .to_owned()
+    };
+    assert_eq!(
+        floor(SHADER_SRC, "the lattice"),
+        floor(crate::text::TEXT_SRC, "the names"),
+        "the lattice's shadow floor and the names' have drifted apart",
+    );
+}

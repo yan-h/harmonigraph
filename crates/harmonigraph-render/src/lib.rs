@@ -1310,8 +1310,14 @@ struct LatticeResources {
     /// draws through (`crate::text`), built for THIS pass — its format and
     /// its depth attachment — so a name takes its place in the scene's own
     /// back-to-front order instead of being laid over the finished picture.
-    glyph_rim_pipeline: wgpu::RenderPipeline,
+    ///
+    /// A name is the resting field's ink, so it takes the light on the field's
+    /// terms: the fill is washed by the halo it stands in (`fs_fill_lit`, which
+    /// is why this one carries the glow at group 1), and the shadow it holds
+    /// that halo off by is the pair's other half — written into the light's own
+    /// pass, over the same glyphs, exactly as a marker's cross writes its own.
     glyph_fill_pipeline: wgpu::RenderPipeline,
+    glyph_glow_pipeline: wgpu::RenderPipeline,
     glyph_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
     /// This renderer's copies of the two sheets a glyph can be cut from —
@@ -2337,28 +2343,85 @@ fn create_glow_pipelines(
     )
 }
 
+/// The glow pass's three attachments and the blends every writer of them melds
+/// under: the light screened, the same light max-blended, and the standoff.
+///
+/// One list, because the terms are what make the field ONE: a node's rings, a
+/// marker's cross and a name's shadow (`text::create_glyph_glow_pipeline`) all
+/// write here, and a writer melding on terms of its own would be readable in
+/// the picture as the order the draws happened to run in.
+///
+/// **Attachment 0 is SCREEN**: `src + dst * (1 - src)`, premultiplied on both
+/// channels, is what makes two neighbouring nodes' halos MELD: an overlap is
+/// brighter than either alone, it is bounded by white however many nodes reach
+/// the same pixel, and the operation is commutative, so nothing about the order
+/// inside a draw is readable in the picture. Adding instead blows a chord's
+/// middle out to white and makes the count of overlapping nodes, rather than
+/// any note, the brightest thing on screen.
+///
+/// **Attachment 1 is MAX**, which is the same guarantee taken all the way: an
+/// overlap is exactly as bright as the brighter of the nodes lighting it, so
+/// the count of them cannot be read off the picture at all.
+///
+/// **Attachment 2 is the STANDOFF**, on the same `max` and for a different
+/// reason: there it is one of two answers a bar dials between, here it is the
+/// only sane way to meld a shadow. The deepest band at a pixel wins, so two
+/// emitters' standoffs crossing do not compound into a pit, and the operator is
+/// commutative.
+///
+/// A coverage of 0 is therefore the destination left exactly alone, which is
+/// what lets `fs_glow` write one rather than take an early-out it cannot take
+/// for the light beside it.
+fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetState>; 3] {
+    let screen = wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
+    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    };
+    let brightest = wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT };
+    [
+        Some(wgpu::ColorTargetState {
+            format: target_format,
+            blend: Some(screen),
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: target_format,
+            blend: Some(brightest),
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: GLOW_SHADE_FORMAT,
+            blend: Some(brightest),
+            write_mask: wgpu::ColorWrites::RED,
+        }),
+    ]
+}
+
 /// The node glow's one pipeline: the light, over the node instance buffer and
 /// into the glow's own target (see [`GlowTarget`]).
 ///
 /// **TWO attachments, one draw: the same light under both blends.** A blend is
 /// fixed-function and per-target, so a dial between two of them can only be had
 /// by writing both and mixing after — which is what the Meld bar is
-/// (`Scene::glow_meld`), mixed at every reader of this target.
-///
-/// **Attachment 0 is SCREEN**: `src + dst * (1 - src)`, premultiplied on both
-/// channels, is what makes two neighbouring nodes' halos MELD: an overlap is
-/// brighter than either alone, it is bounded by white however many nodes reach
-/// the same pixel, and the operation is commutative, so nothing about the order
-/// inside the draw is readable in the picture. Adding instead blows a chord's
-/// middle out to white and makes the count of overlapping nodes, rather than
-/// any note, the brightest thing on screen.
-///
-/// **Attachment 1 is MAX**, which is the same guarantee taken all the way: an
-/// overlap is exactly as bright as the brighter of the nodes lighting it, so
-/// the count of them cannot be read off the picture at all. It is what the
-/// screen alone cannot give at a flat Feather, where a falloff is still near
-/// its peak halfway to a neighbour and screening two of those puts more light
-/// in the GAP between two nodes than either node has of its own.
+/// (`Scene::glow_meld`), mixed at every reader of this target. The terms are
+/// [`glow_targets`]'s, which is where the argument for each of them lives; the
+/// max is what the screen alone cannot give at a flat Feather, where a falloff
+/// is still near its peak halfway to a neighbour and screening two of those
+/// puts more light in the GAP between two nodes than either node has of its
+/// own.
 ///
 /// Both are commutative and neither subtracts, so the pair keeps every promise
 /// one made: no draw order is readable in either, and a max of premultiplied
@@ -2381,11 +2444,9 @@ fn create_glow_pipelines(
 /// ahead of the scene's, and a screen blend has no order to defend.
 ///
 /// **Two pipelines, one target state.** The nodes' light and the markers'
-/// standoff write the same three attachments under the same three blends, and
-/// differ only in what they are drawn over: one instance buffer of nodes, one of
-/// markers. `entries` and `buffers` are the whole of that difference, which is
-/// what keeps a cross's shadow from landing on different terms than a ring's by
-/// drifting a blend.
+/// standoff differ only in what they are drawn over: one instance buffer of
+/// nodes, one of markers. `entries` and `buffers` are the whole of that
+/// difference.
 fn create_glow_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
@@ -2407,24 +2468,6 @@ fn create_glow_pipeline(
         bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
         ..Default::default()
     });
-    let screen = wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrc,
-            operation: wgpu::BlendOperation::Add,
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-            operation: wgpu::BlendOperation::Add,
-        },
-    };
-    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    };
-    let brightest = wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(entries.1),
         layout: Some(&layout),
@@ -2438,34 +2481,7 @@ fn create_glow_pipeline(
             module: &shader,
             entry_point: Some(entries.1),
             compilation_options: Default::default(),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(screen),
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(brightest),
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                // The STANDOFF, on the same `max` the light's brighter half
-                // takes and for a different reason: there it is one of two
-                // answers a bar dials between, here it is the only sane way to
-                // meld a shadow. The deepest band at a pixel wins, so two
-                // nodes' standoffs crossing do not compound into a pit, and the
-                // operator is commutative — which is what keeps the draw's
-                // order as unreadable in this layer as it is in the two above.
-                //
-                // A coverage of 0 is therefore the destination left exactly
-                // alone, which is what lets `fs_glow` write one rather than
-                // take an early-out it cannot take for the light beside it.
-                Some(wgpu::ColorTargetState {
-                    format: GLOW_SHADE_FORMAT,
-                    blend: Some(brightest),
-                    write_mask: wgpu::ColorWrites::RED,
-                }),
-            ],
+            targets: &glow_targets(target_format),
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -2844,18 +2860,19 @@ impl LatticeResources {
         // The label pipelines draw into the scene pass, so they are built
         // against its depth attachment as well as its format.
         let glyph_layout = text::glyph_bind_group_layout(device);
-        let glyph_pipeline = |fragment| {
-            text::create_text_pipeline(
-                device,
-                target_format,
-                &glyph_layout,
-                fragment,
-                Some(DEPTH_FORMAT),
-                EGUI_BLEND,
-            )
-        };
-        let glyph_rim_pipeline = glyph_pipeline("fs_rim");
-        let glyph_fill_pipeline = glyph_pipeline("fs_fill");
+        // The light at group 1, as every other draw in the scene pass takes it:
+        // a name is ink standing in it (`fs_fill_lit`).
+        let glyph_fill_pipeline = text::create_text_pipeline(
+            device,
+            target_format,
+            &glyph_layout,
+            Some(&glow_layout),
+            "fs_fill_lit",
+            Some(DEPTH_FORMAT),
+            EGUI_BLEND,
+        );
+        let glyph_glow_pipeline =
+            text::create_glyph_glow_pipeline(device, &glyph_layout, &glow_targets(target_format));
 
         // The stand-in light: one transparent texel. It is the format the real
         // target is in so that one bind group layout serves both, and ONE texel
@@ -2941,7 +2958,7 @@ impl LatticeResources {
             glow_dummy_bind_group,
             strip_layout,
             sampler,
-            glyph_rim_pipeline,
+            glyph_glow_pipeline,
             glyph_fill_pipeline,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
@@ -3380,7 +3397,15 @@ impl CallbackTrait for LatticeCallback {
                         mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
                         filter_axis: self.slide.unit(),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        _pad: [0.0; 3],
+                        // The two the names share with the rest of the picture,
+                        // read out of the row they were packed into rather than
+                        // off the scene a second time: the Meld a name's wash
+                        // mixes the light by, and the Shadow depth its own
+                        // standoff spends. One number each, and the same number
+                        // the nodes and markers took.
+                        meld: self.uniforms.misc[2],
+                        shadow_depth: self.uniforms.misc11[3],
+                        _pad: 0.0,
                         ring0: text::TextUniforms::ring(self.rings[0]),
                         ring1: text::TextUniforms::ring(self.rings[1]),
                     }),
@@ -3569,6 +3594,25 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_pipeline(&resources.plus_glow_pipeline);
                     pass.draw(0..4, 0..pane.plus_count);
                 }
+                // And the NAMES, whose shadow is a marker's read on the other
+                // half of the same handover: a position shows a cross or a
+                // name, and either way what it stands in the light with is a
+                // standoff on these bars. Every glyph in the pane at once,
+                // ignoring the back-to-front order the scene pass draws them
+                // in — this layer has no depth to defend, the `max` blend
+                // being what melds it.
+                //
+                // Group 0 alone, and its own: the glyph pipelines take the
+                // atlases and the rim's rings where the two draws above take
+                // the lattice's uniforms.
+                if pane.glyph_count > 0 {
+                    if let Some(bind_group) = pane.glyph_bind_group.as_ref() {
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                        pass.set_pipeline(&resources.glyph_glow_pipeline);
+                        pass.draw(0..4, 0..pane.glyph_count);
+                    }
+                }
             }
 
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3677,18 +3721,22 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
                         pass.draw(0..4, a..b);
                     }
-                    // Every rim, then every fill. Stamping had that order for
-                    // free and the shader keeps it, because two neighbouring
-                    // letters otherwise darken each other's ink where their
-                    // rims overlap.
+                    // One draw per name: the glyphs, washed by the light they
+                    // stand in. What used to precede them here was a painted
+                    // rim, stamped round every letter — a name keeps a halo off
+                    // itself the way a marker does instead, by holding the
+                    // light off in the pass that draws it (`fs_glyph_glow`).
+                    //
+                    // The light at group 1, which is the same bind group the
+                    // nodes and markers above it took: a name reads the field
+                    // its neighbours wrote, not one of its own.
                     Draw::Label(a, b) => {
                         let Some(bind_group) = pane.glyph_bind_group.as_ref() else {
                             continue;
                         };
                         pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_bind_group(1, light, &[]);
                         pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
-                        pass.set_pipeline(&resources.glyph_rim_pipeline);
-                        pass.draw(0..4, a..b);
                         pass.set_pipeline(&resources.glyph_fill_pipeline);
                         pass.draw(0..4, a..b);
                     }
