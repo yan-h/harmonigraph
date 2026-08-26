@@ -766,9 +766,9 @@ fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
     let mut state = fresh();
     // Non-defaults on both sides of the splice, so "the blob survived" is
     // distinguishable from "it sank and everything reverted": the view is what
-    // the editor door restores, the lead-in what the offline door reads.
+    // the editor door restores, short_edge what the offline door reads.
     state.view.extent_sevens = 3;
-    state.take.render_config.lead_in = 2.5;
+    state.take.render_config.short_edge = 2160;
     let saved = state.save_persist();
     let stale = saved.replace(anchor, &format!("{spliced}{anchor}"));
     assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
@@ -779,7 +779,7 @@ fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
 
     let offline = crate::render_config_from_persist(&stale)
         .expect("an unknown key must not sink the offline door either");
-    assert_eq!(offline.lead_in, 2.5, "the offline door must read past an unknown key");
+    assert_eq!(offline.short_edge, 2160, "the offline door must read past an unknown key");
 }
 
 /// The numeric case. `spectrogram_fine_levels` existed only while the heatmap's
@@ -935,7 +935,6 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
     // Non-defaults on both sides of the drop, so "the blob survived" is
     // distinguishable from "it sank and everything reverted".
     state.view.extent_sevens = 3;
-    state.take.render_config.lead_in = 2.5;
     let saved = state.save_persist();
 
     let kept: Vec<String> = top_level_pairs(&saved)
@@ -951,7 +950,6 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
     // assertion below mean anything: a fresh state already holds
     // `RenderConfig::default()`, so a load that skipped the section entirely
     // would satisfy "it is at the fresh-install values" without doing it.
-    restored.take.render_config.lead_in = 4.0;
     restored.take.render_config.short_edge = 2160;
     restored.load_persist(&without);
     assert_eq!(
@@ -1355,8 +1353,8 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
 /// The two doors into a take's `ui_state` agree about whether it is loadable.
 ///
 /// The offline renderer reads the SAME blob twice: `render_config_from_persist`
-/// for the frame it composes at and the lead-in it starts from, and
-/// `load_persist` for the camera, view and spectrum it draws with. A floor on
+/// for the frame it composes at, and `load_persist` for the camera, view and
+/// spectrum it draws with. A floor on
 /// one and not the other renders an old take at its recorded size and aspect —
 /// so the output looks honoured — around a lattice nobody dialled in, with the
 /// whole-song playhead the take asked for silently off.
@@ -1378,7 +1376,6 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     state.take.render_config.frame.aspect_w = 9;
     state.take.render_config.frame.aspect_h = 16;
     state.take.render_config.playhead = true;
-    state.take.render_config.lead_in = 2.5;
     let saved = state.save_persist();
 
     let stale = saved.replacen(
@@ -1407,7 +1404,6 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     let at_floor = crate::render_config_from_persist(&saved).expect("the floor still parses");
     assert_eq!(at_floor.frame.aspect_w, 9);
     assert!(at_floor.playhead);
-    assert_eq!(at_floor.lead_in, 2.5);
 }
 
 /// Loading a project asks the detects afresh, even at a tuning this session
@@ -1746,37 +1742,26 @@ fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob still restores");
 }
 
-/// The Video pane's two numeric dials, on the same footing: `lead_in` feeds
-/// the offline renderer's frame count and `split` feeds `Layout::split`,
-/// whose own clamp cannot repair a NaN (it loses every comparison a clamp
-/// makes), only hold a finite value inside a literal range.
+/// The Video pane's split dial: `split` feeds `Layout::split`, whose own
+/// clamp cannot repair a NaN (it loses every comparison a clamp makes), only
+/// hold a finite value inside a literal range.
 #[test]
 fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
-    let cases: [(&str, &str, &str, (f32, f32)); 4] = [
-        ("lead_in", "NaN", "a NaN lead-in", (0.0, 5.0)),
-        ("lead_in", "999.0", "a lead-in past its bar", (0.0, 5.0)),
-        ("split", "NaN", "a NaN split", (0.05, 0.95)),
-        ("split", "inf", "an infinite split", (0.05, 0.95)),
-    ];
-    for (key, value, hint, (lo, hi)) in cases {
+    let cases: [(&str, &str, (f32, f32)); 2] =
+        [("NaN", "a NaN split", (0.05, 0.95)), ("inf", "an infinite split", (0.05, 0.95))];
+    for (value, hint, (lo, hi)) in cases {
         let mut state = fresh();
         state.view.extent_sevens = 3;
         let saved = state.save_persist();
-        let was = match key {
-            "lead_in" => state.take.render_config.lead_in,
-            _ => state.take.render_config.frame.split,
-        };
-        let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
-        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+        let was = state.take.render_config.frame.split;
+        let edited = replace_pair(&saved, "split", &format!("{was:?}"), value);
+        assert_ne!(edited, saved, "{hint}: `split` is not in the blob to edit");
 
         let mut restored = fresh();
         restored.load_persist(&edited);
-        let got = match key {
-            "lead_in" => restored.take.render_config.lead_in,
-            _ => restored.take.render_config.frame.split,
-        };
-        assert!(got.is_finite(), "{hint}: `{key}` opened at {got}");
-        assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
+        let got = restored.take.render_config.frame.split;
+        assert!(got.is_finite(), "{hint}: `split` opened at {got}");
+        assert!(got >= lo && got <= hi, "{hint}: `split` opened at {got}, outside {lo}..={hi}");
         assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
     }
 }

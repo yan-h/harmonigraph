@@ -337,16 +337,15 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
         }
     }
     // Take-only, and gated on exactly the same flag: a shell that cannot record
-    // has nothing for these to describe.
-    for row in ["Finish", "Lead-in"] {
-        let (with, _) = video_pane_shapes(true);
-        assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
-        let (without, _) = video_pane_shapes(false);
-        assert!(
-            text_y(&without, row).is_none(),
-            "the standalone drew {row:?}, which needs a take to mean anything",
-        );
-    }
+    // has nothing for this to describe.
+    let row = "Finish";
+    let (with, _) = video_pane_shapes(true);
+    assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
+    let (without, _) = video_pane_shapes(false);
+    assert!(
+        text_y(&without, row).is_none(),
+        "the standalone drew {row:?}, which needs a take to mean anything",
+    );
 }
 
 /// The bar tracks a pane drew, by width.

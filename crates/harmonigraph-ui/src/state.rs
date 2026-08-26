@@ -1062,13 +1062,12 @@ pub(crate) struct UiPersist {
 }
 
 /// Parse just the render settings out of a persisted UI-state blob — so the
-/// offline renderer can default its size, layout, and lead-in to what the take
-/// was composed for, without building a whole [`SharedState`].
+/// offline renderer can default its size and layout to what the take was
+/// composed for, without building a whole [`SharedState`].
 ///
 /// The whole [`RenderConfig`] rather than the frame alone, because more than
 /// the frame is wanted out here: `main` sizes and lays out from
-/// [`frame`](RenderConfig::frame) and starts from
-/// [`lead_in`](RenderConfig::lead_in). One door into the blob, so a setting the
+/// [`frame`](RenderConfig::frame). One door into the blob, so a setting the
 /// renderer honours cannot be one somebody forgot to add an accessor for.
 ///
 /// Floored like [`SharedState::load_persist`], and it has to be: the offline

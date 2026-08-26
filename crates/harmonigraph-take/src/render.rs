@@ -5,7 +5,7 @@
 //! are take PAYLOAD. `RenderFrame` is the composition a take was framed at,
 //! and the offline renderer reads it out of the take so a re-render reproduces
 //! the framing it was dialed in at rather than whatever the editor happens to
-//! be set to now. `lead_in` and `playhead` are read the same way.
+//! be set to now. `playhead` is read the same way.
 //!
 //! Resolution is the deliberate exception and stays outside `RenderFrame` —
 //! see [`RenderConfig::short_edge`].
@@ -103,27 +103,6 @@ pub struct RenderConfig {
     /// offline renderer from the take; `--playhead` on the command line also
     /// turns it on. Needs audio.
     pub playhead: bool,
-    /// Extra seconds of empty frame before the recording starts, which is
-    /// where the render begins.
-    ///
-    /// Zero by default, and that is the fix rather than a lack of one: the
-    /// render already opens where the take was CAPTURED rather than at song
-    /// zero, so whatever run-up was played is in the video and no padding is
-    /// needed to see it. Event times are the host's transport position, so a
-    /// passage played from a minute into the arrangement was captured from
-    /// 60-odd seconds, and rendering from zero would open on a minute of empty
-    /// lattice.
-    ///
-    /// What this adds is a beat of stillness BEFORE that — empty frame by
-    /// construction, since nothing was captured there. A taste, not a
-    /// correction. The mirror of the renderer's `--tail`, which extends past
-    /// the last event so releases finish rather than cutting mid-decay.
-    ///
-    /// Read by the offline renderer out of the take, like
-    /// [`playhead`](Self::playhead); `--lead` overrides it and `--start`
-    /// overrides both, being an absolute song position rather than a
-    /// relative one.
-    pub lead_in: f32,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
@@ -149,12 +128,6 @@ impl Default for RenderConfig {
             audio_path: String::new(),
             audio_offset: String::new(),
             playhead: false,
-            // None: the render opens where the recording did, so the run-up
-            // actually played is already in the video. Padding beyond it is a
-            // deliberate taste, and empty frame by construction — nothing was
-            // captured before the take started — so it is not something to
-            // hand out by default.
-            lead_in: 0.0,
             frame: RenderFrame::default(),
             // 1080 on the short edge — 1920x1080 at the default 16:9 frame,
             // and the resolution every host and site takes without
@@ -173,12 +146,6 @@ impl RenderConfig {
     /// composes a frame nobody would have set rather than merely misdrawing
     /// one.
     pub fn sanitize(&mut self) {
-        // The Lead-in bar's own range (the Video pane's "Lead-in", `0.0..=5.0`).
-        self.lead_in = if self.lead_in.is_finite() {
-            self.lead_in.clamp(0.0, 5.0)
-        } else {
-            RenderConfig::default().lead_in
-        };
         self.frame.sanitize();
     }
 }
