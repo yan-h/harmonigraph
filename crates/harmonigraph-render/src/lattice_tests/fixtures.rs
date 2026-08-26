@@ -886,7 +886,13 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
 /// node, so the half of the frame being measured holds no other ink and no
 /// other shadow.
 pub(super) fn lone_shadowed_marker(arm: f32, shadow: f32, depth: f32) -> Scene {
-    let mut scene = shadowed_markers(depth, shadow, 1.0);
+    lone_tapered_marker(arm, shadow, depth, 1.0)
+}
+
+/// [`lone_shadowed_marker`] with the arms' taper dialled too: `taper_start` is
+/// where an arm stops being solid, as a share of its length, 1 a square end.
+pub(super) fn lone_tapered_marker(arm: f32, shadow: f32, depth: f32, taper_start: f32) -> Scene {
+    let mut scene = shadowed_markers(depth, shadow, taper_start);
     scene.pluses =
         vec![one_marker(glam::Vec3::new(LONE_OFFSET, 0.0, 0.0), arm, scene.lattice_ground, 1.0)];
     scene
