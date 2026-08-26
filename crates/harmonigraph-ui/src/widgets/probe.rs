@@ -42,12 +42,41 @@ pub(super) fn shapes(width: f32, add: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
     painted(width, add).into_iter().map(|s| s.shape).collect()
 }
 
+/// The same at a named CLOCK, which is what a bar drawn from the time rather
+/// than from its value has to be asked twice (see
+/// [`painted_full_at`](crate::tests::probe::painted_full_at)).
+pub(super) fn shapes_at(width: f32, time: f64, add: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
+    crate::tests::probe::painted_full_at(time, egui::vec2(width, 100.0), add)
+        .shapes
+        .into_iter()
+        .map(|s| s.shape)
+        .collect()
+}
+
 /// The filled rects, in paint order.
 pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Color32)> {
     shapes
         .iter()
         .filter_map(|s| match s {
             egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT => Some((r.rect, r.fill)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The filled convex polygons, in paint order, each as the points it was drawn
+/// through.
+///
+/// The reader for anything that leans: a rect shape can only say where its
+/// corners are, so a shape at an angle to the pane comes through as a path and
+/// its geometry is the points themselves.
+pub(super) fn filled_polys(shapes: &[egui::Shape]) -> Vec<(Vec<egui::Pos2>, egui::Color32)> {
+    shapes
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Path(p) if p.fill != egui::Color32::TRANSPARENT => {
+                Some((p.points.clone(), p.fill))
+            }
             _ => None,
         })
         .collect()
