@@ -200,8 +200,9 @@ fn a_markers_shadow_reaches_as_far_as_its_width_says() {
     assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
 }
 
-/// A marker's shadow is cast by the WHOLE arm, tip and taper alike: two crosses
-/// of one length cast a shadow the same distance out however either one ends.
+/// A marker's shadow is cast by the WHOLE arm, tip and taper alike: a tapered
+/// cross shadows nearly as far out as a square-ended one of its length, and far
+/// past what its SOLID length alone would cast.
 ///
 /// The taper is a length beside the reach, not a share of it, and the fresh one
 /// is nearly half the arm — so a shadow cast from where the taper STARTS comes
@@ -210,10 +211,15 @@ fn a_markers_shadow_reaches_as_far_as_its_width_says() {
 /// eye reads a marker by is its ARMS, and this is the claim that keeps them in
 /// the shadow.
 ///
+/// Three arms and not two, because the taper also costs the shadow DEPTH
+/// (`plus_standoff`) and a reach read off a threshold gives a little of itself
+/// up with it. The third is the ruler that says how little: an arm cut to the
+/// tapered one's solid length, which is the shadow the truncation drew.
+///
 /// Read along the arm rather than as a pixel count, and that is what makes it a
 /// claim about the SHAPE: a count also moves when the taper moves the ink's own
 /// footprint out of the ground being counted, so two counts can differ with the
-/// shadow's reach unchanged. Each taper is walked against its OWN depth-0 frame,
+/// shadow's reach unchanged. Each cross is walked against its OWN depth-0 frame,
 /// which is what cancels that ink; what is left is the standoff alone.
 #[test]
 fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
@@ -234,8 +240,8 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
         brightness(&buf[i..i + 3])
     };
     // The crossing's own column, off the square-ended cross's ink against a
-    // frame with no cross in it: the marker stands in the same place at either
-    // taper, so one reading of it starts both walks.
+    // frame with no cross in it: the marker stands in the same place at every
+    // arm here, so one reading of it starts all three walks.
     let bare = shooter.shot(&{
         let mut s = lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE);
         s.pluses.clear();
@@ -254,9 +260,9 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
     // darker than the same frame without one. Rightward because the node
     // lighting the frame is to the LEFT: that half holds no other ink and no
     // other shadow.
-    let reach = |shooter: &mut Shooter, taper: f32| -> usize {
-        let cold = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 0.0, taper));
-        let hot = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 1.0, taper));
+    let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
+        let cold = shooter.shot(&lone_tapered_marker(arm, SHADOW, 0.0, taper));
+        let hot = shooter.shot(&lone_tapered_marker(arm, SHADOW, 1.0, taper));
         let mut out = mid;
         for x in mid..SIZE[0] as usize {
             if at(&hot, x) < at(&cold, x) {
@@ -265,13 +271,83 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
         }
         out
     };
-    let square = reach(&mut shooter, SQUARE);
-    let tapered = reach(&mut shooter, TAPERED);
+    let square = reach(&mut shooter, ARM, SQUARE);
+    let tapered = reach(&mut shooter, ARM, TAPERED);
+    let solid = reach(&mut shooter, ARM * TAPERED, SQUARE);
     assert!(square > mid, "the square-ended cross cast no shadow past its own crossing");
-    assert_eq!(
-        square, tapered,
-        "a cross tapering from {TAPERED} of its arm shadowed out to {tapered} where a \
-         square-ended one of the same length reached {square}",
+    assert!(
+        solid < square,
+        "the solid length cast as far as the whole arm ({solid} against {square}), so there is \
+         no span here for the tapered cross to be placed along",
+    );
+    // Two thirds of the way, where the taper is three quarters of the arm: the
+    // claim is which of the two lengths the shadow is cast from, and a third of
+    // that span is more room than the depth's own share of the threshold needs.
+    let span = square - solid;
+    assert!(
+        tapered >= solid + span * 2 / 3,
+        "a cross tapering from {TAPERED} of its arm shadowed out to {tapered}, against {solid} \
+         for its solid length alone and {square} for the whole arm",
+    );
+}
+
+/// A tapered arm gives up its shadow with its ink, and gives up the SHARE of it
+/// that it gives up of its own length.
+///
+/// An arm's ink fades to nothing over its last stretch so that it arrives at
+/// nothing rather than stopping at something (`plus_coverage`); a shadow held at
+/// full depth under that stretch caps the arm in dark exactly where the ink has
+/// gone, which is the arrival the taper is there to prevent.
+///
+/// Measured as light TAKEN off the halo rather than as a reach, because what
+/// moves here is the depth and not the footprint — the test above is the one
+/// that holds the footprint still. The ground is the square end's, which is the
+/// largest ink of the three: a tapered cross draws inside that same box at a
+/// lower alpha, so one exclusion answers for all of them.
+///
+/// The square end is the top of the family and that is the other half of the
+/// claim: the fade is spent at the taper's own width, so an arm with no taper
+/// pays nothing for having none.
+#[test]
+fn a_tapered_arm_gives_up_the_share_of_its_shadow_it_gives_up_of_its_length() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.30;
+    const ARM: f32 = 0.9;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let bare = |shooter: &mut Shooter, depth: f32| {
+        shooter.shot(&{
+            let mut s = lone_tapered_marker(ARM, SHADOW, depth, 1.0);
+            s.pluses.clear();
+            s
+        })
+    };
+    let flat_bare = bare(&mut shooter, 0.0);
+    let flat = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 0.0, 1.0));
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave halo for a bite to land in, not {}",
+        ground.len(),
+    );
+    let deep_bare = bare(&mut shooter, 1.0);
+    let taken = |shooter: &mut Shooter, taper: f32| -> i64 {
+        let frame = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 1.0, taper));
+        ground
+            .iter()
+            .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
+            .sum()
+    };
+    let square = taken(&mut shooter, 1.0);
+    let some = taken(&mut shooter, 0.6);
+    let most = taken(&mut shooter, 0.2);
+    assert!(square > 0, "a square-ended cross took no light off the halo it stands in");
+    assert!(
+        square > some && some > most,
+        "an arm fading over none, two fifths and four fifths of its length took {square}, {some} \
+         and {most} of light off the halo, which is not one order",
     );
 }
 

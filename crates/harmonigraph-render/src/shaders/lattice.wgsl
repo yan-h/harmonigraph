@@ -3975,13 +3975,24 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
 /// and calling it exact; a field cast from a shorter cross left that margin
 /// generous by the whole taper.
 ///
-/// Multiplying the coverage BY the taper is the tempting reading and is wrong
-/// at the one place it matters: the taper is 0 at the tip by construction, so
-/// every fragment outside an arm reads the ink it stands off as absent and a
-/// square-ended marker gets no shadow at all. Reading it at the nearest point
-/// ON the arm instead answers that, and buys the same square back — the shadow
-/// can then never reach past a tip where the ink has gone, so what a marker
-/// gains along its arms it loses off their ends.
+/// Its DEPTH follows the taper: an arm's ink fades to nothing over its last
+/// stretch, and a shadow held at full depth under it caps each arm in dark
+/// exactly where the ink has gone — so the arm arrives at SOMETHING after all,
+/// which is the one thing the taper exists to prevent (`plus_coverage`).
+///
+/// A tapered end gives up the share of its shadow that it gives up of its own
+/// length, so the taper bar is the whole of the coupling and there is no
+/// constant here to tune. What that buys is both ends of that bar: a square end
+/// fades over none of its arm and keeps its shadow whole, an arm that fades the
+/// whole way from the crossing has no shadow left at its tips.
+///
+/// Not the fade WHOLE, at any setting between them, and this is the shape
+/// constraint rather than a taste: the Shadow is one length across a node's
+/// rings and a marker's arms alike, and at the bars a marker is drawn at it is
+/// most of an ARM — fresh, 0.16 against an arm of 0.2 in the same uv. A shadow
+/// that gave the taper up whole would reach `half + Shadow` across an arm and
+/// `taper_start * arm` along it, 0.215 against 0.11, and draw a disc with a plus
+/// sitting in it.
 ///
 /// Closed by the marker's own OPACITY, the one number a marker hands over: ink
 /// that is not there holds nothing off, and ink half way in holds half. So a
@@ -4007,7 +4018,19 @@ fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     let corner = vec2<f32>(q.x - in.arm, q.y - half);
     let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
     let soft = standoff_soft();
-    return ring_shade(sd, soft, in.strength);
+    // The ink's own ramp, on the axis and out of the fold `plus_coverage` reads
+    // it in, and clamped into the cross so that past a tip an arm keeps its
+    // end's answer instead of running off the bottom of the ramp.
+    let start = min(u.misc5.y, 1.0 - 1e-3);
+    let fade = smoothstep(start, 1.0, clamp(q.x / in.arm, 0.0, 1.0));
+    // Spent at the WIDTH of the taper that asked for it, `1 - start` being the
+    // share of an arm that fades. A flat share instead would be read off the
+    // ramp's own endpoint, and that endpoint is 0 at every setting of the bar:
+    // `derive_plus_taper_start` holds a SQUARE end a thousandth short of the tip
+    // rather than at it, so a sliver of arm no ink can show would set the shadow
+    // over the whole region outside a cross.
+    let level = in.strength * (1.0 - fade * (1.0 - start));
+    return ring_shade(sd, soft, level);
 }
 
 /// How much of the light standing here this marker holds off, as

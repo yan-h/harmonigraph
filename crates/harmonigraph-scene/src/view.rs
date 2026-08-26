@@ -945,6 +945,10 @@ pub struct ViewConfig {
     /// is where the marker STOPS; a cross faded along its sides as well is a
     /// blurred plus rather than one reaching out of its crossing, and a soft
     /// rim is the feather this deliberately does not bring back.
+    ///
+    /// The SHADOW under a fading end gives up as much of itself as this gives up
+    /// of the arm (`plus_standoff` in lattice.wgsl), so widening this softens
+    /// the dark around the four tips along with the ink in them.
     pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
@@ -1227,7 +1231,8 @@ pub struct ViewConfig {
     /// The ceiling is [`GLOW_SHADOW_MAX`], a whole radius where the two paddings
     /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
     /// rather than as a lack of light is a dip broad enough to come off at the
-    /// rate the skirt does, and that is a width a good deal past any padding's. Nothing in the picture bounds it short of that: it is the
+    /// rate the skirt does, and that is a width a good deal past any padding's.
+    /// Nothing in the picture bounds it short of that: it is the
     /// emitter's own billboard that has to hold the answer, and every vertex
     /// shader the light draws through in lattice.wgsl grows its quad by this so
     /// that it does.
