@@ -375,7 +375,7 @@ struct Uniforms {
     /// (`Scene::glow_shadow_soft`); z: how the fade is skewed across that width
     /// (`Scene::glow_shadow_shape`); w: how much of the LIGHT it takes where it
     /// stands (`Scene::glow_shadow_depth`), off the ground the clearing paints —
-    /// what the node's own ink takes of that same field is `misc13` below.
+    /// what a node's own ink takes of that same field is `misc13` below.
     ///
     /// A row of its own rather than four slots scattered over the two beside
     /// it, because the four are one control: the Shadow bar's two handles, the
@@ -403,23 +403,21 @@ struct Uniforms {
     /// dialled, and this is how tall a texture the renderer allocated. Zeroed
     /// whole with them, on the same rule.
     misc12: [f32; 4],
-    /// The WASH. x: how much of the light standing at a node's pixel washes
-    /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
-    /// the GROUND's share of that same field. y: one quad uv as a world length
-    /// on the markers' sheet (`Scene::marker_unit`), which is what the markers'
-    /// standoff draw converts between its own world lengths and the uv the Shadow
-    /// it holds the light off by is dialled in. z/w unused.
+    /// The WASH. x: how much of the light a LIT slice of a node washes its own
+    /// ink with (`Scene::glow_wash`), where every other piece of the lattice's
+    /// ink takes that same field whole and `misc11.w` above is the GROUND's
+    /// share of it. y: one quad uv as a world length on the markers' sheet
+    /// (`Scene::marker_unit`), which is what the markers' standoff draw
+    /// converts between its own world lengths and the uv the Shadow it holds
+    /// the light off by is dialled in. z/w unused.
     ///
-    /// A row of its own because the wash is not a term of the standoff above:
-    /// the Shadow bars shape the field the GROUND is painted from and this reads
-    /// that same field raw, so a dial sitting among them would carry the
-    /// coupling it exists to break.
-    ///
-    /// A row of its own because it is not a term of the standoff, close as it
-    /// reads to the depth: the Shadow bars shape what the clearing paints, and
-    /// this reads the field raw, so a dial sitting among them would carry the
-    /// coupling it exists to break. Zeroed whole with `misc10`, on the same
-    /// rule — a wash with no light to lay down is a factor on nothing.
+    /// A row of its own because the wash is not a term of the standoff, close
+    /// as it reads to the depth: the Shadow bars shape what the clearing
+    /// paints, and this reads the field raw, so a dial sitting among them would
+    /// carry the coupling it exists to break. Zeroed whole with `misc10`, on
+    /// the same rule — a wash with no light to lay down is a factor on nothing,
+    /// and the markers' standoff draw reads its own zero there as an off switch
+    /// (`vs_plus_glow`).
     misc13: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
@@ -2173,8 +2171,7 @@ impl InkStrip {
 /// The two bind group layouts a scene pipeline draws through: the pane's
 /// uniforms at group 0, and the finished light at group 1 — the target a node
 /// samples to paint the light over the ground rather than the ground bare, and
-/// to wash its own ink with the share of it the Wash bar asks for
-/// (`node_paint`).
+/// to wash its own ink with that same field (`node_paint`).
 ///
 /// Both the node and the marker pipeline take the pair though only the node's
 /// shader touches the light: they are one pass over one pane, so one layout is
@@ -2373,7 +2370,7 @@ fn create_glow_pipelines(
 /// time: nothing written here is subtractive, so there is nothing for the order
 /// to decide. What occludes a node's halo is the scene pass, which draws every
 /// node over the finished light — its SHAPE, at least: what the node's own ink
-/// then takes of the light under it is the Wash bar's to say (`node_paint`).
+/// then takes of the light under it is `node_paint`'s to say.
 ///
 /// **Its own vertex entry point** (`vs_glow`), because the glow reaches past
 /// what a node paints: the billboard has to hold the whole halo, and growing
@@ -3623,8 +3620,8 @@ impl CallbackTrait for LatticeCallback {
             // exactly where it is most wanted and the feature comes out as a
             // ring of haze round a hole. The node samples this same target
             // instead (`node_paint`), painting the light standing at its own
-            // pixel over that ground and washing its own ink with the share
-            // its Wash bar asks for, so a node's middle keeps the light while a
+            // pixel over that ground and washing its own ink with that same
+            // field, so a node's middle keeps the light while a
             // nearer node still hides the SHAPE of what is behind it — a
             // covered node's halo is in the field like everyone else's, and
             // being light and nothing else it can only brighten what stands

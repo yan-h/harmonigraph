@@ -5,25 +5,19 @@ use crate::gpu_harness::headless_device;
 use crate::*;
 
 /// A ring WEARS THE WASH inside a pool the Shadow depth has cleared to the bare
-/// ground: the two are one field asked for twice, and the answers are free of
-/// each other.
+/// ground: the ground's share of the light and the ink's are one field asked
+/// for twice, and the answers are free of each other.
 ///
-/// The look the bar exists for. On one coupled dial a dark pool and a tinted
-/// ring are mutually exclusive — the light the ink would wear is exactly the
-/// light the standoff takes — so the first two claims below are measured at a
-/// DEPTH OF 1, where the ground around the ring is the frame with no glow in it
-/// at all and there is nothing left of the pool's light to tint anything with.
+/// The ink takes that field WHOLE and RAW, before the standoff's factor reaches
+/// it, which is what lets a dark pool and a lit ring be had together. Ink
+/// carrying the standoff's remainder instead could not: at a depth of 1 there
+/// would be nothing left of the pool's light to tint it with, and the ring
+/// would be a silhouette cut out of the frame. So the claims below are measured
+/// at a DEPTH OF 1, where the ground around the ring is the frame with no glow
+/// in it at all:
 ///
-/// Three claims, and the third is the decoupling itself:
-///
-/// - A wash of 0 leaves the ink byte for byte what it is with the glow off,
-///   whatever light is standing at it. Byte-identical rather than nearly so
-///   because a factor of 0 on the light is no light: nothing is left to round.
-/// - A wash of 1 lifts it, and lifts more than half of it.
-/// - Moving the DEPTH moves the ink not at all, the wash reading the field
-///   before the standoff's factor reaches it. A wash carried on the standoff's
-///   remainder instead cannot say this at all, and that is the reason there is
-///   a second bar.
+/// - The light lifts the ink, and lifts more than half of it.
+/// - Moving the DEPTH moves the ink not at all.
 ///
 /// Every lift is measured as a lift and never a loss, which is the wash's own
 /// arithmetic (`node_paint`): the ink takes the light as a screen, so every
@@ -44,16 +38,16 @@ use crate::*;
 /// The BOUND follows from how the set is chosen rather than from tuning —
 /// agreeing over both grounds forces that sliver's coefficient under 1/255, and
 /// the sliver is the only term the depth touches on such a pixel, so one byte
-/// is the most it can carry. A wash reading the standoff's remainder would move
-/// the ink by the light's own size instead, which is the scale the shot beside
-/// it supplies.
+/// is the most it can carry. Ink reading the standoff's remainder would move by
+/// the light's own size instead, which is the scale the shot beside it
+/// supplies.
 #[test]
 fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |reach: f32, depth: f32, wash: f32| -> Scene {
+    let at = |reach: f32, depth: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -67,12 +61,11 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         // The fade the whole width of the shadow, which is the fresh pair.
         scene.glow_shadow_soft = 0.16;
         scene.glow_shadow_depth = depth;
-        scene.glow_wash = wash;
         scene.glow_shadow = 0.16;
         scene
     };
     let mut on_ground = |bg: glam::Vec4| {
-        let mut scene = at(0.0, 1.0, 0.0);
+        let mut scene = at(0.0, 1.0);
         scene.background = bg;
         shooter.shot(&scene)
     };
@@ -87,22 +80,16 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         .collect();
     assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
 
-    let off = shooter.shot(&at(0.0, 1.0, 1.0));
-    let dry = shooter.shot(&at(0.8, 1.0, 0.0));
-    let worn = shooter.shot(&at(0.8, 1.0, 1.0));
-    let open = shooter.shot(&at(0.8, 0.0, 1.0));
-    let moved = ink.iter().filter(|&&i| dry[i..i + 4] != off[i..i + 4]).count();
-    assert_eq!(
-        moved,
-        0,
-        "with no wash the glow reached {moved} of the ring's {} opaque pixels",
-        ink.len(),
-    );
+    // The glow OFF is what the ink is measured against: no light at the pixel
+    // is the one setting left that takes the wash out of the picture.
+    let off = shooter.shot(&at(0.0, 1.0));
+    let worn = shooter.shot(&at(0.8, 1.0));
+    let open = shooter.shot(&at(0.8, 0.0));
     let lifted =
         ink.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
     assert!(
         lifted * 2 > ink.len(),
-        "inside a pool cleared to the bare ground, a full wash lifted {lifted} of the ring's {} \
+        "inside a pool cleared to the bare ground, the light lifted {lifted} of the ring's {} \
          opaque pixels",
         ink.len(),
     );
@@ -121,7 +108,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
             .max()
             .unwrap()
     };
-    let by_wash = spread(&worn, &dry);
+    let by_wash = spread(&worn, &off);
     let by_depth = spread(&worn, &open);
     assert!(
         by_wash > 20,
@@ -131,6 +118,160 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         by_depth <= 1,
         "dropping the depth moved the ink by {by_depth} against the wash's own {by_wash}: the \
          wash is reading the standoff's remainder rather than the field",
+    );
+}
+
+/// The WASH reaches a LIT SLICE and nothing else in the picture.
+///
+/// The bar's whole scope, and the reason it is one bar rather than the two
+/// halves of the lattice's ink dialled together. Unlit ink — a silent slice's
+/// ghost, a wedge the analyzer reads nothing in, a resting cross — is ground
+/// laid over ground the light is already under, so it wants the whole field at
+/// every setting or it reads as a hole punched where the light is brightest. A
+/// SOUNDING slice is already the colour its own halo is made of, so the field
+/// over it buys no colour and spends the edge between the slice and its light.
+///
+/// Two claims, measured between a full bar and an empty one on one frame:
+///
+/// - Something moves, and enough of the lit ink to be the slice rather than a
+///   rim of it.
+/// - NOTHING outside the lit ink moves, byte for byte — not the ghost ring the
+///   lit slice sits in, not the ring's silent wedges, not the halo, the
+///   clearing or the ground.
+///
+/// The lit ink is FOUND rather than described, and found with the glow OFF in
+/// every shot that finds it: it is the pixels that move when the thing lighting
+/// them is taken away, which is the octave for the band and the partial for the
+/// ring. Off the ink, because a shot with the light in it would hand the set
+/// every pixel the halo covers.
+///
+/// Both layers at once, on one node, because they reach the bar through one
+/// term: the band's slot level and the ring's own reading are composited into a
+/// single lit share (`NodeInk::lit`), and a fixture wearing one of them could
+/// not tell that share apart from the layer it came in on.
+#[test]
+fn the_wash_reaches_a_lit_slice_and_nothing_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // An octave held and a partial sounding AT that same octave, so the two
+    // lit wedges stand at the same angle on two annuli and everything else the
+    // node draws is the grey between them.
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let at = |held: Option<usize>, partial: Option<f32>, reach: f32, wash: f32| -> Scene {
+        let mut scene = ringing_node(held, partial, PROBE_RANGE);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_wash = wash;
+        scene
+    };
+    let dark = shooter.shot(&at(Some(slot), Some(sounding), 0.0, 1.0));
+    let unheld = shooter.shot(&at(None, Some(sounding), 0.0, 1.0));
+    let quiet = shooter.shot(&at(Some(slot), None, 0.0, 1.0));
+    let mut is_lit = vec![false; dark.len() / 4];
+    for (p, flag) in is_lit.iter_mut().enumerate() {
+        let i = p * 4;
+        *flag = dark[i..i + 4] != unheld[i..i + 4] || dark[i..i + 4] != quiet[i..i + 4];
+    }
+    let lit = is_lit.iter().filter(|f| **f).count();
+    assert!(lit > 200, "the fixture's two lit wedges cover {lit} pixels between them");
+
+    let full = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 1.0));
+    let none = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 0.0));
+    let moved: Vec<usize> =
+        (0..is_lit.len()).filter(|p| full[p * 4..p * 4 + 4] != none[p * 4..p * 4 + 4]).collect();
+    let moved_lit = moved.iter().filter(|&&p| is_lit[p]).count();
+    let strays = moved.len() - moved_lit;
+    assert!(
+        moved_lit * 2 > lit,
+        "the bar moved {moved_lit} of the {lit} lit pixels: it is reaching an edge of the slice \
+         rather than the slice",
+    );
+    assert_eq!(
+        strays,
+        0,
+        "the bar moved {strays} pixels outside the lit ink, of {} it moved in all: it is \
+         reaching ink that has to wear the whole light whatever it says",
+        moved.len(),
+    );
+}
+
+/// A MARKED slice the note has LEFT keeps the whole light on its band, while
+/// the strip continuing it takes the bar.
+///
+/// The one case that parts the wash's reading of "lit" from the shimmer's
+/// (`lit_slice` in `node_ink`, which takes the louder of a slot's level and
+/// the mark still holding it). A released note under a held mark draws its
+/// band slice in the GROUND — `oct_slot_ink` returns the ghost at level 0 —
+/// while the strip outside the band is still the mark's own colour. The two
+/// pieces of that slice are two different inks, so they take the field on
+/// different terms: a sweep crossing both is one light passing over one slice,
+/// which is what the shimmer's term is for, and the wash is about what the ink
+/// IS. Grey ink is exactly the ink that has to keep the whole field or read as
+/// a hole in the light.
+///
+/// So the claim is that the bar moves the MARK and nothing else on the node —
+/// the marked slot's own ghost included, which is the half a term reading
+/// `max(level, mark_level)` here would have taken with it.
+///
+/// The mark's pixels are FOUND by taking the mark away, with the glow off in
+/// both shots so what is found is ink rather than light.
+#[test]
+fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The melody mark held at full over a slot whose note has gone: the mask
+    // and the mark's own level are the marked VOICE's, so neither goes with
+    // the octave's.
+    let at = |marked: u32, reach: f32, wash: f32| -> Scene {
+        let mut scene = single_marked_node(marked, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 0.0;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_wash = wash;
+        scene
+    };
+    let with_mark = shooter.shot(&at(MIDDLE_C, 0.0, 1.0));
+    let without = shooter.shot(&at(0, 0.0, 1.0));
+    let mut is_mark = vec![false; with_mark.len() / 4];
+    for (p, flag) in is_mark.iter_mut().enumerate() {
+        let i = p * 4;
+        *flag = with_mark[i..i + 4] != without[i..i + 4];
+    }
+    let marked = is_mark.iter().filter(|f| **f).count();
+    assert!(marked > 100, "the fixture's mark covers {marked} pixels");
+
+    let full = shooter.shot(&at(MIDDLE_C, 0.8, 1.0));
+    let none = shooter.shot(&at(MIDDLE_C, 0.8, 0.0));
+    let moved: Vec<usize> =
+        (0..is_mark.len()).filter(|p| full[p * 4..p * 4 + 4] != none[p * 4..p * 4 + 4]).collect();
+    let strays = moved.iter().filter(|&&p| !is_mark[p]).count();
+    assert!(
+        !moved.is_empty(),
+        "the bar moved nothing at all: the mark is not on the side of it that is dialled",
+    );
+    assert_eq!(
+        strays,
+        0,
+        "the bar moved {strays} pixels off the mark, of {} it moved in all: a slice the note has \
+         left is drawn in the ground, and ground ink keeps the whole light",
+        moved.len(),
     );
 }
 

@@ -1062,9 +1062,11 @@ pub struct ViewConfig {
     /// target is one field across every sheet, laid down UNDER the lattice: the
     /// rings, the markers and the names are all drawn over it, and a node's own
     /// clearing paints the light standing at its pixel rather than bare ground,
-    /// so the middle of a node keeps the light its neighbours put there. How
-    /// much of that field the node's own INK takes with it is
-    /// [`glow_wash`](Self::glow_wash)'s to say.
+    /// so the middle of a node keeps the light its neighbours put there. The
+    /// node's own INK takes that field too, so a ring reads as a shape inside
+    /// its light rather than a silhouette cut out of it — whole where the ink
+    /// is unlit, and on [`glow_wash`](Self::glow_wash)'s share where it is a
+    /// sounding slice.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
     /// measures: the bloom thresholds a finished PICTURE, so only the bright
@@ -1316,44 +1318,39 @@ pub struct ViewConfig {
     /// picture with no standoff at all, pixel for pixel, which is what makes
     /// this bar the A/B on the whole feature.
     ///
-    /// The GROUND's share of the light at a node's pixel, and that alone. What
-    /// the node's own INK takes of the same field is
-    /// [`glow_wash`](Self::glow_wash), on a bar of its own, so a ring can stand
-    /// in a pool this has cleared to the bare ground and still carry the colour
-    /// of the halo around it.
+    /// The GROUND's share of the light at a node's pixel, and that alone: the
+    /// ink over it takes the RAW field, before this factor reaches it, so a
+    /// ring can stand in a pool this has cleared to the bare ground and still
+    /// carry the colour of the halo around it.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_shadow_depth: f32,
-    /// How much of the light standing at a pixel washes over the lattice's own
-    /// INK there, 0..=1 — a node's rings, marks and glyphs, and the resting
-    /// markers ([`plus_arm`](Self::plus_arm)) between them, as against the
-    /// ground around them all.
+    /// How much of the light standing at a LIT slice washes over that slice's
+    /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
+    /// reading, and the melody/bass mark that continues one.
     ///
-    /// A MARKER wants it for the reason a silent ring does, and wants it more:
-    /// it is flat ground drawn over ground the light is already under, so at 0
-    /// the resting field inside a halo reads as holes punched in the light at
-    /// exactly the places the light is brightest.
+    /// The LIT ink alone. Every other piece of the lattice — a silent slice's
+    /// grey, a wedge at the analyzer's pinned silent end, the resting markers
+    /// ([`plus_arm`](Self::plus_arm)) between the nodes — takes the field whole
+    /// whatever this says, and is not on a bar at all.
     ///
-    /// The ink's share of the field, and the counterpart to
-    /// [`glow_shadow_depth`](Self::glow_shadow_depth), which says the same thing of
-    /// the ground the clearing paints. 0 is ink drawn exactly as the ring stack
-    /// describes it, pixel for pixel what it is with the glow off; 1 is the
-    /// whole field over it, a node melting into its own halo. Between them a
-    /// silent slice's grey lifts toward the colour of the light it stands in,
-    /// and the node reads as a shape INSIDE its light rather than a silhouette
-    /// cut out of it.
+    /// The two halves want opposite things of one field, which is the whole
+    /// reason only one of them is dialled. Unlit ink is ground laid over ground
+    /// the light is already under, so unwashed it comes out DARKER inside a halo
+    /// than beside it and the resting lattice reads as holes punched exactly
+    /// where the light is brightest: it wants all of the light, always. A lit
+    /// slice is already the colour its own halo is made of, so the field over it
+    /// buys no colour and spends the edge between the slice and its light —
+    /// dialled up, a node melts into its own glow.
     ///
-    /// A bar of its own rather than the depth's other half, which is what lets
-    /// both ends be asked for at once: a full depth carrying a wash is a ring
-    /// standing in a dark pool and still wearing the halo's colour, and no one
-    /// setting of a single coupled dial can say that. What the freedom costs is
-    /// that the pair can be dialled into an INVERSION — a lit ring inside a
-    /// pool the standoff has cleared to the bare ground — which is a picture
-    /// worth being able to ask for and not one to arrive at by accident.
+    /// 1 is one field over the whole node, which is the picture with no bar in
+    /// it. Down from there the sounding slices come back out of the light while
+    /// the grey around them stays in it.
     ///
-    /// The RAW field and not the standoff's remainder — the Shadow bars shape the
-    /// ground alone — so a wash reads the same whatever they are doing around
-    /// it, and turning the shadow up cannot quietly take the ink's light with it.
+    /// The RAW field and not the standoff's remainder — the Shadow bars shape
+    /// the ground alone — so a lit slice reads the same whatever they are doing
+    /// around it, and turning the shadow up cannot quietly take the ink's light
+    /// with it.
     ///
     /// Laid over the ink as a SCREEN, so it can only ever brighten whoever laid
     /// the light down; see `node_paint` in lattice.wgsl for why an over is
@@ -2291,9 +2288,9 @@ impl ViewConfig {
         // a bar reading 0..1 is what keeps its neutral point at the middle.
         self.glow_shadow_shape =
             finite_or(self.glow_shadow_shape, fresh.glow_shadow_shape).clamp(0.0, 1.0);
-        // The SHARES — of the light the standoff stands in, of the light a
-        // node's ink stands in, of the light's own peak, of a whole turn — so
-        // their range is the unit interval.
+        // The SHARES — of the light the standoff stands in, of the light a lit
+        // slice stands in, of the light's own peak, of a whole turn — so their
+        // range is the unit interval.
         self.glow_shadow_depth =
             finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
@@ -2616,22 +2613,11 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_shadow_depth: 0.85,
-            // One minus the depth above, which is exactly what that depth
-            // leaves at a ring's own annulus: a ring wearing the last of the
-            // light its shadow does not take, which is what a single coupled dial
-            // draws and a place for either bar to be moved from.
-            glow_wash: 0.15,
-            // The resting field's own light. Low, and the reason is what the
-            // bar is for: a pool per lattice position is a hundred pools where
-            // a chord is three, so the level that reads as a lit position here
-            // is well under the one a node wants. Enough to say the marker
-            // stands in light rather than on a flat ground, and short of the
-            // fresh ground's own brightness, which is still what draws the
-            // cross.
-            // A pool half again as wide as the fresh cross, which at the
-            // fresh arm (0.2) is a span of 0.5 — under a quarter of the 2.22 uv
-            // to the next position, so the fresh field is one lit position per
-            // marker with dark between them rather than a wash.
+            // The whole field, which is the fresh picture with no bar in it:
+            // every piece of the lattice's ink wears the light it stands in,
+            // and the bar is there to pull a SOUNDING slice back out of its own
+            // halo without the grey around it going with it.
+            glow_wash: 1.0,
             // The colour averaged half way round, which keeps a chord's hues
             // as arcs while a lone wedge still tints the whole halo.
             glow_blend: 0.5,
