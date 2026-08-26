@@ -500,13 +500,14 @@ fn glyph_shade(cov: f32) -> f32 {
 /// The shadow a lattice name holds the light off by, drawn into the glow pass
 /// over the same glyph quads the name itself is drawn from.
 ///
-/// A name has no rim. What a cross keeps a halo off itself with is a shape in
-/// the LIGHT rather than one painted on the ink (`plus_standoff`), and a
+/// A name paints no rim. What a cross keeps a halo off itself with is a shape
+/// in the LIGHT rather than one painted on the ink (`plus_standoff`), and a
 /// lattice where the crosses stand in the light and the names carry a black
-/// halo of their own reads as two pictures laid over each other. So the halo
-/// the rim used to stamp is cast here instead, on the Shadow bars every other
-/// emitter is held off on: dark where there is light to hold off, and nothing
-/// at all where there is none.
+/// halo of their own reads as two pictures laid over each other. The halo is
+/// cast here instead, on the Shadow bars every other emitter is held off on:
+/// dark where there is light to hold off, and nothing at all where there is
+/// none — which a painted halo cannot be, standing at full strength over a
+/// ground no light ever reached.
 ///
 /// The RIM's own shape is what casts it, which is what keeps a glyph's shadow
 /// clear of its strokes: the rings are the glyph dilated (see [`ring`]), and a

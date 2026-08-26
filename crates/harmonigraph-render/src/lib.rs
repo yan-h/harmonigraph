@@ -87,7 +87,12 @@ pub struct LatticeLabels {
     /// One entry per label, naming its node and how many of `glyphs` are
     /// its own.
     pub labels: Vec<Label>,
-    /// The halo's two rings, as [`text_paint_callback`] takes them.
+    /// The halo's two rings, as [`text_paint_callback`] takes them — a shape
+    /// here rather than the ink it is elsewhere: a lattice name paints no rim,
+    /// and what these describe is the dilation its SHADOW is cast from
+    /// (`fs_glyph_glow`). The stamp alphas still weigh it, so the pair means
+    /// what it means on any other surface; what changes is what the accumulated
+    /// coverage is spent on.
     pub rings: [TextRing; 2],
     /// egui's font atlas, on the frames the renderer's mirror of it is
     /// stale. `None` on the rest, which is nearly all of them.
@@ -766,15 +771,14 @@ enum Draw {
     Clearing(u32),
     /// A run of markers, as a range into `pluses`.
     Pluses(u32, u32),
-    /// One name's glyphs, as a range into `glyphs`: its rim, then its fill.
+    /// One name's glyphs, as a range into `glyphs`.
     ///
     /// Per NAME rather than over the whole frame, which is what interleaving
-    /// costs and all it costs: two neighbouring letters otherwise darken each
-    /// other's ink where their rims overlap, and two names on different nodes
-    /// overlapping is the nearer one sitting on the other. Adjacent names on
-    /// ONE sheet merge into a single entry, being one uninterrupted draw;
-    /// across a sheet boundary they do not, the nearer sheet's rim being meant
-    /// to fall on the other's fill.
+    /// costs and all it costs: a name has to land at its own node's place in
+    /// the back-to-front order, so two names on different nodes overlapping is
+    /// the nearer one sitting on the other. Adjacent names on ONE sheet merge
+    /// into a single entry, being one uninterrupted draw; across a sheet
+    /// boundary they do not.
     Label(u32, u32),
 }
 
@@ -3722,10 +3726,10 @@ impl CallbackTrait for LatticeCallback {
                         pass.draw(0..4, a..b);
                     }
                     // One draw per name: the glyphs, washed by the light they
-                    // stand in. What used to precede them here was a painted
-                    // rim, stamped round every letter — a name keeps a halo off
-                    // itself the way a marker does instead, by holding the
-                    // light off in the pass that draws it (`fs_glyph_glow`).
+                    // stand in. A name paints no rim — what keeps a halo off it
+                    // is the shadow it holds that halo off by, written in the
+                    // light's own pass (`fs_glyph_glow`) as a marker's cross
+                    // writes its own.
                     //
                     // The light at group 1, which is the same bind group the
                     // nodes and markers above it took: a name reads the field
