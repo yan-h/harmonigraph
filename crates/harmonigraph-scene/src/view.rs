@@ -1215,8 +1215,8 @@ pub struct ViewConfig {
     /// an [`octave_gap`](Self::octave_gap) of twice this, a gap between two
     /// slices is wide enough to keep all of its own light.
     ///
-    /// A resting MARKER's cross stands the light off on this same bar, out to
-    /// the arm's solid length (`plus_standoff` in lattice.wgsl). It is ink
+    /// A resting MARKER's cross stands the light off on this same bar, out from
+    /// the whole of every arm it draws (`plus_standoff` in lattice.wgsl). It is ink
     /// standing in the light exactly as a ring is, so a lattice whose sounding
     /// notes are dark-rimmed and whose resting field is not would be two
     /// pictures laid over each other; sharing the bar is what makes it one.
