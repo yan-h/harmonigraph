@@ -541,6 +541,19 @@ impl Control {
         self.progress.read()
     }
 
+    /// Stop the render running in the background and throw away the part of
+    /// the video it had written.
+    ///
+    /// The deletion is the render thread's own — see
+    /// [`RenderControl::cancel`]. A video an EARLIER render finished is not
+    /// touched: only the run in flight has anything half-written, and the
+    /// finished one is a file that came out whole.
+    pub fn cancel_render(&self) {
+        if self.render.cancel() {
+            *self.status.lock() = "render cancelled — the part-written video goes with it".into();
+        }
+    }
+
     /// Begin a take. `ui_state` is the persist blob that decides how the
     /// replay will look; `sample_rate` stamps the header. `audio`
     /// records the input bus alongside the notes.
@@ -1031,6 +1044,31 @@ impl RenderControl {
         }
     }
 
+    /// Stop the render now running and disown it, whatever take it is for.
+    ///
+    /// What its own thread then sees is the same `superseded` a replacement
+    /// request produces, so it leaves by the same door: it deletes the
+    /// part-written video and returns without reporting a failure, which is
+    /// what leaves the canceller's word the last one on the status line.
+    ///
+    /// The claim is DROPPED rather than replaced by a newer generation, so
+    /// nothing is left in `claims` for that take's next request to be measured
+    /// against — a generation no run holds would sit there for the life of the
+    /// process.
+    ///
+    /// Like [`cancel_in_flight`](Self::cancel_in_flight) this returns having
+    /// *asked*: the process is reaped by the render thread, and the bar goes
+    /// when that thread ends its flight.
+    ///
+    /// Returns whether there was a render to stop.
+    fn cancel(&self) -> bool {
+        let mut in_flight = self.child.lock();
+        let Some(flight) = in_flight.as_mut() else { return false };
+        self.claims.lock().remove(&flight.take);
+        let _ = flight.child.kill();
+        true
+    }
+
     /// Whether a newer request for the SAME take has arrived since
     /// `generation` claimed it.
     fn superseded(&self, take: &std::path::Path, generation: u64) -> bool {
@@ -1259,7 +1297,6 @@ fn spawn_render(
             }
         };
 
-        progress.begin();
         let stderr = child.stderr.take();
         // Hand the process over so a later request can reach it. Under the
         // same lock a canceller takes, and re-checking the generation
@@ -1273,6 +1310,11 @@ fn spawn_render(
             }
             *in_flight = Some(InFlight { take: take_path.clone(), child });
         }
+        // AFTER the handover, not before it: the bar is what the Video pane
+        // hangs its Cancel off, and `RenderControl::cancel` can only reach a
+        // child that has been published above. Begun any earlier, the bar
+        // spends the spawn offering a cancel that would quietly do nothing.
+        progress.begin();
         // Ends at EOF on the pipe, which a kill brings about immediately.
         let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
         let result = match control.child.lock().take() {
@@ -1648,11 +1690,18 @@ mod tests {
     /// Cancelling with nothing running is a no-op rather than a panic: the
     /// first render of a session takes exactly that path, since every request
     /// cancels before it spawns.
+    ///
+    /// The Video pane's button reaches the same state — it is drawn off a bar
+    /// the shell read at the top of the frame, so a render that ends before the
+    /// press is consumed is cancelled after it is already gone — and answers
+    /// that there was nothing to stop, which is what keeps the status line from
+    /// reporting a cancellation that cancelled nothing.
     #[test]
     fn cancelling_an_idle_render_control_does_nothing() {
         let control = RenderControl::default();
         control.cancel_in_flight(std::path::Path::new("/nowhere/take-1.take"));
         assert!(control.child.lock().is_none());
+        assert!(!control.cancel(), "an idle control claimed to have stopped a render");
     }
 
     /// Spin until `done` or the budget runs out, so the concurrency tests
@@ -1734,6 +1783,84 @@ mod tests {
 
         control.cancel_in_flight(&take);
         wait_until("the last render to be reaped", || control.child.lock().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling a running render kills it and takes the part of the video it
+    /// had written with it.
+    ///
+    /// Against a real process and real files, for the reason the supersede test
+    /// spawns one: the claim bookkeeping proves only that the arithmetic is
+    /// right, and what the button is for — a renderer still running, and an mp4
+    /// that is a fragment of one — lives entirely in the killing and the
+    /// cleanup.
+    ///
+    /// The fixture asks for a `ui_state` blob as well, so the sweep covers both
+    /// things a run leaves beside the take: a partial that is only ever renamed
+    /// into place on success, and the look a "Re-render take" wrote out for it.
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-cancelled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // Stands in for the renderer: writes at `--out` — argument 3, which is
+        // where `spawn_render` puts it — and then never finishes, which is the
+        // state the button exists for.
+        let fake = dir.join("slow-renderer");
+        std::fs::write(&fake, "#!/bin/sh\necho half a video > \"$3\"\nexec sleep 300\n")
+            .expect("write fake renderer");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let take = dir.join("take-1.take");
+        let control = Arc::new(RenderControl::default());
+        let status = Arc::new(Mutex::new(String::new()));
+        let progress = Arc::new(Progress::default());
+        spawn_render(
+            RenderRequest {
+                program: fake.clone(),
+                audio: None,
+                align: None,
+                ui_state: Some("(dummy)".into()),
+                size: [16, 16],
+                playhead: None,
+            },
+            take.clone(),
+            status.clone(),
+            progress.clone(),
+            control.clone(),
+        );
+        // Everything the run put beside the take under a name of its own.
+        let strays = || {
+            std::fs::read_dir(&dir)
+                .expect("the take's directory")
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    name.contains("rendering-") || name.contains("rendernow-")
+                })
+                .count()
+        };
+        wait_until("the render to start", || control.child.lock().is_some());
+        wait_until("the renderer to write some of the video", || strays() == 2);
+
+        assert!(control.cancel(), "there was a render in flight to stop");
+        wait_until("the part-written video to go", || strays() == 0);
+        wait_until("the cancelled render to be reaped", || control.child.lock().is_none());
+        assert!(progress.read().is_none(), "the bar outlived the render it was measuring");
+        // A cancellation is not a failure: the run ended because it was asked
+        // to, and the line belongs to whoever asked.
+        assert!(
+            !status.lock().contains("failed"),
+            "a cancelled render reported failure: {}",
+            status.lock()
+        );
+        // And nothing is left holding the take, so it can be rendered again.
+        let again = control.claim(&take);
+        assert!(!control.superseded(&take, again), "a cancelled take cannot be rendered again");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

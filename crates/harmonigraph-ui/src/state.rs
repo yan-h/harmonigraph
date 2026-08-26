@@ -78,6 +78,11 @@ pub struct TakeState {
     /// One-shot: set by the Video pane's "Re-render take" button, consumed by
     /// the shell to render the last take with the CURRENT settings.
     pub render_now: bool,
+    /// One-shot: set by the Video pane's "Cancel render" button, consumed by
+    /// the shell to stop the render in flight and delete the part of the video
+    /// it had written. The take itself is kept, so
+    /// [`render_now`](Self::render_now) can start over from it.
+    pub cancel_render: bool,
     /// What to do with a take once it is finished. The one persisted field
     /// here — see [`UiPersist`], which carries it as `render`.
     pub render_config: RenderConfig,

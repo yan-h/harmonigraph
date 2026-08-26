@@ -643,6 +643,51 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
     );
 }
 
+/// The cancel stands with the render bar and nowhere else, and pressing it
+/// asks the shell to stop that render.
+///
+/// Both halves in one fixture because they are one claim: a button offering to
+/// stop a render that is not running, and a button that stops nothing, are the
+/// two ways this reads as working without being. Through the REAL dock, so the
+/// press arrives the way a pointer's does — a `clicked()` that no layer between
+/// the mouse and the pane delivers is exactly the failure a hand-built ui
+/// cannot see.
+#[test]
+fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
+    let mut state = fresh();
+    state.take.supported = true;
+    state.take.last_ready = true;
+    // Soloed and tall, like `video_pane_shapes`: the whole control column on
+    // screen, so a button that is missing is missing rather than scrolled off.
+    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    let mut h = DockHarness::at(egui::vec2(420.0, 1200.0));
+    let find = |shapes: &[egui::epaint::ClippedShape]| {
+        shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Cancel render" => Some(t.pos),
+            _ => None,
+        })
+    };
+
+    // The pane's steady state: a take to re-render, and nothing rendering.
+    let idle = h.frame(&mut state, vec![]).shapes;
+    assert!(find(&idle).is_none(), "a cancel drawn with no render to cancel");
+
+    state.take.render_progress = Some(FIXTURE_RENDER);
+    // Two frames: egui resolves the widget under the pointer from the previous
+    // pass, so the button has to have been drawn before the press.
+    h.frame(&mut state, vec![]);
+    let running = h.frame(&mut state, vec![]).shapes;
+    let text = find(&running).expect("no cancel while a render is running");
+    // Inside the button rather than at the text's own corner, which sits on
+    // the frame's inner edge.
+    let at = text + egui::vec2(4.0, 4.0);
+
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    assert!(state.take.cancel_render, "the press never reached the shell");
+}
+
 /// Before the renderer has said how many frames it is composing there is no
 /// share to draw, and an empty track says "starting" where a track filled to
 /// zero would say "none of it done yet" — a claim nothing has made.
