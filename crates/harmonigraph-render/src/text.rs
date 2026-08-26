@@ -211,6 +211,9 @@ pub(crate) struct TextUniforms {
     pub(crate) _pad: f32,
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
+    /// The pane's ground, which a lattice name's knockout clears to where no
+    /// light stands. Every other surface knocks nothing out and leaves it at 0.
+    pub(crate) background: [f32; 4],
 }
 
 /// Which screen axis a surface's labels TRAVEL along, for the two taps
@@ -468,7 +471,7 @@ impl TextResources {
             target_format,
             &layout,
             None,
-            "fs_rim",
+            ("vs_glyph", "fs_rim"),
             None,
             crate::EGUI_BLEND,
         );
@@ -477,7 +480,7 @@ impl TextResources {
             target_format,
             &layout,
             None,
-            "fs_fill",
+            ("vs_glyph", "fs_fill"),
             None,
             crate::EGUI_BLEND,
         );
@@ -671,6 +674,12 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 /// `over` written from the other side, so a glyph composites into the lattice's
 /// offscreen exactly as a node does.
 ///
+/// `entries` is this pipeline's two entry points, vertex then fragment, and
+/// they are handed over as a PAIR because they are chosen together: what a
+/// fragment entry paints outside a glyph's ink is what its vertex entry has to
+/// grow the quad by, and a fragment reaching past its own quad is a shape cut
+/// off in a screen-aligned line rather than a compile error.
+///
 /// `glow` is the lattice's light, at group 1, and only `fs_fill_lit` reads it:
 /// a name there is ink standing in the light and takes the wash a marker's
 /// cross takes. Every other surface passes `None` — its text has no light to
@@ -683,10 +692,11 @@ pub(crate) fn create_text_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
     glow: Option<&wgpu::BindGroupLayout>,
-    fragment: &str,
+    entries: (&str, &str),
     scene_depth: Option<wgpu::TextureFormat>,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
+    let (vertex, fragment) = entries;
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text_shader"),
         source: wgpu::ShaderSource::Wgsl(TEXT_SRC.into()),
@@ -717,7 +727,7 @@ pub(crate) fn create_text_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_glyph"),
+            entry_point: Some(vertex),
             compilation_options: Default::default(),
             buffers: &[GlyphInstance::LAYOUT],
         },
@@ -844,6 +854,7 @@ impl CallbackTrait for TextCallback {
             _pad: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
+            background: [0.0; 4],
         };
 
         let view = resources.atlas.view().expect("checked above");

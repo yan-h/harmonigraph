@@ -608,9 +608,14 @@ const FRESH_SHADOW: f32 = 0.16;
 
 /// That name, in the resting field's own grey and at full strength.
 fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
+    name_at(scene, size, NAME_AT)
+}
+
+/// [`one_name`]'s glyph, standing wherever the caller puts it.
+fn name_at(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> LatticeLabels {
     let at = scene
         .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
-        .project(NAME_AT)
+        .project(world)
         .expect("the name stands in front of the camera");
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let ink = scene.lattice_ground;
@@ -845,4 +850,115 @@ fn the_names_shadow_is_the_rings_own_curve() {
             "the lattice's {name} and the names' have drifted apart",
         );
     }
+}
+
+/// A name knocks a hole in what was drawn before it, the way its node does —
+/// its own node's RINGS included, those being drawn immediately under it.
+///
+/// The reading is what makes this a covering claim and not a dimming one. A
+/// hole is a premultiplied over of the GROUND at its own coverage, so every
+/// pixel it touches lands BETWEEN the picture with no name in it and that
+/// ground. Ink that merely darkened what it stood on would fail that on the
+/// first pixel where the ring is darker than the ground it stands over, and a
+/// name that painted a halo of its own would fail it everywhere.
+///
+/// The Reach is 0, so no light stands anywhere and the ground is one value for
+/// the whole frame — `Scene::background`, which is what `node_paint` and
+/// `fs_fill_lit` both clear to. With light in the picture the same claim needs
+/// the field read back per pixel, which is the shader's own arithmetic restated
+/// as a test.
+///
+/// The control is the same frame with no name in it, at the SAME Shadow.
+/// Everything else in the picture moves with that bar — the node's own hole,
+/// the standoff over it — so two shots at two Shadows say nothing about the
+/// name; two shots at one, differing only in whether the glyph ships, say all
+/// of it.
+#[test]
+fn a_name_covers_the_rings_it_stands_on() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.6;
+    /// How far a node's own billboard reaches, in node radii —
+    /// in lattice.wgsl. The outer bound on anything a node paints, and so on
+    /// anything a hole cut in that node can be read against.
+    const NODE_QUAD: f32 = 1.6;
+    /// Where the name stands: on the node's own octave band rather than in the
+    /// empty middle, which is the one place a hole can be READ. A node's own
+    /// clearing has already cleared its middle to the ground, so a name there
+    /// paints the ground over the ground and the picture cannot tell.
+    const ON_THE_BAND: glam::Vec3 = glam::Vec3::new(1.0, 0.0, 0.0);
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The name in the node's own middle, which is where the lattice puts one.
+    let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
+        let scene = lit_node_and_a_name(0.0, shadow, 1.0);
+        let bare = shooter.shot(&scene);
+        let named = shooter.shot_with(&scene, name_at(&scene, SIZE, ON_THE_BAND));
+        (scene, bare, named)
+    };
+
+    // The name's own INK, taken at a Shadow of 0 where a name paints that and
+    // nothing else. It does not move with the bar, so one reading answers for
+    // both shots.
+    let (_, flat_bare, flat) = shots(0.0);
+    let ink: std::collections::BTreeSet<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] != flat_bare[i..i + 4]).collect();
+    assert!(ink.len() > 40, "the fixture's name must land on the pane, not {} pixels", ink.len());
+
+    let (scene, bare, named) = shots(SHADOW);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+    let ground = [byte(scene.background.x), byte(scene.background.y), byte(scene.background.z)];
+    // Where the node's own billboard reaches, in pixels: uv 1 is 1.8 node
+    // radii, so nothing the node paints stands outside this and a hole inside
+    // it is a hole in the node.
+    let radius = scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32) * NODE_QUAD;
+    let centre = scene
+        .projector(glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32))
+        .project(glam::Vec3::ZERO)
+        .expect("the node stands in front of the camera");
+    let (mut touched, mut on_the_node) = (0usize, 0usize);
+    for i in (0..named.len()).step_by(4) {
+        if ink.contains(&i) || named[i..i + 4] == bare[i..i + 4] {
+            continue;
+        }
+        touched += 1;
+        for c in 0..3 {
+            let (was, now, to) = (bare[i + c] as i32, named[i + c] as i32, ground[c]);
+            assert!(
+                now >= was.min(to) - 2 && now <= was.max(to) + 2,
+                "a name moved a pixel outside its own ink to {now}, which is not between \
+                 the {was} it stood on and the {to} a hole clears to",
+            );
+        }
+        let px = (i / 4) as u32;
+        let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+        if (x - centre.x).hypot(y - centre.y) <= radius {
+            on_the_node += 1;
+        }
+    }
+    assert!(touched > 250, "a name at Shadow {SHADOW} cleared only {touched} pixels");
+    assert!(
+        on_the_node > 150,
+        "a name must clear the node it stands on, and only {on_the_node} of {touched} \
+         cleared pixels were inside the node's own billboard",
+    );
+
+    // And with the Shadow shut it clears nothing at all: `ink` above IS the
+    // difference the name makes at 0, so a hole there would be counted into it
+    // and this asserts that set is the glyph's own footprint and no larger.
+    let outside: Vec<usize> = ink
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let px = (i / 4) as u32;
+            let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+            (x - centre.x).hypot(y - centre.y) > radius
+        })
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "at a Shadow of 0 a name must paint its ink and nothing else, and {} pixels of it \
+         landed outside the node it names",
+        outside.len(),
+    );
 }

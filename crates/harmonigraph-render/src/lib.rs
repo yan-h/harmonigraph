@@ -1186,11 +1186,13 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                misc13: if lights {
-                    [scene.glow_wash, scene.marker_unit, 0.0, 0.0]
-                } else {
-                    [0.0; 4]
-                },
+                // HALF of it zeroed where the glow does not draw. The wash is a
+                // share of the light and goes with it; the unit beside it is
+                // what a marker's own HOLE is measured in (`vs_plus`), and a
+                // hole is cut with no light in the picture at all — which is
+                // `misc11`'s rule above, reaching one field further now that
+                // the markers knock out as the nodes do.
+                misc13: [if lights { scene.glow_wash } else { 0.0 }, scene.marker_unit, 0.0, 0.0],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
@@ -2878,7 +2880,7 @@ impl LatticeResources {
             target_format,
             &glyph_layout,
             Some(&glow_layout),
-            "fs_fill_lit",
+            ("vs_glyph_lit", "fs_fill_lit"),
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
@@ -3427,6 +3429,13 @@ impl CallbackTrait for LatticeCallback {
                         // quad down to the reconstruction filter's own margin.
                         ring0: [0.0; 4],
                         ring1: [0.0; 4],
+                        // The ground a name's knockout clears to where no
+                        // light stands, off the same row the nodes clear to
+                        // (`Uniforms::background`): the two paint one hole
+                        // between them at a name over its own node's rings, so
+                        // a name clearing to a different ground would draw its
+                        // own outline in the seam.
+                        background: self.uniforms.background,
                     }),
                 );
             }
