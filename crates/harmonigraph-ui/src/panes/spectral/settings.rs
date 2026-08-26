@@ -354,7 +354,7 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // belongs to neither: under a section heading a button reads as that
     // section's, and this one names what it takes so it can stand after both.
     // The lattice trail is a different pane's and stays there; the Video
-    // pane's "Clear everything" is what takes all three at once.
+    // pane's "Clear everything" is what takes all four at once.
     button_row(ui, |ui| {
         if ui
             .button("Clear roll and spectrogram")
