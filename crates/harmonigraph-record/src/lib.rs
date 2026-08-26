@@ -566,11 +566,13 @@ impl Control {
             *self.status.lock() = format!("cannot create {}: {err}", dir.display());
             return;
         }
-        let stamp = std::time::SystemTime::now()
+        let epoch_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let path = dir.join(format!("take-{stamp}.{}", harmonigraph_take::EXTENSION));
+        let base =
+            dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
+        let path = disambiguate(base);
         let header = header_for(sample_rate, ui_state);
 
         self.dropped.store(0, Ordering::Relaxed);
@@ -661,6 +663,53 @@ pub fn header_for(sample_rate: f32, ui_state: String) -> harmonigraph_take::Head
         source: "harmonigraph".into(),
         ..Default::default()
     }
+}
+
+/// Turn a Unix timestamp into the sortable, legible stamp a take's filename
+/// carries — `YYYY-MM-DD_HH-MM-SS`, UTC. UTC rather than the host's local
+/// time because reading it back out needs no timezone database, only `:`
+/// is invalid in a filename on every platform this runs on so hyphens
+/// stand in for it, and the lexical and chronological orders coincide.
+fn stamp_for(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let secs_of_day = epoch_secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let (hour, minute, second) = (secs_of_day / 3_600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    format!("{year:04}-{month:02}-{day:02}_{hour:02}-{minute:02}-{second:02}")
+}
+
+/// The proleptic-Gregorian calendar date `days` days after the Unix epoch —
+/// Howard Hinnant's `civil_from_days`, exact over the whole range a take's
+/// clock can produce.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if month <= 2 { y + 1 } else { y };
+    (year, month, day)
+}
+
+/// If `base` (or its `.wav` companion) already sits on disk — two takes
+/// started within the same UTC second — append `_1`, `_2`, ... until a name
+/// neither file uses, rather than let the second take silently truncate the
+/// first's. Distinct from [`Open::path_for`]'s `-N`, which numbers later
+/// PASSES of one take rather than takes that collided on a name.
+fn disambiguate(base: std::path::PathBuf) -> std::path::PathBuf {
+    let taken = |path: &std::path::Path| path.exists() || path.with_extension("wav").exists();
+    if !taken(&base) {
+        return base;
+    }
+    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
+    (1..)
+        .map(|n| base.with_file_name(format!("{stem}_{n}.{}", harmonigraph_take::EXTENSION)))
+        .find(|candidate| !taken(candidate))
+        .expect("an unbounded counter always finds a free name")
 }
 
 /// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,
@@ -1400,6 +1449,47 @@ mod tests {
         // test that read it off a constant would follow a rename that broke
         // every take already written.
         assert_eq!(header.source, "harmonigraph", "the take says what wrote it");
+    }
+
+    /// One known instant, checked against a date computed by hand, plus the
+    /// epoch and a leap-year February to pin the boundaries
+    /// [`civil_from_days`] could get wrong.
+    #[test]
+    fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
+        // 2024-02-29 18:05:09 UTC — a leap day, so the month/day arithmetic
+        // has to fall through the extra day rather than assume 28.
+        assert_eq!(stamp_for(1_709_229_909), "2024-02-29_18-05-09");
+        assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
+    }
+
+    /// Two takes landing on the same stamp — the second starting within the
+    /// same UTC second as the first — number `_1`, `_2`, ... rather than the
+    /// second silently truncating the first's file. Covers both the `.take`
+    /// and the `.wav` companion, since either already existing is a collision.
+    #[test]
+    fn a_repeated_stamp_counts_up_instead_of_overwriting() {
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-disambiguate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let base = dir.join("take-2026-08-25_12-00-00.take");
+
+        assert_eq!(disambiguate(base.clone()), base, "a free name is used as-is");
+
+        std::fs::write(&base, "").expect("write base take");
+        let first_dup = disambiguate(base.clone());
+        assert_eq!(first_dup, dir.join("take-2026-08-25_12-00-00_1.take"));
+
+        // A free `.take` name whose `.wav` companion is already taken is
+        // still a collision — the audio would clobber, even though the take
+        // file itself would not.
+        std::fs::write(first_dup.with_extension("wav"), "").expect("write wav companion");
+        assert_eq!(
+            disambiguate(base),
+            dir.join("take-2026-08-25_12-00-00_2.take"),
+            "the wav-only collision at _1 is skipped, not just the take file's",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A [`Recorder`] whose rings the test keeps the far end of.
