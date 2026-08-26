@@ -587,15 +587,16 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
     }
 }
 
-/// "Clear everything" empties all three accumulations, not two of them.
+/// "Clear everything" empties all four accumulations, not three of them.
 ///
 /// Each is filled by a different path — the trail only once a released voice
 /// has faded past `prune`, the roll on the note-off, the spectrogram from
-/// analyzed audio — so the interesting failure is one of the three quietly
-/// not being wired up. Asserting they are non-empty FIRST is what makes this
-/// a test of the clear rather than of three things that were already empty.
+/// analyzed audio, the glow from a lit surface's own step — so the
+/// interesting failure is one of the four quietly not being wired up.
+/// Asserting they are non-empty FIRST is what makes this a test of the clear
+/// rather than of four things that were already empty.
 #[test]
-fn clearing_everything_empties_all_three_accumulations() {
+fn clearing_everything_empties_all_four_accumulations() {
     let mut state = fresh();
 
     // A note played and released; `prune` past its fade turns the released
@@ -610,14 +611,20 @@ fn clearing_everything_empties_all_three_accumulations() {
         0.0,
         &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
     ));
+    // A surface's glow state, standing in for whatever a lit lattice pane
+    // would have handed a row by now — how it gets there is `glow_fade`'s
+    // own business and tested there.
+    state.glow_fade.insert(0, Default::default());
 
     assert!(!state.tracker.history().is_empty(), "no trail to clear");
     assert!(!state.tracker.roll().is_empty(), "no roll to clear");
     assert!(!state.spectrum.history().is_empty(), "no spectrogram to clear");
+    assert!(!state.glow_fade.is_empty(), "no glow to clear");
 
     state.clear_accumulated();
 
     assert!(state.tracker.history().is_empty(), "the lattice trail survived");
     assert!(state.tracker.roll().is_empty(), "the piano roll survived");
     assert!(state.spectrum.history().is_empty(), "the spectrogram survived");
+    assert!(state.glow_fade.is_empty(), "the lattice glow survived");
 }
