@@ -878,10 +878,11 @@ pub struct Scene {
     /// colour — so a marker IS that grey rather than a brightness of it. A bar
     /// of its own and not [`lattice_ground`](Self::lattice_ground): the field
     /// says where the positions are, which is worth keeping legible at any
-    /// brightness a node's empty rings are dialled to. The light standing at
-    /// one washes over that grey on the terms it takes a node's ink
-    /// (`wash_over` in lattice.wgsl), so a marker inside a halo reads as
-    /// standing in the light rather than as a hole punched in it.
+    /// brightness a node's empty rings are dialled to. The light standing at one
+    /// washes over that grey whole, on the unlit side of
+    /// [`ViewConfig::glow_wash`](crate::ViewConfig::glow_wash), so a marker
+    /// inside a halo reads as standing in the light rather than as a hole
+    /// punched in it.
     ///
     /// Off-sheet positions get none, and that is the whole of what says which
     /// sheet is the ground: a note there floats over the marker field instead
@@ -993,6 +994,16 @@ pub struct Scene {
     /// How much of the light the standoff takes away where it stands (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
+    /// How much of the light standing at a LIT slice washes over that slice's
+    /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
+    ///
+    /// The lit ink alone: every other piece of the lattice takes the field
+    /// whole, and what a fragment's lit share is is the shader's to say
+    /// (`NodeInk::lit` in lattice.wgsl). The ground's share of that same field
+    /// is [`glow_shadow_depth`](Self::glow_shadow_depth), and the two are
+    /// independent: this reads the field RAW, so the Shadow bars move it not at
+    /// all.
+    pub glow_wash: f32,
     /// One quad-uv length of the home sheet, as a world length
     /// (`marker_world`): what converts the marker field between the units its
     /// own draws are in and the units every glow bar is dialled in.

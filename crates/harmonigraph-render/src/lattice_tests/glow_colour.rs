@@ -121,6 +121,89 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     );
 }
 
+/// The WASH reaches a LIT SLICE and nothing else in the picture.
+///
+/// The bar's whole scope, and the reason it is one bar rather than the two
+/// halves of the lattice's ink dialled together. Unlit ink — a silent slice's
+/// ghost, a wedge the analyzer reads nothing in, a resting cross — is ground
+/// laid over ground the light is already under, so it wants the whole field at
+/// every setting or it reads as a hole punched where the light is brightest. A
+/// SOUNDING slice is already the colour its own halo is made of, so the field
+/// over it buys no colour and spends the edge between the slice and its light.
+///
+/// Two claims, measured between a full bar and an empty one on one frame:
+///
+/// - Something moves, and enough of the lit ink to be the slice rather than a
+///   rim of it.
+/// - NOTHING outside the lit ink moves, byte for byte — not the ghost ring the
+///   lit slice sits in, not the ring's silent wedges, not the halo, the
+///   clearing or the ground.
+///
+/// The lit ink is FOUND rather than described, and found with the glow OFF in
+/// every shot that finds it: it is the pixels that move when the thing lighting
+/// them is taken away, which is the octave for the band and the partial for the
+/// ring. Off the ink, because a shot with the light in it would hand the set
+/// every pixel the halo covers.
+///
+/// Both layers at once, on one node, because they reach the bar through one
+/// term: the band's slot level and the ring's own reading are composited into a
+/// single lit share (`NodeInk::lit`), and a fixture wearing one of them could
+/// not tell that share apart from the layer it came in on.
+#[test]
+fn the_wash_reaches_a_lit_slice_and_nothing_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // An octave held and a partial sounding AT that same octave, so the two
+    // lit wedges stand at the same angle on two annuli and everything else the
+    // node draws is the grey between them.
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let at = |held: Option<usize>, partial: Option<f32>, reach: f32, wash: f32| -> Scene {
+        let mut scene = ringing_node(held, partial, PROBE_RANGE);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_wash = wash;
+        scene
+    };
+    let dark = shooter.shot(&at(Some(slot), Some(sounding), 0.0, 1.0));
+    let unheld = shooter.shot(&at(None, Some(sounding), 0.0, 1.0));
+    let quiet = shooter.shot(&at(Some(slot), None, 0.0, 1.0));
+    let mut is_lit = vec![false; dark.len() / 4];
+    for (p, flag) in is_lit.iter_mut().enumerate() {
+        let i = p * 4;
+        *flag = dark[i..i + 4] != unheld[i..i + 4] || dark[i..i + 4] != quiet[i..i + 4];
+    }
+    let lit = is_lit.iter().filter(|f| **f).count();
+    assert!(lit > 200, "the fixture's two lit wedges cover {lit} pixels between them");
+
+    let full = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 1.0));
+    let none = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 0.0));
+    let moved: Vec<usize> =
+        (0..is_lit.len()).filter(|p| full[p * 4..p * 4 + 4] != none[p * 4..p * 4 + 4]).collect();
+    let moved_lit = moved.iter().filter(|&&p| is_lit[p]).count();
+    let strays = moved.len() - moved_lit;
+    assert!(
+        moved_lit * 2 > lit,
+        "the bar moved {moved_lit} of the {lit} lit pixels: it is reaching an edge of the slice \
+         rather than the slice",
+    );
+    assert_eq!(
+        strays,
+        0,
+        "the bar moved {strays} pixels outside the lit ink, of {} it moved in all: it is \
+         reaching ink that has to wear the whole light whatever it says",
+        moved.len(),
+    );
+}
+
 /// A node wearing NOTHING BUT AN AUDIO RING gives off no light at all,
 /// whatever its ring is reading.
 ///

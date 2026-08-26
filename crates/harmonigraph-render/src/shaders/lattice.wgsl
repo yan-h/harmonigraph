@@ -140,8 +140,8 @@ struct Uniforms {
     // skewed across its own width (see `standoff_coverage`), 0 giving the light
     // back closest to the ring and 1 holding the ring dark to the end of it;
     // w: how much of the light it takes where it stands, 1 clearing to the bare
-    // ground. The node's own INK takes that same field whole and before this
-    // factor reaches it (`wash_over`).
+    // ground. The node's own INK reads that same field raw, before this factor
+    // reaches it, on `misc13`'s own bar.
     //
     // Read by `fs_glow` alone, which writes the standoff into a layer of its
     // own beside the light (`glow_shade_tex`): the light is one field under the
@@ -164,13 +164,19 @@ struct Uniforms {
     // dialled, and this is how tall a texture the renderer allocated. Zeroed
     // whole with them, on the same rule.
     misc12: vec4<f32>,
-    // The MARKERS' unit. x: one quad uv as a world length on the sheet the
+    // The WASH. x: how much of the light a LIT slice of a node washes its own
+    // ink with (`glow_wash`), where every other piece of the lattice's ink
+    // takes that field whole. y: one quad uv as a world length on the sheet the
     // markers stand on (`marker_unit`), which is what puts a marker's own draw
-    // and the Shadow it holds the light off by into one unit. y/z/w unused.
+    // and the Shadow it holds the light off by into one unit. z/w unused.
     //
-    // Zeroed whole with misc10, and the markers' standoff draw reads that zero
-    // as its own off switch (`vs_plus_glow`) rather than dividing by the floor
-    // `marker_unit` puts under it.
+    // A row of its own because the wash is not a term of the standoff, close as
+    // it reads to the depth: the Shadow bars shape the field the GROUND is
+    // painted from, and this reads that same field raw, so a dial sitting among
+    // them would carry the coupling it exists to break. Zeroed whole with
+    // misc10, and the markers' standoff draw reads its own zero there as an off
+    // switch (`vs_plus_glow`) rather than dividing by the floor `marker_unit`
+    // puts under it.
     misc13: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
@@ -525,7 +531,7 @@ fn glow_shadow_shape() -> f32 {
 // their own light.
 //
 // A share of the LIGHT and not of the picture — it scales what the node's
-// clearing paints, and never the ink over it (`wash_over`). At 0 the
+// clearing paints, and never the ink over it (`glow_wash`). At 0 the
 // clearing paints the field untouched, which is the picture with no standoff in
 // it at all.
 //
@@ -538,33 +544,48 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
-// The WASH: the light standing at a pixel, laid over the lattice's own ink
-// there — a node's rings, marks and glyphs (`node_paint`) and a resting marker
-// (`plus_paint`) — over ink already premultiplied by `alpha`. Every piece of
-// ink takes the light through here, so the lattice wears it in one operation
-// rather than in several that have to agree.
+// How much of the light a LIT slice washes over its own ink with
+// (`u.misc13.x`): 1 is the whole field over it, the slice melting into its own
+// halo, and 0 is the slice drawn exactly as it is with the glow off.
 //
-// The WHOLE field and no share of it: a silent slice's grey lifts to the colour
-// of the halo it stands in, and the node reads as a shape INSIDE its light
-// rather than a silhouette cut out of it. The field it reads is RAW, before
-// `glow_shadow_depth` takes the ground's share of it, so a ring stands in a
-// pool cleared to the bare ground and still wears the colour of the halo
-// around it — the ground's share and the ink's are one field asked for twice,
-// and the standoff cannot quietly take the ink's light with it.
+// The lit ink ALONE is what this reaches, and everything else in the lattice
+// takes the field whole whatever it says (`wash_over`'s `share`, which
+// `node_paint` mixes toward this by a fragment's own `NodeInk::lit`). The two
+// want opposite things of one field, which is why one bar cannot answer for
+// both: a silent slice's grey and a resting cross are ground laid over lit
+// ground, so unwashed they read as holes punched exactly where the light is
+// brightest and they want all of it. A lit slice is already the colour the
+// halo around it is made of, so the field over it buys no colour and spends
+// contrast — the slice and its own light meet at no edge at all, and the node
+// stops reading as a shape.
+//
+// The field it reads is RAW, before `glow_shadow_depth` takes the ground's
+// share of it, so a ring stands in a pool cleared to the bare ground and still
+// wears the colour of the halo around it — the ground's share and the ink's are
+// one field asked for twice, and the standoff cannot quietly take the ink's
+// light with it.
+fn glow_wash() -> f32 {
+    return clamp(u.misc13.x, 0.0, 1.0);
+}
+
+// `share` of `light`, laid over ink already premultiplied by `alpha`. Every
+// piece of the lattice's ink takes the light through here — a node's rings,
+// marks and glyphs (`node_paint`) and a resting marker (`plus_paint`) — so the
+// lattice wears it in one operation rather than in several that have to agree.
 //
 // A SCREEN, where the ground under the ink takes an over, and the difference is
 // what a NEIGHBOUR's light is allowed to do. The field is melded, so the light
 // at a piece of ink carries every sheet's halo; an over (`ink * (1 - light.a)`)
 // lets a saturated halo from behind take the ink's other channels DOWN — a
 // white name under a red one comes out red — which is ink losing its colour to
-// something it stands in front of. `light + ink * (1 - light)` per channel can
-// only brighten, whatever reaches the pixel. The ground keeps the over: that is
+// something it stands in front of. `w + ink * (1 - w)` per channel can only
+// brighten, whatever reaches the pixel. The ground keeps the over: that is
 // `fs_glow_over`'s own blend state, and the ground a clearing paints has to be
 // the ground it meets at the clearing's edge.
 //
 // Premultiplied, so the ink's own term carries `alpha`: this is the screen of
-// the ink over the light, scaled by the coverage the ink has, and whoever fills
-// the `(1 - alpha)` it leaves takes its own light separately.
+// the ink over `w`, scaled by the coverage the ink has, and whoever fills the
+// `(1 - alpha)` it leaves takes its own light separately.
 //
 // What this does NOT give ink is a way to hold off a NEIGHBOUR's light: the
 // field is one layer, so washed ink is tinted by a far sheet's halo as well as
@@ -573,8 +594,9 @@ fn glow_shadow_depth() -> f32 {
 // node's own halo is the maximum at its own pixel, the falloff being measured
 // from its centre, so the far share is small unless a lit node sits directly
 // behind.
-fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
-    return light * alpha + ink * (1.0 - light);
+fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f32> {
+    let w = light * share;
+    return w * alpha + ink * (1.0 - w);
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
@@ -1839,6 +1861,12 @@ struct RingInk {
     /// How much of the point that wedge covers, the node's own ring presence
     /// taken out of it.
     cov: f32,
+    /// How LOUD the wedge is reading there, 0..1 — the level the color was
+    /// picked at, with neither the coverage nor the node's ring presence in
+    /// it. What the WASH asks of the ring (`node_ink`): a wedge at 0 is the
+    /// ramp's silent end, which is the rings' own ground exactly, so it is
+    /// grey the analyzer is not lighting rather than anything it is.
+    lit: f32,
 };
 
 /// Coverage and color of the audio ring at this fragment.
@@ -1850,7 +1878,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
-        return RingInk(vec3<f32>(0.0), 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
@@ -1859,13 +1887,13 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // rediscovered here, since the question is about the node's whole ring and
     // this is one fragment of one wedge of it.
     if in.ring <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
     if EARLY_OUT && band <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
@@ -1885,7 +1913,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
         }
     }
     if cov <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // WHERE in the wedge the grid is read, which is the whole of what the two
     // readings differ by. The fold answers one number for the octave, so every
@@ -1905,9 +1933,9 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     //
     // The reading itself goes out beside the colour it picks, un-scaled by
     // either: how loud this wedge is and how much of the node's ring is showing
-    // are two questions, and the light asks the first one alone.
+    // are two questions, and the wash asks the first one alone.
     let level = spectrum_at(pitch);
-    return RingInk(spectral_lut_color(level), cov * in.ring);
+    return RingInk(spectral_lut_color(level), cov * in.ring, clamp(level, 0.0, 1.0));
 }
 
 // ---- How tightly a node's octaves pack -------------------------------------
@@ -2653,9 +2681,25 @@ fn node_geom(in: VsOut) -> NodeGeom {
     return NodeGeom(d, aa, field_step, oct);
 }
 
+// What a node paints of itself at one fragment, and what that ink IS.
+struct NodeInk {
+    // The ink, premultiplied by the coverage below.
+    rgb: vec3<f32>,
+    // How much of the fragment that ink covers.
+    alpha: f32,
+    // The share of it standing in a LIT slice, 0..1: a sounding octave, a
+    // wedge the analyzer is reading, a mark. 0 is ink that is the rings' own
+    // ground — a silent slice's ghost, a wedge at the ramp's pinned end — which
+    // says a node is there rather than that anything on it is sounding.
+    //
+    // A share and not a switch, so a slice fading in carries its wash in with
+    // it and no seam appears at a threshold nothing else in the picture has.
+    lit: f32,
+};
+
 /// What a node paints OF ITSELF at this fragment: every layer's ink,
-/// premultiplied, and nothing of the hole it knocks out of the picture behind
-/// it.
+/// premultiplied, how much of the fragment it covers, and how much of that ink
+/// is a LIT slice — nothing of the hole it knocks out of the picture behind it.
 ///
 /// Split from [`node_paint`] so that the node's own picture and the hole it
 /// knocks in everyone else's are two readable pieces rather than one function
@@ -2664,7 +2708,7 @@ fn node_geom(in: VsOut) -> NodeGeom {
 /// answers are different shapes — a layer's ink is a set of slices cut out of
 /// its annulus, its hole is that whole annulus dilated by the reach — and
 /// reading them together is what made the second easy to get wrong.
-fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f32> {
+fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeInk {
     let activation = in.params.x;
 
     // A node is its RINGS and nothing else: the stack starts at the node's own
@@ -2692,6 +2736,14 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     // covers is the band radii; there is nothing left for a switch to say.
     var glyph = 0.0;
     var glyph_rgb = u.lattice_ground.rgb;
+    // How much of that coverage is standing in a slice something has LIT — a
+    // sounding octave, a wedge the analyzer is reading, a mark. A SHARE OF
+    // `glyph` and not a fraction of it, premultiplied exactly as the colour
+    // above is, so it rides every term `glyph` takes below and the two stay
+    // one answer. What reads it is the WASH (`node_paint`), which is the one
+    // thing in the picture that asks a node's ink what it is rather than only
+    // how much of the pixel it covers.
+    var glyph_lit = 0.0;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2785,6 +2837,14 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
         if cov > glyph {
             glyph = cov;
             glyph_rgb = slot_rgb;
+            // The LIT part of what this slot draws, which is its own level and
+            // never the ghost under it: the two are one wedge at one opacity
+            // (`oct_slot_ink`), and the ghost is the backdrop carrying the
+            // ring's shape rather than anything this octave is doing. Decided
+            // by the same winner the colour is, and for the same reason — one
+            // element owns a pixel, so the seam between a lit slice and a
+            // silent one cross-fades in both answers at once.
+            glyph_lit = shape * level;
         }
     }
     // Ease the glyph layer off across the billboard's margin instead of
@@ -2792,7 +2852,9 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     // the outer band's own limit — so it touches nothing but what reaches
     // past the band: the aa fringe of a band dialed right out to the edge,
     // eased to zero by GLYPH_FADE_LIMIT.
-    glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
+    let glyph_taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
+    glyph = glyph * glyph_taper;
+    glyph_lit = glyph_lit * glyph_taper;
     // The mark layer's sheet, which the glyphs take too -- over the slices a
     // melody or bass mark extends, and nowhere else. A mark is the octave it
     // names TOGETHER with the extension that says so, one slice in two
@@ -2842,6 +2904,11 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
         spectral_ring(in, oct, in.uv, glyph_band(d, audio_radii.x, audio_radii.y, aa), aa);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
+    // The wedge's own reading is its lit share, on the composite the coverage
+    // below takes. A silent wedge is the ramp's pinned end — the rings' ground
+    // exactly — so it weighs nothing here and covers the octave layer's answer
+    // with a zero of its own, which is what the ink does too.
+    glyph_lit = audio.lit * audio.cov + glyph_lit * (1.0 - audio.cov);
     glyph = audio.cov + glyph * (1.0 - audio.cov);
 
     // Melody/bass marks: each one its own octave's slice, continued into the
@@ -2884,12 +2951,23 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     mark = mark * (1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d));
     glyph_rgb = (mark_rgb * mark + glyph_rgb * glyph * (1.0 - mark))
         / max(mark + glyph * (1.0 - mark), 1e-4);
+    // A mark is LIT whole, with no term of its own to scale it: it is one
+    // slice in two pieces, drawn only where a note is marked and already
+    // carried on that note's level (`melody_cov`, `bass_cov`). A mark washing
+    // on other terms than the slice it continues would part the two at the gap
+    // between them, which is the seam the shimmer above is shaped to avoid.
+    glyph_lit = mark + glyph_lit * (1.0 - mark);
     glyph = mark + glyph * (1.0 - mark);
 
     // The active note: glyph over (disc + glow), premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
-    return vec4<f32>(active_rgb, active_alpha);
+    // Out as a FRACTION of the ink rather than as the coverage it was carried
+    // as: what the wash asks is what this ink IS, and a half-covered lit slice
+    // is as lit as a whole one. The floor is the discard's own threshold read
+    // from the other side — at no ink there is no share to take, and the
+    // caller multiplies the answer by that same nothing.
+    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4));
 }
 
 /// What a node paints at this fragment, clearing and all. The scene pass's two
@@ -2904,12 +2982,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // with arrives from `node_geom` (`aa`, `field_step`) — nothing under here
     // asks the rasterizer how big the node is, so the derivatives are all taken
     // outside.
-    var ink = vec4<f32>(0.0);
+    var ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0);
     if in.paint != PAINT_CLEARING {
         ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
     }
-    let active_alpha = ink.w;
-    let active_rgb = ink.xyz;
+    let active_alpha = ink.alpha;
+    let active_rgb = ink.rgb;
     let d = g.d;
     let oct = g.oct;
 
@@ -3009,9 +3087,16 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let shade = clamp(textureLoad(glow_shade_tex, coord, 0).x, 0.0, 1.0);
     let lit = light * (1.0 - shade);
     let ground = lit.rgb + u.background.rgb * (1.0 - lit.a);
-    // The WASH: the same field over the node's own INK, whole. A silent slice's
-    // grey lifts to the colour of the halo it stands in, so the node reads as a
+    // The WASH: the same field over the node's own INK. A silent slice's grey
+    // lifts to the colour of the halo it stands in, so the node reads as a
     // shape inside its light rather than a silhouette cut out of it.
+    //
+    // How much of it a LIT slice takes is the bar's (`glow_wash`), and the
+    // fragment's own lit share is what carries it there: unlit ink takes the
+    // field whole at every setting, so the bar can pull a sounding slice out of
+    // its halo without the grey around it going back to reading as a hole. A
+    // full bar is one field over the whole node, which is the arrangement with
+    // no bar in it at all.
     //
     // The RAW `light` and NOT the shaded `lit` the ground below takes, which is
     // what lets the dark pool and the tint be had together: on the standoff's
@@ -3026,7 +3111,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // what the two bars are. Where they do, the node's own antialiased edge
     // cross-fades between them, which is a gradient across a pixel rather than
     // a step.
-    let washed = wash_over(active_rgb, active_alpha, light.rgb);
+    let washed = wash_over(active_rgb, active_alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
     let with_ground = washed + ground * gutter_cov * (1.0 - active_alpha);
     return vec4<f32>(with_ground, final_alpha);
 }
@@ -3841,11 +3926,15 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // where the light is brightest. A node's rings take it on the same terms,
     // and a lattice whose structure sits inside the light is what that buys.
     //
+    // The WHOLE field, at any setting of the Wash bar: a cross is the resting
+    // field's own grey and never a slice anything has lit, so it is on the side
+    // of that bar that takes all of the light (`glow_wash`).
+    //
     // The RAW light, as a node's ink takes it: the shade layer beside it is the
     // GROUND's share of the field and the Shadow bars' answer, and ink carrying
     // the remainder could not stand lit in a dark pool at all.
     let light = glow_light(light_coord(in.clip_pos.xy), glow_meld());
-    return vec4<f32>(wash_over(ink, alpha, light.rgb), alpha);
+    return vec4<f32>(wash_over(ink, alpha, light.rgb, 1.0), alpha);
 }
 
 @fragment
@@ -3869,7 +3958,7 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
 // each other. Sharing the bars is what makes it one.
 
 // One quad uv as a world length on the sheet the markers stand on
-// (`u.misc13.x`, `Scene::marker_unit`), which is what puts the two halves of
+// (`u.misc13.y`, `Scene::marker_unit`), which is what puts the two halves of
 // this draw into one unit: the marker's own lengths arrive in world, and the
 // Shadow it holds the light off by is a node's bar, in uv.
 //
@@ -3877,7 +3966,7 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
 // markers, so what the floor is worth is finite arithmetic on the way to
 // drawing none.
 fn marker_unit() -> f32 {
-    return max(u.misc13.x, 1e-6);
+    return max(u.misc13.y, 1e-6);
 }
 
 struct PlusGlowVsOut {
@@ -3911,7 +4000,7 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     // puts under the division would otherwise turn an arm into a quad the width
     // of the pane. The collapse is what the row means, said here rather than
     // left to the floor.
-    let arm = select(0.0, inst.pos_radius.w / unit, u.misc13.x > 0.0);
+    let arm = select(0.0, inst.pos_radius.w / unit, u.misc13.y > 0.0);
     // Sized to where the standoff's own window has shut ([`glow_shadow_stop`]),
     // measured out from the arm it is cast by, which is `vs_glow`'s rule for a
     // node and holds here for the same reason: a shadow reaching outside its

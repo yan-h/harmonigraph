@@ -573,6 +573,7 @@ pub fn derive_scene(
         glow_shadow_soft: view.glow_shadow_soft.clamp(0.0, crate::GLOW_SHADOW_MAX),
         glow_shadow_shape: view.glow_shadow_shape.clamp(0.0, 1.0),
         glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
+        glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip

@@ -761,8 +761,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              keeps a wide shadow from reading as a black ring. It holds off the \
              light wherever that light reaches, a neighbour's halo as much as \
              the node's own, and however little the node's Clearance covers. \
-             The node's own ink is untouched at any setting — it wears the \
-             light whole. Both handles at 0 lets the glow up to \
+             The node's own ink is untouched at any setting — what the ink \
+             wears is the Wash bar below. Both handles at 0 lets the glow up to \
              every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
@@ -801,9 +801,33 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  with the glow off — and lower leaves the rings sitting in a \
                  dimmer pool of their own light rather than in a void. 0% is \
                  the picture with no shadow at all. It moves the ground alone: \
-                 the rings, the markers and the marks over it wear the light \
-                 whole whatever this says, so a full depth is a lit ring \
-                 standing in a pool cleared to the bare ground.",
+                 the ink over it reads the light before the shadow takes any, \
+                 so a full depth is a lit ring standing in a pool cleared to \
+                 the bare ground.",
+            );
+        // The ink's own share of the same field, under the bar that says the
+        // ground's: the pair is one question asked twice, and the answers are
+        // free of each other on purpose — a dark pool with a tinted ring in it
+        // is a picture no single coupled dial can name. Only the LIT ink is
+        // dialled, the rest of the lattice always taking the whole field, for
+        // the reason the hover text gives.
+        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much of the light a SOUNDING slice washes over its own \
+                 ink — a lit octave indicator, a wedge the analyzer is \
+                 reading, and the melody or bass mark continuing one. 100% \
+                 lays the whole field over it and the slice melts into its own \
+                 halo; lower brings it back out of the light until, at 0%, it \
+                 is drawn exactly as it is with the glow off. \
+                 Everything else in the lattice — a silent slice's grey, an \
+                 empty wedge, the resting crosses between the nodes — always \
+                 takes the whole light, which is what keeps it from reading as \
+                 holes punched where the light is brightest. It reads the \
+                 light before the shadow takes any, so it is free of the depth \
+                 above: a full depth with a wash on it is a slice standing in \
+                 a dark pool and still wearing the halo's colour.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
