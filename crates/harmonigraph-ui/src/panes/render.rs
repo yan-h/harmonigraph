@@ -187,13 +187,13 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     );
 }
 
-/// Empty the three things that accumulate, in one press, next to the button
+/// Empty the four things that accumulate, in one press, next to the button
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
 /// note names", the Analyzer's "Clear roll and spectrogram" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
-/// in. This is for the other moment, when all three are wanted together and
+/// in. This is for the other moment, when all four are wanted together and
 /// there is only one reason: a take about to be recorded should start on an
 /// empty picture, because whatever is left over is baked into the video's
 /// opening seconds. Two panes to visit for one intention is what makes it a
@@ -206,10 +206,11 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
         if ui
             .button("Clear everything")
             .on_hover_text(
-                "Forget the lattice trail, the piano roll, and the spectrogram, so \
-                 the next take opens on an empty picture. A note held across this \
-                 is gone from the roll until it is played again; the lattice keeps \
-                 what is still sounding.",
+                "Forget the lattice trail, the piano roll, the spectrogram, and \
+                 every node's own light, so the next take opens on an empty \
+                 picture. A note held across this is gone from the roll until \
+                 it is played again; the lattice keeps what is still sounding, \
+                 lit again on the next frame.",
             )
             .clicked()
         {

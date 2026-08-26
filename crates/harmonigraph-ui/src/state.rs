@@ -1139,25 +1139,32 @@ impl SharedState {
     }
 
     /// Forget everything that accumulates as the plugin runs: the lattice
-    /// trail, the piano roll, and the spectrogram. Display state only —
-    /// nothing about the tuning, the take, or the render.
+    /// trail, the piano roll, the spectrogram, and every node's own light.
+    /// Display state only — nothing about the tuning, the take, or the
+    /// render.
     ///
     /// Named as a set because the Video pane's "Clear everything" clears it
-    /// before a take, and a fourth accumulation would have to join it here or
+    /// before a take, and a fifth accumulation would have to join it here or
     /// that button quietly stops living up to its name. Each pane still clears
     /// what it draws — Labels the trail, the Analyzer its roll and spectrogram
     /// together — so this is not a replacement for those buttons, it is the
-    /// case where all three are wanted at one moment.
+    /// case where all four are wanted at one moment.
     ///
-    /// Held notes fare differently across the three and deliberately so: the
+    /// Held notes fare differently across the four and deliberately so: the
     /// lattice keeps what is still sounding while the roll drops it (see
     /// [`NoteRoll::clear`](harmonigraph_core::NoteRoll::clear)). Each clear
     /// answers that for itself; evening them up here would make this do
-    /// something the pane buttons do not.
+    /// something the pane buttons do not. The glow is the one exception —
+    /// dropping every surface's [`GlowFade`](crate::panes::glow_fade::GlowFade)
+    /// does not spare a held note's light, because a light re-seeds rather than
+    /// fading up from nothing (see [`glow_fade::apply`](crate::panes::glow_fade::apply)),
+    /// so a still-sounding node is lit again on the very next frame — this
+    /// only cuts the fade a released node's light was still riding.
     pub fn clear_accumulated(&mut self) {
         self.tracker.clear_history();
         self.tracker.clear_roll();
         self.spectrum.clear_history();
+        self.glow_fade.clear();
     }
 
     /// The roll currently on screen: the take's own, laid out statically, in
