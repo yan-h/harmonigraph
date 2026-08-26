@@ -149,16 +149,31 @@ def rust_breakdown(root: Path, reports: list) -> dict:
 
 def build_report(root: Path) -> dict:
     tokei_json = run_tokei(root)
-    languages = {
-        k: {kk: v[kk] for kk in ("code", "comments", "blanks")}
-        for k, v in tokei_json.items() if k != "Total"
-    }
+    rust_code = rust_breakdown(root, tokei_json.get("Rust", {}).get("reports", []))
+    rb = rust_code["totals"]
+
+    # Test/prod code is a Rust-only concept here (#[cfg(test)], tests/ dirs)
+    # — every other language's code counts as prod code, none as test code.
+    languages = {}
+    for k, v in tokei_json.items():
+        if k == "Total":
+            continue
+        d = {kk: v[kk] for kk in ("code", "comments", "blanks")}
+        if k == "Rust":
+            d["test_code"], d["prod_code"] = rb["test_code"], rb["prod_code"]
+        else:
+            d["test_code"], d["prod_code"] = 0, d["code"]
+        languages[k] = d
+
     total = {kk: tokei_json["Total"][kk] for kk in ("code", "comments", "blanks")}
+    total["test_code"] = rb["test_code"]
+    total["prod_code"] = total["code"] - rb["test_code"]
+
     return {
         "languages": languages,
         "total": total,
         "rust_comments": rust_doc_comment_split(tokei_json),
-        "rust_code": rust_breakdown(root, tokei_json.get("Rust", {}).get("reports", [])),
+        "rust_code": rust_code,
     }
 
 
@@ -170,9 +185,11 @@ def print_report(r: dict) -> None:
 
     def row(label, d):
         lines = d["code"] + d["comments"] + d["blanks"]
-        print(f"  {label:<24} {lines:>9,} {d['code']:>9,} {d['comments']:>9,} {d['blanks']:>9,}")
+        print(f"  {label:<24} {lines:>9,} {d['code']:>9,} {d['comments']:>9,} {d['blanks']:>9,}"
+              f" {d['test_code']:>10,} {d['prod_code']:>10,}")
 
-    print(f"{'Language':<26}{'Lines':>10}{'Code':>10}{'Comments':>10}{'Blank':>10}")
+    print(f"{'Language':<26}{'Lines':>10}{'Code':>10}{'Comments':>10}{'Blank':>10}"
+          f"{'Test code':>11}{'Prod code':>11}")
     for name, d in sorted(r["languages"].items(), key=lambda kv: -(kv[1]["code"] + kv[1]["comments"] + kv[1]["blanks"])):
         row(name, d)
     row("Total", r["total"])
