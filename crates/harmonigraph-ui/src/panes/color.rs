@@ -34,11 +34,7 @@ use harmonigraph_scene::ViewConfig;
 /// A plain heading rather than `section`: this is the top of the page body, and
 /// the leading rule `section` draws would sit directly under the page picker.
 pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    ui.heading("Note colors");
-    ui.weak(
-        "Colors every note in every pane — the lattice, the trail, the ribbons. \
-         By PITCH: what the lattice lights from audio reads the heatmap below.",
-    );
+    ui.heading("MIDI pitch colors");
     // The gradient above the range because it is the coarser of the two: it
     // says what the colors ARE, the range says which pitches they are spread
     // over. Both feed the one table every pitch-colored shape reads, so a
@@ -60,11 +56,7 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
          end, or between them to slide the range.",
     );
     bloom_bar(ui, &mut state.view);
-    section(ui, "Heatmap colors");
-    ui.weak(
-        "The level→color table: the spectrogram, the Spiral, and the lattice's \
-         audio ring, which takes it re-anchored on the node's own ground.",
-    );
+    section(ui, "Audio volume colors");
     spectrogram_gradient_group(ui, &mut state.spectrum_config);
 }
 
