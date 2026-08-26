@@ -60,7 +60,7 @@ OPTIONS:
         --lead <SEC>       Extra empty frame before the recording starts. The
                            render already opens where the take was captured,
                            so this is only for holding on a still frame first.
-                           [default: the take's own Lead-in setting]
+                           [default: 0]
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear.  [default: 4]
@@ -111,7 +111,8 @@ struct Args {
     /// `start_of_render`. An explicit `--start 0` is NOT the same thing, which
     /// is why this is an Option rather than defaulting to zero.
     start: Option<f64>,
-    /// `None` means "use the take's own Lead-in setting".
+    /// `None` means no extra lead — the render opens exactly where the take
+    /// was captured.
     lead: Option<f64>,
     end: Option<f64>,
     tail: f64,
@@ -532,8 +533,7 @@ fn run() -> Result<(), String> {
         audio.as_ref().map_or(visual, |a| visual.max(audio_start + a.seconds()))
     });
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
-    // The take's own Lead-in unless the command line says otherwise.
-    let lead = args.lead.unwrap_or(render_config.lead_in as f64);
+    let lead = args.lead.unwrap_or(0.0);
     // Where the recording begins: its first event, or the start of its own
     // audio if that came first (an audio part can be captured before anything
     // is played, and a take may carry no notes at all).

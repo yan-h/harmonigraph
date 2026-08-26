@@ -179,7 +179,7 @@ The flags worth knowing (`--help` lists them all):
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect with its short edge at 1080 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
-| `--lead` | extra empty frame before the recording starts; default is the take's own **Lead-in** |
+| `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
 | `--ui-state` | use a different look than the one in the take |
 | `--playhead` | lay the whole take's spectrogram out at once and sweep a playhead through it |
@@ -199,10 +199,9 @@ event, and arming writes a full parameter snapshot whether or not anything is
 played, so a take carrying sound but **no MIDI at all** anchors correctly too;
 recorded audio contributes its own start as well, and the earliest wins.
 
-The Video pane's `Lead-in` slider (0–5s, default 0) adds stillness *before*
-that, and `--lead` overrides it per render. Default 0 because the run-up you
-actually played is already in the video — the lead is a taste, not a
-correction, and it is empty frame by construction.
+`--lead` adds stillness *before* that, per render. Default 0 because the
+run-up you actually played is already in the video — the lead is a taste, not
+a correction, and it is empty frame by construction.
 
 `--start` still means an absolute song position and outranks the lead: use it
 to skip *to* a passage, or `--start 0` to open at song zero.
