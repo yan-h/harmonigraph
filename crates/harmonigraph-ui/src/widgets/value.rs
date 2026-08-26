@@ -414,6 +414,59 @@ impl<'a> ValueBar<'a> {
     }
 }
 
+// ---- The light that crosses a running bar ----------------------------------
+// One soft band travelling the track, over the fill and the bare well alike so
+// that it crosses the frontier rather than stopping at it: what moves is a
+// LIGHT falling on the bar, not a second reading of how far it has got. The
+// four numbers below are what shape it (see [`progress_bar`]).
+
+/// Seconds the light takes to cross the track once.
+///
+/// Paced against what the bar is measuring: a render is minutes of work, so the
+/// sweep has to say "running" to a glance without asking to be watched. Two
+/// glances a second apart find it somewhere else, and nothing about it reads as
+/// a countdown — which a period near a second would, the eye reading a beat
+/// that fast as one tick per unit of something.
+const SWEEP_PERIOD: f64 = 2.4;
+
+/// How far the light reaches either side of its centre, as a share of the
+/// track's width.
+///
+/// Wide on purpose. A narrow band is a highlight travelling ALONG the bar,
+/// which is an object and invites being read as a position; a band most of a
+/// quarter of the track across is a tide over the whole of it, with no edge
+/// anywhere to mistake for a mark. It is also what lets the peak stay this dim
+/// and still be seen — the lift is spread over enough of the bar to register.
+const SWEEP_REACH: f32 = 0.22;
+
+/// Alpha of the light where the band is centred, falling to nothing at
+/// [`SWEEP_REACH`].
+///
+/// Sized so the fill under the light lands about where a hovered [`ValueBar`]
+/// sits: the brightest this bar ever gets is a shade the pane already wears, so
+/// the sweep cannot read as a state the bar has entered. It is the same lift
+/// over the bare track, where there is far less to lift, and that is the case
+/// it is really tuned for — a bar with no fill at all still has to show it.
+const SWEEP_LIGHT: f32 = 0.14;
+
+/// Columns the light is drawn in.
+///
+/// It is one smooth bump most of a quarter of the bar wide rather than a
+/// picture with detail in it, so the count only has to keep the raised cosine
+/// off its own straight-line chords: 64 across the width a settings column
+/// opens to puts a vertex every few points, and the bump spans a dozen of them.
+const SWEEP_SEGMENTS: usize = 64;
+
+/// The band's profile at `d`, a distance from its centre in units of the
+/// reach: a raised cosine, 1 at the centre and 0 from the reach outward.
+///
+/// Flat at both ends, which is the property being bought. A profile with a
+/// corner at the reach draws a faint edge travelling the bar — the one thing a
+/// light must not have, an edge being what a reading here is made of.
+fn sweep_profile(d: f32) -> f32 {
+    0.5 + 0.5 * (std::f32::consts::PI * d.min(1.0)).cos()
+}
+
 /// A read-only bar reporting how far something running in the background has
 /// got: `fraction` of the track filled, `label` on the left and `value` read
 /// out on the right.
@@ -423,9 +476,19 @@ impl<'a> ValueBar<'a> {
 /// one you are being told. It senses hover only: there is nothing here to
 /// drag, and a bar that moved under the pointer would claim there was.
 ///
+/// **A light crosses it while it stands**, on the clock rather than on the
+/// value, so the bar says it is alive as well as how far along it is. That is
+/// two different jobs and only the second is a number: a bar can go a long
+/// while without its fill visibly moving — a render counting to five thousand
+/// frames advances the edge by a fifth of a point a frame — and a still bar and
+/// a hung one look alike. The case that settles the design is the one with no
+/// number at all, below.
+///
 /// `fraction` is `None` while the total is still unknown, and then the track
 /// draws EMPTY rather than at zero — "no idea yet" and "none of it done" are
-/// different things, and only one of them is a number.
+/// different things, and only one of them is a number. The light is what is
+/// left to read in that state, and it needs no total to draw, so the emptiest
+/// the bar ever is is still the bar moving.
 ///
 /// Nothing keeps the name from re-eliding as the readout grows, unlike
 /// `ValueBar`, which reserves the width of the widest value its range can
@@ -437,7 +500,17 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, theme::row_height(scale)), Sense::hover());
 
-    let radius = CornerRadius::same(bar_radius(scale));
+    let corner = bar_radius(scale);
+    let radius = CornerRadius::same(corner);
+    // Where the light stands this frame, taken before the painter is borrowed.
+    // The phase is the clock alone, so two bars on screen are lit together
+    // rather than each from whenever it appeared. The repaint is asked for
+    // unconditionally, the way the record button's breath asks: the bar is on
+    // the pane only while something is running, and an animation left to the
+    // idle poll would advance in 50 ms steps.
+    let phase = (ui.ctx().input(|i| i.time) / SWEEP_PERIOD).rem_euclid(1.0) as f32;
+    ui.ctx().request_repaint();
+
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::well());
     if let Some(t) = fraction {
@@ -445,6 +518,37 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
         fill.set_width(rect.width() * t.clamp(0.0, 1.0));
         painter.rect_filled(fill, radius, theme::accent_fill());
     }
+    // The light, over both halves of the track and under both text runs: it
+    // lifts what the bar is drawn OF and never what it says. Its centre runs
+    // from a reach outside one end to a reach outside the other, so the band
+    // arrives and leaves rather than jumping — a centre wrapping at the edges
+    // would put the whole bump back at the left in one frame, the one motion
+    // here that would read as a glitch.
+    //
+    // The cost of that is a beat at the wrap where the band is off the track at
+    // both ends and the bar is briefly unlit, and it is kept: a second bump
+    // entering as the first leaves would close the gap, and what it buys with
+    // it is a procession — a bar with a steady stream of light running through
+    // it, which is a busier thing to have on the pane than one light that
+    // crosses and comes round again.
+    //
+    // A mesh, because the well and the fill are opaque rects and a soft edge is
+    // not to be had from those. The track's own corners are handed to it so the
+    // light rounds where the well does rather than reaching past the arc onto
+    // the panel, which at this alpha is a faint square corner twice a period.
+    let reach = rect.width() * SWEEP_REACH;
+    let centre = rect.left() - reach + (rect.width() + 2.0 * reach) * phase;
+    let light = theme::text();
+    super::mesh::gradient_strip(
+        painter,
+        rect,
+        SWEEP_SEGMENTS,
+        (corner.into(), corner.into()),
+        |p| {
+            let x = rect.left() + rect.width() * p;
+            light.gamma_multiply(SWEEP_LIGHT * sweep_profile((x - centre).abs() / reach))
+        },
+    );
 
     // Value laid out first and the name elided into what is left, the order
     // and the reason `ValueBar` uses: the number is what the bar is for.
@@ -474,7 +578,8 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::{painted, painted_text, shapes};
+    use crate::widgets::mesh::{band_bounds, band_colors, bands};
+    use crate::widgets::probe::{filled_rects, painted, painted_text, shapes, shapes_at};
 
     /// Paint one value bar across a `width`-point row and return what it
     /// emitted, with or without a preview curve.
@@ -787,6 +892,165 @@ mod tests {
     /// The harmonic-seventh bar's range, which straddles a digit boundary: the
     /// 12-TET value (and the param's default) is 1000.00, the just one 968.83.
     const SEVENTH_RANGE: RangeInclusive<f32> = 928.83..=1008.83;
+
+    /// How wide a track the sweep readings below are taken across.
+    const SWEEP_WIDTH: f32 = 240.0;
+
+    /// Paint a progress bar at `time` and answer its light, column by column
+    /// left to right, as the alpha each column was drawn at.
+    ///
+    /// A mesh is what identifies it: everything else this bar draws is a
+    /// rounded rect or a text run.
+    fn sweep_alphas(time: f64, fraction: Option<f32>) -> Vec<u8> {
+        let shapes = shapes_at(SWEEP_WIDTH, time, |ui| {
+            progress_bar(ui, fraction, "Rendering", "1200/5400");
+        });
+        let bands = bands(&shapes);
+        assert_eq!(bands.len(), 1, "a progress bar draws one band, its light");
+        band_colors(&bands[0]).iter().map(|c| c.a()).collect()
+    }
+
+    /// Where the light's weight sits, as a share of the way across the track:
+    /// the mean column, each weighted by how brightly it was drawn.
+    ///
+    /// A centroid rather than the brightest column, because the brightest
+    /// column is a step function with a plateau of ties at the top — it holds
+    /// still through a run of phases and then jumps, so neither "it moves" nor
+    /// "it does not move backwards" can be asked of it. The centroid moves the
+    /// moment the light does.
+    fn sweep_centre(time: f64, fraction: Option<f32>) -> f32 {
+        let alphas = sweep_alphas(time, fraction);
+        let last = (alphas.len() - 1) as f32;
+        let weight: f32 = alphas.iter().map(|&a| f32::from(a)).sum();
+        assert!(weight > 0.0, "the light is out at {time}s");
+        alphas.iter().enumerate().map(|(i, &a)| i as f32 / last * f32::from(a)).sum::<f32>()
+            / weight
+    }
+
+    /// A bar with NO fill still carries the light.
+    ///
+    /// The state this animation is for. A render that has not yet reported a
+    /// total draws an empty track by design — "no idea yet" is not a number —
+    /// and until this the whole bar was then a well with two words in it, which
+    /// is what a render stuck at zero also looks like. The light needs no total
+    /// to draw, so it is the reading that survives having none.
+    #[test]
+    fn an_empty_track_still_carries_the_light() {
+        let lit = sweep_alphas(SWEEP_PERIOD * 0.5, None).into_iter().max().unwrap_or(0);
+        assert!(lit > 0, "an empty track drew no light at all");
+        let shapes = shapes_at(SWEEP_WIDTH, SWEEP_PERIOD * 0.5, |ui| {
+            progress_bar(ui, None, "Rendering", "starting");
+        });
+        let fills = filled_rects(&shapes);
+        assert!(
+            fills.iter().all(|(_, fill)| *fill != theme::accent_fill()),
+            "a bar with no fraction filled part of its track anyway",
+        );
+    }
+
+    /// The light is drawn from the CLOCK, not from the value.
+    ///
+    /// It is the bar saying it is running, which is a different claim from how
+    /// far it has got and must not be readable as that one: a light that sat at
+    /// the fill's edge, or moved at a rate the fraction set, would be a second
+    /// reading of the same number and would contradict it the moment the first
+    /// one stalled — precisely when this is the only thing left to read.
+    #[test]
+    fn the_light_is_drawn_from_the_clock_and_not_from_the_value() {
+        let bare = sweep_alphas(SWEEP_PERIOD * 0.35, None);
+        for fraction in [0.0f32, 0.3, 1.0] {
+            assert_eq!(
+                sweep_alphas(SWEEP_PERIOD * 0.35, Some(fraction)),
+                bare,
+                "a bar {fraction} of the way along was lit differently from an empty one",
+            );
+        }
+    }
+
+    /// One period takes the light the whole way across, once.
+    ///
+    /// Both halves are the claim. It reaches BOTH ends, so no part of the track
+    /// is permanently dark and the sweep cannot be mistaken for a mark parked
+    /// somewhere; and it only ever moves FORWARD, so the bar reads in the
+    /// direction the work goes rather than rocking on the spot.
+    #[test]
+    fn the_light_crosses_the_whole_track_once_a_period() {
+        let mut last = f32::NEG_INFINITY;
+        for step in 1..10 {
+            let at = sweep_centre(SWEEP_PERIOD * f64::from(step) / 10.0, Some(0.5));
+            assert!(at > last, "the light went backwards, from {last} of the way across to {at}");
+            last = at;
+        }
+        for (phase, end, which) in [(0.05, 0usize, "left"), (0.95, usize::MAX, "right")] {
+            let alphas = sweep_alphas(SWEEP_PERIOD * phase, Some(0.5));
+            let end = end.min(alphas.len() - 1);
+            let brightest = alphas.iter().copied().max().unwrap_or(0);
+            assert_eq!(
+                alphas[end], brightest,
+                "the light is brightest somewhere other than the {which} end at phase {phase}, so \
+                 it never reaches it",
+            );
+        }
+    }
+
+    /// The light has no EDGE anywhere on it.
+    ///
+    /// What separates a light from a mark, and the one thing that would make it
+    /// a second reading whatever it is drawn from: an edge travelling the track
+    /// is a boundary, and a boundary on a bar is where a value sits. The
+    /// profile is a raised cosine for this, flat where it meets its own reach,
+    /// so no two neighbouring columns differ by more than a small fraction of
+    /// the light's full strength — measured against the strength the light is
+    /// DIALLED to and not against the brightest column on the track, which is
+    /// less than that wherever the band hangs off an end and would let the
+    /// bound slacken exactly where the profile is steepest.
+    #[test]
+    fn the_light_travels_with_no_edge_on_it() {
+        let full = (SWEEP_LIGHT * 255.0) as u32;
+        for step in 0..10 {
+            let time = SWEEP_PERIOD * f64::from(step) / 10.0;
+            let alphas = sweep_alphas(time, Some(0.5));
+            let jump = alphas.windows(2).map(|w| w[1].abs_diff(w[0])).max().unwrap_or(0);
+            assert!(
+                u32::from(jump) * 6 <= full,
+                "at {time}s the light steps {jump} of its {full} between two columns",
+            );
+        }
+    }
+
+    /// The light stays inside the track, and under everything the track SAYS.
+    ///
+    /// Two ways the same pass can go wrong. Painted after the two text runs it
+    /// would wash the name and the frame counts a shade every time it passed
+    /// them, which is the readings flickering; and handed the track's rect
+    /// without its corners it would reach past the rounded well onto the panel
+    /// behind, which is a faint square corner appearing twice a period.
+    #[test]
+    fn the_light_stays_inside_the_track_and_under_its_readings() {
+        let shapes = shapes_at(SWEEP_WIDTH, SWEEP_PERIOD * 0.5, |ui| {
+            progress_bar(ui, Some(0.5), "Rendering", "1200/5400");
+        });
+        let band = shapes
+            .iter()
+            .position(|s| matches!(s, egui::Shape::Mesh(_)))
+            .expect("the light is painted");
+        let text = shapes
+            .iter()
+            .position(|s| matches!(s, egui::Shape::Text(_)))
+            .expect("the bar draws its name");
+        assert!(band < text, "the light is painted over the bar's own readings");
+        let track = filled_rects(&shapes)
+            .into_iter()
+            .find(|(_, fill)| *fill == theme::well())
+            .expect("the bar draws its track")
+            .0;
+        let egui::Shape::Mesh(mesh) = &shapes[band] else { unreachable!() };
+        let lit = band_bounds(mesh);
+        assert!(
+            track.contains_rect(lit),
+            "the light covers {lit:?}, which is outside the {track:?} it lights",
+        );
+    }
 
     /// A bar's NAME holds still while its number changes width.
     ///

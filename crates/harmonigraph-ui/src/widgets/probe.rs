@@ -42,6 +42,17 @@ pub(super) fn shapes(width: f32, add: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
     painted(width, add).into_iter().map(|s| s.shape).collect()
 }
 
+/// The same at a named CLOCK, which is what a bar drawn from the time rather
+/// than from its value has to be asked twice (see
+/// [`painted_full_at`](crate::tests::probe::painted_full_at)).
+pub(super) fn shapes_at(width: f32, time: f64, add: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
+    crate::tests::probe::painted_full_at(time, egui::vec2(width, 100.0), add)
+        .shapes
+        .into_iter()
+        .map(|s| s.shape)
+        .collect()
+}
+
 /// The filled rects, in paint order.
 pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Color32)> {
     shapes

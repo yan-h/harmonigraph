@@ -140,6 +140,28 @@ pub(crate) fn painted_full(screen: egui::Vec2, add: impl FnMut(&mut egui::Ui)) -
     frame_full(&themed(), screen, add)
 }
 
+/// The same with the frame's CLOCK named, for the things drawn from it rather
+/// than from state: the sweep across a
+/// [`progress_bar`](crate::widgets::progress_bar), the record button's breath.
+///
+/// The clock is a fixture's to set for the same reason a screen size is. Left
+/// out of the raw input egui advances it by one predicted frame per pass, so a
+/// fixture that paints once can only ever see a sixtieth of a second — one
+/// phase out of a period, chosen by nothing, and the same one every time. A
+/// claim about something that MOVES needs two of them.
+pub(crate) fn painted_full_at(
+    time: f64,
+    screen: egui::Vec2,
+    mut add: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen);
+    let raw = egui::RawInput { screen_rect: Some(screen), time: Some(time), ..Default::default() };
+    themed().run_ui(raw, |ui| {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+        add(&mut child);
+    })
+}
+
 /// A primary-button press or release at `pos`.
 pub(crate) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
