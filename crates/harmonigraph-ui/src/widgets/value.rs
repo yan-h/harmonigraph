@@ -414,40 +414,199 @@ impl<'a> ValueBar<'a> {
     }
 }
 
-// ---- The sweep that crosses a running bar ----------------------------------
-// A run of the FILL, drawn a shade up, travelling from one end of it to the
-// other: the bar saying it is running, in the only two things a settings pane
-// is built out of — a flat rect and a colour off the skin.
+// ---- The stripes that cross a running bar ----------------------------------
+// Diagonal bands travelling along the bar, each drawn one rung above whatever
+// it stands on: the fill's own raised shade on the near side of the frontier,
+// the panel's faint-striping grey on the far side. The bar saying it is
+// running, in the flattest thing that can lean — a polygon of one opaque
+// colour off the skin.
 //
 // Flat is the constraint, not an economy. Nothing else in a settings pane is
 // drawn in a gradient: the wells, the fills, the buttons and the handles are
 // each one opaque colour, and the two bands that are not (a
 // [`SpectrumBar`](super::gradient::SpectrumBar) track, a
 // [`GradientPreview`](super::gradient::GradientPreview)) are gradients because
-// the value they draw IS a ramp of colour. A soft-edged sweep here would be the
+// the value they draw IS a ramp of colour. A soft-edged band here would be the
 // one shading in the pane that means nothing.
+//
+// The pattern crosses the WHOLE track and changes colour at the frontier
+// rather than stopping at it, which is what keeps the two claims apart. How far
+// the work has got is the frontier alone, and a stripe cannot be misread as a
+// second helping of it, because a stripe is the same picture wherever it sits
+// and only the frontier ever reads as a quantity. That it is running at all is
+// the motion, and the far side is where that has to be legible: the state a
+// render opens in has no total yet, so it has no fill at all.
 
-/// Seconds the sweep takes to cross the filled part once.
+/// Distance along the bar from one stripe to the next.
+///
+/// Sized against the row it lives in ([`theme::ROW_HEIGHT`]) rather than
+/// against the bar's length, which the pane's width sets: a stripe is read
+/// against the thickness it crosses, so a pitch near two thirds of the height
+/// is the same rhythm in a narrow column and a wide one.
+///
+/// The design size, at [chrome scale](theme::ui_scale) 1.0.
+const STRIPE_PITCH: f32 = 13.0;
+
+/// How much of a pitch the stripe covers, the rest being the ground it stands
+/// on.
+///
+/// Even, so neither the stripe nor the gap between two reads as the figure and
+/// the other as the ground — the pattern is meant to be a texture that moves,
+/// and a thin stripe on a wide ground is a row of marks that could be counted.
+const STRIPE_DUTY: f32 = 0.5;
+
+/// How many stripes pass a fixed point on the bar each second.
 ///
 /// Paced against what the bar is measuring: a render is minutes of work, so it
 /// has to say "running" to a glance without asking to be watched. Two glances a
-/// second apart find it somewhere else, and nothing about it reads as a
-/// countdown — which a period near a second would, the eye taking a beat that
-/// fast as one tick per unit of something.
+/// second apart find the pattern somewhere else, and nothing about it reads as
+/// a countdown — which a rate several times this would, the eye taking a beat
+/// that fast as one tick per unit of something.
 ///
-/// A period rather than a speed, so what it crosses is always the filled part
-/// however long that is. A fixed speed would whip across a bar a twentieth
-/// full several times a second and crawl the same distance on a full one, which
-/// is the animation running at a rate the value sets.
-const SWEEP_PERIOD: f64 = 2.4;
+/// A rate in stripes rather than a speed in points, so the pitch above is the
+/// only thing that sets the rhythm: a speed would have to be retuned every time
+/// the pitch moved to keep the same one.
+const STRIPE_RATE: f32 = 1.2;
 
-/// How much of the filled part the sweep covers at once, as a share of it.
+/// How far a stripe leans, in points along the bar per point down it. 1.0 is
+/// the 45° of the pattern this is: the lean is what makes a band read as
+/// travelling ALONG the bar rather than as a shutter opening and closing.
+const STRIPE_LEAN: f32 = 1.0;
+
+/// Area under which a cut stripe is dropped rather than painted — a sliver off
+/// an end of the track, too thin to put a pixel down and still a shape to
+/// tessellate.
+const STRIPE_MIN_AREA: f32 = 0.1;
+
+/// How many segments each corner of a [`rounded_outline`] is drawn in.
 ///
-/// A share of the FILL and not of the track, so the sweep is the same picture
-/// at every fraction: a width off the track would be most of a short fill and a
-/// sliver of a long one, which is a second thing the bar's value silently
-/// changes about it.
-const SWEEP_SHARE: f32 = 0.22;
+/// The outline is a stripe's cutter rather than anything painted, so it only
+/// has to be closer to the arc than a viewer can see it miss: four segments
+/// leave the shared control radius by under a fifth of a point at the largest
+/// [chrome scale](theme::ui_scale) on offer.
+const OUTLINE_STEPS: usize = 4;
+
+/// The outline of a rounded rect, clockwise, as a convex polygon a stripe can
+/// be cut against.
+///
+/// The radius is clamped the way epaint clamps a rect shape's — to half the
+/// shorter side — so the cutter and the fill it is cutting to agree about the
+/// shape of a nearly-empty bar, where the fill is narrower than two corners.
+fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
+    let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
+    // Each corner as the centre it turns about and the direction it starts
+    // from, in the screen's own angles: x to the right, y DOWN, so the quarter
+    // turns run clockwise on screen from the top-left corner.
+    let corners = [
+        (egui::pos2(rect.left() + radius, rect.top() + radius), 180.0_f32),
+        (egui::pos2(rect.right() - radius, rect.top() + radius), 270.0),
+        (egui::pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (egui::pos2(rect.left() + radius, rect.bottom() - radius), 90.0),
+    ];
+    let mut outline = Vec::with_capacity(corners.len() * (OUTLINE_STEPS + 1));
+    for (centre, from) in corners {
+        for step in 0..=OUTLINE_STEPS {
+            let angle = (from + 90.0 * step as f32 / OUTLINE_STEPS as f32).to_radians();
+            outline.push(centre + egui::vec2(angle.cos(), angle.sin()) * radius);
+        }
+    }
+    outline
+}
+
+/// `poly` cut down to the part of it inside `region` — both convex, both wound
+/// clockwise.
+///
+/// Sutherland–Hodgman: cut against one of the region's edges at a time. A
+/// convex polygon cut by a half-plane is still convex and still wound the same
+/// way, so what comes out is something [`egui::Shape::convex_polygon`] can take
+/// and nothing here has to triangulate.
+fn clipped(poly: &[egui::Pos2], region: &[egui::Pos2]) -> Vec<egui::Pos2> {
+    let mut poly = poly.to_vec();
+    for edge in 0..region.len() {
+        if poly.is_empty() {
+            return poly;
+        }
+        let (from, to) = (region[edge], region[(edge + 1) % region.len()]);
+        // Positive to the RIGHT of the edge's direction, which is the inside of
+        // a clockwise outline once y points down.
+        let side =
+            |p: egui::Pos2| (to.x - from.x) * (p.y - from.y) - (to.y - from.y) * (p.x - from.x);
+        let cut = std::mem::take(&mut poly);
+        for i in 0..cut.len() {
+            let (p, q) = (cut[i], cut[(i + 1) % cut.len()]);
+            let (sp, sq) = (side(p), side(q));
+            let crossing = || p + (q - p) * (sp / (sp - sq));
+            match (sp >= 0.0, sq >= 0.0) {
+                (true, true) => poly.push(q),
+                (true, false) => poly.push(crossing()),
+                (false, true) => poly.extend([crossing(), q]),
+                (false, false) => {}
+            }
+        }
+    }
+    poly
+}
+
+/// The area `poly` encloses, positive for the clockwise winding everything
+/// here is wound in.
+fn area(poly: &[egui::Pos2]) -> f32 {
+    let shoelace: f32 = (0..poly.len())
+        .map(|i| {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            p.x * q.y - q.x * p.y
+        })
+        .sum();
+    shoelace * 0.5
+}
+
+/// Paint the travelling stripes over `region` in `colour`.
+///
+/// The pattern is laid out across `bar` and only shown inside `region`, which
+/// is how one pattern comes out in two colours: the same bands are painted
+/// twice, cut to the whole track and then to the fill, with the fill's own
+/// opaque rect between the two passes.
+///
+/// `travel` is how far along the bar the pattern stands this frame, in points,
+/// and `corner` the radius `region` is drawn with — the cut follows it, so a
+/// band that runs off an end wears that end's curve instead of poking a square
+/// corner out of it.
+fn stripes(
+    painter: &egui::Painter,
+    bar: egui::Rect,
+    region: egui::Rect,
+    corner: u8,
+    pitch: f32,
+    travel: f32,
+    colour: Color32,
+) {
+    if region.width() <= 0.0 || region.height() <= 0.0 || pitch <= 0.0 {
+        return;
+    }
+    let outline = rounded_outline(region, f32::from(corner));
+    // How far a band shifts between the top of the bar and the bottom, and so
+    // how much further along the bar the pattern reaches at the bottom edge
+    // than the top one.
+    let lean = STRIPE_LEAN * bar.height();
+    let band = |along: f32| {
+        [
+            egui::pos2(along, bar.top()),
+            egui::pos2(along + pitch * STRIPE_DUTY, bar.top()),
+            egui::pos2(along + pitch * STRIPE_DUTY - lean, bar.bottom()),
+            egui::pos2(along - lean, bar.bottom()),
+        ]
+    };
+    // Every band whose reach touches the region: the pattern is anchored to the
+    // bar's left end, and the lean is what carries the last one further along at
+    // the bottom edge than at the top.
+    let first = ((region.left() - travel) / pitch).floor();
+    let bands = ((region.width() + lean) / pitch).ceil().max(0.0) as usize;
+    for step in 0..=bands {
+        let poly = clipped(&band(travel + (first + step as f32) * pitch), &outline);
+        if area(&poly) > STRIPE_MIN_AREA {
+            painter.add(egui::Shape::convex_polygon(poly, colour, egui::Stroke::NONE));
+        }
+    }
+}
 
 /// A read-only bar reporting how far something running in the background has
 /// got: `fraction` of the track filled, `label` on the left and `value` read
@@ -458,23 +617,22 @@ const SWEEP_SHARE: f32 = 0.22;
 /// one you are being told. It senses hover only: there is nothing here to
 /// drag, and a bar that moved under the pointer would claim there was.
 ///
-/// **A sweep crosses the FILLED part while it stands**, on the clock rather
+/// **Diagonal stripes travel along it while it stands**, on the clock rather
 /// than on the value, so the bar says it is running as well as how far along it
 /// is. Those are two jobs and only the second is a number: a bar can go a long
 /// while without its fill visibly moving — a render counting to five thousand
 /// frames advances the edge by a twentieth of a point a frame — and a still bar
 /// and a hung one look alike.
 ///
-/// It is confined to the fill, which is what keeps it from being readable as a
-/// second value. Everything past the frontier is what has NOT happened, and a
-/// pane drawing on it, however faintly, is drawing on the part of the bar whose
-/// whole meaning is that nothing is there yet.
+/// The stripes cross the whole track, taking the shade above whichever side of
+/// the frontier they stand on. See [`stripes`] for why they do not stop at it.
 ///
 /// `fraction` is `None` while the total is still unknown, and then the track
 /// draws EMPTY rather than at zero — "no idea yet" and "none of it done" are
-/// different things, and only one of them is a number. There is no fill to
-/// sweep in that state and nothing animates: what says a render is alive before
-/// its first frame count is the status line naming the file it is writing.
+/// different things, and only one of them is a number. That state is the one
+/// with the least to show and the most to say, since it is where a render
+/// opens: nothing about the frontier is a reading yet, and the stripes are the
+/// whole of what the bar can honestly claim.
 ///
 /// Nothing keeps the name from re-eliding as the readout grows, unlike
 /// `ValueBar`, which reserves the width of the widest value its range can
@@ -493,53 +651,37 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
         fill.set_width(rect.width() * t.clamp(0.0, 1.0));
         fill
     });
-    // The run of the fill the sweep covers this frame, decided before the
-    // painter is borrowed and `None` when there is no fill to cross.
-    //
-    // Its leading edge runs from its own width behind the fill's left end to
-    // the frontier, and what is drawn is the part of that inside the fill —
-    // so it comes on at one end and goes off at the other rather than jumping,
-    // which is the one motion here that would read as a glitch. Both edges are
-    // hard: at the ends the fill's own boundary is what cuts it, and in the
-    // middle it is a rect like everything else on the pane.
-    //
-    // The phase is the clock alone, so two bars on screen sweep together rather
-    // than each from whenever it appeared, and the repaint is asked for only
-    // where something is actually moving. Unconditional is the record button's
-    // way and would be wrong here: this bar draws a still picture whenever the
-    // total is unknown, and there is nothing to spend a frame on then.
-    let sweep = fill.filter(|fill| fill.width() > 0.0).and_then(|fill| {
-        let phase = (ui.ctx().input(|i| i.time) / SWEEP_PERIOD).rem_euclid(1.0) as f32;
-        ui.ctx().request_repaint();
-        let span = fill.width() * SWEEP_SHARE;
-        let lead = fill.left() + (fill.width() + span) * phase;
-        let run = egui::Rect::from_x_y_ranges(
-            (lead - span).max(fill.left())..=lead.min(fill.right()),
-            fill.y_range(),
-        );
-        (run.width() > 0.0).then_some((fill, run))
-    });
+
+    // Where the pattern stands this frame, from the CLOCK alone: two of these
+    // bars on screen stripe together rather than each from whenever it
+    // appeared. Wrapped to one pitch before it is a length, so the arithmetic
+    // is exact through a render that runs for an hour rather than losing points
+    // off an f32 that has grown into the thousands.
+    let pitch = STRIPE_PITCH * scale;
+    let travel =
+        (ui.ctx().input(|i| i.time) * f64::from(STRIPE_RATE)).rem_euclid(1.0) as f32 * pitch;
+    // Unconditional, unlike a bar whose animation is its fill's: this one is
+    // only on screen while a render is running, and the stripes cross the whole
+    // track whether or not the fill has reached them.
+    ui.ctx().request_repaint();
 
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::well());
+    // The rung a raised surface sits at, which is what the skin keeps this grey
+    // for. On the dark side of the frontier it is the only thing in the well.
+    stripes(painter, rect, rect, corner, pitch, travel, theme::surface_faint());
     if let Some(fill) = fill {
+        // Opaque over the pass above, so the pattern CHANGES colour at the
+        // frontier rather than showing two of itself through one. The stripes
+        // under the fill are painted and covered rather than skipped: what
+        // covers them is a rounded rect, and cutting them to it would mean
+        // cutting to the outside of a curve, which is not one half-plane.
         painter.rect_filled(fill, radius, theme::accent_fill());
-    }
-    if let Some((fill, run)) = sweep {
-        // Rounded only where it stands on an end of the fill, so it wears that
-        // end's own cap and is square wherever it cuts across. One radius for
-        // both corners on a side: the fill is a rect with the shared control
-        // radius on all four, and a sweep meeting it has to round to the same
-        // arc or it draws a step inside a curve.
-        let cap = |on: bool| if on { corner } else { 0 };
-        let (head, tail) =
-            (cap(run.right() >= fill.right() - 0.01), cap(run.left() <= fill.left() + 0.01));
-        let ends = CornerRadius { nw: tail, sw: tail, ne: head, se: head };
-        // The fill a shade up: a colour the pane already wears rather than a new
-        // one, so the sweep cannot read as a state the bar has entered. Opaque,
-        // like every accent mix in the skin — an alpha over the fill would be a
-        // third colour that exists nowhere else in the panel.
-        painter.rect_filled(run, ends, theme::accent_fill_hover());
+        // The fill a shade up: a colour the pane already wears rather than a
+        // new one, so a stripe cannot read as a state the bar has entered.
+        // Opaque, like every accent mix in the skin — an alpha over the fill
+        // would be a third colour that exists nowhere else in the panel.
+        stripes(painter, rect, fill, corner, pitch, travel, theme::accent_fill_hover());
     }
 
     // Value laid out first and the name elided into what is left, the order
@@ -570,7 +712,9 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::{filled_rects, painted, painted_text, shapes, shapes_at};
+    use crate::widgets::probe::{
+        filled_polys, filled_rects, painted, painted_text, shapes, shapes_at,
+    };
 
     /// Paint one value bar across a `width`-point row and return what it
     /// emitted, with or without a preview curve.
@@ -884,185 +1028,336 @@ mod tests {
     /// 12-TET value (and the param's default) is 1000.00, the just one 968.83.
     const SEVENTH_RANGE: RangeInclusive<f32> = 928.83..=1008.83;
 
-    /// How wide a track the sweep readings below are taken across.
-    const SWEEP_WIDTH: f32 = 240.0;
+    /// How wide a track the stripe readings below are taken across.
+    const STRIPED_WIDTH: f32 = 240.0;
 
-    /// Paint a progress bar at `time` and answer the fill's own rect and the
-    /// run of it the sweep covered, or `None` where nothing swept.
+    /// One turn of the pattern: the time a stripe takes to reach where the one
+    /// before it stood.
+    const STRIPE_TURN: f64 = 1.0 / STRIPE_RATE as f64;
+
+    /// One stripe as it was painted: the points it was drawn through, and the
+    /// shade that says which side of the frontier it stands on.
+    type Stripe = (Vec<egui::Pos2>, Color32);
+
+    /// Paint a progress bar at `time` and answer its track, its fill, and every
+    /// polygon on it in paint order.
     ///
-    /// The colour is what identifies each: the accent fill and the shade above
-    /// it are drawn nowhere else on this bar.
-    fn swept(time: f64, fraction: Option<f32>) -> (Option<egui::Rect>, Option<egui::Rect>) {
-        let shapes = shapes_at(SWEEP_WIDTH, time, |ui| {
+    /// A polygon is a stripe and nothing else here: the rest of the bar is
+    /// rects and text, so anything that came through as a path leans.
+    fn striped(time: f64, fraction: Option<f32>) -> (egui::Rect, Option<egui::Rect>, Vec<Stripe>) {
+        let shapes = shapes_at(STRIPED_WIDTH, time, |ui| {
             progress_bar(ui, fraction, "Rendering", "1200/5400");
         });
-        let of = |want: egui::Color32| {
-            let found: Vec<_> = filled_rects(&shapes)
-                .into_iter()
-                .filter(|(_, fill)| *fill == want)
-                .map(|(r, _)| r)
-                .collect();
-            assert!(found.len() <= 1, "the bar drew {} rects in {want:?}", found.len());
-            found.into_iter().next()
+        let rect = |want: Color32| {
+            filled_rects(&shapes).into_iter().find(|(_, fill)| *fill == want).map(|(r, _)| r)
         };
-        (of(theme::accent_fill()), of(theme::accent_fill_hover()))
+        (
+            rect(theme::well()).expect("the bar draws a track"),
+            rect(theme::accent_fill()),
+            filled_polys(&shapes),
+        )
     }
 
-    /// The sweep is the fill's, and never touches the rest of the track.
+    /// Where `poly` reaches at height `y`, or `None` where it does not reach
+    /// that deep.
     ///
-    /// Past the frontier is what has NOT happened, and the bar's whole claim
-    /// about that stretch is that nothing is there — so an animation reaching
-    /// into it, at any strength, is drawing on the half of the bar that means
-    /// "not yet". Swept across a period because the run is CLAMPED to the fill
-    /// at both ends, and a clamp is exactly what holds at the phases either
-    /// side of the one a fixture happens to pick.
-    #[test]
-    fn the_sweep_never_leaves_the_filled_part() {
-        for step in 0..12 {
-            let time = SWEEP_PERIOD * f64::from(step) / 12.0;
-            for fraction in [0.05f32, 0.42, 1.0] {
-                let (fill, run) = swept(time, Some(fraction));
-                let fill = fill.expect("a bar with a fraction fills part of its track");
-                let Some(run) = run else { continue };
-                assert!(
-                    fill.contains_rect(run),
-                    "at {time}s a bar {fraction} full swept {run:?}, outside its {fill:?} fill",
-                );
+    /// A convex polygon meets a horizontal line in one run, so this is a
+    /// stripe's width measured at a named depth — and a lean is read by
+    /// measuring the same stripe at two of them.
+    fn span_at(poly: &[egui::Pos2], y: f32) -> Option<(f32, f32)> {
+        let mut hits = Vec::new();
+        for i in 0..poly.len() {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (p.y <= y) != (q.y <= y) {
+                hits.push(p.x + (q.x - p.x) * (y - p.y) / (q.y - p.y));
             }
         }
+        let lo = hits.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = hits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        (hits.len() >= 2).then_some((lo, hi))
     }
 
-    /// A bar with no fill sweeps nothing.
-    ///
-    /// The corollary of the rule above, and worth its own claim because it is
-    /// the state a render opens in: no total reported yet, so the track draws
-    /// empty by design. There is no filled part, so there is nothing to cross,
-    /// and a sweep that fell back to the whole track here would be animating
-    /// the one bar that has no reading in it at all.
-    #[test]
-    fn a_bar_with_no_fill_sweeps_nothing() {
-        for step in 0..12 {
-            let time = SWEEP_PERIOD * f64::from(step) / 12.0;
-            for fraction in [None, Some(0.0)] {
-                let (_, run) = swept(time, fraction);
-                assert!(run.is_none(), "at {time}s a bar at {fraction:?} swept {run:?}");
-            }
-        }
+    /// Whether `p` is inside `rect` rounded off by `radius`, which is the shape
+    /// the bar actually draws — the plain rect would pass a point standing in
+    /// the square corner the rounding cuts away.
+    fn inside_rounded(rect: egui::Rect, radius: f32, p: egui::Pos2) -> bool {
+        let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
+        let square = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + radius, rect.top() + radius),
+            egui::pos2(rect.right() - radius, rect.bottom() - radius),
+        );
+        p.distance(square.clamp(p)) <= radius + 0.01
     }
 
-    /// The sweep is drawn from the CLOCK, at the same share of every fill.
+    /// Every stripe's left edge, at the depth the track is widest.
     ///
-    /// It says the bar is running, which is a different claim from how far it
-    /// has got and must not be readable as that one. Taking a share of the fill
-    /// is what makes it the same picture at every fraction — a sweep parked at
-    /// the frontier, or one whose rate the fraction set, would be a second
-    /// reading of the same number, and would contradict the first the moment it
-    /// stalled, which is when this is the only thing left moving.
+    /// Mid-height on purpose: the rounding bites only within a corner radius of
+    /// the top and bottom, so a reading taken there is of the pattern and not
+    /// of the curve it is cut to.
+    fn starts_at_mid(track: egui::Rect, polys: &[Stripe]) -> Vec<f32> {
+        polys.iter().filter_map(|(poly, _)| span_at(poly, track.center().y)).map(|s| s.0).collect()
+    }
+
+    /// The stripes lean, all by the same amount.
+    ///
+    /// The lean is the whole reason this reads as travelling rather than as a
+    /// shutter: an upright band crossing a bar is as much a closing door as an
+    /// advancing one, and the eye takes a leaning one as going the way it
+    /// points. Measured on stripes that cross the track whole, since a shear is
+    /// horizontal and so leaves a stripe's width at any depth alone — a
+    /// measurement narrower than that is one an end of the track has cut.
     #[test]
-    fn the_sweep_sits_at_the_same_share_of_every_fill() {
-        for step in 1..12 {
-            let time = SWEEP_PERIOD * f64::from(step) / 12.0;
-            let share = |fraction: f32| {
-                let (fill, run) = swept(time, Some(fraction));
-                let (fill, run) = (fill.unwrap(), run.unwrap());
-                (
-                    (run.left() - fill.left()) / fill.width(),
-                    (run.right() - fill.left()) / fill.width(),
-                )
+    fn the_stripes_lean() {
+        let (track, _, polys) = striped(0.3, None);
+        let (near_top, near_bottom) = (track.top() + 1.0, track.bottom() - 1.0);
+        let mut whole = 0;
+        for (poly, _) in &polys {
+            let (Some(top), Some(bottom)) = (span_at(poly, near_top), span_at(poly, near_bottom))
+            else {
+                continue;
             };
-            let half = share(0.5);
-            for fraction in [0.25f32, 1.0] {
-                let other = share(fraction);
-                assert!(
-                    (other.0 - half.0).abs() < 0.01 && (other.1 - half.1).abs() < 0.01,
-                    "at {time}s the sweep covers {other:?} of a bar {fraction} full and {half:?} \
-                     of a half-full one",
-                );
+            let width = STRIPE_PITCH * STRIPE_DUTY;
+            if (top.1 - top.0 - width).abs() > 0.01 || (bottom.1 - bottom.0 - width).abs() > 0.01 {
+                continue;
             }
+            whole += 1;
+            let lean = (top.0 - bottom.0) / (near_bottom - near_top);
+            assert!(
+                (lean - STRIPE_LEAN).abs() < 0.01,
+                "a stripe leans {lean} points along the bar per point down it, not {STRIPE_LEAN}",
+            );
         }
+        assert!(whole > 4, "only {whole} stripes crossed the track whole to be measured");
     }
 
-    /// One period takes the sweep the whole way across the fill, once.
+    /// A stripe is FLAT — one opaque colour, and no gradient anywhere.
     ///
-    /// Both halves are the claim. It reaches BOTH ends, so no part of the fill
-    /// is permanently untouched and the sweep cannot be mistaken for a mark
-    /// parked somewhere; and it only ever moves FORWARD, so the bar reads in
-    /// the direction the work goes rather than rocking on the spot.
-    ///
-    /// Neither edge retreating, with one of them always advancing, is what
-    /// "forward" has to mean here rather than one edge climbing: each edge is
-    /// held at an end of the fill while the other crosses it — the sweep coming
-    /// on at the start and going off at the frontier — so both stand still for
-    /// part of a period, and a claim on either alone fails on the stretch the
-    /// other one is moving.
+    /// The house rule for a settings pane, and the reason a stripe is a polygon
+    /// and not a soft band: every well, fill, button and handle here is one
+    /// opaque colour, and the only gradients in the panel are the two bands
+    /// whose value IS a ramp of colour. A mesh is what a gradient is built from
+    /// in this crate, so a bar emitting one has grown a shading that means
+    /// nothing.
     #[test]
-    fn the_sweep_crosses_the_filled_part_once_a_period() {
-        let mut last = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-        let mut touched = (false, false);
-        for step in 0..=12 {
-            let time = SWEEP_PERIOD * f64::from(step) / 12.0;
-            let (fill, run) = swept(time, Some(0.5));
-            let fill = fill.unwrap();
-            let Some(run) = run else { continue };
-            let now = (run.left(), run.right());
-            assert!(
-                now.0 >= last.0 - 0.01 && now.1 >= last.1 - 0.01,
-                "the sweep went backwards at {time}s, from {last:?} to {now:?}",
-            );
-            assert!(
-                now.0 > last.0 + 0.01 || now.1 > last.1 + 0.01,
-                "the sweep stood still at {time}s, at {now:?}",
-            );
-            last = now;
-            touched.0 |= run.left() <= fill.left() + 0.01;
-            touched.1 |= run.right() >= fill.right() - 0.01;
-        }
-        assert!(touched.0, "the sweep never reaches the start of the fill");
-        assert!(touched.1, "the sweep never reaches the frontier");
-    }
-
-    /// The sweep is FLAT — one opaque colour, and no gradient anywhere.
-    ///
-    /// The house rule for a settings pane, and the reason this is a rect and
-    /// not a soft band: every well, fill, button and handle here is one opaque
-    /// colour, and the only gradients in the panel are the two bands whose
-    /// value IS a ramp of colour. A mesh is what a gradient is built from in
-    /// this crate, so a bar emitting one has grown a shading that means nothing.
-    #[test]
-    fn the_sweep_is_one_flat_colour() {
-        let shapes = shapes_at(SWEEP_WIDTH, SWEEP_PERIOD * 0.5, |ui| {
+    fn a_stripe_is_one_flat_colour() {
+        let shapes = shapes_at(STRIPED_WIDTH, 0.3, |ui| {
             progress_bar(ui, Some(0.5), "Rendering", "1200/5400");
         });
         assert!(
             !shapes.iter().any(|s| matches!(s, egui::Shape::Mesh(_))),
             "the bar drew a mesh, which in a settings pane is a gradient",
         );
-        let run = swept(SWEEP_PERIOD * 0.5, Some(0.5)).1.expect("the bar sweeps");
-        assert!(run.width() > 0.0, "the sweep covers {run:?}");
+        let polys = filled_polys(&shapes);
+        assert!(!polys.is_empty(), "the bar drew no stripes to check");
+        for (_, colour) in &polys {
+            assert!(
+                *colour == theme::surface_faint() || *colour == theme::accent_fill_hover(),
+                "a stripe is {colour:?}, neither shade the bar's two sides wear",
+            );
+        }
     }
 
-    /// The sweep is painted under everything the bar SAYS.
+    /// No stripe leaves the track, at any phase or any fill.
     ///
-    /// Painted after the two text runs it would restate the name and the frame
-    /// counts a shade lighter every time it passed them, which is the readings
-    /// flickering — and they are what the bar is for.
+    /// A band laid across the bar reaches past both ends of it, so what keeps
+    /// it inside is the cut — and the shape it is cut to is the ROUNDED track,
+    /// not the rect. Cutting to the rect passes every reading but the one that
+    /// matters: the corner, where a square end of a band would stand outside
+    /// the curve the rest of the pane is drawn to.
     #[test]
-    fn the_sweep_is_painted_under_the_bars_readings() {
-        let shapes = shapes_at(SWEEP_WIDTH, SWEEP_PERIOD * 0.5, |ui| {
+    fn no_stripe_leaves_the_track() {
+        for step in 0..6 {
+            let time = STRIPE_TURN * f64::from(step) / 6.0;
+            for fraction in [None, Some(0.03), Some(0.5), Some(1.0)] {
+                let (track, _, polys) = striped(time, fraction);
+                let radius = f32::from(bar_radius(1.0));
+                for (poly, _) in polys.iter().filter(|(_, c)| *c == theme::surface_faint()) {
+                    for p in poly {
+                        assert!(
+                            inside_rounded(track, radius, *p),
+                            "at {time}s a stripe reaches {p:?}, outside the {track:?} track",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A stripe takes the shade of the side of the frontier it stands on, and
+    /// is cut to that side.
+    ///
+    /// The pattern says the bar is running and the frontier says how far it has
+    /// got, and the second is the reading: a stripe carrying the fill's shade
+    /// out past the frontier would put the fill's own colour on the part of the
+    /// bar whose whole meaning is that nothing has happened there yet.
+    ///
+    /// Cut to the fill's own rounded shape rather than to the track's, which is
+    /// what a nearly-empty bar is here to catch: a fill narrower than two
+    /// corners is rounded to HALF ITS WIDTH, the clamp epaint puts on a rect
+    /// shape, so a stripe cut to the track's radius would stand outside the
+    /// fill it is meant to be lighting.
+    #[test]
+    fn a_stripe_takes_the_shade_of_the_side_it_stands_on() {
+        for step in 0..6 {
+            let time = STRIPE_TURN * f64::from(step) / 6.0;
+            for fraction in [0.03f32, 0.5, 1.0] {
+                let (_, fill, polys) = striped(time, Some(fraction));
+                let fill = fill.expect("a bar with a fraction fills part of its track");
+                let radius = f32::from(bar_radius(1.0));
+                for (poly, _) in polys.iter().filter(|(_, c)| *c == theme::accent_fill_hover()) {
+                    for p in poly {
+                        assert!(
+                            inside_rounded(fill, radius, *p),
+                            "at {time}s a bar {fraction} full lights {p:?}, outside its \
+                             {fill:?} fill",
+                        );
+                    }
+                }
+            }
+        }
+        let lit = striped(0.3, Some(0.5))
+            .2
+            .iter()
+            .filter(|(_, c)| *c == theme::accent_fill_hover())
+            .count();
+        assert!(lit > 4, "only {lit} stripes wear the fill's shade on a half-full bar");
+    }
+
+    /// The track's stripes are painted UNDER the fill.
+    ///
+    /// One pattern in two colours rather than two patterns: the dark pass runs
+    /// the whole track, and what makes the near side change shade is the fill's
+    /// own opaque rect covering that pass before the light one is drawn. Paint
+    /// the fill first and the dark stripes are on top of it — the far side's
+    /// texture laid over the near side's colour.
+    #[test]
+    fn the_track_stripes_are_painted_under_the_fill() {
+        let shapes = shapes_at(STRIPED_WIDTH, 0.3, |ui| {
             progress_bar(ui, Some(0.5), "Rendering", "1200/5400");
         });
-        let swept = shapes
-            .iter()
-            .position(|s| match s {
-                egui::Shape::Rect(r) => r.fill == theme::accent_fill_hover(),
+        let at = |want: Color32| {
+            let of = |s: &egui::Shape| match s {
+                egui::Shape::Rect(r) => r.fill == want,
+                egui::Shape::Path(p) => p.fill == want,
                 _ => false,
-            })
-            .expect("the sweep is painted");
+            };
+            let first = shapes.iter().position(of).expect("the bar paints it");
+            let last = shapes.iter().rposition(of).expect("the bar paints it");
+            (first, last)
+        };
+        let dark = at(theme::surface_faint());
+        let fill = at(theme::accent_fill());
+        let light = at(theme::accent_fill_hover());
+        assert!(dark.1 < fill.0, "a track stripe is painted over the fill");
+        assert!(fill.1 < light.0, "the fill is painted over its own stripes");
+    }
+
+    /// A bar with NO fill still stripes, and still moves.
+    ///
+    /// The state a render opens in: no total reported yet, so the track draws
+    /// empty by design and the frontier has nothing to say. It is the bar with
+    /// the least to show and the most to tell — a render that has not counted
+    /// its first frame looks exactly like one that has hung — so it is the one
+    /// state the pattern cannot be allowed to sit out.
+    #[test]
+    fn a_bar_with_no_fill_still_stripes() {
+        for fraction in [None, Some(0.0)] {
+            let (track, fill, polys) = striped(0.0, fraction);
+            assert!(fill.is_none() || fill.is_some_and(|f| f.width() == 0.0));
+            assert!(polys.len() > 4, "a bar at {fraction:?} drew {} stripes", polys.len());
+            let moved = striped(STRIPE_TURN / 3.0, fraction).2;
+            assert_ne!(
+                starts_at_mid(track, &polys),
+                starts_at_mid(track, &moved),
+                "a bar at {fraction:?} drew the same stripes a third of a turn later",
+            );
+        }
+    }
+
+    /// The light stripes are the dark ones, re-coloured — not a second pattern.
+    ///
+    /// Two patterns would beat against each other: they would agree at the
+    /// phase a fixture happened to pick and drift apart everywhere else, and
+    /// what shows at the frontier is a stripe with a step in it. Read at
+    /// mid-height, where the track is widest, so a stripe's left edge is the
+    /// pattern's own and not something a corner cut.
+    #[test]
+    fn a_light_stripe_stands_where_a_dark_one_does() {
+        for step in 0..6 {
+            let time = STRIPE_TURN * f64::from(step) / 6.0;
+            let (track, _, polys) = striped(time, Some(0.6));
+            let side = |want: Color32| {
+                let of: Vec<_> =
+                    polys.iter().filter(|(_, c)| *c == want).cloned().collect::<Vec<_>>();
+                starts_at_mid(track, &of)
+            };
+            let dark = side(theme::surface_faint());
+            for start in side(theme::accent_fill_hover()) {
+                assert!(
+                    dark.iter().any(|d| (d - start).abs() < 0.01),
+                    "at {time}s a light stripe starts at {start}, where no dark one does: {dark:?}",
+                );
+            }
+        }
+    }
+
+    /// The pattern travels ALONG the bar, one stripe per turn.
+    ///
+    /// Both halves are the claim. It goes forward, so the bar reads in the
+    /// direction the work does rather than rocking on the spot; and it covers
+    /// exactly one pitch per turn, which is what makes the rate a rate in
+    /// stripes — retune the pitch and the rhythm the eye reads is unchanged.
+    ///
+    /// Measured on the leading edges modulo the pitch, because a pattern that
+    /// wraps has no single edge to follow: one leaves the far end while another
+    /// arrives at the near one.
+    #[test]
+    fn the_pattern_travels_one_stripe_a_turn() {
+        let phase = |time: f64| {
+            let (track, _, polys) = striped(time, None);
+            let starts = starts_at_mid(track, &polys);
+            // The leftmost stripe starts where the TRACK does, its own start
+            // cut away, so it says nothing about where the pattern stands.
+            let uncut = starts
+                .iter()
+                .find(|s| **s > track.left() + 0.01)
+                .expect("some stripe starts inside the track");
+            (uncut - track.left()).rem_euclid(STRIPE_PITCH)
+        };
+        let steps = 8;
+        for step in 0..steps {
+            let (from, to) = (
+                phase(STRIPE_TURN * f64::from(step) / f64::from(steps)),
+                phase(STRIPE_TURN * f64::from(step + 1) / f64::from(steps)),
+            );
+            let by = (to - from).rem_euclid(STRIPE_PITCH);
+            let want = STRIPE_PITCH / steps as f32;
+            assert!(
+                (by - want).abs() < 0.01,
+                "an eighth of a turn moved the pattern {by} points along the bar, not {want}",
+            );
+        }
+    }
+
+    /// The stripes are painted under everything the bar SAYS.
+    ///
+    /// Painted after the two text runs they would restate the name and the
+    /// frame counts a shade lighter every time one passed, which is the
+    /// readings flickering — and they are what the bar is for.
+    #[test]
+    fn the_stripes_are_painted_under_the_bars_readings() {
+        let shapes = shapes_at(STRIPED_WIDTH, 0.3, |ui| {
+            progress_bar(ui, Some(0.5), "Rendering", "1200/5400");
+        });
+        let striped = shapes
+            .iter()
+            .rposition(|s| matches!(s, egui::Shape::Path(p) if p.fill != Color32::TRANSPARENT))
+            .expect("the bar is striped");
         let text = shapes
             .iter()
             .position(|s| matches!(s, egui::Shape::Text(_)))
             .expect("the bar draws its name");
-        assert!(swept < text, "the sweep is painted over the bar's own readings");
+        assert!(striped < text, "a stripe is painted over the bar's own readings");
     }
 
     /// A bar's NAME holds still while its number changes width.

@@ -64,6 +64,24 @@ pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Col
         .collect()
 }
 
+/// The filled convex polygons, in paint order, each as the points it was drawn
+/// through.
+///
+/// The reader for anything that leans: a rect shape can only say where its
+/// corners are, so a shape at an angle to the pane comes through as a path and
+/// its geometry is the points themselves.
+pub(super) fn filled_polys(shapes: &[egui::Shape]) -> Vec<(Vec<egui::Pos2>, egui::Color32)> {
+    shapes
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Path(p) if p.fill != egui::Color32::TRANSPARENT => {
+                Some((p.points.clone(), p.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The text runs and the boxes they occupy, in paint order.
 ///
 /// One entry per RUN, which is not the same as one per pass: [`grip_over_text`]
