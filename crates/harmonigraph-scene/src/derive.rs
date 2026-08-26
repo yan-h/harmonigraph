@@ -8,8 +8,8 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Pulse, Scene, SpectralPaint,
-    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
+    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint, MARK_DELAY_MAX,
+    NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
 };
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
@@ -525,15 +525,7 @@ pub fn derive_scene(
         plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,
-        // A mark sheet reaches the extension AND the octave slice it extends,
-        // so with the mark layer off — no end marked, or no depth to
-        // draw one with, which is `marks_draw` and is exactly what the
-        // pane grays the row on — the extension half is multiplied away by a
-        // coverage of zero and the SLICE half is not: the glyph layer draws
-        // that either way, so without this fold the sheet would go on
-        // sweeping from a control the user can no longer reach. Folded here
-        // so the picture and the control agree by construction.
-        pulse_marks: if view.marks_draw() { view.pulse_marks } else { Pulse::Off },
+        pulse_marks: view.pulse_marks,
         shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
         // Strictly positive: the pattern's phase divides by this. The floor is
         // a small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),
