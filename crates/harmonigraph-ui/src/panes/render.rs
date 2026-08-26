@@ -456,7 +456,8 @@ fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     clear_everything(ui, state);
 }
 
-/// How far the background render has got, while one is running.
+/// How far the background render has got, while one is running — and the way
+/// to call it off.
 ///
 /// A render is minutes of work started by a button that then looks like
 /// nothing happened: the status line names the file and never changes again
@@ -468,7 +469,13 @@ fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Absent, not greyed, when nothing is rendering: the take controls are the
 /// pane's steady state and a permanent empty bar under them would read as a
 /// render stuck at zero.
-fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
+///
+/// The cancel shares that lifetime, because a running render is the only thing
+/// it can act on. What it stops is the RENDER: the recording on disk is
+/// untouched, so "Re-render take" above starts a fresh one from the same take,
+/// and a video some earlier render finished stays where it landed — only the
+/// run in flight has anything half-written to throw away.
+fn render_progress(ui: &mut egui::Ui, state: &mut SharedState) {
     let Some(progress) = state.take.render_progress else { return };
     let value = match progress.total {
         // Pad `done` to the width of `total` so the readout keeps one width as
@@ -482,4 +489,17 @@ fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
         "Frames written of the frames this render is composing. It runs in \
          the background — the DAW, and this window, keep going while it does.",
     );
+    button_row(ui, |ui| {
+        if ui
+            .button("Cancel render")
+            .on_hover_text(
+                "Stop this render and delete the part of the video it has \
+                 written. The take is kept — \"Re-render take\" starts over from \
+                 it.",
+            )
+            .clicked()
+        {
+            state.take.cancel_render = true;
+        }
+    });
 }

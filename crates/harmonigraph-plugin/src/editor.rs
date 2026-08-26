@@ -219,6 +219,12 @@ impl EditorShared {
             ));
         }
 
+        // "Cancel render": stop the renderer and drop the part-written video.
+        // Nothing about the take, so the button above can start another.
+        if std::mem::take(&mut self.ui.take.cancel_render) {
+            self.take.cancel_render();
+        }
+
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from
