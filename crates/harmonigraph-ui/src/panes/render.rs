@@ -288,25 +288,6 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         ],
     );
 
-    // The picture's timing rather than its shape, which is why it is here and
-    // not in Frame. Counterpart of the renderer's `--tail`.
-    //
-    // Seconds of lead, NOT a song position, and 0 is the useful default: the
-    // render already opens where the take was CAPTURED, so the run-up actually
-    // played is in the video without asking for it. (Take times are the host's
-    // transport position, so a passage played from a minute in was captured
-    // from 60-odd seconds; rendering from song zero would open on a minute of
-    // nothing, which is what this row's default would otherwise have to paper
-    // over.) What the bar adds is stillness BEFORE the recording, which is
-    // empty frame by construction.
-    ValueBar::new(&mut state.take.render_config.lead_in, 0.0..=5.0, "Lead-in")
-        .show(ui)
-        .on_hover_text(
-            "Extra seconds of empty frame before the video starts. The render \
-             already opens where the recording did, so 0 gives you whatever run-up \
-             you actually played; raise this only to hold on a still frame first.",
-        );
-
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed
     // preview reaches the video without recording again.
