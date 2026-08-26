@@ -87,13 +87,18 @@ pub struct LatticeLabels {
     /// One entry per label, naming its node and how many of `glyphs` are
     /// its own.
     pub labels: Vec<Label>,
-    /// The halo's two rings, as [`text_paint_callback`] takes them — a shape
-    /// here rather than the ink it is elsewhere: a lattice name paints no rim,
-    /// and what these describe is the dilation its SHADOW is cast from
-    /// (`fs_glyph_glow`). The stamp alphas still weigh it, so the pair means
-    /// what it means on any other surface; what changes is what the accumulated
-    /// coverage is spent on.
-    pub rings: [TextRing; 2],
+    /// A node's own radius on this pane, in POINTS.
+    ///
+    /// A lattice name paints no rim; what holds a halo off it is the standoff
+    /// it casts into the light (`fs_glyph_glow`), and that is dialled in node
+    /// radii like every other standoff in the picture. The glyph pass has no
+    /// node under a letter to measure one against, so the conversion is made
+    /// here, where the pane's own height and the camera both are.
+    ///
+    /// One number for the pane, as the size the names are typeset at is: an
+    /// off-sheet node draws smaller and its name with it, and its shadow is
+    /// still the home sheet's width.
+    pub node_points: f32,
     /// egui's font atlas, on the frames the renderer's mirror of it is
     /// stale. `None` on the rest, which is nearly all of them.
     pub atlas: Option<FontAtlas>,
@@ -719,8 +724,10 @@ struct LatticeCallback {
     glyphs: Vec<GlyphInstance>,
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
-    /// The halo's rings, and the two sheets on the frames either has moved.
-    rings: [TextRing; 2],
+    /// A node's radius on this pane in points, which is the unit the standoff
+    /// its names cast is dialled in — see [`LatticeLabels::node_points`].
+    node_points: f32,
+    /// The two sheets, on the frames either has moved.
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
@@ -1109,7 +1116,7 @@ impl LatticeCallback {
             clearings,
             glyphs,
             draws,
-            rings: labels.rings,
+            node_points: labels.node_points,
             atlas: labels.atlas,
             marks: labels.marks,
             slide: labels.slide,
@@ -1553,8 +1560,8 @@ struct PaneBuffers {
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
     draws: Vec<Draw>,
-    /// What the glyph shader is told about this pane: its size in points,
-    /// the atlas's, and the rim's rings.
+    /// What the glyph shader is told about this pane: its size in points, the
+    /// atlas's, and the terms a name's standoff is cast on.
     glyph_uniform_buffer: wgpu::Buffer,
     /// Names both mirrored sheets, so it is rebuilt whenever a fresh one has
     /// been uploaded — and `glyph_sheet_keys` is which uploads it names.
@@ -3401,17 +3408,25 @@ impl CallbackTrait for LatticeCallback {
                         mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
                         filter_axis: self.slide.unit(),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        // The two the names share with the rest of the picture,
-                        // read out of the row they were packed into rather than
-                        // off the scene a second time: the Meld a name's wash
-                        // mixes the light by, and the Shadow depth its own
-                        // standoff spends. One number each, and the same number
-                        // the nodes and markers took.
+                        // What the names share with the rest of the picture,
+                        // read out of the rows they were packed into rather
+                        // than off the scene a second time: the Meld a name's
+                        // wash mixes the light by, and the whole Shadow row its
+                        // standoff is cast on. The same numbers the nodes and
+                        // markers took, so the bar means one thing.
                         meld: self.uniforms.misc[2],
+                        node_points: self.node_points,
+                        shadow: self.uniforms.misc11[0],
+                        shadow_soft: self.uniforms.misc11[1],
+                        shadow_shape: self.uniforms.misc11[2],
                         shadow_depth: self.uniforms.misc11[3],
                         _pad: 0.0,
-                        ring0: text::TextUniforms::ring(self.rings[0]),
-                        ring1: text::TextUniforms::ring(self.rings[1]),
+                        // A lattice name paints no rim, so there is no ring for
+                        // the two passes that draw one to walk. Zero samples is
+                        // what says so (`ring`), and it is what keeps the fill's
+                        // quad down to the reconstruction filter's own margin.
+                        ring0: [0.0; 4],
+                        ring1: [0.0; 4],
                     }),
                 );
             }
@@ -3607,8 +3622,8 @@ impl CallbackTrait for LatticeCallback {
                 // being what melds it.
                 //
                 // Group 0 alone, and its own: the glyph pipelines take the
-                // atlases and the rim's rings where the two draws above take
-                // the lattice's uniforms.
+                // atlases and the pane's own Shadow row where the two draws
+                // above take the lattice's uniforms.
                 if pane.glyph_count > 0 {
                     if let Some(bind_group) = pane.glyph_bind_group.as_ref() {
                         pass.set_bind_group(0, bind_group, &[]);

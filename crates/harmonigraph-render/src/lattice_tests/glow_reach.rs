@@ -414,7 +414,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
             ..crate::text::tests::glyph()
         }],
         labels: vec![Label { node, glyphs: 1 }],
-        rings: [TextRing::default(); 2],
+        node_points: 0.0,
         atlas: Some(crate::text::tests::atlas()),
         marks: None,
         slide: SlideAxis::default(),

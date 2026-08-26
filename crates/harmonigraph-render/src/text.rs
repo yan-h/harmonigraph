@@ -192,14 +192,20 @@ pub(crate) struct TextUniforms {
     /// `FILTER_TAP` in the shader for what is done with it.
     pub(crate) filter_axis: [f32; 2],
     pub(crate) pixels_per_point: f32,
-    /// The lattice's Meld bar and Shadow depth, for the two entry points that
-    /// draw a name against its light (`fs_fill_lit` and `fs_glyph_glow`). Every
-    /// other surface has no light to read and leaves both at 0 — which for the
-    /// depth is a name that casts no shadow, the same nothing the bar's own
-    /// bottom draws.
+    /// The lattice's Meld bar, for the entry point that washes a name in the
+    /// light it stands in (`fs_fill_lit`).
     pub(crate) meld: f32,
+    /// A node's radius on the pane, in points, and the four Shadow terms
+    /// dialled as shares of it — what `fs_glyph_glow` casts a name's standoff
+    /// from. Every other surface has no light to hold off and leaves all five
+    /// at 0, which the depth alone is enough to mean: a name that casts no
+    /// shadow, the same nothing the bar's own bottom draws.
+    pub(crate) node_points: f32,
+    pub(crate) shadow: f32,
+    pub(crate) shadow_soft: f32,
+    pub(crate) shadow_shape: f32,
     pub(crate) shadow_depth: f32,
-    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
+    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 64 and
     /// this is the gap in front of them. Named rather than derived because
     /// the mismatch is a validation error at first paint, not a compile one.
     pub(crate) _pad: f32,
@@ -750,6 +756,9 @@ pub(crate) fn create_text_pipeline(
 ///
 /// No depth, and one bind group: the glow pass carries neither a depth
 /// attachment nor a light to read, this draw being one of the writers of it.
+///
+/// Its own VERTEX entry point too (`vs_glyph_shadow`), the standoff reaching
+/// further outside a glyph than anything the fill pass paints there.
 pub(crate) fn create_glyph_glow_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -769,7 +778,7 @@ pub(crate) fn create_glyph_glow_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_glyph"),
+            entry_point: Some("vs_glyph_shadow"),
             compilation_options: Default::default(),
             buffers: &[GlyphInstance::LAYOUT],
         },
@@ -827,6 +836,10 @@ impl CallbackTrait for TextCallback {
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
             meld: 0.0,
+            node_points: 0.0,
+            shadow: 0.0,
+            shadow_soft: 0.0,
+            shadow_shape: 0.0,
             shadow_depth: 0.0,
             _pad: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),

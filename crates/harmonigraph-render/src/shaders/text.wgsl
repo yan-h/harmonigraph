@@ -45,10 +45,28 @@ struct Locals {
     /// lattice's entry points alone; every other surface draws no light and
     /// leaves it at 0.
     meld: f32,
-    /// How much of that light a name holds off, 0..1 — the lattice's Shadow
-    /// depth, spent in [`glyph_shade`].
+    /// A node's own radius on this pane, in points.
+    ///
+    /// The unit the four Shadow terms below are dialled in: the lattice sets
+    /// them as shares of a node (`ViewConfig::glow_shadow`), and a glyph pass
+    /// has no node under it to measure a coordinate against, so the conversion
+    /// arrives here instead. ONE number for the pane, as the size the names are
+    /// typeset at is — an off-sheet node draws smaller and its name with it,
+    /// but its shadow is the home sheet's width.
+    node_points: f32,
+    /// How far a name's standoff reaches, in node radii — the lattice's Shadow
+    /// width, `glow_shadow` there.
+    shadow: f32,
+    /// How much of that width is the fade back to the light, same units —
+    /// `glow_shadow_soft`.
+    shadow_soft: f32,
+    /// How the fade is skewed across its own width, 0..1 as the bar carries it
+    /// — `glow_shadow_shape`.
+    shadow_shape: f32,
+    /// How much of the light a name holds off where its standoff is solid,
+    /// 0..1 — `glow_shadow_depth`.
     shadow_depth: f32,
-    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
+    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 64 and
     /// this is the gap in front of them.
     _pad: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
@@ -117,18 +135,50 @@ fn vs_glyph(
     // Which sheet `uv` addresses.
     @location(4) sheet: u32,
 ) -> VertexOut {
+    return glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+}
+
+/// The same quad grown by the SHADOW's reach instead of the rim's, for the
+/// glow pass's draw ([`fs_glyph_glow`]).
+///
+/// Its own entry point because the two reaches are not the same length and the
+/// larger of them is not free: the standoff is a share of a NODE, which at a
+/// wide Shadow is several times what a rim is, and every fragment of a grown
+/// quad is one the fill pass would otherwise never have visited. A lattice full
+/// of names pays that per glyph.
+@vertex
+fn vs_glyph_shadow(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) rim: vec4<f32>,
+    @location(4) sheet: u32,
+) -> VertexOut {
+    return glyph_vertex(vertex, rect, uv, fill, rim, sheet, shadow_reach());
+}
+
+fn glyph_vertex(
+    vertex: u32,
+    rect: vec4<f32>,
+    uv: vec4<f32>,
+    fill: vec4<f32>,
+    rim: vec4<f32>,
+    sheet: u32,
+    grown_by: f32,
+) -> VertexOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
 
-    // Grown by the rim's reach, since that is painted outside the ink. The
-    // grown edge lands on a whole physical pixel (the radius is snapped
-    // before it arrives), so the glyph's own texels stay aligned 1:1 with
-    // the framebuffer exactly as egui's own quad has them.
+    // Grown by whatever this draw paints outside the ink — the rim's reach, or
+    // the shadow's. The grown edge lands on a whole physical pixel (the rim's
+    // radius is snapped before it arrives), so the glyph's own texels stay
+    // aligned 1:1 with the framebuffer exactly as egui's own quad has them.
     //
-    // Never less than the distance `coverage` reads into, whatever the rings
-    // say: a quad that stops at the ink cuts off the same edge column the
+    // Never less than the distance `coverage` reads into, whatever the caller
+    // asks for: a quad that stops at the ink cuts off the same edge column the
     // margin exists to keep, and a caller asking for no rim at all is the one
     // way to get one. That distance is the patch margin plus the offset its
     // taps sit at, since a fragment a quarter texel inside the bound still
@@ -136,7 +186,7 @@ fn vs_glyph(
     // different spaces, so this is those texels expressed in points. Both
     // rings drawn, it is three eighths of a point against the rim's two and
     // changes nothing.
-    let reach = max(rim_reach(), (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point);
+    let reach = max(grown_by, (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point);
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
@@ -480,21 +530,125 @@ struct GlowOut {
     @location(2) shade: vec4<f32>,
 }
 
-/// The floor under what a shadow may KEEP of the light: `SHADOW_KEEP_FLOOR` in
-/// lattice.wgsl, which is where its reasoning lives, and the two are one number
-/// — `the_names_shadow_spends_the_depth_the_rings_do` is what says so.
+// The standoff's own curve, written a second time.
+//
+// lattice.wgsl holds the first copy and the whole of the reasoning —
+// `standoff_coverage`, `gap_shade` and the five constants under them. Neither
+// module can call into the other (WGSL has no linkage across shader modules and
+// there is no source composition in this tree), and the shape has to be
+// IDENTICAL rather than merely similar: the Shadow is one bar across a node's
+// rings, a marker's cross and a name, so two curves under one bar is the bar
+// meaning two things. `the_names_shadow_is_the_rings_own_curve` reads both
+// files and pins every constant here against the one it was copied from.
+//
+// What is NOT copied is where the numbers come from. There they are read off a
+// node's own uv; here they arrive in `Locals` as shares of a node radius plus
+// the points that radius draws as, because a glyph has no node under it.
+const SHADOW_TAIL: f32 = 4.0;
+const SHADOW_STOP: f32 = 2.0;
+const SHADOW_SHAPE_RIND: f32 = 0.25;
+const SHADOW_SHAPE_PLAIN: f32 = 1.0;
+const SHADOW_SOFT_FLOOR: f32 = 0.02;
 const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 
-/// What a standoff coverage of `cov` leaves of the light: the Shadow depth,
-/// spent geometrically over that coverage.
+/// The Shadow's outer handle in points, floored off zero as `clearing_edge`
+/// floors it.
+fn shadow_edge() -> f32 {
+    return max(locals.shadow * locals.node_points, 0.001);
+}
+
+/// The width of its fade in points, under `standoff_soft`'s own floor.
+fn shadow_soft() -> f32 {
+    return max(locals.shadow_soft, SHADOW_SOFT_FLOOR) * locals.node_points;
+}
+
+/// How far out the standoff still has anything to say, in points: where
+/// [`standoff_coverage`]'s own window has shut it.
 ///
-/// `gap_shade` in lattice.wgsl is the same mapping over the same bar, and has
-/// to be: the Shadow is ONE setting across a node's rings, a marker's cross and
-/// a name, so what differs between the three is the shape they cast and never
-/// what a covered pixel is worth.
+/// What [`vs_glyph_shadow`] sizes its quad to, so the coverage is exactly zero
+/// at the quad's edge and the tail is never cut off in a screen-aligned line.
+fn shadow_reach() -> f32 {
+    if locals.shadow_depth <= 0.0 {
+        return 0.0;
+    }
+    let edge = shadow_edge();
+    let inner = clamp(edge - shadow_soft(), 0.0, edge - 0.001);
+    return inner + SHADOW_STOP * (edge - inner);
+}
+
+/// How much of the light standing `sd` points out from a name's ink that name
+/// holds off — `standoff_coverage` in lattice.wgsl, in points rather than in a
+/// node's uv.
+fn standoff_coverage(sd: f32) -> f32 {
+    let edge = shadow_edge();
+    let inner = clamp(edge - shadow_soft(), 0.0, edge - 0.001);
+    let u = max(sd - inner, 0.0) / (edge - inner);
+    let shape = SHADOW_SHAPE_RIND * pow(SHADOW_SHAPE_PLAIN / SHADOW_SHAPE_RIND,
+        clamp(locals.shadow_shape, 0.0, 1.0));
+    return exp(-SHADOW_TAIL * pow(u, shape)) * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
+}
+
+/// What a standoff coverage of `cov` leaves of the light — `gap_shade` in
+/// lattice.wgsl: the Shadow depth, spent geometrically over that coverage.
 fn glyph_shade(cov: f32) -> f32 {
     let keep = max(1.0 - clamp(locals.shadow_depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
     return 1.0 - pow(keep, clamp(cov, 0.0, 1.0));
+}
+
+/// How many taps the dilation below takes, and how they are spread across its
+/// reach.
+///
+/// A node's rings and a marker's arms are shapes with a distance FUNCTION, so
+/// their standoff is one evaluation; a glyph is a bitmap, and the only way to
+/// ask how far a fragment stands from a letter is to go and look. Each tap
+/// looks at one offset and asks what the standoff would be worth if the ink
+/// were there; the deepest answer wins, which is the same thing a distance
+/// field would have said and is exactly a morphological dilation by the
+/// standoff's own curve.
+///
+/// The taps are laid on a golden-angle spiral, whose radii are BIASED toward
+/// the ink: `standoff_coverage` spends [`SHADOW_TAIL`] e-folds by its outer
+/// handle, so a tap out at the reach is worth a fiftieth of one at the edge of
+/// the ink and the sample density should follow the weight rather than the
+/// area. Squared is that bias — half the taps inside a quarter of the reach.
+///
+/// A spiral rather than rings, because the error a finite tap count makes is
+/// then IRREGULAR rather than concentric: rings quantize the distance to their
+/// own radii and draw the quantization as contours, which in a smooth dark
+/// field is the one artefact that reads as a mistake.
+const SHADOW_TAPS: i32 = 48;
+const SHADOW_TAP_BIAS: f32 = 2.0;
+/// The golden angle in radians, `PI * (3 - sqrt(5))`.
+const GOLDEN_ANGLE: f32 = 2.399963;
+
+/// How much of the light standing here this name holds off: its own ink,
+/// dilated by the Shadow.
+///
+/// The INK, not a rim: the letters are what the eye reads a name by, exactly as
+/// the arms are what it reads a cross by, and `plus_standoff` casts a marker's
+/// shadow from the arms themselves.
+fn glyph_standoff(in: VertexOut) -> f32 {
+    let reach = shadow_reach() * locals.pixels_per_point;
+    // Nothing this far from the glyph's own patch can be within `reach` of any
+    // ink in it, the patch being exactly the ink's bounding box. One box
+    // distance in place of forty-eight texture taps, and it answers most of a
+    // grown quad: the quad is square and the dilation is round, so the corners
+    // alone are a fifth of it.
+    let d = max(in.uv_min - in.texel, in.texel - in.uv_max);
+    let outside = length(max(d, vec2<f32>(0.0))) + min(max(d.x, d.y), 0.0);
+    if outside > reach {
+        return 0.0;
+    }
+    var cov = coverage(in, in.texel);
+    for (var i = 0; i < SHADOW_TAPS; i = i + 1) {
+        let t = (f32(i) + 0.5) / f32(SHADOW_TAPS);
+        let radius = reach * pow(t, SHADOW_TAP_BIAS);
+        let angle = GOLDEN_ANGLE * f32(i);
+        let off = vec2<f32>(cos(angle), sin(angle)) * radius;
+        let weight = standoff_coverage(radius / locals.pixels_per_point);
+        cov = max(cov, coverage(in, in.texel - off) * weight);
+    }
+    return cov;
 }
 
 /// The shadow a lattice name holds the light off by, drawn into the glow pass
@@ -509,28 +663,23 @@ fn glyph_shade(cov: f32) -> f32 {
 /// none — which a painted halo cannot be, standing at full strength over a
 /// ground no light ever reached.
 ///
-/// The RIM's own shape is what casts it, which is what keeps a glyph's shadow
-/// clear of its strokes: the rings are the glyph dilated (see [`ring`]), and a
-/// shadow the width of the ink alone would be a name cut out of the light
-/// rather than one standing in it. The ink's own coverage is taken with it so
-/// that a stroke the rings' samples happen to miss is still solid in the
-/// shadow — the letters are what the eye reads a name by, exactly as the arms
-/// are on a cross.
-///
 /// Closed by the name's own STRENGTH, the one number the rim colour carries
 /// here (`LABEL_SHADOW` in `harmonigraph_ui`): a name easing in as the marker
 /// under it eases out grows its shadow on the same clock its ink arrives on, so
 /// a position handing itself between the two is never twice shadowed nor
 /// briefly unshadowed.
+///
+/// The strength lands on the SHADE and not on the coverage, which is
+/// `ring_shade`'s reading and for its reason: the coverage is an exponent, so a
+/// level spent there is a number of stops rather than a share of the light, and
+/// a name a tenth of the way out would still hold off half of what it held off
+/// whole.
 @fragment
 fn fs_glyph_glow(in: VertexOut) -> GlowOut {
     if locals.shadow_depth <= 0.0 || in.rim.a <= 0.0 {
         discard;
     }
-    var cov = ring(in, locals.ring0, 0.0);
-    cov = ring(in, locals.ring1, cov);
-    cov = max(cov, coverage(in, in.texel));
-    let shade = glyph_shade(cov) * clamp(in.rim.a, 0.0, 1.0);
+    let shade = glyph_shade(glyph_standoff(in)) * clamp(in.rim.a, 0.0, 1.0);
     if shade <= 0.0 {
         discard;
     }
