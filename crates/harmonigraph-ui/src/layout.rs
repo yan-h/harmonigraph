@@ -52,6 +52,14 @@ pub struct Layout {
     /// every pane edge that isn't already on the picture's boundary —
     /// which is close enough, and means adjacent panes get one gap
     /// between them rather than two.
+    ///
+    /// Zero in every layout the plugin composes, and a hand-written `.ron`
+    /// wanting a gutter has to say so: a gap fills with `background`, and
+    /// `background` matches a pane's bed only while that pane is UNLIT. The
+    /// lattice's bed carries the glow's wash, so beside a lit lattice any
+    /// gap at all reads as a dark bar down the seam — several shades under
+    /// the pane it borders, at the one place in the frame the eye is already
+    /// looking. No fixed colour fixes that; the wash is a dial.
     #[serde(default)]
     pub gap: f32,
     pub panes: Vec<Placement>,
@@ -97,7 +105,7 @@ impl Layout {
             "spiral" => vec![full(Pane::Spiral)],
             _ => return None,
         };
-        Some(Layout { background: default_background(), margin: 0.0, gap: 8.0, panes })
+        Some(Layout { background: default_background(), margin: 0.0, gap: 0.0, panes })
     }
 
     /// A preset name or a path to a `.ron` file.
@@ -135,7 +143,7 @@ impl Layout {
             Placement { pane: Pane::Lattice, rect: lattice },
             Placement { pane: Pane::Spectral, rect: spectral },
         ];
-        Layout { background: default_background(), margin: 0.0, gap: 8.0, panes }
+        Layout { background: default_background(), margin: 0.0, gap: 0.0, panes }
     }
 
     /// Resolve to screen rectangles inside a frame of `size` points.
@@ -175,12 +183,13 @@ impl Layout {
 
     /// The line segments that separate adjacent panes: one down the middle of
     /// every gap [`resolve`](Self::resolve) opened between two panes, spanning
-    /// exactly the edge they share.
+    /// exactly the edge they share. At a [`gap`](Self::gap) of zero that
+    /// middle is the shared edge itself, and the line is the whole seam.
     ///
-    /// The gap alone doesn't read as a boundary — it shows the frame
-    /// background, which is within a shade or two of both panes' own dark
-    /// fills, so the lattice and the spectral pane melt into one continuous
-    /// field. Geometry only, so it can be tested without a GPU;
+    /// The seam has to be DRAWN, because the alternative carries no boundary
+    /// of its own: an unlit lattice paints its bed at exactly `background`,
+    /// so two panes left to abut melt into one continuous field. Geometry
+    /// only, so it can be tested without a GPU;
     /// [`paint_dividers`](Self::paint_dividers) draws it.
     pub fn dividers(&self, placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
         // A gap is where `resolve` put one — exactly `gap` points wide (or
@@ -278,6 +287,53 @@ mod tests {
         assert_eq!(left.left(), 0.0, "the outer edge keeps the margin, not a half-gap");
         assert_eq!(right.right(), 1920.0);
         assert!((right.left() - left.right() - 20.0).abs() < 0.01, "one gap between them");
+    }
+
+    /// No strip of frame background between two panes, in any layout the
+    /// plugin composes for itself — the seam is the hairline and nothing
+    /// else. A gap there fills with `background`, which is the lattice's bed
+    /// only while the lattice is unlit; under any wash it is a dark bar
+    /// flanking the divider, which is what the divider is supposed to be
+    /// instead of.
+    ///
+    /// Sweeps every constructed layout rather than pinning `gap`, because
+    /// the number is not the claim — two panes touching is, and a `resolve`
+    /// that inset them for some other reason would pass a check on the
+    /// field.
+    #[test]
+    fn no_layout_the_plugin_composes_shows_ground_between_two_panes() {
+        let named = PRESETS.iter().map(|n| ((*n).to_string(), Layout::preset(n).unwrap()));
+        let split =
+            LatticeSide::ALL.iter().map(|s| (format!("split {s:?}"), Layout::split(*s, 0.6)));
+        for (name, layout) in named.chain(split) {
+            let resolved = layout.resolve(FRAME);
+            for (i, (_, a)) in resolved.iter().enumerate() {
+                for (_, b) in &resolved[i + 1..] {
+                    // Facing across a vertical edge, or a horizontal one.
+                    let touch = |near: f32, far: f32| (far - near).abs() < 0.01;
+                    let side_by_side = a.top() < b.bottom()
+                        && b.top() < a.bottom()
+                        && (touch(a.right(), b.left()) || touch(b.right(), a.left()));
+                    let stacked = a.left() < b.right()
+                        && b.left() < a.right()
+                        && (touch(a.bottom(), b.top()) || touch(b.bottom(), a.top()));
+                    assert!(
+                        side_by_side || stacked,
+                        "{name}: {a:?} and {b:?} do not meet, so ground shows between them"
+                    );
+                }
+            }
+            // Non-vacuous where there is a boundary at all: touching panes
+            // still get their seam drawn. A gap of zero is exactly the case
+            // `dividers`'s tolerance could round the wrong way.
+            if resolved.len() > 1 {
+                assert_eq!(
+                    layout.dividers(&resolved).len(),
+                    resolved.len() - 1,
+                    "{name}: flush panes lost their divider"
+                );
+            }
+        }
     }
 
     #[test]
