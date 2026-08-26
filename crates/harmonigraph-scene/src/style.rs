@@ -370,9 +370,9 @@ impl Gradient {
     }
 }
 
-/// Which shimmer the melody/bass marks run: one sheet of soft light laid over
-/// the lattice, in the pattern this names, or [`Off`](Pulse::Off) for the
-/// steady picture.
+/// Which shimmer sweeps the lattice: one sheet of soft light laid over every
+/// octave slice a note currently lights, in the pattern this names, or
+/// [`Off`](Pulse::Off) for the steady picture.
 ///
 /// Every live mode is the same animation with a different shape to it, which
 /// is what lets one set of knobs size all of them
@@ -383,12 +383,10 @@ impl Gradient {
 /// light reads as raking over the picture instead of as many small identical
 /// animations.
 ///
-/// The sheet also reaches OUT of the ring layer, onto the octave slice each
-/// ring points at — a mark being the ring together with the octave it names.
-/// That reach is the whole of what it touches outside the rings: the octave
-/// glyphs draw steady everywhere no ring points, which is what keeps them
-/// readable as which octaves sound. All of it lives in `lattice.wgsl`'s
-/// Shimmer section.
+/// A melody or bass mark's own strip takes the sheet too, past the band — a
+/// mark being the ring together with the octave it names, so light crossing
+/// the one has to cross the other. A silent slice with no mark extending it
+/// draws steady. All of it lives in `lattice.wgsl`'s Shimmer section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Pulse {
     /// Steady — no animation, the look every earlier build drew.

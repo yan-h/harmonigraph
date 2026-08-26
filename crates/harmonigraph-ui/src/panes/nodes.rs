@@ -193,49 +193,42 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // inside it, and its SIDES are cut by the Octave gap -- the same padding
     // one sector stands off the next, so it reads as that indicator's own piece
     // rather than as a ring around everything.
-    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        // The Delay is about a mark that is DRAWN — when it arrives — so it is
-        // gated on there being one. The strip's depth is the Layers bar's
-        // outermost handle, and 0 is its off position, where `mark_extension`
-        // returns no coverage. The enclosing block already grays this on
-        // both marks being off, so what it is gated on either way is
-        // `marks_draw` — the same predicate `derive_scene` folds the shimmer
-        // on, and the one the Shimmer section reads. Written as the depth alone
-        // because that is the half this block adds; the pair is what has to
-        // agree.
-        ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
-            // How long an end has to be HELD before its mark answers. Here
-            // rather than in with the note-wide settings at the head of the
-            // pane, because it is about these two marks alone: the octave
-            // sectors they continue answer immediately whatever this says.
-            //
-            // Linear, unlike the wide bars that need easing to be draggable
-            // at their fine end: one second of travel puts a hundredth of it
-            // — the readout's own resolution — a couple of pixels apart, and
-            // the settings that matter (a passing sixteenth at 120bpm is
-            // 125ms) sit in the first third rather than crushed at the
-            // bottom. Read out in seconds, the one value in this section that
-            // is not a length.
-            ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Delay")
-                .display(seconds)
-                .show(ui)
-                .on_hover_text(
-                    "How long a note must stay the melody or the bass before \
-                     its mark fades in — keeps fast playing from flickering \
-                     marks. 0 marks instantly.",
-                );
-        });
+    // The Delay is about a mark that is DRAWN — when it arrives — so it is
+    // gated on there being one: an end has to be marked AND the strip's depth
+    // (the Layers bar's outermost handle) has to leave it something to draw
+    // with, where `mark_extension` returns no coverage at 0 — `marks_draw`.
+    ui.add_enabled_ui(view.marks_draw(), |ui| {
+        // How long an end has to be HELD before its mark answers. Here
+        // rather than in with the note-wide settings at the head of the
+        // pane, because it is about these two marks alone: the octave
+        // sectors they continue answer immediately whatever this says.
+        //
+        // Linear, unlike the wide bars that need easing to be draggable
+        // at their fine end: one second of travel puts a hundredth of it
+        // — the readout's own resolution — a couple of pixels apart, and
+        // the settings that matter (a passing sixteenth at 120bpm is
+        // 125ms) sit in the first third rather than crushed at the
+        // bottom. Read out in seconds, the one value in this section that
+        // is not a length.
+        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Delay")
+            .display(seconds)
+            .show(ui)
+            .on_hover_text(
+                "How long a note must stay the melody or the bass before \
+                 its mark fades in — keeps fast playing from flickering \
+                 marks. 0 marks instantly.",
+            );
     });
 }
 
-/// The patterns the marks' sheet can be laid in, for the Shimmer row.
+/// The patterns the shimmer's sheet can be laid in, for the Shimmer row.
 ///
 /// A table beside the row rather than four arms written into it: a pattern is a
 /// shape the light takes, and each one's description is a sentence about that
-/// shape rather than about the marks, so it belongs next to the others it is
+/// shape rather than about the lattice, so it belongs next to the others it is
 /// told apart from.
 const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
-    (Pulse::Off, "Off", "Steady — no sweep on the marks"),
+    (Pulse::Off, "Off", "Steady — no sweep"),
     (
         Pulse::Bands,
         "Bands",
@@ -257,61 +250,52 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
     ),
 ];
 
-/// Shimmer: the shape the sheet crossing the marks takes, and how it is sized
-/// and paced. The whole feature, under the one heading that names it.
+/// Shimmer: the shape the sheet crossing the lattice takes, and how it is
+/// sized and paced. The whole feature, under the one heading that names it.
 ///
 /// The pattern is the first row and the four bars follow it, because the row
 /// says WHETHER there is a sweep and the bars only say what it looks like. It
-/// sits here rather than in Melody/bass, even though the marks are what the
-/// sheet crosses: a "Shimmer" row under that heading with a "Shimmer" section
-/// below it splits one feature across two places and spends its name twice.
+/// sits after Melody/bass because a mark's own strip rides the same sheet,
+/// but the pattern reaches every octave slice a note lights whether or not
+/// either mark is switched on.
 ///
-/// The two gates are different questions and are written as two. The pattern
-/// needs a mark to lay light on, so it follows [`ViewConfig::marks_draw`]
-/// — the same predicate `derive_scene` folds `pulse_marks` off with, so a view
-/// carrying a pattern with no end marked, or no mark width, is not
-/// shimmering. The bars need light to shape, so they additionally follow
-/// [`Pulse::sweeps`]: with the pattern Off they have nothing to move. Gating
-/// the pattern on `sweeps()` too would strand it — Off could never be left.
+/// The bars gate on [`Pulse::sweeps`] alone: with the pattern Off they have
+/// nothing to move. The pattern row itself is always draggable — Off is
+/// where a session leaves it when nothing should shimmer, not a state the
+/// pane has to protect the row from reaching.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    ui.add_enabled_ui(view.marks_draw(), |ui| {
-        // Off is its own option rather than a checkbox beside the row: one row
-        // says both whether the marks shimmer and how.
-        choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
-        ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
-            ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed").show(ui).on_hover_text(
-                "How fast the sheet travels, in lattice units a second — \
-                     the same rate on screen and in a render. 0 freezes it.",
+    // Off is its own option rather than a checkbox beside the row: one row
+    // says both whether the lattice shimmers and how.
+    choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
+    ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
+        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed").show(ui).on_hover_text(
+            "How fast the sheet travels, in lattice units a second — \
+                 the same rate on screen and in a render. 0 freezes it.",
+        );
+        // Eased, because the range is three orders wide and the useful
+        // settings are not spread evenly over it: the tight end is a
+        // different picture every few hundredths (0.05 to 0.1 halves the
+        // periods on a node), where the wide end changes little between 8
+        // and 15. Geometric travel gives each end the same share of the bar.
+        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Spacing")
+            .eased(true)
+            .show(ui)
+            .on_hover_text(
+                "The pattern's wavelength, one bright peak to the next, in \
+                 lattice units. Around five nodes reads as a sweep; under \
+                 one node it becomes a texture.",
             );
-            // Eased, because the range is three orders wide and the useful
-            // settings are not spread evenly over it: the tight end is a
-            // different picture every few hundredths (0.05 to 0.1 halves the
-            // periods on a node), where the wide end changes little between 8
-            // and 15. Geometric travel gives each end the same share of the bar.
-            ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Spacing")
-                .eased(true)
-                .show(ui)
-                .on_hover_text(
-                    "The pattern's wavelength, one bright peak to the next, in \
-                     lattice units. Around five nodes reads as a sweep; under \
-                     one node it becomes a texture.",
-                );
-            ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
-                .show(ui)
-                .on_hover_text(
-                    "How far a peak stands above the trough beside it — the \
-                     same ratio on dark notes as bright ones. 0 is no shimmer, \
-                     1 the tuned depth.",
-                );
-            ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
-                .show(ui)
-                .on_hover_text(
-                    "How gradually the light arrives: high fades peak into \
-                     trough across the whole period, low narrows the peak to a \
-                     hard band.",
-                );
-        });
+        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity").show(ui).on_hover_text(
+            "How far a peak stands above the trough beside it — the \
+                 same ratio on dark notes as bright ones. 0 is no shimmer, \
+                 1 the tuned depth.",
+        );
+        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness").show(ui).on_hover_text(
+            "How gradually the light arrives: high fades peak into \
+                 trough across the whole period, low narrows the peak to a \
+                 hard band.",
+        );
     });
 }
 

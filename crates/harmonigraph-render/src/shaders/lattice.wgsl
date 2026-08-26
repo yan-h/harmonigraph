@@ -1120,7 +1120,7 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
     return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
 }
 
-// The melody/bass marks' shimmer pattern (u.misc6.w — see `Pulse`).
+// The shimmer's pattern selector (u.misc6.w — see `Pulse`).
 fn pulse_marks_mode() -> u32 {
     return u32(u.misc6.w + 0.5);
 }
@@ -1129,11 +1129,11 @@ fn pulse_marks_mode() -> u32 {
 // Every pulse mode but 0, and the same animation in each: a pattern of light
 // laid over the layer, travelling. What the mode picks is its SHAPE.
 //
-// WHICH pixels it covers is not quite the same question. The sheet is the
-// marks', and it takes the octave slices those marks extend (`mark_slice` in
-// `fs_main`) as well as the extensions themselves, because a mark is one slice
-// in two pieces rather than the outer piece alone. The rest of the octave layer
-// draws steady.
+// WHICH pixels it covers is not quite the same question. The sheet reaches
+// every octave slice a note currently lights (`lit_slice` in `node_ink`), and
+// the strip a melody or bass mark extends past the band as well, because a
+// mark is one slice in two pieces rather than the outer piece alone. A slice
+// with no note sounding and no mark extending it draws steady.
 //
 // The field is SHARED. Every node samples the same sheet at its own place on
 // `in.field` — the plane the billboards face, in world units — so the light
@@ -2788,21 +2788,17 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // reach zero `span` times over.
     // An empty pair is the octave layer dialled off (its width bar at 0), and
     // it takes the whole layer with it: the slot loop below only ever scales
-    // this coverage, the backdrop rides it, and the marks' shimmer reaches the
+    // this coverage, the backdrop rides it, and the shimmer reaches the
     // slices through it.
     let band = select(glyph_band(d, band_in, band_out, aa), 0.0, band_out <= band_in);
-    // The slots a melody or bass mark is extending (in.marks, the same
-    // bitmasks `mark_extension` reads below), which is where the MARK layer's
-    // sheet reaches into this one.
-    let extreme_slots = in.marks.x | in.marks.y;
-    // How much of this pixel is a slice a melody or bass mark extends, and
-    // how strongly that mark is drawing there: the weight the MARK layer's
-    // shimmer reaches the octave glyphs with, below. The slice's own shape,
-    // so the sweep fades in exactly with the wedge's edges instead of at a
-    // boundary of its own, times the same mark level the extension itself is
-    // scaled by -- a released melody's slice stops shimmering as its mark
-    // goes, rather than outliving it.
-    var mark_slice = 0.0;
+    // How much of this pixel is a slice some note currently lights, and how
+    // strongly: the weight the shimmer reaches the octave glyphs with, below.
+    // The slice's own shape, so the sweep fades in exactly with the wedge's
+    // edges instead of at a boundary of its own, times the louder of the
+    // slot's own level and whatever a melody or bass mark is still holding it
+    // at -- a released note stops shimmering as its own level goes, and a
+    // mark still extending it keeps the slice lit until the mark itself is.
+    var lit_slice = 0.0;
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -2816,13 +2812,11 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
         // evaluates both arms, and a shift past the width is undefined.
         let in_range = slot >= 0 && slot < i32(OCTAVE_SLOTS);
         let bit = select(0u, 1u << u32(clamp(slot, 0, i32(OCTAVE_SLOTS) - 1)), in_range);
-        let is_extreme = (extreme_slots & bit) != 0u;
-        if is_extreme {
-            mark_slice = max(mark_slice, shape * max(
-                select(0.0, in.params.y, (in.marks.x & bit) != 0u),
-                select(0.0, in.params.z, (in.marks.y & bit) != 0u),
-            ));
-        }
+        let mark_level = max(
+            select(0.0, in.params.y, (in.marks.x & bit) != 0u),
+            select(0.0, in.params.z, (in.marks.y & bit) != 0u),
+        );
+        lit_slice = max(lit_slice, shape * max(level, mark_level));
         // Ghosts carry the ring's shape in the rings' own ground, and a lit
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
@@ -2837,13 +2831,25 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
         if cov > glyph {
             glyph = cov;
             glyph_rgb = slot_rgb;
-            // The LIT part of what this slot draws, which is its own level and
-            // never the ghost under it: the two are one wedge at one opacity
+            // The LIT part of what this slot draws, which is never the ghost
+            // under it: the two are one wedge at one opacity
             // (`oct_slot_ink`), and the ghost is the backdrop carrying the
             // ring's shape rather than anything this octave is doing. Decided
             // by the same winner the colour is, and for the same reason — one
             // element owns a pixel, so the seam between a lit slice and a
             // silent one cross-fades in both answers at once.
+            //
+            // This slot's own LEVEL, where `lit_slice` above takes the louder
+            // of that and the mark still holding the slice. The two terms
+            // differ on purpose and the case that parts them is a released
+            // note under a held mark: the slice is then drawn in the GROUND
+            // (`oct_slot_ink` returns the ghost at level 0) while the strip
+            // outside it is still the mark's own colour. A sweep crossing both
+            // is one light passing over one slice, which is what `lit_slice`
+            // is for; the wash is about what the ink IS, and grey ink is
+            // exactly the ink that has to keep the whole field or read as a
+            // hole. So the wash follows the COLOUR: it fades to the full field
+            // on the same envelope the slice fades to the ground on.
             glyph_lit = shape * level;
         }
     }
@@ -2855,30 +2861,28 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     let glyph_taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
     glyph = glyph * glyph_taper;
     glyph_lit = glyph_lit * glyph_taper;
-    // The mark layer's sheet, which the glyphs take too -- over the slices a
-    // melody or bass mark extends, and nowhere else. A mark is the octave it
-    // names TOGETHER with the extension that says so, one slice in two
-    // pieces, so light crossing the one crosses the other; a sweep that
-    // stopped at the extension's edge would cut the mark in half at the gap.
-    // It is taken here rather than with the marks below because this is where
-    // the glyph layer is finished, and it is the same terms the marks
-    // themselves use -- one sheet, read twice, not two sweeps that could
-    // disagree.
+    // The sheet, which the glyphs take too -- over every slice a note
+    // currently lights, and the strip a melody or bass mark extends past the
+    // band as well. A mark is the octave it names TOGETHER with the extension
+    // that says so, one slice in two pieces, so light crossing the one
+    // crosses the other; a sweep that stopped at the extension's edge would
+    // cut the mark in half at the gap.
     //
     // After the slot loop and after the margin taper: the sheet is a plane
     // crossing the lattice rather than anything per slot, and a peak must not
     // push the layer back out past the fade the taper just closed.
     let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, field_step);
     // Taken down by the slice weight rather than applied flat, which is what
-    // keeps the sheet inside the mark: `mark_slice` is how much of this pixel
-    // is a wedge some ring points at, so a plain slice arrives at a SWING of
-    // zero and draws exactly as it does steady. Scaling the swing and not the
-    // shape, because the shape is where in the sheet this fragment sits and a
-    // half-lit slice sits in the same place as a fully lit one -- it is how far
-    // the sheet moves it that the weight is about. The mode needs no guard of
-    // its own here -- `shimmer_terms` returns a zero swing when the pattern is
-    // Off, so the scale is a no-op either way.
-    let glyph_shimmer = vec2<f32>(mark_shimmer.x * mark_slice, mark_shimmer.y);
+    // keeps the sheet inside the lit slices: `lit_slice` is how much of this
+    // pixel is a wedge some note is sounding at, or a mark is still
+    // extending, so a silent slice arrives at a SWING of zero and draws
+    // exactly as it does steady. Scaling the swing and not the shape, because
+    // the shape is where in the sheet this fragment sits and a half-lit slice
+    // sits in the same place as a fully lit one -- it is how far the sheet
+    // moves it that the weight is about. The mode needs no guard of its own
+    // here -- `shimmer_terms` returns a zero swing when the pattern is Off,
+    // so the scale is a no-op either way.
+    let glyph_shimmer = vec2<f32>(mark_shimmer.x * lit_slice, mark_shimmer.y);
     // No clamp at white here, where an added light needs one:
     // `shimmer_light` fits its crest to the layer's own headroom, so the top
     // channel lands AT 1 and never past it. That guarantee is what the layers

@@ -204,6 +204,77 @@ fn the_wash_reaches_a_lit_slice_and_nothing_else() {
     );
 }
 
+/// A MARKED slice the note has LEFT keeps the whole light on its band, while
+/// the strip continuing it takes the bar.
+///
+/// The one case that parts the wash's reading of "lit" from the shimmer's
+/// (`lit_slice` in `node_ink`, which takes the louder of a slot's level and
+/// the mark still holding it). A released note under a held mark draws its
+/// band slice in the GROUND — `oct_slot_ink` returns the ghost at level 0 —
+/// while the strip outside the band is still the mark's own colour. The two
+/// pieces of that slice are two different inks, so they take the field on
+/// different terms: a sweep crossing both is one light passing over one slice,
+/// which is what the shimmer's term is for, and the wash is about what the ink
+/// IS. Grey ink is exactly the ink that has to keep the whole field or read as
+/// a hole in the light.
+///
+/// So the claim is that the bar moves the MARK and nothing else on the node —
+/// the marked slot's own ghost included, which is the half a term reading
+/// `max(level, mark_level)` here would have taken with it.
+///
+/// The mark's pixels are FOUND by taking the mark away, with the glow off in
+/// both shots so what is found is ink rather than light.
+#[test]
+fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The melody mark held at full over a slot whose note has gone: the mask
+    // and the mark's own level are the marked VOICE's, so neither goes with
+    // the octave's.
+    let at = |marked: u32, reach: f32, wash: f32| -> Scene {
+        let mut scene = single_marked_node(marked, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 0.0;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_wash = wash;
+        scene
+    };
+    let with_mark = shooter.shot(&at(MIDDLE_C, 0.0, 1.0));
+    let without = shooter.shot(&at(0, 0.0, 1.0));
+    let mut is_mark = vec![false; with_mark.len() / 4];
+    for (p, flag) in is_mark.iter_mut().enumerate() {
+        let i = p * 4;
+        *flag = with_mark[i..i + 4] != without[i..i + 4];
+    }
+    let marked = is_mark.iter().filter(|f| **f).count();
+    assert!(marked > 100, "the fixture's mark covers {marked} pixels");
+
+    let full = shooter.shot(&at(MIDDLE_C, 0.8, 1.0));
+    let none = shooter.shot(&at(MIDDLE_C, 0.8, 0.0));
+    let moved: Vec<usize> =
+        (0..is_mark.len()).filter(|p| full[p * 4..p * 4 + 4] != none[p * 4..p * 4 + 4]).collect();
+    let strays = moved.iter().filter(|&&p| !is_mark[p]).count();
+    assert!(
+        !moved.is_empty(),
+        "the bar moved nothing at all: the mark is not on the side of it that is dialled",
+    );
+    assert_eq!(
+        strays,
+        0,
+        "the bar moved {strays} pixels off the mark, of {} it moved in all: a slice the note has \
+         left is drawn in the ground, and ground ink keeps the whole light",
+        moved.len(),
+    );
+}
+
 /// A node wearing NOTHING BUT AN AUDIO RING gives off no light at all,
 /// whatever its ring is reading.
 ///

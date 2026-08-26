@@ -929,14 +929,12 @@ pub struct Scene {
     /// sum already spent, this struct carrying [`mark_inner`](Self::mark_inner)
     /// itself. Already clamped.
     pub mark_thickness: f32,
-    /// Which shimmer sweeps the melody/bass marks (see [`Pulse`] and
-    /// [`ViewConfig::pulse_marks`]).
-    ///
-    /// Folded to [`Pulse::Off`] when the marks are off — which is
-    /// [`ViewConfig::marks_draw`], a thickness of 0 OR neither end
-    /// switched on, not the thickness alone — where there is no mark
-    /// to animate and the mark's own octave slice must not go on shimmering
-    /// under a control the pane has grayed out.
+    /// Which shimmer sweeps the lattice (see [`Pulse`] and
+    /// [`ViewConfig::pulse_marks`]) — every octave slice a note currently
+    /// lights, and a melody or bass mark's own strip past the band. Carried
+    /// straight from the view: nothing here depends on whether a mark is
+    /// switched on, so the sheet keeps sweeping the octave layer with both
+    /// marks off.
     pub pulse_marks: Pulse,
     /// How fast the shimmer travels (world units per second), how wide its
     /// period is (world units), how deep the light it carries is (0 none, 1
