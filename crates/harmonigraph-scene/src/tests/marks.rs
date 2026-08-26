@@ -785,28 +785,19 @@ fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
     assert_ne!(node.color, node.melody_color, "the fold is what puts them on different pitches");
 }
 
-/// The marks' shimmer folds off with the marks themselves.
+/// The shimmer's mode reaches the scene whether or not a mark exists to carry
+/// it — it sweeps every octave slice a note lights, not the marks alone, so
+/// nothing here has to fold it off on the marks' account.
 ///
-/// A depth of 0 is the marks' documented off position, where `mark_extension`
-/// returns no coverage, and the pane grays the row there.
-///
-/// The fold is needed because a mark sheet also sweeps the octave SLICE a
-/// mark extends, which the glyph layer draws and no mark coverage
-/// multiplies away: without it, switching the marks off leaves the marked
-/// octaves sweeping from a control the user can no longer reach to stop.
-/// Every pattern is folded, not only the ones that reach furthest — which
-/// pattern is safe to leave standing is a fact about where it draws, and
-/// pinning that to today's answer would make a pattern reaching past the mark
-/// later a silent bug rather than an edit here.
-/// The marks go off two ways, and BOTH have to fold the mode: no depth to
-/// draw one with, and no end marked for one to belong to
-/// ([`ViewConfig::marks_draw`], which the pane grays the row on). The
-/// marks-off half is the easier one to leave out, because nothing is visibly
-/// wrong when it is: no slot is marked, so `in.marks` is 0 and the slice the
-/// sheet would reach collapses to zero on its own. That is the accident this
-/// fold exists not to depend on.
+/// Once folded on exactly that reasoning (`the_mark_pulse_folds_off_when_the_marks_are_off`,
+/// since replaced): a mark sheet also sweeps the octave SLICE a mark extends,
+/// which the glyph layer draws and no mark coverage multiplies away, so
+/// forcing the mode off when a mark could not be drawn was how the marked
+/// octave's own slice was kept from sweeping past a control the user could no
+/// longer reach. That slice now sweeps on its own note's account instead, so
+/// the fold would only have stopped a picture the feature is meant to draw.
 #[test]
-fn the_mark_pulse_folds_off_when_the_marks_are_off() {
+fn the_shimmer_mode_survives_the_marks_being_off() {
     let pulse = |mark_thickness: f32, marked: bool, pulse_marks: Pulse| {
         let view = ViewConfig {
             mark_thickness,
@@ -819,18 +810,8 @@ fn the_mark_pulse_folds_off_when_the_marks_are_off() {
     };
 
     for mode in [Pulse::Bands, Pulse::Checker, Pulse::Hex] {
-        assert_eq!(
-            pulse(0.0, true, mode),
-            Pulse::Off,
-            "{mode:?} survived the mark depth going to 0, where it keeps \
-             drawing -- on the marked octave's own slice",
-        );
-        assert_eq!(
-            pulse(0.09, false, mode),
-            Pulse::Off,
-            "{mode:?} survived both marks coming off, where there is no mark for it \
-             to animate and the pane has grayed its row",
-        );
+        assert_eq!(pulse(0.0, true, mode), mode, "{mode:?} did not survive the mark depth at 0");
+        assert_eq!(pulse(0.09, false, mode), mode, "{mode:?} did not survive both marks off");
         assert_eq!(pulse(0.09, true, mode), mode, "{mode:?} must survive a mark it can animate",);
     }
 }

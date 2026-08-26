@@ -219,9 +219,9 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
 /// Off must ALSO be steady across the clock, which is the half that keeps the
 /// rest honest: a picture that moved with time in every mode would pass the
 /// two "it changed" claims below without the sheet doing anything. It is
-/// checked on a node with NO mark at all, which is also the containment claim
-/// `the_mark_shimmer_reaches_the_octave_slice_it_points_at` makes in full:
-/// nothing about an unmarked node depends on the clock.
+/// checked on a node with no mark at all, its `pulse_marks` left at the
+/// fixture's own Off — the octave layer still sounds, but Off never sweeps
+/// whatever is lit.
 ///
 /// The instants are picked without reference to the fixture's own speed or
 /// width: the claim is that the clock reaches the layer, not that a
@@ -367,8 +367,8 @@ fn the_mark_sheet_reaches_the_slice_whole() {
     let (mut dimmed_slice, mut dimmed_ring) = (0usize, 0usize);
     for step in 0..8 {
         let time = 0.2 + step as f64 * (WIDTH / SPEED) as f64 / 8.0;
-        // The rings, from the node that wears none — the same mask
-        // `the_mark_shimmer_reaches_the_octave_slice_it_points_at` takes, so
+        // The ring, from the node that wears none — the same mask
+        // `the_shimmer_reaches_every_sounding_slice_marked_or_not` takes, so
         // what is left is the glyph layer.
         let bare = gpu.shot(&scene(0, off, time));
         let steady = gpu.shot(&scene(MIDDLE_C, off, time));
@@ -663,27 +663,31 @@ fn a_width_finer_than_the_pixels_fades_out_instead_of_aliasing() {
     );
 }
 
-/// The mark rings' shimmer also sweeps the octave SLICE each ring points at,
-/// which is drawn by the glyph layer — a mark is the ring together with the
-/// octave it names, and light crossing the one has to cross the other or it
-/// cuts the mark in half at the gap between them.
+/// The shimmer reaches every octave SLICE a note lights, drawn by the glyph
+/// layer, and — where a melody or bass mark stands on one — the ring past the
+/// band as well: a mark is the ring together with the octave it names, and
+/// light crossing the one has to cross the other or it cuts the mark in half
+/// at the gap between them.
 ///
-/// The claim is about paint OUTSIDE the rings, so the rings are masked off
-/// rather than switched off: `mark_thickness = 0` would take the rings and
-/// the slice sweep with them (`the_mark_pulse_folds_off_when_the_rings_are_off`
-/// in harmonigraph-scene folds the mode there, and a fixture the app cannot
-/// build is not a reading of what it draws). The mask is measured instead —
-/// an unmarked node wears no rings, so the pixels a marked one differs from
-/// it at ARE the rings, fringe and all, whatever radii the band setting put
-/// them at. What is left is the rest of the node, where only the glyph layer
-/// draws.
+/// That reach is no longer conditioned on a mark existing at all
+/// (`the_mark_shimmer_reaches_the_octave_slice_it_points_at`, before this was
+/// rewritten, required an unmarked node to sit out the sweep entirely). The
+/// containment claim survives in a narrower shape instead: with nothing
+/// sounding there is no level to weight the sweep with, so a genuinely idle
+/// node still sits out the sweep.
+///
+/// The ring-vs-slice split for the marked case is measured the same way as
+/// before: an unmarked node wears no ring, so the pixels a marked one differs
+/// from it at ARE the ring, fringe and all, whatever radii the band setting
+/// put them at. What is left is the rest of the node, where only the glyph
+/// layer draws.
 #[test]
-fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
+fn the_shimmer_reaches_every_sounding_slice_marked_or_not() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    // One instant, held across all four shots: the sweep moves, so anything
+    // One instant, held across every shot: the sweep moves, so anything
     // compared across two clocks would differ whatever it drew.
     let at = |melody: u32, pulse: harmonigraph_scene::Pulse| -> Scene {
         let mut scene = single_marked_node(melody, 0);
@@ -694,21 +698,35 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
     let off = harmonigraph_scene::Pulse::Off;
     let shimmer = harmonigraph_scene::Pulse::Bands;
 
-    // No mark: no ring to sweep and no slice to reach, so the mode changes
-    // nothing at all. This is the containment half of the claim — the mark
-    // layer's sweep must not have become a second octave-layer sweep.
+    // Nothing sounding at all: the mode must still change nothing, or the
+    // sweep is painting a slice with no level to weight it.
+    let mute = |pulse: harmonigraph_scene::Pulse| -> Scene {
+        let mut scene = at(0, pulse);
+        scene.nodes[0].activation = 0.0;
+        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        scene
+    };
+    assert_eq!(
+        differing_pixels(&gpu.shot(&mute(off)), &gpu.shot(&mute(shimmer))),
+        0,
+        "a node with nothing sounding changed under the shimmer; the sweep is \
+         painting a slice with no level to weight it",
+    );
+
+    // Sounding but unmarked: the note's own octave slice now sweeps on its
+    // own account, where it used to sit out the sweep entirely.
     let bare = gpu.shot(&at(0, off));
     let bare_shimmer = gpu.shot(&at(0, shimmer));
-    assert_eq!(
-        differing_pixels(&bare, &bare_shimmer),
-        0,
-        "an unmarked node changed under the mark rings' shimmer; the sweep has \
-         escaped the slices a ring points at and is crossing the whole octave layer",
+    assert!(
+        differing_pixels(&bare, &bare_shimmer) > 0,
+        "an unmarked but sounding node did not shimmer; the sheet is still \
+         gated on a mark existing rather than on the note lighting the slice",
     );
 
     let steady = gpu.shot(&at(MIDDLE_C, off));
     let swept = gpu.shot(&at(MIDDLE_C, shimmer));
-    // Where the rings draw, from the node that wears none.
+    // Where the ring draws, from the node that wears none.
     let ring = |i: usize| bare[i * 4..i * 4 + 4] != steady[i * 4..i * 4 + 4];
     let (mut on_ring, mut past_ring) = (0usize, 0usize);
     for i in 0..steady.len() / 4 {
@@ -722,13 +740,13 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
         }
     }
     eprintln!("mark shimmer moved {on_ring} px of ring and {past_ring} px past it");
-    // A floor rather than a share of the rings: the slice is one wedge of the
-    // band against two full annuli, and how much of the band the fixture
+    // A floor rather than a share of the ring: the slice is one wedge of the
+    // band against a full annulus, and how much of the band the fixture
     // shows is a setting. Measured 599 px past the ring, against 940 on it.
     assert!(
         past_ring > 200,
-        "the mark rings' shimmer moved only {past_ring} px outside the rings \
-         ({on_ring} on them): it is sweeping the annulus alone and stopping at \
+        "the mark's shimmer moved only {past_ring} px outside the ring \
+         ({on_ring} on it): it is sweeping the annulus alone and stopping at \
          the gap, leaving the octave slice the mark names unlit",
     );
 }

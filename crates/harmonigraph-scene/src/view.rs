@@ -456,12 +456,12 @@ pub struct ViewConfig {
     /// above whatever this is, so it is a shape rather than a second
     /// strength — and it is inert without two extras to differ.
     pub octave_extra_blend: f32,
-    // Which shimmer sweeps the octave glyphs has no field here: the sheet is
-    // the melody/bass marks' alone (`pulse_marks`), and the octave layer draws
-    // steady whatever those are doing. Saved blobs still carry the
-    // `pulse_octaves` key, naming a pattern nothing reads any more; serde
-    // ignores unknown keys, so such a blob loads intact, opens on the steady
-    // octave layer, and drops the key on the next save.
+    // Which shimmer sweeps the octave glyphs has no field here: one pattern
+    // (`pulse_marks`) sizes the sheet for every layer it reaches — the
+    // glyphs of a currently sounding octave and a melody or bass mark's own
+    // strip alike. Saved blobs still carry the `pulse_octaves` key, naming a
+    // pattern nothing reads any more; serde ignores unknown keys, so such a
+    // blob loads intact and drops the key on the next save.
     // ---- What the audio ring says ----------------------------------------
     // Which notes are HELD, or which sine waves are SOUNDING. The two are
     // different questions about the same music, and the lattice answers both
@@ -767,15 +767,14 @@ pub struct ViewConfig {
     /// fresh view opens on — see `impl Default`, where the wait that stops
     /// the chord-release smear is written out.
     pub mark_delay: f32,
-    /// Which shimmer sweeps the melody/bass marks (see [`Pulse`]): the sheet
-    /// takes both marks AND the octave slice each one extends. That reach
-    /// into the other layer is the mark being one slice in two pieces, so
-    /// light crossing one crosses the other — and it is the whole
-    /// of where the sheet goes, the octave layer drawing steady everywhere a
-    /// mark does not reach. [`Pulse::Bands`] fresh, so the sweep is on out of
-    /// the box; a blob with no `pulse_marks` key gets that same value, the
-    /// container-level `#[serde(default)]` making `impl Default` the one
-    /// fallback for this field as for every other.
+    /// Which shimmer sweeps the lattice (see [`Pulse`]): the sheet takes
+    /// every octave slice a note currently lights, and a melody or bass
+    /// mark's own strip past the band as well — a mark being one slice in
+    /// two pieces, so light crossing one crosses the other. [`Pulse::Bands`]
+    /// fresh, so the sweep is on out of the box; a blob with no `pulse_marks`
+    /// key gets that same value, the container-level `#[serde(default)]`
+    /// making `impl Default` the one fallback for this field as for every
+    /// other.
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
@@ -1661,17 +1660,10 @@ impl ViewConfig {
     /// marked for there to BE a mark, and the depth has to leave it
     /// something to draw with.
     ///
-    /// One predicate because three places have to agree on it — the pane
-    /// grays the marks' own controls, `derive_scene` folds
-    /// [`pulse_marks`](Self::pulse_marks) off, and the Shimmer bars gray on
-    /// the same thing, that pattern being the only thing they size — and three
-    /// copies of a two-term condition is how they come to disagree. They did:
-    /// the fold tested the thickness alone, so a saved view with both marks off
-    /// kept shipping a live pulse mode, and the Shimmer bars tested neither and
-    /// stayed draggable with nothing to drag.
-    ///
     /// Says nothing about whether a mark is drawn NOW — that is a held note's
-    /// business, per node. This is whether the layer is switched on.
+    /// business, per node. This is whether the layer is switched on, which is
+    /// what the pane grays its Delay bar on: a mark that cannot appear has
+    /// nothing for a delay to time.
     pub fn marks_draw(&self) -> bool {
         self.mark_thickness > 0.0 && (self.mark_melody || self.mark_bass)
     }
