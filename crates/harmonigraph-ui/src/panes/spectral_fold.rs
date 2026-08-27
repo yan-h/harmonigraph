@@ -168,7 +168,7 @@ use harmonigraph_scene::{
     SPECTRAL_WIDTH_MIN,
 };
 
-use super::spectral::axes::loudness;
+use super::spectral::axes::{loudness, power_db, spectrogram_level_db};
 use crate::spectrum::SpectrumBuckets;
 use crate::SharedState;
 
@@ -360,7 +360,7 @@ impl Fold {
 ///   smoothing that helps the other.
 ///
 /// The reading goes into the scene as one [`SpectralPaint`], which is also
-/// what carries the FREQUENCY colour scheme: the analyzer's own gradient,
+/// what carries the FREQUENCY colour scheme: the volume gradient and range,
 /// handed in whole here and baked into the ring's table by
 /// [`SpectralPaint::new`], whose silent end is pinned — in chroma as well as
 /// lightness — onto the lattice's own ground
@@ -437,6 +437,10 @@ pub struct RingLevels {
     /// stall: a release slow enough to be worth having moves a bucket less than
     /// 1/255 in a frame, and rounding that back is a filter that never arrives.
     level: Box<[f32; SPECTRUM_BINS]>,
+    /// The same reading carried through the volume-color window. Kept beside
+    /// the analyzer level because values outside that window still need their
+    /// true color position when the two ranges differ.
+    color_level: Box<[f32; SPECTRUM_BINS]>,
     /// The clock the levels stand at, or `None` before the first fill.
     ///
     /// A moment and not a duration, so a pane drawn TWICE in one frame — the
@@ -447,22 +451,21 @@ pub struct RingLevels {
 
 impl Default for RingLevels {
     fn default() -> RingLevels {
-        RingLevels { level: Box::new([0.0; SPECTRUM_BINS]), at: None }
+        RingLevels {
+            level: Box::new([0.0; SPECTRUM_BINS]),
+            color_level: Box::new([0.0; SPECTRUM_BINS]),
+            at: None,
+        }
     }
 }
 
 impl RingLevels {
     /// Read a grid of power into the ring's channel, carried on the ring's own
-    /// attack and release: every bucket through the shared [`loudness`] curve,
-    /// stepped toward that, and quantized to the byte the shader unpacks.
-    ///
-    /// The one place either reading becomes a LEVEL, which is what keeps them in
-    /// the same colour scheme: the byte in the table is what `loudness` answers,
-    /// so a wedge and the Spectral pane's own curve at the same power are the
-    /// same level and therefore the same colour off the same ramp. What differs
-    /// between the two readings is the grid handed in — the fold's smoothed
-    /// excess, or the analyzer's raw buckets — and nothing after this point
-    /// knows which it was.
+    /// attack and release: every bucket through the analyzer's [`loudness`]
+    /// curve and the independent volume-color mapping, stepped toward each
+    /// target and quantized to the bytes the shader unpacks. The analyzer copy
+    /// feeds the gate; the color copy keeps levels outside the analyzer window
+    /// visible at their true position in the volume-color ramp.
     ///
     /// Per BUCKET rather than per node, which is what makes the ring cost the
     /// same whatever the extents are: the grid is one reading the whole lattice
@@ -506,6 +509,14 @@ impl RingLevels {
             let alpha = if target > *level { attack } else { release };
             *level += (target - *level) * alpha;
             paint.levels[bucket] = (*level * 255.0).round() as u8;
+
+            let color_target = grid.map_or(0.0, |grid| {
+                spectrogram_level_db(cfg, power_db(grid[bucket]), bucket_pitch(bucket))
+            });
+            let color_level = &mut self.color_level[bucket];
+            let color_alpha = if color_target > *color_level { attack } else { release };
+            *color_level += (color_target - *color_level) * color_alpha;
+            paint.color_levels[bucket] = (*color_level * 255.0).round() as u8;
         }
     }
 }
@@ -1041,11 +1052,9 @@ mod tests {
     /// [`loudness`] curve applied to the analyzer's own grid, with no kernel
     /// over it and no floor under it.
     ///
-    /// The claim that keeps the ring in the FREQUENCY colour scheme, and it is
-    /// exact rather than approximate: the byte in the table is what
-    /// `loudness` answers, so a wedge and the Spectral pane's own curve at the
-    /// same frequency are the same level and therefore the same colour off the
-    /// same ramp. A fold or a floor slipped in here would leave the ring
+    /// The claim that keeps the ring's geometry on the analyzer's scale, and it
+    /// is exact rather than approximate: the byte in the table is what
+    /// `loudness` answers. A fold or a floor slipped in here would leave the ring
     /// reading lower than the analyzer everywhere, which looks like a taste
     /// decision rather than a bug.
     #[test]
@@ -1072,6 +1081,39 @@ mod tests {
             }
         }
         assert!(checked > 0, "no bucket was above the floor, so the comparison proves nothing");
+    }
+
+    /// The ring keeps analyzer levels for its gate but maps colors from the
+    /// independent volume window, including values below the analyzer floor.
+    #[test]
+    fn the_ring_color_levels_keep_values_outside_the_analyzer_window() {
+        let mut cfg = crate::SpectrumConfig {
+            floor_db: -60.0,
+            ceiling_db: -20.0,
+            volume_floor_db: -90.0,
+            volume_ceiling_db: -30.0,
+            tilt: 0.0,
+            ..crate::SpectrumConfig::default()
+        };
+        cfg.sanitize();
+        let view = ViewConfig::default();
+        let bucket = 1000;
+        let power = 10.0f32.powf(-7.5); // -75 dB, below the analyzer floor
+        let mut grid = [0.0f32; SPECTRUM_BINS];
+        grid[bucket] = power;
+        let mut paint = SpectralPaint::new(&view, cfg.spectrogram_gradient);
+        RingLevels::default().fill(&mut paint, &cfg, Some(&grid), &view, 0.0);
+
+        let analyzer = loudness(&cfg, power, bucket_pitch(bucket));
+        let color = spectrogram_level_db(&cfg, power_db(power), bucket_pitch(bucket));
+        assert_eq!(analyzer, 0.0, "the fixture must sit below the analyzer floor");
+        assert!(color > 0.0, "the color window must retain the below-floor value");
+        assert_eq!(paint.levels[bucket], 0, "the gate level left the analyzer scale");
+        assert_eq!(
+            paint.color_levels[bucket],
+            (color * 255.0).round() as u8,
+            "the ring color level did not use the independent window",
+        );
     }
 
     /// The two readings are MEASURED apart, which is the whole point of having
@@ -1150,7 +1192,7 @@ mod tests {
     /// Held against `ring_gradient` — the scene crate's own re-anchoring, the
     /// one the ring's table is actually built through — rather than against a
     /// copy of its arithmetic written out here. The claim is that the ring
-    /// paints the ANALYZER's gradient at all, and a restated formula would go
+    /// paints the volume gradient at all, and a restated formula would go
     /// on passing after the two definitions had drifted apart.
     ///
     /// Worth pinning because both halves have already drifted once and neither

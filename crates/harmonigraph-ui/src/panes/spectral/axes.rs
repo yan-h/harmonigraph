@@ -223,11 +223,10 @@ pub(super) fn text_scales(
     }
 }
 
-/// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
-/// floor is 0, the configured ceiling is 1, and the tilt lifts treble by
-/// its slope above the 1 kHz pivot. The spectrum curve's height and the
-/// spectrogram's cell intensity both read from this, so the two always agree
-/// on what "loud" means for a given bucket.
+/// How loud `power` reads at pitch `midi`, on a 0..1 height scale: the
+/// configured floor is 0, the configured ceiling is 1, and the tilt lifts
+/// treble by its slope above the 1 kHz pivot. Audio colors use
+/// [`spectrogram_level_db`] and their own dB window.
 pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
     loudness_db(cfg, power_db(power), midi)
 }
@@ -238,15 +237,8 @@ pub(crate) fn power_db(power: f32) -> f32 {
     10.0 * power.max(1e-12).log10()
 }
 
-/// [`loudness`] from a bucket already in dB, so the heatmap (whose columns are
-/// stored that way) never takes a `log10` per pixel.
-///
-/// The heatmap reads exactly this and nothing of its own. Giving it a private dB
-/// window and a contrast curve is tempting — a curve is read as a shape against
-/// a baseline and a picture is read as a picture, so the ranges that suit them
-/// need not coincide. What that argument misses is that one range IS what makes
-/// "loud" the same claim in both halves of one pane, and a second one is a
-/// second thing to keep in step.
+/// [`loudness`] from a bucket already in dB, so the analyzer curve's height
+/// mapping never takes a `log10` per pixel.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     loudness_raw(cfg, power_db, midi).clamp(0.0, 1.0)
 }
@@ -273,6 +265,21 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
     (db - floor) / (ceiling - floor)
 }
 
+/// A bucket's level in the volume-color ramp, before its 0..1 clamp. The
+/// analyzer's Level window still determines the curve and geometry; this
+/// separate window only decides which dB values receive the gradient's ends.
+pub(crate) fn spectrogram_level_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
+    let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    let (floor, ceiling) = spectrogram_window(cfg);
+    (db - floor) / (ceiling - floor)
+}
+
+/// A bucket's level for the audio volume colors, clamped to the gradient's
+/// domain.
+pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
+    spectrogram_level_raw(cfg, power_db, midi).clamp(0.0, 1.0)
+}
+
 /// The dB window the depth axis spans: the Level range bar's floor, and a ceiling
 /// held at least [`LEVEL_RANGE_MIN_SPAN`](crate::LEVEL_RANGE_MIN_SPAN) above
 /// it.
@@ -289,6 +296,14 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
 /// survive: it is drawn to be trusted over what it is drawn on.
 pub(crate) fn level_window(cfg: &crate::SpectrumConfig) -> (f32, f32) {
     (cfg.floor_db, cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN))
+}
+
+/// The dB window used only to map audio levels into the volume-color ramp.
+pub(crate) fn spectrogram_window(cfg: &crate::SpectrumConfig) -> (f32, f32) {
+    (
+        cfg.volume_floor_db,
+        cfg.volume_ceiling_db.max(cfg.volume_floor_db + crate::LEVEL_RANGE_MIN_SPAN),
+    )
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.

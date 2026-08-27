@@ -9,9 +9,9 @@
 //!   [`pitch_lut_color`](crate::pitch_lut_color). A note's disc, its octave
 //!   wedges, its melody and bass marks and its ribbon on the piano roll all
 //!   come off that one table, so a pitch is one colour wherever it is drawn.
-//! - **FREQUENCY** — the analyzer's own ramp
-//!   (`SpectrumConfig::spectrogram_gradient`) against its own Level window,
-//!   read through [`gradient_color`](crate::gradient_color). A bucket of the
+//! - **FREQUENCY** — the volume-color ramp
+//!   (`SpectrumConfig::spectrogram_gradient`) against its own dB window, read
+//!   through [`gradient_color`](crate::gradient_color). A bucket of the
 //!   spectrum curve, a cell of the spectrogram, a segment of the Spiral pane
 //!   and every audio-lit element of the lattice come off THAT one table, so a
 //!   loudness is one LIGHT wherever it is drawn — added over whatever ground
@@ -230,7 +230,7 @@ pub type SpectralLevels = [u8; SPECTRUM_BINS];
 ///
 /// One struct rather than a scatter of fields because the parts are only ever
 /// right TOGETHER: a ramp with no levels behind it paints silence in the
-/// analyzer's colours, and levels with no ramp paint a measurement in the
+/// volume colors, and levels with no ramp paint a measurement in the
 /// pitch ramp's, which is the exact confusion the two schemes exist to
 /// prevent. [`silent`](Self::silent) is the one state where none of it is
 /// read.
@@ -298,8 +298,8 @@ pub struct SpectralPaint {
     /// beside the gate because the two are one decision and a threshold read
     /// from a different frame than its partner is a decision nobody made.
     pub hysteresis: f32,
-    /// The reading the ring paints, bucket by bucket of the analyzer's own
-    /// pitch grid — the raw spectrum or the fold over it, whichever
+    /// The reading used for the ring's gate, bucket by bucket of the analyzer's
+    /// own pitch grid — the raw spectrum or the fold over it, whichever
     /// [`folded`](Self::folded) says, both already through the analyzer's Level
     /// window.
     ///
@@ -314,6 +314,10 @@ pub struct SpectralPaint {
     /// annulus: the ring is a MEASUREMENT of a range, and a range with nothing
     /// in it is a reading, not a gap.
     pub levels: Box<SpectralLevels>,
+    /// The same buckets mapped through the volume-color dB window. The shader
+    /// reads these levels for ring color; [`levels`](Self::levels) remains the
+    /// analyzer-normalized copy used by [`RingGate`].
+    pub color_levels: Box<SpectralLevels>,
 }
 
 impl SpectralPaint {
@@ -342,6 +346,7 @@ impl SpectralPaint {
             gate: SPECTRAL_GATE_MIN,
             hysteresis: 0.0,
             levels: Box::new([0; SPECTRUM_BINS]),
+            color_levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
 
@@ -393,6 +398,7 @@ impl SpectralPaint {
             // nobody can read falls back to the simpler rule.
             hysteresis: clamp_or(view.spectral_ring_hysteresis, 0.0, 0.0, SPECTRAL_HYSTERESIS_MAX),
             levels: Box::new([0; SPECTRUM_BINS]),
+            color_levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
 

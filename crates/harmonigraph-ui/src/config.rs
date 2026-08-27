@@ -310,10 +310,10 @@ pub struct SpectrumConfig {
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
     pub floor_db: f32,
-    /// Top of the dB height scale: what reads as full height (and as the
-    /// brightest spectrogram cell). 0 dB — a full-scale sine — is where it
-    /// starts and the loudest it goes; pulling it down lifts quiet material
-    /// into the whole picture instead of the bottom of it.
+    /// Top of the dB height scale: what reads as full height. 0 dB — a
+    /// full-scale sine — is where it starts and the loudest it goes; pulling
+    /// it down lifts quiet material into the whole picture instead of the
+    /// bottom of it.
     ///
     /// The pair is one control, like the pitch range: the window on the
     /// spectrum's dynamics, movable at either end.
@@ -574,9 +574,8 @@ pub struct SpectrumConfig {
     /// turn it off carries `false` and still round-trips.
     pub show_spectrogram: bool,
     /// The heatmap's color ramp: the same six-knob [`Gradient`] the lattice
-    /// colors pitch through, spanning the analyzer's LEVEL instead — its bottom
-    /// is what reads as silence and its top what reads as a full bucket, which
-    /// is the Spectrum's own Level window and not a second one.
+    /// colors pitch through, spanning the audio level instead — its bottom is
+    /// what reads as silence and its top what reads as a full bucket.
     ///
     /// One type for both, because a heatmap's palette and a pitch ramp are the
     /// same object asked of different axes, and the six knobs say more about a
@@ -592,23 +591,18 @@ pub struct SpectrumConfig {
     /// legal picture and an occasionally useful one, showing exactly how far
     /// back the history reaches.
     ///
-    /// Three more knobs belong here on the obvious reading and are absent on
-    /// purpose, each because its neutral position is the one worth looking at.
-    /// An overall opacity fades the heatmap out from under the notes, at the
-    /// price of the scheme it shares with the curve (see `heatmap_mesh`); a
-    /// contrast curve bends the level a gradient is already even in; and a
-    /// private dB window lets the same bucket mean two things in one pane. The
-    /// window is the Spectrum's Level, always: one range means "loud" is the
-    /// same claim in the curve and in the heatmap, which is the whole reason
-    /// they share
-    /// [`loudness_db`](crate::panes::spectral::axes::loudness_db).
-    ///
-    /// Their fields are gone from the blob too, and so is the
-    /// `spectrogram_color` this replaces. That costs nothing on load — serde
-    /// ignores keys it has no field for, which
-    /// `a_persist_blob_carrying_a_since_removed_field_still_loads` pins — so a
-    /// project saved with a palette name simply loads at the fresh gradient.
+    /// The audio colors have their own dB window. It controls where this
+    /// gradient reaches its quiet and loud ends without changing the analyzer
+    /// curve's height scale. The spectrum, spectrogram, Spiral and lattice
+    /// audio ring all use this window when they turn a level into a color.
     pub spectrogram_gradient: Gradient,
+    /// Bottom of the dB window used to map audio levels into the volume-color
+    /// gradient. The analyzer's `floor_db` controls geometry, not this color
+    /// scale.
+    pub volume_floor_db: f32,
+    /// Top of the dB window used to map audio levels into the volume-color
+    /// gradient.
+    pub volume_ceiling_db: f32,
 }
 
 impl SpectrumConfig {
@@ -716,6 +710,20 @@ impl SpectrumConfig {
         self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
         self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
         self.ceiling_db = self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
+        self.volume_floor_db = if self.volume_floor_db.is_finite() {
+            self.volume_floor_db
+        } else {
+            fresh.volume_floor_db
+        };
+        self.volume_ceiling_db = if self.volume_ceiling_db.is_finite() {
+            self.volume_ceiling_db
+        } else {
+            fresh.volume_ceiling_db
+        };
+        self.volume_floor_db =
+            self.volume_floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
+        self.volume_ceiling_db =
+            self.volume_ceiling_db.clamp(self.volume_floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
         // And the heatmap's gradient, which `ViewConfig::sanitize` does for the
         // lattice's one door over. Asked of the type rather than restated, so
         // the pane and the file agree about which gradients are legal.
@@ -939,6 +947,8 @@ impl Default for SpectrumConfig {
             // The even ramp, which is the one that reads a heatmap's quiet
             // detail honestly — and now even in `L*` rather than in bytes.
             spectrogram_gradient: SpectrogramPreset::Aurora.gradient(),
+            volume_floor_db: -60.0,
+            volume_ceiling_db: DEFAULT_CEILING_DB,
         }
     }
 }

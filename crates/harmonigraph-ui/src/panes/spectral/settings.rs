@@ -198,7 +198,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     .show(ui)
     .on_hover_text(
         "The slice of the level scale on show: the low end reads as silence, \
-         the high end as full height and the brightest heatmap cell. Pull the \
+         the high end as full height. The volume-color range controls heatmap \
+         brightness separately. Pull the \
          top down to lift quiet material into the picture. Double-click for the \
          full scale.",
     );
