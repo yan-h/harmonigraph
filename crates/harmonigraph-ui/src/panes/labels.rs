@@ -1,13 +1,19 @@
 //! The Labels section of the Display tab's Lattice page: the text on the
 //! lattice as one subject — what a node's label says (its name, its cents),
-//! how big it draws, and which nodes carry one at all.
+//! how big it draws, how bright it is while its note sounds, and which nodes
+//! carry one at all.
 //!
-//! Per-node text, but not per-note styling, which is what keeps it out of
-//! [`super::nodes`]: a label rides a hovered node, a sounding one and a
-//! remembered one alike, so it is about the text rather than about any state
-//! the note is in. The trail is that last case and belongs here for the same
-//! reason — it IS labels persisting, which is why it is one option of the
-//! Show row rather than a heading of its own.
+//! Per-node text, and what keeps it out of [`super::nodes`] is that a label
+//! rides a hovered node, a sounding one and a remembered one alike: the
+//! subject here is the text. The trail is that last case and belongs here for
+//! the same reason — it IS labels persisting, which is why it is one option of
+//! the Show row rather than a heading of its own.
+//!
+//! Sounding ink is not the exception to that it looks like. What it sets is
+//! how a NAME is drawn; the note under it only chooses which of the label's
+//! two ends is in force, and the other end is the marker field's own ink, over
+//! in [`super::plus`] — a resting name and the crosses standing around it are
+//! one grey (`label_ink` in [`super::lattice`]).
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -15,7 +21,8 @@ use crate::SharedState;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::{NoteNames, ViewConfig};
 
-/// What a label says, which nodes carry one, and how big it draws.
+/// What a label says, which nodes carry one, how big it draws and how bright
+/// it is while its note sounds.
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Labels");
     ui.checkbox(&mut state.view.show_labels, "Note names")
@@ -30,6 +37,30 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .on_hover_text(
                 "Label size on the node. Labels already zoom with the lattice; \
                  this sets how big a name is on its node.",
+            );
+        // Last of the bars, because it is the only one here whose other end is
+        // somewhere else: what it sets is one end of a pair, and the pair reads
+        // as a pair only once the size and the cents under the name are
+        // settled.
+        //
+        // No off position and none to want. Equal to the Marker ink under the
+        // At rest heading IS the off position — every label in the resting
+        // field's one grey, and the type answering to the music by nothing.
+        ValueBar::new(&mut state.view.sounding_ink, 0.0..=100.0, "Sounding ink")
+            // Whole points on the L* axis the Ground and Marker ink bars are
+            // counted in, which is the point of the units here: this number is
+            // only readable against the resting end's, and the two sit in
+            // different sections of the page.
+            .integer()
+            .show(ui)
+            .on_hover_text(
+                "How bright a name and its cents are drawn while their note is \
+                 sounding. The same L* the At rest section's Marker ink is in, \
+                 which is what that text falls back to once nothing is sounding \
+                 under it -- so equal numbers put every label in the resting \
+                 field's grey, and the gap between the two is how far a played \
+                 name is lifted out of it. The crossing runs on the note Fade, \
+                 on the way in and on the release alike.",
             );
         clear_button(ui, &state.view, &mut state.tracker);
     });

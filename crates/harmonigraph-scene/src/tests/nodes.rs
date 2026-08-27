@@ -399,6 +399,55 @@ fn a_broken_ground_reads_back_as_the_grey_it_draws() {
     }
 }
 
+/// The labels' LIT end is repaired at both of the doors the at-rest pair is,
+/// and it is the one bar on this axis with no surface in this crate: nothing a
+/// derived scene carries reads it, so a missing line in
+/// [`ViewConfig::sanitize`] or a missing accessor is invisible to every other
+/// test here.
+///
+/// What being wrong costs is not one label. The number is one END of a mix
+/// (`label_ink` in `harmonigraph-ui`), and a mix carries a NaN at every level
+/// whatever the other end holds — so it reaches the grey of every name on the
+/// pane, the ones on nodes nothing is sounding under included.
+///
+/// Both doors, for the pair above's reason: the accessor keeps the picture
+/// drawable whatever the field holds, which is exactly why it cannot also be
+/// the check on whether the blob's door repaired anything. With the repair
+/// only in the accessor a hand-edited blob draws the fresh white while the bar
+/// sits on NaN and the file keeps it.
+#[test]
+fn a_broken_sounding_ink_reads_back_as_the_l_star_it_draws() {
+    let fresh = ViewConfig::default().sounding_ink;
+    for (broken, want) in [
+        (f32::NAN, fresh),
+        (f32::INFINITY, fresh),
+        (f32::NEG_INFINITY, fresh),
+        (-50.0, 0.0),
+        (500.0, 100.0),
+    ] {
+        let mut view = ViewConfig { sounding_ink: broken, ..plain_view() };
+        assert_eq!(
+            view.sounding_ink_lightness(),
+            want,
+            "a sounding ink of {broken} resolves to an L* off the axis",
+        );
+        let lit = crate::grey_of_lightness(view.sounding_ink_lightness());
+        assert!(drawable(lit), "a sounding ink of {broken} solves to {lit:?}");
+        view.sanitize();
+        assert_eq!(
+            view.sounding_ink, want,
+            "the blob's door left a sounding ink of {broken} as it was",
+        );
+        // Nothing left for the drawing side to repair, so the bar's number and
+        // the grey a lit label draws cannot come apart later.
+        assert_eq!(
+            view.sounding_ink_lightness(),
+            view.sounding_ink,
+            "a sanitized sounding ink is still being moved on the way to the picture",
+        );
+    }
+}
+
 /// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
 /// brightness: the vivid end of it is the one its sign names, and at 0 every
 /// note asks for the same fraction as every other.
