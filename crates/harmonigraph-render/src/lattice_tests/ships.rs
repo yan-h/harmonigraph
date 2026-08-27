@@ -64,6 +64,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         for (bucket, level) in paint.levels.iter_mut().enumerate() {
             *level = if (bucket / 7) % 3 == 0 { 220 } else { 20 };
         }
+        paint.color_levels.clone_from(&paint.levels);
         // ...and a node with a ring and nothing else, which is the idle
         // branch's new case: no activation, no marks, and an annulus to draw.
         let mut silent = scene.nodes[0];
@@ -648,11 +649,12 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
         (paint.inner, paint.outer) = rings.audio;
         paint.folded = true;
-        // The whole grid at one level, so every wedge whose octave the
-        // analyzer's axis reaches reads the same entry. Off the axis
-        // `spectrum_at` answers 0 whatever the grid holds, which this wheel
-        // stays clear of.
+        // Keep the analyzer gate and volume-color ramp at one level, so every
+        // wedge whose octave the axis reaches reads the same entry. Off the
+        // axis `spectrum_at` answers 0 whatever the grid holds, which this
+        // wheel stays clear of.
         paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
+        paint.color_levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
         paint.lut = std::array::from_fn(|k| {
             let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
             if t < 0.5 {
@@ -677,7 +679,7 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
     assert!(
         blue_low > blue_high + HUE_FLIP && red_high > red_low + HUE_FLIP,
         "crossing the ramp's half did not flip the wedge's hue: the ring is not \
-         indexing the analyzer's ramp at the wedge's own level",
+         indexing the volume-color ramp at the wedge's own level",
     );
 }
 

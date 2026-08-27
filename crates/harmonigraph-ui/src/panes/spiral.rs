@@ -24,11 +24,9 @@
 //! coordinates, which is why it costs no DSP at all.
 //!
 //! It shares the Analyzer's [`SpectrumConfig`](crate::SpectrumConfig) whole
-//! rather than carrying settings of its own, so the pitch range, level window,
-//! tilt and gradient are the ones dialled in the Display tab's Analyzer
-//! section, and "loud" means the same thing here as it does there — the same
-//! property already held between that pane's curve and its heatmap. It reads
-//! through their [`loudness`] and [`cell_color`] unmodified to get it.
+//! rather than carrying settings of its own. Its geometry follows the
+//! analyzer's pitch and level windows, while color comes from the volume-color
+//! range and gradient dialled on the Colors page.
 //!
 //! One consequence of sharing worth expecting: `tilt` pivots at 1 kHz, so on a
 //! spiral it lifts by RADIUS rather than along a straight axis — a brightness
@@ -44,7 +42,7 @@
 
 use egui::Color32;
 
-use super::spectral::axes::loudness;
+use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::note_color;
 use super::spectral::spectrogram::{cell_color, power_mean};
 use crate::SharedState;
@@ -705,7 +703,10 @@ fn strip(
         // Opaque, and untinted by anything of this pane's: the gradient's dark
         // end is black, so silence recedes into the disc rather than letting
         // the pane's own `well` through in rings between the turns.
-        let color = cell_color(cfg.spectrogram_gradient, loudness(cfg, level(midi), midi));
+        let color = cell_color(
+            cfg.spectrogram_gradient,
+            spectrogram_level_db(cfg, power_db(level(midi)), midi),
+        );
         mesh.colored_vertex(spiral.at(midi, -spiral.half()), color);
         mesh.colored_vertex(spiral.at(midi, spiral.half()), color);
         if i > 0 {

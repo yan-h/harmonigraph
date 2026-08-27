@@ -23,7 +23,7 @@
 
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, GradientPreview, SpectrumBar, SpreadBar, ValueBar};
+use crate::widgets::{button_row, GradientPreview, RangeBar, SpectrumBar, SpreadBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::ViewConfig;
 
@@ -200,6 +200,20 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "How vivid each end of the level range draws — 0 is grey (Mono), 100% \
          as vivid as the screen allows. The first number is silence. \
          Double-click resets.",
+    );
+    RangeBar::new(
+        &mut cfg.volume_floor_db,
+        &mut cfg.volume_ceiling_db,
+        crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
+        "Color range",
+    )
+    .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+    .display(|db| format!("{db:.0} dB"))
+    .show(ui)
+    .on_hover_text(
+        "The dB window the volume colors span: the low end takes the quiet color, \
+         the high end the loud color. Independent of the Analyzer's Level range. \
+         Double-click for the full dB scale.",
     );
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
         "The result: the heatmap's colors, silence on the left, a full bucket \

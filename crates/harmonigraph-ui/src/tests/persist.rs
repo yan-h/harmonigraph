@@ -665,6 +665,8 @@ fn spectrum_config_round_trips_through_persist() {
     let mut state = fresh();
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.ceiling_db = -12.0;
+    state.spectrum_config.volume_floor_db = -72.0;
+    state.spectrum_config.volume_ceiling_db = -18.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
@@ -684,6 +686,8 @@ fn spectrum_config_round_trips_through_persist() {
     restored.load_persist(&saved);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
+    assert_eq!(restored.spectrum_config.volume_floor_db, -72.0);
+    assert_eq!(restored.spectrum_config.volume_ceiling_db, -18.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     // A range off the C boundaries survives, which the octave pair could not
     // have expressed at all.
@@ -845,6 +849,7 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
     for key in [
         format!("release:{:?},", defaults.release),
         format!("floor_db:{:?},", defaults.floor_db),
+        format!("volume_floor_db:{:?},", defaults.volume_floor_db),
         format!("window:{:?},", defaults.window),
     ] {
         let mut state = fresh();

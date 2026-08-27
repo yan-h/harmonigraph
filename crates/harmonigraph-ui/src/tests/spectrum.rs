@@ -522,34 +522,25 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     }
 }
 
-/// The heatmap and the curve read ONE level scale, so a bucket that draws the
-/// curve half way up paints a cell half way along the ramp, and dragging the
-/// Level window moves both together.
-///
-/// A private dB window and a contrast curve on the heatmap's side would let the
-/// same bucket mean two different things in one pane. Nothing enforces the
-/// agreement but there being one mapping, and what holds THAT is comparing the
-/// two ends: `loudness`, which the curve's height comes from, against
-/// `bin_level`, which is what the heatmap's pixels actually go through.
-///
-/// Comparing `loudness` against `loudness_db(power_db(..))` instead proves
-/// nothing whatever — that is `loudness`' own body, so both sides of the
-/// assertion are one expression and no change to the heatmap can fail it. The
-/// bridge has to be a function only the heatmap calls.
+/// The heatmap's color level is independent of the curve's height level. A
+/// bucket can therefore sit at a different fraction of the color ramp while
+/// the analyzer's geometry stays fixed, and moving the volume-color window
+/// changes only that color fraction.
 ///
 /// The tolerance is the store's, not the mapping's: `bin_level` reads a bucket
 /// quantized to a byte of dB, so the two agree to within half a step of that
 /// grid. `quantizing_a_bucket_does_not_move_its_colour` is where the step
 /// itself is held.
 #[test]
-fn the_heatmap_reads_the_curve_s_own_level_scale() {
-    use crate::panes::spectral::axes::loudness;
+fn the_heatmap_reads_its_own_color_level_scale() {
+    use crate::panes::spectral::axes::spectrogram_level_db;
     let mut cfg = SpectrumConfig::default();
     let midi = 60.0;
     let check = |cfg: &SpectrumConfig, power: f32| {
-        let tolerance =
-            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
-        let curve = loudness(cfg, power, midi);
+        let tolerance = 0.5 * harmonigraph_core::spectrogram::DB_STEP
+            / (cfg.volume_ceiling_db - cfg.volume_floor_db)
+            + 1e-6;
+        let curve = spectrogram_level_db(cfg, 10.0 * power.max(1e-12).log10(), midi);
         let heatmap = crate::spectrogram::bin_level_for_test(
             cfg,
             harmonigraph_core::spectrogram::quantize(power),
@@ -564,20 +555,21 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
     for power in [0.0, 1e-8, 1e-4, 1e-2, 1.0, 1e9] {
         check(&cfg, power);
     }
-    // And they stay together as the window is dragged, at either end.
-    cfg.floor_db = -20.0;
-    cfg.ceiling_db = 0.0;
+    // The color window moves independently of the analyzer's Level window.
+    cfg.volume_floor_db = -20.0;
+    cfg.volume_ceiling_db = 0.0;
     check(&cfg, 1e-4);
-    cfg.floor_db = -90.0;
-    cfg.ceiling_db = -30.0;
+    cfg.volume_floor_db = -90.0;
+    cfg.volume_ceiling_db = -30.0;
     check(&cfg, 1e-6);
     // The tilt is the one input that makes the mapping pitch-dependent, so the
     // two have to track each other across pitch as well as across level.
     cfg.tilt = -6.0;
     for midi in [30.0f32, 60.0, 120.0] {
-        let tolerance =
-            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
-        let curve = loudness(&cfg, 1e-5, midi);
+        let tolerance = 0.5 * harmonigraph_core::spectrogram::DB_STEP
+            / (cfg.volume_ceiling_db - cfg.volume_floor_db)
+            + 1e-6;
+        let curve = spectrogram_level_db(&cfg, 10.0 * (1e-5f32).log10(), midi);
         let heatmap = crate::spectrogram::bin_level_for_test(
             &cfg,
             harmonigraph_core::spectrogram::quantize(1e-5),
