@@ -687,7 +687,8 @@ impl TextBatch {
     pub(crate) fn lattice_labels(
         &mut self,
         painter: &egui::Painter,
-        origin: egui::Pos2,
+        rect: egui::Rect,
+        scene: &harmonigraph_scene::Scene,
         state: &crate::SharedState,
     ) -> harmonigraph_render::LatticeLabels {
         #[cfg(test)]
@@ -718,13 +719,18 @@ impl TextBatch {
         };
         let mut glyphs = std::mem::take(&mut self.glyphs);
         for glyph in &mut glyphs {
-            glyph.rect[0] -= origin.x;
-            glyph.rect[1] -= origin.y;
+            glyph.rect[0] -= rect.min.x;
+            glyph.rect[1] -= rect.min.y;
         }
         harmonigraph_render::LatticeLabels {
             glyphs,
             labels: std::mem::take(&mut self.labels),
-            rings: rings(painter.ctx()),
+            // The one thing the glyph pass cannot work out for itself: a node
+            // is world-space geometry and a name is typeset in points, so the
+            // standoff a name casts — dialled in node radii, like every other
+            // standoff in the picture — has no unit until the pane says how
+            // large a node draws on it.
+            node_points: scene.node_radius * scene.camera.points_per_world(rect.height()),
             atlas,
             marks,
             // The default, and here that is a want of an answer rather than
@@ -1597,13 +1603,28 @@ mod tests {
     fn a_lattice_that_drew_no_names_hands_over_no_atlas() {
         let ctx = egui::Context::default();
         let state = crate::tests::probe::fresh();
+        let scene = harmonigraph_scene::derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.view.reach(),
+            &state.frame_params,
+            state.camera,
+            None,
+            0.0,
+        );
         let mut published = 0usize;
         // Several frames: the first publication is the one that would seed
         // `seen` and quiet the rest, and with nothing drawn there is none.
         for _ in 0..3 {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let mut batch = TextBatch::default();
-                let labels = batch.lattice_labels(ui.painter(), egui::pos2(0.0, 0.0), &state);
+                let labels = batch.lattice_labels(
+                    ui.painter(),
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                    &scene,
+                    &state,
+                );
                 published += usize::from(labels.atlas.is_some());
             });
         }

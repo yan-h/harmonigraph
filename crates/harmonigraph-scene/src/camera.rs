@@ -143,15 +143,41 @@ impl Camera {
     /// every zoom — a name that fits its node at the default distance is a
     /// speck on it zoomed in, and swamps it zoomed out.
     ///
-    /// Both terms are read through the range they are navigable in rather
-    /// than trusted. Nothing the UI does can put either outside it; a
-    /// hand-edited persisted blob can, and this scales a FONT SIZE — where a
-    /// zero distance divides to infinity, and a field of view anywhere near
-    /// `PI` sends `tan` through it and comes back NEGATIVE. What egui does
-    /// with a size like that is quietly draw nothing: the glyph is rasterized
-    /// at a width that saturates to zero and every label vanishes, which reads
-    /// as a broken plugin rather than as a bad number.
+    /// Both terms are read through the range they are navigable in — see
+    /// `focus_half_height`, which is where that is done and why it has to be.
     pub fn screen_scale(&self) -> f32 {
+        Self::half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / self.focus_half_height()
+    }
+
+    /// How many screen POINTS a world-space length draws as, on a viewport
+    /// `height` points tall.
+    ///
+    /// The other half of [`screen_scale`](Self::screen_scale), and the same
+    /// arithmetic: that one is a ratio against the default framing, this one is
+    /// the framing itself. What it is for is a length the picture holds in
+    /// WORLD units — a node's radius — that something typeset in points has to
+    /// match, which is the standoff a lattice name casts (`glyph_standoff` in
+    /// the glyph shader, where a node's radius is the unit the Shadow bar is
+    /// dialled in).
+    ///
+    /// True at the focus plane under every projection, for the reason
+    /// [`screen_scale`](Self::screen_scale) gives: the window's half-height is
+    /// `distance * tan(fov/2)` and the viewport's height lands on it.
+    pub fn points_per_world(&self, height: f32) -> f32 {
+        height.max(0.0) / (2.0 * self.focus_half_height())
+    }
+
+    /// The world-space half-height of the window at the focus plane, out of
+    /// terms read through the range they are navigable in rather than trusted.
+    ///
+    /// Nothing the UI does can put either outside it; a hand-edited persisted
+    /// blob can, and this scales a FONT SIZE — where a zero distance divides to
+    /// infinity, and a field of view anywhere near `PI` sends `tan` through it
+    /// and comes back NEGATIVE. What egui does with a size like that is quietly
+    /// draw nothing: the glyph is rasterized at a width that saturates to zero
+    /// and every label vanishes, which reads as a broken plugin rather than as
+    /// a bad number.
+    fn focus_half_height(&self) -> f32 {
         let sane = |value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32| {
             if value.is_finite() {
                 value.clamp(*range.start(), *range.end())
@@ -164,8 +190,11 @@ impl Camera {
         // Well short of the half-turn where `tan` changes sign, and off zero,
         // which would divide by it.
         let fov_y = sane(self.fov_y, 0.2..=2.0, Self::DEFAULT_FOV_Y);
-        let half_height = |distance: f32, fov_y: f32| distance * (fov_y * 0.5).tan();
-        half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / half_height(distance, fov_y)
+        Self::half_height(distance, fov_y)
+    }
+
+    fn half_height(distance: f32, fov_y: f32) -> f32 {
+        distance * (fov_y * 0.5).tan()
     }
 
     /// Orbit around the target by a drag delta in pixels.

@@ -77,7 +77,7 @@ fn lattice_labels_in(
     let mut labels = None;
     let _ = probe::painted_full(PANE.size(), |ui| {
         panes::lattice::draw_node_labels(ui, rect, scene, &state.view, &mut batch);
-        labels = Some(batch.lattice_labels(ui.painter(), rect.min, state));
+        labels = Some(batch.lattice_labels(ui.painter(), rect, scene, state));
     });
     labels.expect("the closure runs")
 }

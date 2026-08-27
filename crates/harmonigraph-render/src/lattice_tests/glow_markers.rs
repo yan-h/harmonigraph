@@ -623,3 +623,102 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
         );
     }
 }
+
+/// A marker knocks a hole in what was drawn before it, the way a node does —
+/// so a cross standing in front of a sheet covers that sheet's rings instead of
+/// sitting on them.
+///
+/// The claim and the reading are [`a_name_covers_the_rings_it_stands_on`]'s in
+/// `super::labels`, and deliberately so: the hole is one shape across the three
+/// things the lattice draws, and it is measured the same way in each. A hole is
+/// a premultiplied over of the GROUND at its own coverage, so every pixel it
+/// touches lands BETWEEN the picture with no marker in it and that ground. The
+/// Reach is 0, so the ground is one value for the whole frame.
+///
+/// The cross is LOOSE — at a lattice position no home node holds — which is
+/// exactly the arrangement that puts it over the sheets behind home and under
+/// the home sheet (`push_loose`). One node behind it, and the ring that node
+/// draws is what the hole is read on.
+#[test]
+fn a_marker_covers_the_sheet_behind_it() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.6;
+    /// Where the sheet behind stands, in world units: far enough back to sort
+    /// before the loose markers and square behind the cross on screen.
+    const BEHIND: f32 = -1.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |shadow: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        // No light anywhere, so the ground a hole clears to is the background
+        // and nothing else in the frame moves with the bar below.
+        scene.glow_reach = 0.0;
+        scene.glow_shadow = shadow;
+        scene.glow_shadow_soft = shadow;
+        scene.glow_shadow_depth = 1.0;
+        // The one node, pushed back a sheet so the loose cross is drawn after
+        // it. `on_home` is what `from_scene` sorts the markers against.
+        scene.nodes[0].world_pos = glam::Vec3::new(0.0, 0.0, BEHIND);
+        scene.nodes[0].on_home = false;
+        scene
+    };
+    let cross = |scene: &Scene| -> Vec<harmonigraph_scene::PlusInstance> {
+        vec![one_marker(glam::Vec3::ZERO, scene.node_radius * 0.9, scene.lattice_ground, 1.0)]
+    };
+    let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
+        let bare = shooter.shot(&at(shadow));
+        let mut with = at(shadow);
+        with.pluses = cross(&with);
+        let marked = shooter.shot(&with);
+        (at(shadow), bare, marked)
+    };
+
+    // The cross's own INK, taken at a Shadow of 0 where a marker paints that
+    // and nothing else. It does not move with the bar.
+    let (_, flat_bare, flat) = shots(0.0);
+    let ink: std::collections::BTreeSet<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] != flat_bare[i..i + 4]).collect();
+    assert!(ink.len() > 200, "the fixture's cross must land on the pane, not {} px", ink.len());
+
+    let (scene, bare, marked) = shots(SHADOW);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+    let ground = [byte(scene.background.x), byte(scene.background.y), byte(scene.background.z)];
+    let mut touched = 0usize;
+    for i in (0..marked.len()).step_by(4) {
+        if ink.contains(&i) || marked[i..i + 4] == bare[i..i + 4] {
+            continue;
+        }
+        touched += 1;
+        for c in 0..3 {
+            let (was, now, to) = (bare[i + c] as i32, marked[i + c] as i32, ground[c]);
+            assert!(
+                now >= was.min(to) - 2 && now <= was.max(to) + 2,
+                "a marker moved a pixel outside its own ink to {now}, which is not between \
+                 the {was} it stood on and the {to} a hole clears to",
+            );
+        }
+    }
+    assert!(touched > 250, "a cross at Shadow {SHADOW} cleared only {touched} pixels");
+
+    // And the pixels it cleared were RING: with the sheet behind taken out of
+    // the scene, the same frame is bare ground there and there is nothing for a
+    // hole to take away.
+    let empty = shooter.shot(&Scene { nodes: Vec::new(), ..at(SHADOW) });
+    let marked_empty =
+        shooter.shot(&Scene { nodes: Vec::new(), pluses: cross(&scene), ..at(SHADOW) });
+    let on_nothing = (0..marked_empty.len())
+        .step_by(4)
+        .filter(|&i| !ink.contains(&i) && marked_empty[i..i + 4] != empty[i..i + 4])
+        .count();
+    assert_eq!(
+        on_nothing, 0,
+        "with nothing behind it a cross must clear nothing, and it changed {on_nothing} pixels",
+    );
+}

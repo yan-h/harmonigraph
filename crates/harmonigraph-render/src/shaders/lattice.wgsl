@@ -3147,6 +3147,10 @@ struct PlusVsOut {
     // is drawn at.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // This marker's arm in the NODE's uv, which is the unit the Shadow is
+    // dialled in: what [`plus_clearing`] scales the arm-unit field above into,
+    // and 0 where the markers have no length to be measured in at all.
+    @location(2) @interpolate(flat) arm: f32,
 };
 
 // How far a marker's billboard reaches past the tips of its arms, in arms.
@@ -3223,17 +3227,33 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
         vec2<f32>(1.0, 1.0),
     );
     let corner = corners[vertex_index];
+    // The arm in the node's uv, as `vs_plus_glow` takes it and collapsing the
+    // same way: `misc13` is zeroed whole where the glow is off, and a marker
+    // with no unit to be measured in casts no hole.
+    let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.misc13.y > 0.0);
+    // Grown to hold the CLEARING as well as the ink, in arms: the hole reaches
+    // one `gap_reach` out from the cross, and that is a node's length where
+    // this quad's is an arm, so the ratio is the conversion between them. The
+    // ink's own margin is the floor rather than a term — a marker at no Shadow
+    // draws the quad it always did, and the band it caps is the same width in
+    // pixels at either size (`plus_paint`).
+    //
+    // Free of the Shadow DEPTH, which is the LIGHT's factor: the hole is cut at
+    // every depth, so the quad has to hold it at every depth (`gap_reach`).
+    let stand = select(0.0, gap_reach() / arm, arm > 0.0);
+    let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON
     // the lattice rather than an object standing in it, so it keeps its shape
     // under an orbit instead of foreshortening into an ellipse.
-    let reach = inst.pos_radius.w * PLUS_QUAD_MARGIN;
+    let reach = inst.pos_radius.w * margin;
     let world = inst.pos_radius.xyz
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
 
     var out: PlusVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner * PLUS_QUAD_MARGIN;
+    out.uv = corner * margin;
     out.color = inst.color;
+    out.arm = arm;
     return out;
 }
 
@@ -3916,7 +3936,18 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // the quad at the bottom of the bar.
     let aa = min(aa_width(fwidth(in.uv.x)), PLUS_QUAD_MARGIN - 1.0);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
-    if alpha < 0.01 {
+    // The KNOCKOUT, on the same Shadow a node's rings clear their own footprint
+    // with: a cross in front of a node is one of the things the lattice puts in
+    // front of another, so it hides what it stands over exactly as the node
+    // does (`node_paint`, which sets out the three things that make a hole read
+    // as a hole). Where it falls in the picture is the order the draws were
+    // emitted in — a cross covers the nodes behind it and no others.
+    var gutter_cov = 0.0;
+    if glow_shadow() > 0.0 {
+        gutter_cov = plus_clearing(in);
+    }
+    let final_alpha = alpha + gutter_cov * (1.0 - alpha);
+    if final_alpha < 0.01 {
         discard;
     }
     // Premultiplied, as every draw in this pass is: the marker IS its own ink
@@ -3937,8 +3968,21 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // The RAW light, as a node's ink takes it: the shade layer beside it is the
     // GROUND's share of the field and the Shadow bars' answer, and ink carrying
     // the remainder could not stand lit in a dark pool at all.
-    let light = glow_light(light_coord(in.clip_pos.xy), glow_meld());
-    return vec4<f32>(wash_over(ink, alpha, light.rgb, 1.0), alpha);
+    let coord = light_coord(in.clip_pos.xy);
+    let light = glow_light(coord, glow_meld());
+    // What the hole is cleared TO, and it is `node_paint`'s ground down to the
+    // multiply: the finished light standing at this pixel over the bare ground,
+    // taken off the same two targets under the same Meld and cut by the same
+    // shade. Painting the ground alone would stamp the light out exactly where
+    // the picture wants it, the glow being composited under this whole pass.
+    let shade = clamp(textureLoad(glow_shade_tex, coord, 0).x, 0.0, 1.0);
+    let lit = light * (1.0 - shade);
+    let ground = lit.rgb + u.background.rgb * (1.0 - lit.a);
+    // Under the cross's own ink, which is what the `(1 - alpha)` says: the
+    // ground fills the part of the quad the marker itself leaves empty and no
+    // more of it, so a marker never clears itself.
+    let washed = wash_over(ink, alpha, light.rgb, 1.0);
+    return vec4<f32>(washed + ground * gutter_cov * (1.0 - alpha), final_alpha);
 }
 
 @fragment
@@ -4026,100 +4070,139 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     return out;
 }
 
-/// How much of the light standing here this marker's cross holds off: its own
-/// distance field under [`ring_shade`], which is the same Shadow bars a node's
-/// rings are stood off on and the same place the depth is spent.
+/// The cross's own standoff at a fragment, as the two factors its readers spend
+/// differently: how much of the Shadow's coverage stands here, and the level of
+/// the ink casting it.
+///
+/// TWO factors and not one answer, because the level lands in a different place
+/// in each. [`plus_shade`] spends the depth over the coverage and closes the
+/// result with the level, which is [`ring_shade`]'s domain and the difference
+/// between a release and a black silhouette; [`plus_clearing`] has no depth to
+/// spend at all and the level is a share of the hole outright, which is what
+/// [`node_clearing`]'s own terms are. One field, read twice.
+///
+/// `uv` arrives in the ARM's own units — [`plus_coverage`]'s, so the shape
+/// measured is the shape drawn — and `arm` is that arm in the node uv the
+/// Shadow is dialled in. A box's signed distance scales with the coordinate it
+/// is taken in, so that one multiply is the whole of the conversion, and it is
+/// the only thing the two readers differ by: the ink's quad is built in arms
+/// (`vs_plus`) and the light's in the node's uv (`vs_plus_glow`).
 ///
 /// The CROSS's own distance field, which is [`plus_coverage`]'s — the same fold
-/// onto one box, so the shadow is the shape the marker draws rather than a disc
-/// around it, and the four inner corners are as clean in the shadow as they are
-/// in the ink. The SAME box, down to its half-extents: `1` and `misc5.x` of an
-/// arm there, one arm and `misc5.x` of an arm here, which is the one conversion
-/// the two fields differ by — a signed distance scales with the coordinate it
-/// is taken in, and this one is the LIGHT's uv where that one is the arm's.
+/// onto one box, so the standoff is the shape the marker draws rather than a
+/// disc around it, and the four inner corners are as clean in it as they are in
+/// the ink. The SAME box, down to its half-extents: `1` and `misc5.x` of an arm
+/// in both.
 ///
 /// The arm is taken out to its TIP, taper and all. The taper says how an arm's
 /// ink ENDS, not how much arm there is: it is a length beside the reach
 /// (`ViewConfig::plus_taper`) and the fresh one is nearly half of it, so a
-/// shadow cast from where the taper STARTS is cast from a cross barely longer
+/// field cast from where the taper STARTS is cast from a cross barely longer
 /// than the square its two arms cross in — and one Shadow of isotropic dilation
 /// then rounds that off into a dark SQUARE sitting under a plus. The arms are
-/// what the eye reads a marker by, and they have to be in the shadow for the
-/// shadow to be the cross's.
+/// what the eye reads a marker by, and they have to be in it for it to be the
+/// cross's.
 ///
-/// [`vs_plus_glow`] already sizes its quad this way, to `arm + glow_shadow_stop`
-/// and calling it exact; a field cast from a shorter cross left that margin
-/// generous by the whole taper.
+/// Both quads are already sized this way, to one arm plus the Shadow's own
+/// reach and calling it exact; a field cast from a shorter cross left that
+/// margin generous by the whole taper.
 ///
-/// Its DEPTH follows the taper: an arm's ink fades to nothing over its last
-/// stretch, and a shadow held at full depth under it caps each arm in dark
-/// exactly where the ink has gone — so the arm arrives at SOMETHING after all,
-/// which is the one thing the taper exists to prevent (`plus_coverage`).
+/// The LEVEL follows the taper: an arm's ink fades to nothing over its last
+/// stretch, and a field held at full strength under it caps each arm exactly
+/// where the ink has gone — so the arm arrives at SOMETHING after all, which is
+/// the one thing the taper exists to prevent (`plus_coverage`).
 ///
-/// A tapered end gives up the share of its shadow that it gives up of its own
+/// A tapered end gives up the share of its standoff that it gives up of its own
 /// length, so the taper bar is the whole of the coupling and there is no
 /// constant here to tune. What that buys is both ends of that bar: a square end
-/// fades over none of its arm and keeps its shadow whole, an arm that fades the
-/// whole way from the crossing has no shadow left at its tips.
+/// fades over none of its arm and keeps its field whole, an arm that fades the
+/// whole way from the crossing has none left at its tips.
 ///
 /// Not the fade WHOLE, at any setting between them, and this is the shape
 /// constraint rather than a taste: the Shadow is one length across a node's
 /// rings and a marker's arms alike, and at the bars a marker is drawn at it is
-/// most of an ARM — fresh, 0.16 against an arm of 0.2 in the same uv. A shadow
+/// most of an ARM — fresh, 0.16 against an arm of 0.2 in the same uv. A field
 /// that gave the taper up whole would reach `half + Shadow` across an arm and
 /// `taper_start * arm` along it, 0.215 against 0.11, and draw a disc with a plus
 /// sitting in it.
 ///
 /// Closed by the marker's own OPACITY, the one number a marker hands over: ink
-/// that is not there holds nothing off, and ink half way in holds half. So a
-/// position handing itself back as a name fades off it grows its cross and the
-/// shadow under that cross on one clock, where a shadow closed against the
-/// LIGHT instead arrives on the Glow release — seconds behind a cross that is
-/// already whole, and for no reason the picture shows.
-fn plus_standoff(in: PlusGlowVsOut) -> f32 {
-    // An arm of 0 draws no markers (`derive_pluses`). The marker draw is left
-    // to say so by its own quad collapsing; this one's does not, the Shadow
-    // holding it open, so the emptiness is stated here instead.
-    if in.arm <= 0.0 {
-        return 0.0;
+/// that is not there stands nothing off and hides nothing, and ink half way in
+/// does half of each. So a position handing itself back as a name fades off it
+/// grows its cross, the shadow under that cross and the hole it cuts on one
+/// clock, where a field closed against the LIGHT instead arrives on the Glow
+/// release — seconds behind a cross that is already whole, and for no reason
+/// the picture shows.
+struct PlusStandoff {
+    cov: f32,
+    level: f32,
+};
+
+fn plus_standoff(uv: vec2<f32>, arm: f32, strength: f32) -> PlusStandoff {
+    // An arm of 0 draws no markers (`derive_pluses`), and neither reader's quad
+    // collapses to say so — the ink's holds the marker it is still drawing and
+    // the light's is held open by the Shadow. The emptiness is stated here for
+    // both instead.
+    if arm <= 0.0 {
+        return PlusStandoff(0.0, 0.0);
     }
-    let p = abs(in.uv);
+    let p = abs(uv);
     let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
     // Never wider than it is long, which is what the fold above needs: it maps
     // the upright arm onto the flat one, and a box taller than wide in that
     // octant is the other arm's, nearer than the one being measured. At the top
     // of the width bar the two are equal and the cross is a filled square,
     // which is what that end of the bar draws (`plus_coverage`).
-    let half = min(u.misc5.x, 1.0) * in.arm;
-    let corner = vec2<f32>(q.x - in.arm, q.y - half);
+    let half = min(u.misc5.x, 1.0);
+    let corner = vec2<f32>(q.x - 1.0, q.y - half);
     let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
-    let soft = standoff_soft();
     // The ink's own ramp, on the axis and out of the fold `plus_coverage` reads
     // it in, and clamped into the cross so that past a tip an arm keeps its
     // end's answer instead of running off the bottom of the ramp.
     let start = min(u.misc5.y, 1.0 - 1e-3);
-    let fade = smoothstep(start, 1.0, clamp(q.x / in.arm, 0.0, 1.0));
+    let fade = smoothstep(start, 1.0, clamp(q.x, 0.0, 1.0));
     // Spent at the WIDTH of the taper that asked for it, `1 - start` being the
     // share of an arm that fades. A flat share instead would be read off the
     // ramp's own endpoint, and that endpoint is 0 at every setting of the bar:
     // `derive_plus_taper_start` holds a SQUARE end a thousandth short of the tip
-    // rather than at it, so a sliver of arm no ink can show would set the shadow
+    // rather than at it, so a sliver of arm no ink can show would set the field
     // over the whole region outside a cross.
-    let level = in.strength * (1.0 - fade * (1.0 - start));
-    return ring_shade(sd, soft, level);
+    let level = strength * (1.0 - fade * (1.0 - start));
+    return PlusStandoff(standoff_coverage(sd * arm, standoff_soft()), level);
+}
+
+/// How much of what stands BEHIND this marker its cross hides: [`plus_standoff`]
+/// at the level of the ink casting it, with no depth spent over it.
+///
+/// [`node_clearing`]'s twin, and one of the same family: what a marker holds the
+/// light off is what it hides, on one Shadow width and one fade. The depth is
+/// the LIGHT's factor alone and never reaches here — a cross at a depth of 0
+/// still covers what it stands over (`glow_shadow_depth`).
+fn plus_clearing(in: PlusVsOut) -> f32 {
+    let s = plus_standoff(in.uv, in.arm, in.color.a);
+    return s.cov * clamp(s.level, 0.0, 1.0);
 }
 
 /// How much of the light standing here this marker holds off, as
-/// [`glow_shade_tex`] carries it: [`plus_standoff`], which is already the depth
-/// spent over the cross.
+/// [`glow_shade_tex`] carries it: [`plus_standoff`] with the depth spent over
+/// its coverage and the level closed on the result, which is [`ring_shade`]'s
+/// own arrangement and the difference between a release and a black silhouette.
 ///
 /// [`glow_shade`]'s twin, down to the exit a depth of 0 buys, which here skips
 /// a distance field rather than a walk over every mark.
+///
+/// Its uv arrives in the node's own, so the arm it is scaled against is 1: the
+/// conversion [`plus_standoff`] takes is already in this quad
+/// ([`vs_plus_glow`]), and doing it twice would square it.
 fn plus_shade(in: PlusGlowVsOut) -> f32 {
     if glow_shadow_depth() <= 0.0 {
         return 0.0;
     }
-    return plus_standoff(in);
+    if in.arm <= 0.0 {
+        return 0.0;
+    }
+    let s = plus_standoff(in.uv / in.arm, in.arm, in.strength);
+    return gap_shade(s.cov) * clamp(s.level, 0.0, 1.0);
 }
 
 @fragment

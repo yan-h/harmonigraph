@@ -603,6 +603,93 @@ mod tests {
         }
     }
 
+    /// The three standoffs in one picture, written to `target/scratch/`: a
+    /// node's rings, a marker's cross and a name's type, all standing in the
+    /// same light and all held off it by the same Shadow bars.
+    ///
+    /// A probe: it asserts nothing, the verdict being whether the three read as
+    /// one shadow, and it is kept and `#[ignore]`d for the reason the field's
+    /// own probe above is — the reading conditions are the expensive part.
+    ///
+    /// Those conditions: a chord HELD, because a standoff is a hole in light
+    /// and an unlit lattice has none to hold off; `NoteNames::Played`, which is
+    /// the one setting that puts names and crosses in the same frame, the
+    /// played positions taking type and the rest keeping their marks; and the
+    /// camera pulled back far enough that a node's shadow reaches its
+    /// neighbours, which is where two shadows can be compared at all.
+    ///
+    /// The sweep is the Shadow WIDTH, since that is the bar the three are meant
+    /// to share: off, fresh, and wide enough that the pools meet.
+    ///
+    /// `PROBE_TAG` names the shots, so a before and an after can be shot from
+    /// two builds and laid side by side.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture lattice_shadows
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_lattice_shadows_draw_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
+
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        for shadow in [0.0f32, fresh.glow_shadow, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
+            let mut state = SharedState::new(FORMAT);
+            state.view.show_labels = true;
+            state.view.note_names = harmonigraph_scene::NoteNames::Played;
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            for note in [55u8, 60, 64, 67, 71] {
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            state.camera.zoom_by(2.0);
+            state.view.glow_shadow = shadow;
+            state.view.glow_shadow_soft = shadow.min(fresh.glow_shadow_soft);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("shadows-{:.0}-{tag}.png", shadow * 100.0));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
+
     /// A node is a LAMP with a sheet behind it, not a hole: its own middle is
     /// at least as bright as the ground a few pixels away, at one sheet and at
     /// two alike.

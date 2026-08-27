@@ -94,9 +94,8 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     );
 
     // One glyph, `off` points to the right of that pixel, named by `node`. No
-    // rim: the fill alone answers the question, and a rim would spread the
-    // reading over pixels nothing is being asked about.
-    let bare = [TextRing::default(); 2];
+    // standoff: the fill alone answers the question, and a shadow would spread
+    // the reading over pixels nothing is being asked about.
     let picture = |instance: GlyphInstance, off: f32, label: Option<u32>| -> Vec<u8> {
         let (glyphs, labels) = match label {
             Some(node) => (
@@ -110,7 +109,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
             LatticeLabels {
                 glyphs,
                 labels,
-                rings: bare,
+                node_points: 0.0,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: Some(crate::text::tests::mark_sheet()),
                 slide: SlideAxis::default(),
@@ -257,7 +256,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0), glyph(2.0), glyph(3.0)],
             labels: [near, hush_a, hush_b, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            rings: [TextRing::default(); 2],
+            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -341,7 +340,7 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last_and_apart() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0)],
             labels: [near, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            rings: [TextRing::default(); 2],
+            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -411,7 +410,7 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
         LatticeLabels {
             glyphs: vec![glyph],
             labels: vec![Label { node: 0, glyphs: 1 }],
-            rings: [TextRing::default(); 2],
+            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -488,7 +487,7 @@ fn a_label_adds_no_light_through_the_bloom() {
             LatticeLabels {
                 glyphs,
                 labels,
-                rings: [TextRing::default(); 2],
+                node_points: 0.0,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: None,
                 slide: SlideAxis::default(),
@@ -558,5 +557,408 @@ fn a_label_adds_no_light_through_the_bloom() {
          pass's input, so it glows and eats the halo of the node it covers",
         (at / 4) % SCENE_SIZE[0] as usize,
         (at / 4) / SCENE_SIZE[0] as usize,
+    );
+}
+
+/// The name's own fixture: a lit node at the origin and a light wide enough to
+/// reach past every ring it paints.
+///
+/// The arrangement is `a_resting_marker_wears_the_wash_it_stands_in`'s, and
+/// deliberately: the tests below are that cross's claims asked of a name, so
+/// what they are read against has to be the same picture with the cross swapped
+/// for a glyph.
+fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.glow_reach = reach;
+    scene.glow_strength = 1.5;
+    scene.glow_feather = 1.0;
+    scene.glow_shadow = shadow;
+    // The fade the whole width of the shadow, which is the pairing the bar
+    // ships in and the one the width means anything simple at: `glow_shadow_soft`
+    // is clamped to the width by `ViewConfig::sanitize`, so a fixture that left
+    // it alone would narrow its own fade as it widened its shadow.
+    scene.glow_shadow_soft = shadow;
+    scene.glow_shadow_depth = depth;
+    // The markers away: a cross would write a standoff of its own into the
+    // layer both tests below read.
+    scene.pluses.clear();
+    scene
+}
+
+/// Where the name stands in that fixture: uv 1 is 1.8 node radii, so the
+/// outermost ring reaches 1.57 world units and this is well clear of it, inside
+/// a reach that carries light past both.
+const NAME_AT: glam::Vec3 = glam::Vec3::new(3.0, 0.0, 0.0);
+
+/// How wide that name's one glyph is drawn, in points. Its atlas patch is 8
+/// texels square and opaque (`text::tests::atlas`), so at this size it is a
+/// solid block of ink several pixels across — and a pixel inside it carries the
+/// label's colour exactly, which is what the wash is read on.
+const NAME_SIZE: f32 = 12.0;
+
+/// The Shadow width the fresh view opens at, for the shots that are about
+/// something else and want the bar left where the picture has it.
+const FRESH_SHADOW: f32 = 0.16;
+
+/// That name, in the resting field's own grey and at full strength.
+fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
+    name_at(scene, size, NAME_AT)
+}
+
+/// [`one_name`]'s glyph, standing wherever the caller puts it.
+fn name_at(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> LatticeLabels {
+    let at = scene
+        .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
+        .project(world)
+        .expect("the name stands in front of the camera");
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let ink = scene.lattice_ground;
+    LatticeLabels {
+        glyphs: vec![GlyphInstance {
+            rect: [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE],
+            fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
+            // The shadow's strength, which is the whole of what the glow pass
+            // reads off this colour (`fs_glyph_glow`).
+            rim: [0, 0, 0, 255],
+            ..crate::text::tests::glyph()
+        }],
+        labels: vec![Label { node: 0, glyphs: 1 }],
+        // How large a node draws here, which is the unit the Shadow bars are
+        // dialled in and so the whole of what gives the name's standoff a size.
+        // Taken off the camera exactly as the pane takes it
+        // (`TextBatch::lattice_labels`), a fixture that made its own answer up
+        // being one that could agree with the shader while disagreeing with the
+        // picture.
+        node_points: scene.node_radius * scene.camera.points_per_world(size[1] as f32),
+        atlas: Some(crate::text::tests::atlas()),
+        marks: Some(crate::text::tests::mark_sheet()),
+        slide: SlideAxis::default(),
+    }
+}
+
+/// A name wears the light it stands in, exactly as a resting cross does.
+///
+/// The pair is one field: a position shows a name or a marker and never both
+/// (`derive_pluses`), so a name that did not take the wash would read as a hole
+/// punched in the halo at precisely the positions a cross reads as standing in
+/// it — the handover between the two visible as the light flinching rather than
+/// as one shape replacing another.
+///
+/// Read against the glow OFF, which is the one setting that takes the wash out
+/// of the picture and leaves everything else where it was.
+#[test]
+fn a_name_wears_the_wash_it_stands_in() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let bare = shooter.shot(&lit_node_and_a_name(0.0, FRESH_SHADOW, 0.0));
+    let unlit = lit_node_and_a_name(0.0, FRESH_SHADOW, 0.0);
+    let off = shooter.shot_with(&unlit, one_name(&unlit, SIZE));
+    // The name's own pixels: what it drew where the node had left the frame
+    // black. Its ink is laid down flat and premultiplied, so a pixel it covers
+    // completely carries that colour exactly and the brightest value in the set
+    // IS the colour — every other one is a fraction of it across the edge.
+    let drawn: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && off[i..i + 4] != bare[i..i + 4])
+        .collect();
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| off[i + c]).max().unwrap_or(0));
+    let name: Vec<usize> = drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
+    assert!(name.len() > 30, "the name covers {} whole pixels of its own", name.len());
+
+    let lit = lit_node_and_a_name(1.6, FRESH_SHADOW, 0.0);
+    let worn = shooter.shot_with(&lit, one_name(&lit, SIZE));
+    let lifted =
+        name.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
+    assert_eq!(
+        lifted,
+        name.len(),
+        "the light lifted {lifted} of the name's {} pixels: the name is not wearing the light \
+         it stands in",
+        name.len(),
+    );
+    let dimmed = name.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    assert_eq!(dimmed, 0, "the wash took light off {dimmed} of the name's {} pixels", name.len());
+    let by_wash = name
+        .iter()
+        .map(|&i| (0..3).map(|c| worn[i + c].abs_diff(off[i + c])).max().unwrap())
+        .max()
+        .unwrap();
+    assert!(
+        by_wash > 20,
+        "the fixture's wash moves the name by {by_wash}; there is nothing here to measure",
+    );
+}
+
+/// A name holds the light off itself, on the Shadow bars a node's rings and a
+/// marker's cross are held off by.
+///
+/// The other half of the pair above, and the whole of why a name needs no
+/// painted rim: what keeps a halo from swallowing the type is a shape in the
+/// LIGHT, written in the light's own pass, so it stands off whatever reaches
+/// there — a neighbour's halo as readily as the named node's.
+///
+/// Measured on the GROUND around the name rather than on the name itself, the
+/// ink being washed by the raw light and so unmoved by its own shadow, exactly
+/// as a cross's is. The light it stands off out there is the NODE's, the name
+/// standing well clear of every ring that node paints, so what is read is a
+/// shadow cast on somebody else's light and not a name dimming its own.
+#[test]
+fn a_name_holds_the_light_off_the_ground_it_stands_on() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let (ground, dimmed) = shadowed_ground(&mut shooter, FRESH_SHADOW, 1.0);
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave ground for the shadow to land on, not {}",
+        ground.len(),
+    );
+    assert!(
+        dimmed.len() > 40,
+        "a name at a full Shadow depth dimmed only {} of the {} pixels its ink never reaches",
+        dimmed.len(),
+        ground.len(),
+    );
+}
+
+/// What a name takes off the light around it at one setting of the Shadow: the
+/// ground its ink never covers, and which of those pixels it darkened.
+///
+/// The pair at a depth of 0 is asserted here rather than left to a caller, and
+/// it is what says the darkening measured is the STANDOFF: with the Shadow shut
+/// nothing a name draws may take light off anything, so a reading that survives
+/// this is not the glyph pass finding some other way to darken the picture.
+///
+/// The footprint is read at depth 0, where a name writes ink and nothing else.
+/// It does not move with the depth, so one reading answers for every shot at
+/// that width.
+fn shadowed_ground(
+    shooter: &mut Shooter,
+    shadow: f32,
+    depth: f32,
+) -> (Vec<usize>, std::collections::BTreeSet<usize>) {
+    const SIZE: [u32; 2] = [256, 256];
+    let mut shot = |depth: f32, named: bool| -> Vec<u8> {
+        let scene = lit_node_and_a_name(1.6, shadow, depth);
+        let labels = if named { one_name(&scene, SIZE) } else { LatticeLabels::default() };
+        shooter.shot_with(&scene, labels)
+    };
+    let flat_bare = shot(0.0, false);
+    let flat = shot(0.0, true);
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
+    let flat_dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&flat[i..i + 3]) < brightness(&flat_bare[i..i + 3]))
+        .count();
+    assert_eq!(flat_dimmed, 0, "a name took light off the ground at a Shadow depth of 0");
+
+    let deep_bare = shot(depth, false);
+    let deep = shot(depth, true);
+    let dimmed = ground
+        .iter()
+        .copied()
+        .filter(|&i| brightness(&deep[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
+        .collect();
+    (ground, dimmed)
+}
+
+/// The Shadow's WIDTH says how far a name's shadow reaches, on the same bar it
+/// says it to a node's rings and a marker's cross.
+///
+/// This is what parts the standoff a name casts from the painted rim it
+/// replaces. A rim is a radius of its own: it answers to no bar, so a lattice
+/// dialled to a wide soft shadow drew one everywhere except around the type,
+/// where a hard keyline of a fixed couple of points stayed exactly as it was.
+/// Two shadows in one picture, and the seam between them at every name.
+///
+/// A superset is what says the width STRETCHES one shape rather than deepening
+/// it: every pixel a narrow Shadow darkens, a wide one darkens too.
+///
+/// Read as the difference the NAME makes at each width, which is what keeps the
+/// claim about the name: the node's own standoff widens on the same bar and the
+/// shade layer is a `max`, so a frame read on its own says which of two shadows
+/// won rather than how far this one reaches. Both widths are chosen to leave the
+/// node's standoff short of the name — at the wide end it stops half a world unit
+/// clear of the ink — so nothing in the narrow set is a pixel the node has
+/// already claimed.
+#[test]
+fn a_names_shadow_reaches_as_far_as_its_width_says() {
+    const SIZE: [u32; 2] = [256, 256];
+    const NARROW: f32 = 0.1;
+    const WIDE: f32 = 0.3;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let narrow = shadowed_ground(&mut shooter, NARROW, 1.0).1;
+    let wide = shadowed_ground(&mut shooter, WIDE, 1.0).1;
+    assert!(!narrow.is_empty(), "the narrow Shadow must cast a shadow at all");
+    assert!(
+        wide.len() > narrow.len() * 2,
+        "widening the Shadow from {NARROW} to {WIDE} shadowed {} against {}",
+        wide.len(),
+        narrow.len(),
+    );
+    let missed = narrow.difference(&wide).count();
+    assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
+}
+
+/// One Shadow, two shaders: the curve a name's standoff is cast on is the curve
+/// a ring's and a cross's are cast on, constant for constant.
+///
+/// It is written twice — `standoff_coverage` and `gap_shade` in lattice.wgsl,
+/// their copies in text.wgsl — because the two draws are two shader modules and
+/// neither can call into the other. This is what that costs. Every number under
+/// the curve is tuned, and a copy of one drifting is a name whose shadow is a
+/// different shape from the shadow beside it at some setting of a bar that
+/// carries both, which no single picture makes obvious.
+///
+/// The BODIES cannot be compared this way — the lattice reads its terms off a
+/// node's uv and the glyph pass off `Locals` — so what is pinned is the
+/// arithmetic's constants, which is where drift would actually land.
+#[test]
+fn the_names_shadow_is_the_rings_own_curve() {
+    let value = |src: &str, name: &str, what: &str| -> String {
+        let prefix = format!("const {name}: f32 = ");
+        src.lines()
+            .find_map(|line| line.trim().strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{what} no longer defines {name}"))
+            .trim_end_matches(';')
+            .to_owned()
+    };
+    for name in [
+        "SHADOW_TAIL",
+        "SHADOW_STOP",
+        "SHADOW_SHAPE_RIND",
+        "SHADOW_SHAPE_PLAIN",
+        "SHADOW_SOFT_FLOOR",
+        "SHADOW_KEEP_FLOOR",
+    ] {
+        assert_eq!(
+            value(SHADER_SRC, name, "the lattice"),
+            value(crate::text::TEXT_SRC, name, "the names"),
+            "the lattice's {name} and the names' have drifted apart",
+        );
+    }
+}
+
+/// A name knocks a hole in what was drawn before it, the way its node does —
+/// its own node's RINGS included, those being drawn immediately under it.
+///
+/// The reading is what makes this a covering claim and not a dimming one. A
+/// hole is a premultiplied over of the GROUND at its own coverage, so every
+/// pixel it touches lands BETWEEN the picture with no name in it and that
+/// ground. Ink that merely darkened what it stood on would fail that on the
+/// first pixel where the ring is darker than the ground it stands over, and a
+/// name that painted a halo of its own would fail it everywhere.
+///
+/// The Reach is 0, so no light stands anywhere and the ground is one value for
+/// the whole frame — `Scene::background`, which is what `node_paint` and
+/// `fs_fill_lit` both clear to. With light in the picture the same claim needs
+/// the field read back per pixel, which is the shader's own arithmetic restated
+/// as a test.
+///
+/// The control is the same frame with no name in it, at the SAME Shadow.
+/// Everything else in the picture moves with that bar — the node's own hole,
+/// the standoff over it — so two shots at two Shadows say nothing about the
+/// name; two shots at one, differing only in whether the glyph ships, say all
+/// of it.
+#[test]
+fn a_name_covers_the_rings_it_stands_on() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.6;
+    /// How far a node's own billboard reaches, in node radii —
+    /// in lattice.wgsl. The outer bound on anything a node paints, and so on
+    /// anything a hole cut in that node can be read against.
+    const NODE_QUAD: f32 = 1.6;
+    /// Where the name stands: on the node's own octave band rather than in the
+    /// empty middle, which is the one place a hole can be READ. A node's own
+    /// clearing has already cleared its middle to the ground, so a name there
+    /// paints the ground over the ground and the picture cannot tell.
+    const ON_THE_BAND: glam::Vec3 = glam::Vec3::new(1.0, 0.0, 0.0);
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The name in the node's own middle, which is where the lattice puts one.
+    let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
+        let scene = lit_node_and_a_name(0.0, shadow, 1.0);
+        let bare = shooter.shot(&scene);
+        let named = shooter.shot_with(&scene, name_at(&scene, SIZE, ON_THE_BAND));
+        (scene, bare, named)
+    };
+
+    // The name's own INK, taken at a Shadow of 0 where a name paints that and
+    // nothing else. It does not move with the bar, so one reading answers for
+    // both shots.
+    let (_, flat_bare, flat) = shots(0.0);
+    let ink: std::collections::BTreeSet<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] != flat_bare[i..i + 4]).collect();
+    assert!(ink.len() > 40, "the fixture's name must land on the pane, not {} pixels", ink.len());
+
+    let (scene, bare, named) = shots(SHADOW);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+    let ground = [byte(scene.background.x), byte(scene.background.y), byte(scene.background.z)];
+    // Where the node's own billboard reaches, in pixels: uv 1 is 1.8 node
+    // radii, so nothing the node paints stands outside this and a hole inside
+    // it is a hole in the node.
+    let radius = scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32) * NODE_QUAD;
+    let centre = scene
+        .projector(glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32))
+        .project(glam::Vec3::ZERO)
+        .expect("the node stands in front of the camera");
+    let (mut touched, mut on_the_node) = (0usize, 0usize);
+    for i in (0..named.len()).step_by(4) {
+        if ink.contains(&i) || named[i..i + 4] == bare[i..i + 4] {
+            continue;
+        }
+        touched += 1;
+        for c in 0..3 {
+            let (was, now, to) = (bare[i + c] as i32, named[i + c] as i32, ground[c]);
+            assert!(
+                now >= was.min(to) - 2 && now <= was.max(to) + 2,
+                "a name moved a pixel outside its own ink to {now}, which is not between \
+                 the {was} it stood on and the {to} a hole clears to",
+            );
+        }
+        let px = (i / 4) as u32;
+        let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+        if (x - centre.x).hypot(y - centre.y) <= radius {
+            on_the_node += 1;
+        }
+    }
+    assert!(touched > 250, "a name at Shadow {SHADOW} cleared only {touched} pixels");
+    assert!(
+        on_the_node > 150,
+        "a name must clear the node it stands on, and only {on_the_node} of {touched} \
+         cleared pixels were inside the node's own billboard",
+    );
+
+    // And with the Shadow shut it clears nothing at all: `ink` above IS the
+    // difference the name makes at 0, so a hole there would be counted into it
+    // and this asserts that set is the glyph's own footprint and no larger.
+    let outside: Vec<usize> = ink
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let px = (i / 4) as u32;
+            let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+            (x - centre.x).hypot(y - centre.y) > radius
+        })
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "at a Shadow of 0 a name must paint its ink and nothing else, and {} pixels of it \
+         landed outside the node it names",
+        outside.len(),
     );
 }
