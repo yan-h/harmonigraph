@@ -270,6 +270,30 @@ pub struct ViewConfig {
     /// [`NoteNames::All`] is the label layer's own answer and carries no
     /// memory at all.
     pub note_names: NoteNames,
+    /// How bright the text on a SOUNDING node is — its name, the marks beside
+    /// it and its cents line alike — as an `L*` 0..100 on the same axis as
+    /// [`marker_ink`](Self::marker_ink), which is what that same text draws in
+    /// once nothing is sounding under it.
+    ///
+    /// One END of a pair rather than a brightness on its own, and the pair is
+    /// what the setting is: a label crosses between the two on its node's own
+    /// [`activation`](crate::NodeInstance::activation), so the note Fade times
+    /// the crossing and there is no second clock to set. Equal numbers put
+    /// every label in the resting field's grey and the type answers to the
+    /// music by nothing; every other pairing is reachable from there, a
+    /// sounding name held BELOW a kept one included.
+    ///
+    /// A brightness and not an opacity, which is the whole of why this is a
+    /// bar rather than a factor on a label's strength. Alpha over the
+    /// lattice's dark ground is grey rather than a fainter white, so a rank
+    /// spent there costs the quieter end its legibility as well as its rank;
+    /// an `L*` names the grey each end lands on outright, and neither end is a
+    /// fraction of the other.
+    ///
+    /// **Neutral**, for [`lattice_ground`](Self::lattice_ground)'s reason: hue
+    /// in this picture is the music's, and a name is not where a note's colour
+    /// lives. Only meaningful while `show_labels` is on.
+    pub sounding_ink: f32,
     // How a sounding node's middle is painted has no field here: what lights
     // it is the node glow, and nothing switches that glow's paint. The field
     // styles (Vortex, Checker and Spiral) are gone with the core disc they
@@ -407,6 +431,10 @@ pub struct ViewConfig {
     /// [`lattice_ground`](Self::lattice_ground) above: the neutral grey every
     /// cross standing at a home-sheet position is drawn in
     /// ([`derive_pluses`](crate::derive::derive_pluses)).
+    ///
+    /// And the grey a label on a node NOTHING is sounding under is drawn in
+    /// with it, which is the resting end of the label pair — see
+    /// [`sounding_ink`](Self::sounding_ink) for why the two share one number.
     ///
     /// A bar of its own rather than a share of the ground, so the two are read
     /// against each other by their numbers and set independently: equal numbers
@@ -1773,6 +1801,22 @@ impl ViewConfig {
         }
     }
 
+    /// [`sounding_ink`](Self::sounding_ink) as an `L*` the colour path can
+    /// actually solve for: on the axis, and a real number.
+    ///
+    /// Its own function for [`marker_ink_lightness`](Self::marker_ink_lightness)'s
+    /// reason, with one more of its own: this end is read through a MIX against
+    /// that one, and a mix carries a NaN whatever the other end holds — so a
+    /// broken value here is not one label drawn the wrong grey but every label
+    /// on the pane, including the ones on nodes nothing is sounding under.
+    pub fn sounding_ink_lightness(&self) -> f32 {
+        if self.sounding_ink.is_finite() {
+            self.sounding_ink.clamp(0.0, 100.0)
+        } else {
+            DEFAULT_SOUNDING_INK
+        }
+    }
+
     /// Whether the audio ring is drawn at all: a width to draw it with, and
     /// room left inside the quad to draw it in.
     ///
@@ -2257,6 +2301,12 @@ impl ViewConfig {
         // reaches no gradient, so a broken one costs the resting field and
         // nothing else.
         self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
+        // The lit end of the labels' pair, on that same axis and repaired for
+        // the markers' reason. It reaches no gradient either, so a broken one
+        // costs the type on a sounding node and nothing else — but it costs it
+        // on every node at once, the value being one end of a mix rather than a
+        // grey drawn straight.
+        self.sounding_ink = finite_or(self.sounding_ink, fresh.sounding_ink).clamp(0.0, 100.0);
 
         // The node glow's pair. The reach repairs to the fresh value — 0, the
         // off position — on the same argument the ring's gate does: a number
@@ -2349,6 +2399,18 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// Which grey this is, and why that rung, is at
 /// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
 const DEFAULT_RING_GROUND: f32 = 20.0;
+
+/// The `L*` a fresh [`ViewConfig::sounding_ink`] opens on: the top of the axis,
+/// so a sounding name is white and the fresh distance between the two ends of
+/// the label pair is the whole of it. Named for [`DEFAULT_RING_GROUND`]'s
+/// reason — the `_lightness` accessor needs it without building a fresh view to
+/// read one field off — and the `Default` below is written in terms of it.
+///
+/// White rather than a rung of the resting picture, because the two ends are
+/// answering different questions: the resting one is dialled against the ground
+/// the lattice's structure has to stay legible over, and this one against the
+/// light a note is putting out under it.
+const DEFAULT_SOUNDING_INK: f32 = 100.0;
 
 /// The look a fresh view starts in, and the single source of every field's
 /// fallback: the container-level `#[serde(default)]` on the struct means a
@@ -2474,6 +2536,13 @@ impl Default for ViewConfig {
             // the positions legible — and there is no fresh look that guesses
             // it, because it depends on how much light is behind the notes.
             marker_ink: DEFAULT_RING_GROUND,
+            // The other end of the label pair, as far from that grey as the
+            // axis goes: type on a sounding node is white, and what says a node
+            // is sounding is its own light behind a name that has stepped out
+            // of the resting field. A fresh view is therefore a picture where
+            // the bar is doing something — it is a look to dial down from
+            // rather than one to discover.
+            sounding_ink: DEFAULT_SOUNDING_INK,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
             // 72 degrees an octave, with a two-octave fringe either end (see

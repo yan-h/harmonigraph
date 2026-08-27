@@ -281,8 +281,8 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
     badge
 }
 
-/// The ink every lattice label is drawn in — the note name, its marks and
-/// the cents under it alike — rather than the skin's
+/// The ink ONE lattice label is drawn in — the note name, its marks and the
+/// cents under it alike — rather than the skin's
 /// [`text`](theme::text)/[`text_dim`](theme::text_dim) pair.
 ///
 /// Type over the lattice is not chrome. The skin dresses the panels around
@@ -291,20 +291,39 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// said something the label does not mean — the note the brighter, its cents
 /// the fainter — where they are one label naming one node.
 ///
-/// The RESTING FIELD's own grey, off
-/// [`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig) and through the
-/// same repair the markers take it through. A name and a cross are one claim
-/// on one position, handed between them by
-/// [`name_level`](harmonigraph_scene::NodeInstance::name_level), so they are
-/// one colour: names on a white of their own and crosses on a dialled grey
-/// read as two fields laid over each other, and the bar could move only half
-/// of it.
+/// A grey off `lit`, the level the node under it is sounding at, between the
+/// two `L*` bars the label pair is: the RESTING FIELD's own
+/// ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)) at 0 and
+/// [`sounding_ink`](harmonigraph_scene::ViewConfig::sounding_ink) at 1, each
+/// through the repair its own bar carries.
 ///
-/// OPAQUE, as a marker's ink is (see `derive_pluses`): the grey the bar names
-/// is the grey on screen rather than a blend of it with whatever the label
-/// stands on. What varies across a label is its own strength, spent on this.
-fn label_ink(view: &harmonigraph_scene::ViewConfig) -> egui::Color32 {
-    super::scene_color(harmonigraph_scene::grey_of_lightness(view.marker_ink_lightness()), 1.0)
+/// Silent is the markers' grey EXACTLY, and that is the end that has to be: a
+/// name and a cross are one claim on one position, handed between them by
+/// [`name_level`](harmonigraph_scene::NodeInstance::name_level), and a handoff
+/// landing on a white of its own reads as a second field laid over the
+/// crosses — one the marker bar can move only half of. Through the crossing
+/// the two greys do differ, a name being on its way to or from the lit end
+/// while the cross under it takes up what the name leaves; that is one event
+/// drawn once rather than two.
+///
+/// Mixed in `L*` rather than between the two solved greys, because `L*` is the
+/// axis the pair is dialled on: the bars are read against each other by their
+/// numbers, and a crossing through greys neither number names is a third answer
+/// no bar gives.
+///
+/// OPAQUE at every mix, as a marker's ink is (see `derive_pluses`): the grey a
+/// bar names is the grey on screen rather than a blend of it with whatever the
+/// label stands on. What varies across a label is its own strength, spent on
+/// this.
+fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
+    // Held to the range the mix is defined on before it is spent. A level off
+    // either end runs the crossing past a grey the bars can reach, and a NaN
+    // takes EVERY label on the pane with it rather than the one node it arrived
+    // on — the mix carries it whatever the two ends hold.
+    let lit = if lit.is_finite() { lit.clamp(0.0, 1.0) } else { 0.0 };
+    let resting = view.marker_ink_lightness();
+    let l_star = resting + (view.sounding_ink_lightness() - resting) * lit;
+    super::scene_color(harmonigraph_scene::grey_of_lightness(l_star), 1.0)
 }
 
 /// What a name hands the LIGHT standing under it: the shadow it holds that
@@ -321,11 +340,11 @@ const LABEL_SHADOW: egui::Color32 = egui::Color32::BLACK;
 /// How readable a label on a node that is not sounding is: exactly as
 /// readable as one that is.
 ///
-/// A kept name and a sounding name carry the same ink, and what tells them
-/// apart is the NODE — a sounding one is lit and a remembered one is not.
-/// Dimming the type as well says it twice, and it costs the quieter half its
-/// legibility rather than merely its rank, because alpha over the lattice's
-/// dark ground is grey rather than a fainter white.
+/// A kept name is as OPAQUE as a sounding one, and what separates the two is
+/// spent on BRIGHTNESS instead — [`label_ink`], on a bar of its own. Alpha over
+/// the lattice's dark ground is grey rather than a fainter white, so a rank
+/// spent here costs the quieter end its legibility as well as its rank, where a
+/// grey each end is named in outright costs it neither.
 ///
 /// It is also the level the marker underneath already assumes.
 /// [`name_level`](harmonigraph_scene::NodeInstance::name_level) is what the
@@ -445,9 +464,6 @@ pub(crate) fn draw_node_labels(
     // mode the field never fills, so a fading name has nothing to settle onto
     // and eases all the way out.
     let names = view.note_names;
-    // The resting field's grey, resolved once for the pane rather than per
-    // name: one bar, one answer, whatever the frame holds.
-    let ink = label_ink(view);
     for (index, node) in scene.nodes.iter().enumerate() {
         // Whether this node is named at all — asked of the node rather than
         // spelled out here, because the resting MARKER under it turns on the same
@@ -461,6 +477,11 @@ pub(crate) fn draw_node_labels(
             continue;
         };
         let strength = label_strength(node, names);
+        // Per NODE and off the note's own envelope, which is what puts the
+        // crossing between the two ends on the Fade: `activation` is the same
+        // ramp the node's light rides, so a name brightens and dims with the
+        // thing it names rather than on a clock of its own.
+        let ink = label_ink(view, node.activation);
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a
@@ -1101,5 +1122,182 @@ mod tests {
             state.hovered, None,
             "the interactive copy should pick, and clear a stale hover"
         );
+    }
+
+    /// A label's ink is the two `L*` bars and nothing between them that they do
+    /// not name: the markers' own grey where nothing sounds, the Sounding ink
+    /// bar's where a note is fully on, and a mix taken on the AXIS in between.
+    ///
+    /// The axis is the claim. Both bars are counted in `L*` so a person sets
+    /// them by comparing two numbers, and a crossing that mixed the two solved
+    /// GREYS instead runs through brightnesses neither number names — close
+    /// enough to look right, and a third answer no bar gives.
+    ///
+    /// The level arrives as a node's activation, which is a float out of a
+    /// derive, so the ends of the range and a value off it are held here too: a
+    /// NaN in a mix is every label on the pane rather than the one node it came
+    /// from.
+    #[test]
+    fn a_labels_ink_is_a_mix_of_the_two_bars_on_their_own_axis() {
+        // Two greys well apart and both off the fresh pair, so a resolve
+        // reading the wrong bar — or either bar's fresh value — draws a visibly
+        // wrong colour rather than the right one by coincidence.
+        let view = harmonigraph_scene::ViewConfig {
+            marker_ink: 24.0,
+            sounding_ink: 88.0,
+            ..Default::default()
+        };
+        let grey =
+            |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
+        assert_eq!(
+            label_ink(&view, 0.0),
+            grey(view.marker_ink),
+            "a label on a node nothing is sounding under left the markers' grey",
+        );
+        assert_eq!(
+            label_ink(&view, 1.0),
+            grey(view.sounding_ink),
+            "a label on a fully lit node is not the grey its own bar names",
+        );
+        assert_eq!(
+            label_ink(&view, 0.25),
+            grey(24.0 + (88.0 - 24.0) * 0.25),
+            "the crossing is not taken on the L* axis the two bars are counted in",
+        );
+        // Off the range and off the number line: a level a derive can hand over
+        // must not reach the solve as something no colour comes back from.
+        for (level, want) in
+            [(-1.0f32, view.marker_ink), (2.0, view.sounding_ink), (f32::NAN, view.marker_ink)]
+        {
+            assert_eq!(
+                label_ink(&view, level),
+                grey(want),
+                "a level of {level} carried a label's ink off the bars",
+            );
+        }
+        // Opaque at every mix, as a marker's ink is: the grey a bar names is
+        // the grey on screen and not a blend of it with whatever the label
+        // happens to stand on. A label's own strength is spent on top of this.
+        for step in 0..=8 {
+            let ink = label_ink(&view, step as f32 / 8.0);
+            assert_eq!(ink.a(), 255, "a label's ink carries a standing alpha of its own at {step}");
+        }
+    }
+
+    /// A label crosses between the two bars on its NOTE's own fade, and every
+    /// line of it crosses together — a name and the cents under it are one
+    /// label naming one node, so a bar that moved only the name would be the
+    /// two ranks of grey `label_ink` exists to refuse.
+    ///
+    /// Sampled through the derive rather than off a hand-built node, because
+    /// which clock the crossing runs on is the whole claim: `activation` is the
+    /// ramp the node's own light rides, so there is no second time constant to
+    /// set and none that can drift from the Fade.
+    ///
+    /// The release is where a brightness and an opacity part company, and that
+    /// is why the middle sample checks both. Under `Past` a departing name is
+    /// held at full strength (see `label_strength`), so through that stretch
+    /// the type is not fading out at all and everything moving on it is this
+    /// mix.
+    #[test]
+    fn a_labels_lines_cross_between_the_bars_on_the_note_fade() {
+        let mut state = fresh();
+        state.view.marker_ink = 24.0;
+        state.view.sounding_ink = 88.0;
+        // A long fade, so the release is a stretch to sample in rather than a
+        // frame of it, and the arrival has landed well before the first sample.
+        state.frame_params.fade_time = 1.0;
+        assert!(state.view.show_cents, "the fresh view draws cents; without them this is one line");
+        assert_eq!(
+            state.view.note_names,
+            NoteNames::Past,
+            "the fresh view keeps the past, which is what holds a departing name opaque",
+        );
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(2.0, 0, 60));
+
+        // Held, mid-release, and settled onto the record the trail keeps.
+        let held = drawn_label(&mut state, 1.9);
+        let releasing = drawn_label(&mut state, 2.5);
+        let kept = drawn_label(&mut state, 5.0);
+        let grey =
+            |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
+        assert_eq!(
+            held.0,
+            grey(state.view.sounding_ink),
+            "a sounding label is not drawn in the grey its own bar names",
+        );
+        assert_eq!(
+            kept.0,
+            grey(state.view.marker_ink),
+            "a label on a node nothing is sounding under left the markers' grey",
+        );
+        // Between the two and at neither, which is the whole of what says a
+        // crossing is running: one that snapped would land on an end here, and
+        // one on a clock of its own would be as likely to be past it.
+        assert!(
+            kept.0.r() < releasing.0.r() && releasing.0.r() < held.0.r(),
+            "a releasing label is at {:?}, outside the {:?}..{:?} the bars span",
+            releasing.0,
+            kept.0,
+            held.0,
+        );
+        // What is NOT moving through that stretch, so the brightness is the only
+        // thing about the type a release changes.
+        assert_eq!(releasing.0.a(), 255, "a releasing label is being faded out as well as dimmed");
+        // Every sample drew a whole label rather than a name alone — the cents
+        // are the second `text()` call and the only one with a decimal point in
+        // it. Which grey the two lines share is `drawn_label`'s own assertion.
+        for (label, when) in [(&held, "sounding"), (&releasing, "releasing"), (&kept, "kept")] {
+            assert!(
+                label.1.len() >= 2,
+                "the {when} label laid out {:?}, so this cannot compare two lines",
+                label.1,
+            );
+            assert!(
+                label.1.iter().any(|said| said.contains('.')),
+                "the {when} label laid out {:?}, with no cents line to see move",
+                label.1,
+            );
+        }
+    }
+
+    /// The ink and the text of every piece one node's label drew, `secs` into
+    /// the take. One node's, because `Past` names what the music has visited
+    /// and the caller plays a single note.
+    ///
+    /// The ink comes back as ONE colour with the rest checked against it, so
+    /// the "one label, one grey" half of the claim is held here rather than at
+    /// each call.
+    fn drawn_label(state: &mut crate::SharedState, secs: f64) -> (egui::Color32, Vec<String>) {
+        // Pruned first, as the editor's own frame does: a trail record is
+        // written the frame a release finishes, so a sample that only derived
+        // would find the kept name still unrecorded and nothing named at all.
+        state.tracker.prune(secs, &state.view.envelope(&state.frame_params));
+        let scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.view.reach(),
+            &state.frame_params,
+            state.camera,
+            None,
+            secs,
+        );
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
+        let mut batch = crate::text::TextBatch::default();
+        let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
+            draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+        });
+        let pieces = batch.pieces().to_vec();
+        let ink = pieces.first().expect("the visited node is named").fill;
+        for piece in &pieces {
+            assert_eq!(
+                piece.fill, ink,
+                "{:?} is drawn in {:?} against the rest of its label's {ink:?}",
+                piece.text, piece.fill,
+            );
+        }
+        (ink, pieces.into_iter().map(|piece| piece.text).collect())
     }
 }

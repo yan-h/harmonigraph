@@ -98,7 +98,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .show(ui)
         .on_hover_text(
             "How bright the crosses standing at the lattice's resting \
-             positions are drawn. The same L* the Ground above is in, so equal \
+             positions are drawn, and the text on a node nothing is sounding \
+             under with them. The same L* the Ground above is in, so equal \
              numbers put the whole resting lattice in one grey and any \
              difference is read straight off the pair. Hold it above the \
              Ground to keep the structure legible while a node's empty rings \

@@ -368,13 +368,19 @@ pub(crate) struct TextBatch {
     marks: Vec<egui::Rect>,
 }
 
-/// One `text()` call, for tests: what it said, at what size, and the ink it
-/// covers on screen.
+/// One `text()` call, for tests: what it said, at what size, the ink it covers
+/// on screen and the colour that ink was laid down in.
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct TextPiece {
     pub text: String,
     pub font_size: f32,
+    /// What the glyphs were filled with — the same premultiplied bytes every
+    /// [`GlyphInstance`] of this piece carries. Per PIECE, which is what makes
+    /// it worth keeping: a lattice label is two calls, its name and its cents
+    /// line, and whether they are drawn in one colour is a claim only a test
+    /// that can see both can hold.
+    pub fill: egui::Color32,
     /// Tight to the glyphs — what the eye reads, and what the label's own
     /// stacking is measured against.
     pub ink: egui::Rect,
@@ -544,7 +550,7 @@ impl TextBatch {
                 // would be comparing two different spaces.
                 let min = self.magnify.map_or(pos, |m| m.point(pos));
                 let galley = egui::Rect::from_min_size(min, galley.size() * k);
-                self.pieces.push(TextPiece { text: said, font_size, ink, galley });
+                self.pieces.push(TextPiece { text: said, font_size, fill: color, ink, galley });
             }
         }
     }
