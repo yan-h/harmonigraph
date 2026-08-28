@@ -207,6 +207,7 @@ pub(crate) fn draw_spectrogram(
         ppp: painter.ctx().pixels_per_point().max(1.0),
         max_side,
         max_rows: max_side,
+        max_cols: usize::MAX,
         pitch_len: axes.pitch_len(),
         depth_len: time.region_depth_len(axes),
         window: time.window(),
@@ -233,36 +234,45 @@ pub(crate) fn draw_spectrogram(
     let mut plan = Plan::new(&view, &columns);
 
     // While the style is moving — a pitch wheel, a Level drag, a palette bar —
-    // every frame restarts the ring, so the frame builds the COARSE image
-    // instead: rows down to a bounded magnification of the pane and stretched
-    // back over it, and wide rows reading a plain max (see
-    // [`gesture_rows`](crate::spectrogram::gesture_rows) and
-    // [`RowRead::Max`](crate::spectrogram::RowRead)). One build at full
-    // quality sharpens it once the style has held still — a frame nothing
-    // else schedules when no audio is flowing and the pointer has let go, so
-    // it is requested here. Whole-song is out: its one style change per
-    // config edit is already cached after a frame, and an offline render must
-    // never trade resolution away. The whole-song guard alone does not carry
-    // that: only a playhead render takes it, so a default export reaches this
-    // observe every frame — and stays sharp because headless input holds no
-    // pointer down and a replay moves no style input, so no change ever
-    // opens a gesture.
+    // every frame restarts the ring, so the frame gives one axis up rather
+    // than paying a full build it is about to throw away. Which axis is
+    // [`GestureCut`](crate::spectrogram::GestureCut)'s answer, and it is the
+    // one the gesture is NOT moving. One build at full quality sharpens it
+    // once the style has held still — a frame nothing else schedules when no
+    // audio is flowing and the pointer has let go, so it is requested here.
+    // Whole-song is out: its one style change per config edit is already
+    // cached after a frame, and an offline render must never trade resolution
+    // away. The whole-song guard alone does not carry that: only a playhead
+    // render takes it, so a default export reaches this observe every frame —
+    // and stays sharp because headless input holds no pointer down and a
+    // replay moves no style input, so no change ever opens a gesture.
     let (t, pointer_down) = painter.ctx().input(|i| (i.time, i.pointer.any_down()));
-    if !view.whole
-        && crate::spectrogram::StyleMotion::observe(
+    let cut = if view.whole {
+        None
+    } else {
+        crate::spectrogram::StyleMotion::observe(
             &mut spectrum.spectrogram[surface].motion,
             plan.key.style(),
             t,
             pointer_down,
         )
-    {
+    };
+    if let Some(cut) = cut {
         painter.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
             crate::spectrogram::STYLE_SETTLE,
         ));
-        view.coarse = true;
-        // Against the rows the FULL plan settled on, so the bound is on the
-        // stretch a reader sees rather than on what the texture would take.
-        view.max_rows = crate::spectrogram::gesture_rows(plan.rows);
+        // Both cuts are taken against what the FULL plan settled on, so each
+        // bounds the stretch a reader sees rather than what the texture would
+        // take.
+        match cut {
+            crate::spectrogram::GestureCut::Rows => {
+                view.coarse = true;
+                view.max_rows = crate::spectrogram::gesture_rows(plan.rows);
+            }
+            crate::spectrogram::GestureCut::Slabs => {
+                view.max_cols = crate::spectrogram::gesture_slabs(plan.slabs());
+            }
+        }
         plan = Plan::new(&view, &columns);
     }
 
