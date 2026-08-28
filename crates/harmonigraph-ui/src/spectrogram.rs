@@ -15,7 +15,7 @@ use egui::Color32;
 use harmonigraph_core::spectrogram::{db_of, BucketDb};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 
-use crate::panes::spectral::axes::{loudness_raw, PitchScale};
+use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
 use crate::SpectrumConfig;
 use harmonigraph_scene::Gradient;
 
@@ -677,9 +677,8 @@ pub(crate) struct ColumnStyle {
 
 /// How a bucket becomes a colour: the dB window it is read against and the ramp
 /// the result lands on. Exactly the fields [`fill_column_into`] reaches —
-/// `cell_color`'s ramp, and everything
-/// [`loudness_db`](crate::panes::spectral::axes::loudness_db) reads — and nothing
-/// else.
+/// `cell_color`'s ramp, and the volume-color dB window and tilt it reads — and
+/// nothing else.
 ///
 /// It is spelled out field by field rather than holding a whole
 /// [`SpectrumConfig`] because the config is also where the pane keeps what it
@@ -703,7 +702,7 @@ struct ColumnColor {
     /// of the color table.
     ramp: Gradient,
     // Bit patterns, for the same exactness the outer struct's floats get: the
-    // Level window the heatmap shares with the curve, and the tilt applied
+    // dB window used by the volume-color ramp, and the tilt applied
     // inside it.
     floor_bits: u32,
     ceiling_bits: u32,
@@ -714,8 +713,8 @@ impl ColumnColor {
     fn new(cfg: &SpectrumConfig) -> ColumnColor {
         ColumnColor {
             ramp: what_decides_a_texel(cfg.spectrogram_gradient.sanitized()),
-            floor_bits: cfg.floor_db.to_bits(),
-            ceiling_bits: cfg.ceiling_db.to_bits(),
+            floor_bits: cfg.volume_floor_db.to_bits(),
+            ceiling_bits: cfg.volume_ceiling_db.to_bits(),
             tilt_bits: cfg.tilt.to_bits(),
         }
     }
@@ -1865,7 +1864,7 @@ fn write_ring(
 /// alone was 6.4 ms — a restart being the frame a pitch pan, a colour change or
 /// a resize step costs. Both halves collapse:
 ///
-/// - [`loudness_raw`] is AFFINE in dB and a stored byte is a linear dB grid, so
+/// - [`spectrogram_level_raw`] is AFFINE in dB and a stored byte is a linear dB grid, so
 ///   a row's whole mapping is `row0 + step * byte` — two constants per row, and
 ///   `step` is shared by all of them.
 /// - The ramp is then a function of one scalar, so it is sampled once into
@@ -1931,18 +1930,18 @@ impl Shades {
                 })
                 .collect(),
             // From the mapping itself at two adjacent stored values, rather than
-            // from a second copy of its algebra: the slope is `loudness_raw`'s
+            // from a second copy of its algebra: the slope is `spectrogram_level_raw`'s
             // own, whatever it is written as. Any row will do — it does not
             // depend on pitch.
-            step: loudness_raw(cfg, db0 + harmonigraph_core::spectrogram::DB_STEP, 0.0)
-                - loudness_raw(cfg, db0, 0.0),
-            row0: bins.iter().map(|b| loudness_raw(cfg, db0, b.midi)).collect(),
+            step: spectrogram_level_raw(cfg, db0 + harmonigraph_core::spectrogram::DB_STEP, 0.0)
+                - spectrogram_level_raw(cfg, db0, 0.0),
+            row0: bins.iter().map(|b| spectrogram_level_raw(cfg, db0, b.midi)).collect(),
             weight: &ROW_WEIGHT,
         }
     }
 
-    /// The 0..1 loudness row `r` reads a stored byte at —
-    /// [`loudness_db`](crate::panes::spectral::axes::loudness_db)'s
+    /// The 0..1 color row `r` reads a stored byte at —
+    /// [`spectrogram_level_db`](crate::panes::spectral::axes::spectrogram_level_db)'s
     /// answer for that byte, reached by the affine form and carrying its clamp.
     fn level(&self, r: usize, bucket: BucketDb) -> f32 {
         (self.row0[r] + self.step * bucket as f32).clamp(0.0, 1.0)
@@ -1976,7 +1975,7 @@ fn fill_column_into(shades: &Shades, bins: &[Bin], slab: &[BucketDb], out: &mut 
     out.extend(bins.iter().enumerate().map(|(r, b)| shades.at(r, b.read.of(slab, weight))));
 }
 
-/// One cell's 0..1 loudness from its stored byte, evaluated directly — the
+/// One cell's 0..1 volume-color level from its stored byte, evaluated directly — the
 /// REFERENCE [`Shades`] is a table of, and only reachable from tests.
 ///
 /// Deliberately unguarded. A shortcut here — answering anything under -90 dB
@@ -1991,12 +1990,12 @@ fn fill_column_into(shades: &Shades, bins: &[Bin], slab: &[BucketDb], out: &mut 
 /// the ramp across the whole of `0..1` rather than from some floor up.
 #[cfg(test)]
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    crate::panes::spectral::axes::loudness_db(cfg, db_of(bucket), midi)
+    crate::panes::spectral::axes::spectrogram_level_db(cfg, db_of(bucket), midi)
 }
 
 /// The level the heatmap's pixels actually go through, for the crate's own
 /// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
-/// curve against.
+/// curve against. It is the color mapping, not the analyzer's height mapping.
 ///
 /// Through [`Shades`], not through [`bin_level`], and that is the whole point of
 /// the function: the bridge has to be what the SHIPPING path computes, or it
@@ -2347,13 +2346,13 @@ mod tests {
     /// Level range bar stops at -100, and a hand-edited blob does not.
     #[test]
     fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
-        let mut cfg = SpectrumConfig { ceiling_db: 0.0, ..SpectrumConfig::default() };
+        let mut cfg = SpectrumConfig { volume_ceiling_db: 0.0, ..SpectrumConfig::default() };
         for floor in [-60.0f32, -90.0, -100.0, -120.0] {
-            cfg.floor_db = floor;
+            cfg.volume_floor_db = floor;
             // One stored step, as a fraction of the window it is drawn in; the
             // levels either side of any stored byte may differ by that and no
             // more.
-            let step = harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - floor);
+            let step = harmonigraph_core::spectrogram::DB_STEP / (cfg.volume_ceiling_db - floor);
             for bucket in 0..BucketDb::MAX {
                 let here = bin_level(&cfg, bucket, 60.0);
                 let next = bin_level(&cfg, bucket + 1, 60.0);
@@ -4254,8 +4253,9 @@ mod tests {
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
 
         // Every colour input, one at a time: the palette, either end of the
-        // Level window, or the tilt recolours every pixel without moving a
-        // column. Spelled out one by one because [`ColumnColor`] is a list kept
+        // color window, or the tilt recolours every pixel without moving a
+        // column. Spelled out one by one because
+        // [`ColumnColor`] is a list kept
         // by hand, and a field left off it is a WRONG picture — which, unlike a
         // slow one, no frame counter reports.
         let recoloured = |edit: fn(&mut SpectrumConfig)| {
@@ -4263,8 +4263,8 @@ mod tests {
             edit(&mut c);
             styled(style(100, 0.1, 40.0, 48.0, &c));
         };
-        recoloured(|c| c.floor_db -= 6.0);
-        recoloured(|c| c.ceiling_db -= 6.0);
+        recoloured(|c| c.volume_floor_db -= 6.0);
+        recoloured(|c| c.volume_ceiling_db -= 6.0);
         recoloured(|c| c.tilt += 1.0);
         // The palette, which is six numbers rather than one name. Each is
         // swept on its own: they compare structurally, so this cannot catch a
@@ -4296,6 +4296,8 @@ mod tests {
         };
         carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
         carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
+        carried(|c| c.floor_db -= 6.0); // analyzer geometry
+        carried(|c| c.ceiling_db -= 6.0);
 
         // And the hue pair at NO CHROMA, which is the Mono preset and the one
         // place a gradient knob decides nothing. `chroma_at` is 0 at every
@@ -4858,8 +4860,8 @@ mod tests {
                 for tilt in [0.0, 3.0, -3.0, 6.0] {
                     let cfg = SpectrumConfig {
                         spectrogram_gradient: ramp,
-                        floor_db: floor,
-                        ceiling_db: ceiling,
+                        volume_floor_db: floor,
+                        volume_ceiling_db: ceiling,
                         tilt,
                         ..SpectrumConfig::default()
                     };

@@ -630,6 +630,7 @@ pub(super) fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f3
             }
         }
     }
+    paint.color_levels.clone_from(&paint.levels);
     scene.spectral = paint;
     scene
 }

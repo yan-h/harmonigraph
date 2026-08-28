@@ -38,8 +38,9 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::panes::window_shows_node;
 use crate::{theme, SharedState};
 use axes::{
-    frequency_grid, label_anchor, level_grid, loudness, plot_budget, text_scales, Axes, PitchScale,
-    TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, level_grid, loudness, plot_budget, power_db,
+    spectrogram_level_db, text_scales, Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT,
+    MARKING_PT, PROFILE_PT,
 };
 use egui::Sense;
 use gestures::{drag_split, drag_zoom, spectrum_split};
@@ -359,9 +360,7 @@ pub(crate) fn spectral_pane(
             // The run is read by the heatmap's own power mean
             // ([`spectrogram::power_mean`]), not by a MAX, and the two must
             // stay the same read: a pixel of the curve and a row of the heatmap
-            // cover the same buckets, and the pane draws them from one gradient
-            // through one loudness mapping precisely so that equal levels read
-            // equal. A MAX here would put a ridge and the curve above it at
+            // cover the same buckets. A MAX here would put a ridge and the curve above it at
             // different heights on the same tone — and it carries the same
             // fault on its own account, since the largest of N draws grows with
             // N, so the curve's noise floor would lift as the pitch axis was
@@ -381,12 +380,15 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            // Color from the SAME gradient as the spectrogram, keyed by the same
-            // loudness, so the curve reads in the heatmap's scheme rather than a
-            // flat accent. `tint` keeps the gradient's hue/brightness and only
+            // Color from the SAME gradient as the spectrogram, keyed by the
+            // volume-color dB window, so the curve reads in the heatmap's scheme
+            // rather than a flat accent. `tint` keeps the gradient's hue/brightness and only
             // sets opacity (gamma_multiply would darken it toward black).
             let hue = |power: f32, midi: f32| {
-                spectrogram::cell_color(cfg.spectrogram_gradient, loudness(&cfg, power, midi))
+                spectrogram::cell_color(
+                    cfg.spectrogram_gradient,
+                    spectrogram_level_db(&cfg, power_db(power), midi),
+                )
             };
             let tint = |c: egui::Color32, a: u8| {
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)

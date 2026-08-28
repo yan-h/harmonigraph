@@ -444,9 +444,11 @@ struct Uniforms {
     /// which is the whole difference between the two schemes.
     spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
     /// The analyzer's loudness at every bucket of its pitch grid, a byte
-    /// apiece, sixteen to a row (see `SPECTRUM_WORDS`).
+    /// apiece, sixteen to a row (see `SPECTRUM_WORDS`). Used by the CPU-side
+    /// gate; the adjacent color copy is what the shader paints.
     ///
-    /// In the uniform buffer rather than a texture, and it is 3.8 KB of it.
+    /// In the uniform buffer rather than a texture, and the two copies are
+    /// 7.6 KB together.
     /// What a texture would buy is a sampler's own bilinear read; what it
     /// costs is a bind-group entry on every lattice pipeline, a texture per
     /// SURFACE — the docked pane and the Render preview both draw a lattice in
@@ -457,6 +459,10 @@ struct Uniforms {
     /// already carry a lookup table of their own. The interpolation is two
     /// unpacks and a mix.
     spectrum: [[u32; 4]; SPECTRUM_WORDS],
+    /// The same buckets mapped through the volume-color dB window. The ring
+    /// shader uses these for color while `spectrum` remains the analyzer copy
+    /// used by the CPU gate.
+    spectrum_color: [[u32; 4]; SPECTRUM_WORDS],
 }
 
 /// Rows of four `u32` the analyzer's grid packs into: sixteen levels to a row.
@@ -1233,6 +1239,11 @@ impl LatticeCallback {
                 // and the struct uploads whole either way.
                 spectrum: if scene.spectral.ring_draws() {
                     pack_spectrum(&scene.spectral.levels)
+                } else {
+                    [[0u32; 4]; SPECTRUM_WORDS]
+                },
+                spectrum_color: if scene.spectral.ring_draws() {
+                    pack_spectrum(&scene.spectral.color_levels)
                 } else {
                     [[0u32; 4]; SPECTRUM_WORDS]
                 },

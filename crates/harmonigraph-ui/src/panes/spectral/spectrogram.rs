@@ -10,8 +10,9 @@
 //! rather than a mesh of flat cells (which looked blocky) or interpolated
 //! triangles (which floated and creased). Geometry still comes from
 //! [`Axes`], so it turns and flips with the pane, and
-//! its dB intensity scale is shared with the spectrum curve via
-//! [`loudness`](super::axes::loudness) so "loud" means the same in both.
+//! its dB intensity scale is shared with the spectrum curve via the
+//! volume-color mapping, so "loud" means the same color in both while their
+//! analyzer geometry remains independent.
 
 use egui::Color32;
 

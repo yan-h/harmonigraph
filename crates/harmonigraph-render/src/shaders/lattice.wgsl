@@ -186,8 +186,12 @@ struct Uniforms {
     spectral_lut: array<vec4<f32>, 64>,
     // The analyzer's loudness at every bucket of its pitch grid, a byte
     // apiece, sixteen buckets to a row. Read by the audio ring alone; see
-    // `spectrum_at`.
+    // `spectrum_at` and the CPU gate.
     spectrum: array<vec4<u32>, 240>,
+    // The same buckets mapped through the volume-color dB window. The audio
+    // ring reads this copy for color, while `spectrum` retains the analyzer
+    // levels used by the CPU gate.
+    spectrum_color: array<vec4<u32>, 240>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -1720,7 +1724,7 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
 }
 
 // Color at loudness `level` (0..1), read from the FREQUENCY scheme's ramp —
-// the analyzer's own gradient, the one the spectrogram's cells, the spectrum
+// the volume-color gradient, the one the spectrogram's cells, the spectrum
 // curve and the Spiral pane's segments are all drawn off, re-anchored for the
 // LATTICE: the CPU rebuilds the table from that gradient with its silent end
 // pinned onto u.lattice_ground — that L*, and no chroma at all — and its loud
@@ -1811,6 +1815,12 @@ fn spectrum_level(b: u32) -> f32 {
     return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
 }
 
+fn spectrum_color_level(b: u32) -> f32 {
+    let i = min(b, SPECTRUM_BUCKETS - 1u);
+    let word = u.spectrum_color[i / 16u][(i / 4u) % 4u];
+    return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
+}
+
 // The analyzer's loudness at absolute MIDI `pitch`, interpolated between the
 // two buckets either side of it, or 0 where the axis does not reach that pitch
 // (under 20 Hz, over 20 kHz).
@@ -1830,6 +1840,15 @@ fn spectrum_at(pitch: f32) -> f32 {
     }
     let i = u32(floor(x));
     return mix(spectrum_level(i), spectrum_level(i + 1u), x - floor(x));
+}
+
+fn spectrum_color_at(pitch: f32) -> f32 {
+    let x = (pitch - SPECTRUM_MIN_MIDI) * BUCKETS_PER_SEMITONE - 0.5;
+    if x < 0.0 || x > f32(SPECTRUM_BUCKETS - 1u) {
+        return 0.0;
+    }
+    let i = u32(floor(x));
+    return mix(spectrum_color_level(i), spectrum_color_level(i + 1u), x - floor(x));
 }
 
 // Where a fragment sits ACROSS one wedge, 0 at its counter-clockwise edge and
@@ -1935,7 +1954,12 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // either: how loud this wedge is and how much of the node's ring is showing
     // are two questions, and the wash asks the first one alone.
     let level = spectrum_at(pitch);
-    return RingInk(spectral_lut_color(level), cov * in.ring, clamp(level, 0.0, 1.0));
+    let color_level = spectrum_color_at(pitch);
+    return RingInk(
+        spectral_lut_color(color_level),
+        cov * in.ring,
+        clamp(level, 0.0, 1.0),
+    );
 }
 
 // ---- How tightly a node's octaves pack -------------------------------------
