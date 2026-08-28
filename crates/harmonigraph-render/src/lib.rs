@@ -1038,7 +1038,7 @@ impl LatticeCallback {
         // and no coarser order gives all three.
         //
         // A home node clears the home nodes BEHIND IT, which is what the
-        // Clearance is for wherever two nodes overlap on one sheet — every
+        // clearing is for wherever two nodes overlap on one sheet — every
         // orbited camera, where the sheet foreshortens under billboards that do
         // not. Batching the knockouts ahead of the ink puts every hole under
         // every ring, so the bar goes quiet on the picture it is most wanted in.
@@ -3932,7 +3932,7 @@ impl CallbackTrait for LatticeCallback {
             //
             // The node's own KNOCKOUT is the half of that which is easy to
             // leave out. A node paints the ground filled to its CENTRE, one
-            // Clearance out past every layer (`node_clearing`), so light laid
+            // Shadow out past every layer (`node_clearing`), so light laid
             // down first and then cleared to BARE ground is stamped out
             // exactly where it is most wanted and the feature comes out as a
             // ring of haze round a hole. The node samples this same target

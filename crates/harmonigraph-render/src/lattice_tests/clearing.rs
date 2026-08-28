@@ -226,7 +226,7 @@ fn middled_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
 /// node standing anywhere in that circle is erased down to the ground and the
 /// light over it, however far off the front node's own rings it stands. That is
 /// most of what a node covers, the fresh middle being over half its radius, and
-/// it is the picture the Clearance exists to avoid rather than to make.
+/// it is the picture the clearing exists to avoid rather than to make.
 ///
 /// Cut back to the INK instead, the lattice would show through every gap on the
 /// node, which reads as neither a hole nor a node.
@@ -746,7 +746,7 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
     // The far node's ink and nothing else: lit where it stands alone, and
     // untouched by the near node standing beside it with its hole switched
     // off. Anything the near node already covers is occlusion, which is not
-    // what the Clearance is for and would read the same with none.
+    // what the clearing is for and would read the same with none.
     let own: Vec<usize> = (0..alone.len())
         .step_by(4)
         .filter(|&i| brightness(&alone[i..i + 4]) > 24 && flat[i..i + 4] == alone[i..i + 4])
@@ -764,7 +764,7 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
     let (short, long) = (taken(near), taken(far));
     assert!(
         short > 100,
-        "a Clearance of {near} took {short} px of the node beside it, out of the {} px \
+        "a Shadow of {near} took {short} px of the node beside it, out of the {} px \
          of it standing in the open",
         own.len(),
     );

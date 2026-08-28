@@ -575,9 +575,12 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
 /// and kept the marker's standoff, a cross-shaped hole in the light with
 /// nothing standing in it.
 ///
-/// Measured against the SAME node with the Clearance dialled off, which is the
-/// one setting where the hole was never painted — so the claim is that the
-/// Clearance no longer decides this, rather than that some ink survives.
+/// Measured against the SAME node with the Shadow dialled off, which is the one
+/// setting where the hole was never painted (`from_scene` emits no `Clearing`
+/// below it) — so the claim is that the hole no longer decides this, rather
+/// than that some ink survives. The sweep carries no slack to hide a loss in:
+/// the marker's own shade adds no pixel to the set, so the counts are EQUAL at
+/// every Shadow and one pixel of the cross going missing fails the assertion.
 #[test]
 fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
     const SIZE: [u32; 2] = [256, 256];
@@ -616,8 +619,8 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
         let cut = inked(gutter);
         assert!(
             cut.len() >= bare.len(),
-            "at a Clearance of {gutter} the ringing node took {} of the {} pixels its \
-             cross covers with the Clearance off",
+            "at a Shadow of {gutter} the ringing node took {} of the {} pixels its \
+             cross covers with the Shadow off",
             bare.len() - cut.len(),
             bare.len(),
         );

@@ -46,11 +46,12 @@ cargo run -p harmonigraph-standalone
 # The whole test suite; every crate carries tests.
 cargo test
 
-# The exact checks .github/workflows/ci.yml runs: clippy -D warnings, the
-# tests, the harmonigraph-plugin package check, baseview's own tests, the
-# rustdoc doc-link check, the harmonigraph-core dependency guard, and the
-# worktree-reclaim lock cases. Actions is currently off, so this is
-# the gate — don't wait on a check to appear on your PR.
+# The exact checks .github/workflows/ci.yml runs: cargo fmt --check, clippy
+# -D warnings, the tests, the harmonigraph-plugin package check, baseview's
+# own tests, the rustdoc doc-link check, the harmonigraph-core dependency
+# guard, the worktree-reclaim lock cases and the bundle swap. Actions is
+# currently off, so this is the gate — don't wait on a check to appear on
+# your PR.
 ./ci.sh
 
 # Build the CLAP/VST3 bundles into target/bundled/.

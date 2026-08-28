@@ -15,6 +15,7 @@ that recombines the two is doing so on purpose, not double-counting.
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,8 +58,49 @@ def rust_doc_comment_split(tokei_json: dict) -> dict:
     return {"plain": plain, "doc": doc}
 
 
-def is_dedicated_test_file(rel_path: Path) -> bool:
-    return "tests" in rel_path.parts[:-1] or rel_path.name == "tests.rs"
+def module_dir(path: Path) -> Path:
+    """Where a file's child modules live: beside a crate/module root, and in a
+    directory of its own name under any other file."""
+    return path.parent if path.name in ("lib.rs", "main.rs", "mod.rs") else path.parent / path.stem
+
+
+def dedicated_test_roots(reports: list) -> set:
+    """Every file or directory a `#[cfg(test)] mod X;` declares.
+
+    Resolved from the declaration rather than guessed from the name, because
+    the name is not a convention the compiler enforces and this tree does not
+    keep one: `lattice_tests/`, `gpu_harness.rs` and `widgets/probe.rs` are all
+    test-only and none is called `tests`, while `widgets/range.rs` sits one
+    line below a gated `mod probe;` and ships. A heuristic on the path counts
+    the first three as production code and reads as a plausible number.
+    """
+    roots = set()
+    decl = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+    for report in reports:
+        path = Path(report["name"])
+        lines = path.read_text(errors="ignore").splitlines()
+        for i, line in enumerate(lines):
+            if "#[cfg(test)]" not in line:
+                continue
+            # The declaration the attribute is ON, which is the next line that
+            # is neither blank nor another attribute.
+            for nxt in lines[i + 1 : i + 4]:
+                if not nxt.strip() or nxt.lstrip().startswith("#["):
+                    continue
+                if m := decl.match(nxt):
+                    base = module_dir(path)
+                    for cand in (base / f"{m.group(1)}.rs", base / m.group(1)):
+                        if cand.exists():
+                            roots.add(cand.resolve())
+                break
+    return roots
+
+
+def is_dedicated_test_file(rel_path: Path, path: Path, roots: set) -> bool:
+    if "tests" in rel_path.parts[:-1] or rel_path.name == "tests.rs":
+        return True
+    resolved = path.resolve()
+    return any(resolved == r or r in resolved.parents for r in roots)
 
 
 def cfg_test_block_ranges(lines: list) -> list:
@@ -107,6 +149,7 @@ def rust_breakdown(root: Path, reports: list) -> dict:
     totals = {"total_code": 0, "test_code": 0, "dedicated_files": 0, "inline_files": 0,
               "dedicated_lines": 0, "inline_lines": 0}
     per_crate = {}
+    roots = dedicated_test_roots(reports)
 
     def bump(crate, key, amount):
         per_crate.setdefault(crate, {"total_code": 0, "test_code": 0})
@@ -122,7 +165,7 @@ def rust_breakdown(root: Path, reports: list) -> dict:
             bump(crate, "total_code", code)
 
             lines = path.read_text(errors="ignore").splitlines()
-            if is_dedicated_test_file(rel):
+            if is_dedicated_test_file(rel, path, roots):
                 totals["test_code"] += code
                 totals["dedicated_lines"] += len(lines)
                 totals["dedicated_files"] += 1

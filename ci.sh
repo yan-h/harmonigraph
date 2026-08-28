@@ -106,4 +106,4 @@ run .claude/tests/reclaim-locks.sh
 run .claude/tests/plugin-swap.sh
 
 echo
-echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap)"
+echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap)"

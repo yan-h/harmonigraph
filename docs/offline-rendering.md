@@ -35,7 +35,7 @@ your refresh rate, or whether a window was in front.
 #    Export audio as usual for the soundtrack.
 # 2. Render:
 cargo build --release -p harmonigraph-offline
-./target/release/harmonigraph-offline ~/Music/"Harmonigraph Takes"/take-1770000000.take \
+./target/release/harmonigraph-offline ~/Music/"Harmonigraph Takes"/take-2026-08-25_14-32-08.take \
     --audio ~/bounces/piece.wav \
     --out piece.mp4 \
     --size 3840x2160
@@ -49,7 +49,10 @@ cargo build --release -p harmonigraph-offline
 it. You do not have to export, and you do not have to do anything
 differently from how you'd play it anyway.
 
-Takes are written to `~/Music/Harmonigraph Takes/take-<unixtime>.take`
+Takes are written to `~/Music/Harmonigraph Takes/take-<stamp>.take`, where
+the stamp is the UTC calendar date and time the recording started —
+`take-2026-08-25_14-32-08.take` — so the directory sorts chronologically by
+name. A second take inside the same second gets `_1`, `_2`.
 (`LATTICE_TAKE_DIR` overrides the directory). The status line under the
 toggle tells you where the file is going and how many events have landed.
 
@@ -300,8 +303,8 @@ harmonigraph-offline piece.take --layout mine.ron
 ```ron
 (
     background: (14, 14, 18),
-    margin: 24.0,
-    gap: 16.0,
+    margin: 0.0,
+    gap: 0.0,
     panes: [
         (pane: Lattice,  rect: (0.0, 0.0, 0.68, 1.0)),
         (pane: Spectral, rect: (0.68, 0.0, 1.0, 1.0)),

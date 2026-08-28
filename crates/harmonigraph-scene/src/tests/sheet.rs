@@ -474,6 +474,39 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     }
 }
 
+/// A padding dialled past the bar's ceiling reads back as the padding the
+/// picture draws. [`GAP_MAX`] is a ceiling the two gap bars are BUILT from, so
+/// a blob written when it stood higher carries a value the bar cannot reach —
+/// and `rings` holds it to the ceiling for the picture while the field keeps
+/// the number the bar reads out. Two controls on one page then disagree: the
+/// bar reads 35 % and the stack under it draws 20 %, with nothing on screen
+/// saying which is the node.
+///
+/// Both gaps and both ends, because the door is one function: `sanitize`
+/// repairs each field by name, so a gap left out of it is repaired nowhere,
+/// which the picture cannot report — `size` having already made it drawable.
+#[test]
+fn a_gap_dialled_past_its_ceiling_reads_back_as_the_padding_it_draws() {
+    for wild in [GAP_MAX + 0.15, GAP_MAX * 4.0, -0.1, f32::NAN, f32::INFINITY] {
+        let mut view = ViewConfig { ring_gap: wild, octave_gap: wild, ..ViewConfig::default() };
+        view.sanitize();
+        assert_eq!(
+            view.ring_gap,
+            view.rings().gap,
+            "the bar reads a ring gap of {} and the stack draws {}",
+            view.ring_gap,
+            view.rings().gap,
+        );
+        assert_eq!(
+            view.octave_gap,
+            view.octave_gap_width(),
+            "the bar reads an octave gap of {} and the shader cuts {}",
+            view.octave_gap,
+            view.octave_gap_width(),
+        );
+    }
+}
+
 #[test]
 fn the_ring_geometry_is_sanitized_into_the_scene() {
     // A stack dialled past the quad's own edge: each width is held to the bar's

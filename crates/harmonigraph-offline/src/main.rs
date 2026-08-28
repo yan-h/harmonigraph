@@ -107,9 +107,11 @@ struct Args {
     size: Option<[u32; 2]>,
     scale: Option<f32>,
     fps: f64,
-    /// `None` means "start a lead-in before the first note" — see
-    /// `start_of_render`. An explicit `--start 0` is NOT the same thing, which
-    /// is why this is an Option rather than defaulting to zero.
+    /// `None` means "start where the take's capture begins", backed off by
+    /// whatever `--lead` asks for — see `start_of_render`. An explicit
+    /// `--start 0` is NOT the same thing, which is why this is an Option
+    /// rather than defaulting to zero: a take that opens ten seconds in
+    /// renders from second ten, not from second zero.
     start: Option<f64>,
     /// `None` means no extra lead — the render opens exactly where the take
     /// was captured.

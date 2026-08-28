@@ -162,6 +162,13 @@ fn write_contact_sheet(name: &str, expected: &[u8], actual: &[u8]) -> PathBuf {
 
 fn check(name: &str, scene: &Scene) {
     let Some(mut shooter) = Shooter::new(GOLDEN_SIZE) else {
+        // Said out loud, as `harmonigraph-offline`'s render tests say it. This
+        // is the tree's only gate on what the lattice LOOKS like, and a silent
+        // return reports `ok` without reading the golden, rendering, or
+        // comparing — so a machine with no adapter is indistinguishable from a
+        // machine where the picture still matches, including when the goldens
+        // have been deleted (the missing-file panic is downstream of here).
+        eprintln!("skipping golden {name}: no usable GPU adapter");
         return;
     };
     let actual = shooter.shot(scene);
