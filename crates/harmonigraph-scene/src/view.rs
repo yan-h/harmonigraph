@@ -2253,6 +2253,19 @@ impl ViewConfig {
         // the four of them into radii (`rings`).
         self.spectral_ring_width = finite_or(self.spectral_ring_width, fresh.spectral_ring_width)
             .clamp(0.0, RING_WIDTH_MAX);
+        // The two paddings, against the same hole and for the reason the width
+        // above is repaired rather than left to the picture: [`GAP_MAX`] is a
+        // ceiling the two bars are BUILT from, so a blob written when it stood
+        // higher carries a number no bar can reach, and `rings` holds it to the
+        // ceiling for the picture while the field keeps what the bar reads out.
+        // The stack under the bar then draws one padding and the bar names
+        // another, which is a value read out one way and drawn another.
+        //
+        // The clamp in [`rings`](Self::rings) stays where it is — the picture is
+        // reached by more routes than this door — and this one makes the number
+        // the door lets through a number the picture agrees with.
+        self.ring_gap = finite_or(self.ring_gap, fresh.ring_gap).clamp(0.0, GAP_MAX);
+        self.octave_gap = finite_or(self.octave_gap, fresh.octave_gap).clamp(0.0, GAP_MAX);
         // How wide a window each wedge shows. A MULTIPLIER in the shader — a
         // fragment's across-the-wedge fraction scales by it into a cents
         // offset — so a zero from a hand-edited blob is finite but degenerate:
