@@ -204,6 +204,78 @@ pub(crate) fn gesture_rows(rows: usize) -> usize {
     (rows / GESTURE_MAGNIFY).max(GESTURE_ROWS).min(rows)
 }
 
+/// How far a gesture divides the SLABS when the pitch axis is the one moving —
+/// the time axis standing in for the row cut, so the pitch read stays exactly
+/// what it settles to.
+///
+/// Four because that is where the two costs meet. Measured over a 1024-slab
+/// window on a 1408-row pane, zoomed out (`timing_slabs`), a restart at full
+/// rows and the settled mean costs 16.84 ms at the full slab count, 8.61 ms at
+/// half and **4.18 ms at a quarter** — against the 4.25 ms the row cut pays for
+/// the same frame. So a quarter buys the pitch axis back for nothing, and a
+/// half would cost twice a frame's share. It also halves the UPLOAD, 3.0 MB
+/// against 5.8, on the term [`GESTURE_MAGNIFY`] can only reason about.
+///
+/// What it costs is the time axis: four times fewer slabs stretched over the
+/// same depth, so the picture goes blocky along time for as long as the gesture
+/// runs. That is the axis a pitch gesture is holding still, which is the whole
+/// argument for spending it.
+///
+/// It also costs two aggregator refolds per gesture, one at each end, because
+/// [`SpectrogramAgg`] keys its grid on the slab width and a changed width
+/// cannot carry forward. Bounded and small — 2.5 ms at a 120 s window, 1.0 ms
+/// at 12 s (`timing_refold`) — and paid at the boundaries rather than per
+/// frame, since the width holds still for the length of the gesture.
+const GESTURE_SLAB_CUT: usize = 4;
+
+/// Slabs a gesture frame floors at, one [`PANE_QUANTUM`]: below a quantum the
+/// time axis stops being a picture, and a pane this shallow composes cheaply at
+/// its own width anyway.
+const GESTURE_SLABS: usize = PANE_QUANTUM as usize;
+
+/// The slabs a gesture frame builds for a pane that would settle at `slabs`.
+pub(crate) fn gesture_slabs(slabs: usize) -> usize {
+    // Never MORE than the pane asked for, exactly as [`gesture_rows`].
+    (slabs / GESTURE_SLAB_CUT).max(GESTURE_SLABS).min(slabs)
+}
+
+/// Which axis a gesture spends, chosen by the axis it is MOVING.
+///
+/// A gesture frame has to give something up, and the only reading that costs
+/// nothing is the one on the axis nobody is looking at. Both arms come out
+/// within noise of each other on the compose (`timing_slabs`), so this is a
+/// choice about the picture rather than about the frame rate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GestureCut {
+    /// Rows down to [`gesture_rows`], wide rows reading [`RowRead::Max`]. The
+    /// time axis is untouched, which is what a Span drag needs.
+    Rows,
+    /// Slabs down to [`gesture_slabs`], the pitch axis left at the rows and the
+    /// read it settles to. What a pitch drag needs, and what keeps its frames
+    /// from sitting several dB over the picture they settle into.
+    Slabs,
+}
+
+impl GestureCut {
+    /// The cut for a gesture opened by a change to `driver`.
+    fn of(driver: Option<Restart>) -> GestureCut {
+        match driver {
+            // The pitch range moving IS the gesture, so the pitch axis is what
+            // a reader is judging while it runs.
+            Some(Restart::Pitch) => GestureCut::Slabs,
+            // A Level or palette drag moves neither axis, and it is a judgement
+            // about BRIGHTNESS — which the row cut moves by up to 3.3 dB of a
+            // 60 dB ramp zoomed out, on a picture being dialled by eye. The
+            // slab cut leaves that reading alone at the same cost.
+            Some(Restart::Colour) => GestureCut::Slabs,
+            // A Span drag moves the time axis; a resize moves the rows. Each
+            // spends the axis it is not moving, which for both is the pitch
+            // side — and there the row cut is also the cheaper arm.
+            _ => GestureCut::Rows,
+        }
+    }
+}
+
 /// Seconds the full-resolution style must hold still before the image is
 /// rebuilt at full height. Short enough that letting go of a zoom reads as
 /// the picture snapping into focus; long enough that a wheel's notches, which
@@ -237,13 +309,19 @@ pub(crate) struct StyleMotion {
     /// may carry a gesture across a ladder rung while a grab on the
     /// performance overlay may not.
     held: bool,
+    /// Which axis the OPEN gesture spends, from the change that last moved the
+    /// style. Held across the frames that change nothing so the cut — and with
+    /// it the ring's width — stays put for the length of a gesture: a cut
+    /// re-decided per frame would resize the ring per frame, which is the cost
+    /// the gesture path exists to avoid.
+    cut: GestureCut,
 }
 
 impl StyleMotion {
     /// Observe this frame's full-resolution style at time `t` (egui's input
     /// clock), with `pointer_down` saying whether any pointer button is held:
-    /// whether the frame sits inside a gesture, and so should trade
-    /// resolution for rate.
+    /// `None` if the frame is settled, or which axis it should spend
+    /// ([`GestureCut`]) if it sits inside a gesture.
     ///
     /// A gesture opens on a style CHANGE — never on the pointer alone — and
     /// it opens on the first change the pointer is holding: a drag's first
@@ -283,7 +361,7 @@ impl StyleMotion {
         style: &ColumnStyle,
         t: f64,
         pointer_down: bool,
-    ) -> bool {
+    ) -> Option<GestureCut> {
         match slot {
             // A clock reading EARLIER than the stamp is a new egui context —
             // the editor window creates one per open and its input clock
@@ -298,7 +376,7 @@ impl StyleMotion {
                 m.changed_at = t - STYLE_SETTLE;
                 m.moving = false;
                 m.held = false;
-                false
+                None
             }
             // Holding still: the gesture runs on while the pointer is down —
             // a Span drag between rungs — or for the settle window past the
@@ -315,14 +393,17 @@ impl StyleMotion {
                 // nothing.
                 m.held = m.held && pointer_down;
                 m.moving = m.moving && (m.held || t - m.changed_at < STYLE_SETTLE);
-                m.moving
+                m.moving.then_some(m.cut)
             }
             Some(m) => {
+                // Read off the OLD style before it is overwritten: which field
+                // moved is the whole input to the choice.
+                m.cut = GestureCut::of(m.style.differs(style));
                 m.moving = pointer_down || t - m.changed_at < STYLE_SETTLE;
                 m.held = pointer_down;
                 m.style = style.clone();
                 m.changed_at = t;
-                m.moving
+                m.moving.then_some(m.cut)
             }
             None => {
                 *slot = Some(StyleMotion {
@@ -330,8 +411,9 @@ impl StyleMotion {
                     changed_at: t - STYLE_SETTLE,
                     moving: false,
                     held: false,
+                    cut: GestureCut::Rows,
                 });
-                false
+                None
             }
         }
     }
@@ -919,6 +1001,14 @@ pub(crate) struct PaneView {
     /// shrink the slab count too, resizing the ring on every frame of a gesture,
     /// which is the cost the gesture path exists to avoid.
     pub(crate) max_rows: usize,
+    /// The widest image THIS build makes, in slabs: `usize::MAX` where nothing
+    /// binds, or the cut a gesture takes on the time axis
+    /// ([`gesture_slabs`]).
+    ///
+    /// The mirror of [`max_rows`](Self::max_rows) and separate for the same
+    /// reason — it bounds the PICTURE, not the device, whose own limit reaches
+    /// the slabs through [`slab_ceiling`].
+    pub(crate) max_cols: usize,
     /// Points across the pitch axis, and across the FAR region of the depth
     /// axis — which the heatmap does not own: the roll's ribbons draw over the
     /// same region on the same time axis, and it is the spectrum CURVE that has
@@ -989,6 +1079,12 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
+    /// Slabs the pane asked for, before [`RING_HEADROOM`] — the time-axis twin
+    /// of [`rows`](Self::rows), and what [`gesture_slabs`] cuts.
+    pub(crate) fn slabs(&self) -> usize {
+        self.capacity - RING_HEADROOM
+    }
+
     pub(crate) fn new(view: &PaneView, columns: &Columns) -> Plan {
         // The offline build's pane cannot resize mid-render, so it has nothing
         // to hold still and takes its size to the pixel; the live one rounds up
@@ -1010,7 +1106,11 @@ impl Plan {
         // [`slab_ceiling`]).
         let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
         let col_cap = col_cap.min(slab_ceiling(view.max_side, view.whole) as f32);
-        let target_cols = depth_px.clamp(2.0, col_cap) as usize;
+        // The gesture's cut applies AFTER the device and pane caps, so it can
+        // only ever take slabs away — never hand back more than either allows.
+        // `min` then `max`, never `clamp`, which panics when a caller's cut
+        // lands under the floor.
+        let target_cols = (depth_px.clamp(2.0, col_cap) as usize).min(view.max_cols).max(2);
         let bucket = if view.whole {
             // The offline build draws its own fixed column set rather than the
             // live store's, so it shares no ladder with it and has nothing to
@@ -2784,6 +2884,7 @@ mod tests {
             ppp,
             max_side: EDITOR_MAX_SIDE,
             max_rows: EDITOR_MAX_SIDE,
+            max_cols: usize::MAX,
             pitch_len,
             depth_len,
             window,
@@ -2889,6 +2990,7 @@ mod tests {
                         ppp,
                         max_side,
                         max_rows: max_side,
+                        max_cols: usize::MAX,
                         pitch_len: pitch,
                         depth_len: depth,
                         window: win,
@@ -3027,6 +3129,7 @@ mod tests {
                     ppp,
                     max_side,
                     max_rows: max_side,
+                    max_cols: usize::MAX,
                     pitch_len: 1000.0,
                     depth_len: depth,
                     window: span,
@@ -3145,6 +3248,7 @@ mod tests {
             ppp: 2.0,
             max_side: BARE_MAX_SIDE,
             max_rows: BARE_MAX_SIDE,
+            max_cols: usize::MAX,
             pitch_len: 500.0,
             depth_len: 300.0,
             window,
@@ -3418,23 +3522,32 @@ mod tests {
         let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
         let c = ColumnStyle::new(100, false, 0.1, 42.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
-        assert!(!StyleMotion::observe(&mut slot, &b, 10.1, false), "one change is not a gesture");
         assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15, false),
+            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
+            "first sight is not a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 10.1, false).is_none(),
+            "one change is not a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 10.15, false).is_some(),
             "a second one right after opens it",
         );
         assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, false),
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, false).is_some(),
             "and it holds while the settle has not passed",
         );
         assert!(
-            !StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, false),
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, false).is_none(),
             "held still past the settle, the image sharpens",
         );
-        assert!(!StyleMotion::observe(&mut slot, &c, 20.0, false), "quiet frames stay settled");
         assert!(
-            !StyleMotion::observe(&mut slot, &a, 21.0, false),
+            StyleMotion::observe(&mut slot, &c, 20.0, false).is_none(),
+            "quiet frames stay settled"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &a, 21.0, false).is_none(),
             "and the next lone change is sharp",
         );
 
@@ -3445,23 +3558,39 @@ mod tests {
         // without the restart guard counts as inside the settle window until
         // the NEW clock catches the old stamp: minutes of coarse picture for
         // reopening the editor.
-        let mut slot =
-            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true, held: true });
+        let mut slot = Some(StyleMotion {
+            style: a.clone(),
+            changed_at: 600.0,
+            moving: true,
+            held: true,
+            cut: GestureCut::Rows,
+        });
         assert!(
-            !StyleMotion::observe(&mut slot, &a, 0.5, false),
+            StyleMotion::observe(&mut slot, &a, 0.5, false).is_none(),
             "a restarted clock reads as settled, not as ten minutes of gesture",
         );
         // And the slot is re-stamped onto the new clock: a drag a moment later
         // still opens a gesture, on its second frame as any other drag does.
-        assert!(!StyleMotion::observe(&mut slot, &b, 0.6, false), "the new clock's first change");
-        assert!(StyleMotion::observe(&mut slot, &c, 0.62, false), "and its second opens a gesture");
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 0.6, false).is_none(),
+            "the new clock's first change"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 0.62, false).is_some(),
+            "and its second opens a gesture"
+        );
 
         // The pointer does not change the reopen: a button already held while
         // the editor comes back is first sight on this clock, not a gesture.
-        let mut slot =
-            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true, held: true });
+        let mut slot = Some(StyleMotion {
+            style: a.clone(),
+            changed_at: 600.0,
+            moving: true,
+            held: true,
+            cut: GestureCut::Rows,
+        });
         assert!(
-            !StyleMotion::observe(&mut slot, &a, 0.5, true),
+            StyleMotion::observe(&mut slot, &a, 0.5, true).is_none(),
             "a restarted clock reads as settled with the pointer down too",
         );
     }
@@ -3484,7 +3613,7 @@ mod tests {
         // and none costs the picture its rows.
         for (i, style) in styles.iter().enumerate() {
             assert!(
-                !StyleMotion::observe(&mut slot, style, 100.0 + i as f64, false),
+                StyleMotion::observe(&mut slot, style, 100.0 + i as f64, false).is_none(),
                 "a change a second after the last one is not a gesture",
             );
         }
@@ -3502,20 +3631,21 @@ mod tests {
             let t = 107.0 + f64::from(frame) / 60.0;
             assert!(t - 107.0 < STYLE_SETTLE, "the sweep stays inside the settle");
             assert!(
-                !StyleMotion::observe(&mut slot, last, t, false),
+                StyleMotion::observe(&mut slot, last, t, false).is_none(),
                 "frame {frame} after a lone change is still settled",
             );
         }
         // A second change this soon after the FIRST one would have opened a
         // gesture; this far past it, the next lone change is sharp too.
         assert!(
-            !StyleMotion::observe(&mut slot, next, 108.0, false),
+            StyleMotion::observe(&mut slot, next, 108.0, false).is_none(),
             "and the next lone change is too",
         );
         // The same changes at a frame's spacing ARE a drag, from the second on.
         let mut slot = None;
         for (i, style) in styles.iter().enumerate() {
-            let gesture = StyleMotion::observe(&mut slot, style, 200.0 + i as f64 / 60.0, false);
+            let gesture =
+                StyleMotion::observe(&mut slot, style, 200.0 + i as f64 / 60.0, false).is_some();
             assert_eq!(gesture, i > 1, "frame {i} of a continuous drag");
         }
     }
@@ -3531,10 +3661,13 @@ mod tests {
         let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
         let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        assert!(
+            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
+            "first sight is not a gesture"
+        );
         // A long quiet, then a press whose first frame moves the style.
         assert!(
-            StyleMotion::observe(&mut slot, &b, 60.0, true),
+            StyleMotion::observe(&mut slot, &b, 60.0, true).is_some(),
             "one change with the pointer down opens the gesture",
         );
     }
@@ -3555,18 +3688,24 @@ mod tests {
         let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
         let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
-        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "the drag's first rung");
+        assert!(
+            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
+            "first sight is not a gesture"
+        );
+        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(), "the drag's first rung");
         // 0.38 s of held style at 60 Hz, pointer down throughout — well past
         // the settle window from frame 13 on.
         for frame in 1..=23 {
             let t = 20.0 + f64::from(frame) / 60.0;
             assert!(
-                StyleMotion::observe(&mut slot, &b, t, true),
+                StyleMotion::observe(&mut slot, &b, t, true).is_some(),
                 "frame {frame} between rungs is still the gesture",
             );
         }
-        assert!(StyleMotion::observe(&mut slot, &c, 20.39, true), "and the next rung still is");
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 20.39, true).is_some(),
+            "and the next rung still is"
+        );
     }
 
     /// A gesture the WHEEL opened is not held open by a press that arrives
@@ -3594,27 +3733,33 @@ mod tests {
         let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
         let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
-        assert!(!StyleMotion::observe(&mut slot, &b, 10.1, false), "one notch is not a gesture");
         assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15, false),
+            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
+            "first sight is not a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 10.1, false).is_none(),
+            "one notch is not a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 10.15, false).is_some(),
             "a second notch inside the settle window opens one",
         );
         // The button goes down after the wheel stopped, on something that
         // moves no style. Still inside the settle window, so the gesture is
         // legitimately open here and the press is not what is holding it.
         assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, true),
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, true).is_some(),
             "the settle window has not run out yet",
         );
         // Past the window with the button still held: nothing is driving the
         // style, so the gesture is over however long the hold goes on.
         assert!(
-            !StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, true),
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, true).is_none(),
             "a press that opened nothing carried the gesture past its settle",
         );
         assert!(
-            !StyleMotion::observe(&mut slot, &c, 30.0, true),
+            StyleMotion::observe(&mut slot, &c, 30.0, true).is_none(),
             "and went on carrying it for as long as the button was down",
         );
     }
@@ -3628,14 +3773,20 @@ mod tests {
         let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
         let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
-        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "a drag opens a gesture");
         assert!(
-            StyleMotion::observe(&mut slot, &b, 20.1, false),
+            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
+            "first sight is not a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(),
+            "a drag opens a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 20.1, false).is_some(),
             "released inside the settle, it runs on to the window",
         );
         assert!(
-            !StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false),
+            StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false).is_none(),
             "held still past the settle with the pointer up, the image sharpens",
         );
     }
@@ -3655,19 +3806,22 @@ mod tests {
         for frame in 0..30 {
             let t = 10.0 + f64::from(frame) / 60.0;
             assert!(
-                !StyleMotion::observe(&mut slot, &a, t, true),
+                StyleMotion::observe(&mut slot, &a, t, true).is_none(),
                 "frame {frame} of a drag that moves no style is settled",
             );
         }
         // A real gesture, opened by a change and settled by release...
-        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "a drag opens a gesture");
         assert!(
-            !StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false),
+            StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(),
+            "a drag opens a gesture"
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false).is_none(),
             "and release settles it",
         );
         // ...stays settled under a later press that changes nothing.
         assert!(
-            !StyleMotion::observe(&mut slot, &b, 30.0, true),
+            StyleMotion::observe(&mut slot, &b, 30.0, true).is_none(),
             "a later unrelated press does not reopen the settled gesture",
         );
     }
@@ -3711,6 +3865,11 @@ mod tests {
     /// would re-fold the whole retention — 46 ms at a 12 s Span on a
     /// full-height 2x pane, measured — and only the rebuild counter can see the
     /// difference, since the refold draws the same picture.
+    ///
+    /// Per FRAME, which is the whole of the claim. `GestureCut::Slabs` moves
+    /// the slab width once at each END of a pitch gesture and the grid is keyed
+    /// on that width, so one pays exactly two refolds however long it runs;
+    /// `timing_refold` is what those two cost.
     ///
     /// Driven at a 12 s Span rather than at the three-minute one a fresh view
     /// opens on, and that is the fixture being cheap rather than being stale:
@@ -3779,6 +3938,7 @@ mod tests {
             ppp: 2.0,
             max_side: EDITOR_MAX_SIDE,
             max_rows: EDITOR_MAX_SIDE,
+            max_cols: usize::MAX,
             pitch_len,
             depth_len,
             window: 30.0,
@@ -3818,7 +3978,7 @@ mod tests {
         assert!(folds <= 8, "a horizontal drag re-folds {folds} times, not a handful");
     }
 
-    /// The two-step plan a gesture frame is built through, which
+    /// The two-step plan a [`GestureCut::Rows`] frame is built through, which
     /// `draw_spectrogram` runs and no other test reaches: the FULL plan
     /// decides the rows, [`gesture_rows`] cuts them, and the second plan
     /// builds the short image.
@@ -3836,18 +3996,19 @@ mod tests {
         // as points, which is what a pane is measured in.
         for pitch_len in [120.0f32, 350.0, 704.0] {
             let mut planned = std::collections::BTreeSet::new();
-            // Ten frames of a pitch drag: the scale moves every frame, the
-            // pane does not.
+            // Ten frames of a Span drag, which is the gesture that spends its
+            // rows: the window moves every frame, the pane and the scale do
+            // not.
             for frame in 0..10 {
-                let (min_midi, span) = (40.0 + frame as f32 * 0.5, 48.0 - frame as f32 * 0.9);
                 let view = |coarse: bool, max_rows: usize| PaneView {
                     ppp: 2.0,
                     max_side: EDITOR_MAX_SIDE,
                     max_rows,
+                    max_cols: usize::MAX,
                     pitch_len,
                     depth_len: 800.0,
-                    window: 30.0,
-                    scale: PitchScale { min_midi, max_midi: min_midi + span, span },
+                    window: 30.0 + frame as f64 * 4.0,
+                    scale: PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 },
                     cfg: SpectrumConfig::default(),
                     whole: false,
                     coarse,
@@ -3888,6 +4049,7 @@ mod tests {
                 ppp: 2.0,
                 max_side: EDITOR_MAX_SIDE,
                 max_rows: EDITOR_MAX_SIDE,
+                max_cols: usize::MAX,
                 pitch_len: 120.0,
                 depth_len: 800.0,
                 window: 30.0,
@@ -3899,6 +4061,124 @@ mod tests {
             &columns,
         );
         assert_eq!(gesture_rows(short.rows), short.rows, "a pane under the floor keeps its rows");
+    }
+
+    /// The mirror two-step, for [`GestureCut::Slabs`]: a pitch gesture spends
+    /// the time axis, so the pitch side of the style — its rows AND its read —
+    /// has to reach the second plan untouched and the slab width has to be the
+    /// only thing that moved.
+    ///
+    /// That is the whole claim. A difference anywhere on the pitch side is the
+    /// several-dB step between a gesture frame and the picture it settles into,
+    /// which is what this cut exists to remove.
+    #[test]
+    fn a_pitch_gesture_holds_its_rows_and_cuts_its_slabs() {
+        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
+        let mut planned = std::collections::BTreeSet::new();
+        // Ten frames of a pitch drag: the scale moves every frame, the pane and
+        // the window do not.
+        for frame in 0..10 {
+            let (min_midi, span) = (40.0 + frame as f32 * 0.5, 48.0 - frame as f32 * 0.9);
+            let view = |max_cols: usize| PaneView {
+                ppp: 2.0,
+                max_side: EDITOR_MAX_SIDE,
+                max_rows: EDITOR_MAX_SIDE,
+                max_cols,
+                pitch_len: 704.0,
+                depth_len: 800.0,
+                window: 30.0,
+                scale: PitchScale { min_midi, max_midi: min_midi + span, span },
+                cfg: SpectrumConfig::default(),
+                whole: false,
+                coarse: false,
+            };
+            // Exactly the pair of calls `draw_spectrogram` makes for this cut.
+            let full = Plan::new(&view(usize::MAX), &columns);
+            let short = Plan::new(&view(gesture_slabs(full.slabs())), &columns);
+
+            // The fixture has to be wide enough that the cut bites at all: a
+            // pane under the floor would pass every assertion below with the
+            // cut doing nothing.
+            assert!(short.slabs() < full.slabs(), "the pane is too narrow to reach the cut");
+            assert_eq!(short.rows, full.rows, "the rows came through the cut");
+            assert_eq!(short.slabs(), gesture_slabs(full.slabs()), "the cut reached the plan");
+            assert!(
+                short.slabs() * GESTURE_SLAB_CUT >= full.slabs(),
+                "{} slabs under {} is past the bound",
+                short.slabs(),
+                full.slabs(),
+            );
+            assert!(short.slabs() >= full.slabs().min(GESTURE_SLABS), "under the floor");
+            assert_eq!(
+                full.key.style().differs(short.key.style()),
+                Some(Restart::Slab),
+                "the cut moved something other than the slab width",
+            );
+            planned.insert((full.slabs(), short.slabs()));
+        }
+        assert_eq!(planned.len(), 1, "the slab count moved during the gesture: {planned:?}");
+    }
+
+    /// Which axis a gesture spends is decided by the one it is MOVING, and the
+    /// answer stands for the length of the gesture.
+    ///
+    /// The holding is the half that costs something to get wrong: a cut
+    /// re-decided on a frame that moves nothing would resize the ring under a
+    /// drag that has merely paused, which is the per-frame relayout the whole
+    /// gesture path exists to avoid.
+    #[test]
+    fn a_gesture_spends_the_axis_it_is_not_moving() {
+        let cfg = SpectrumConfig::default();
+        let dimmer = SpectrumConfig { volume_floor_db: cfg.volume_floor_db - 6.0, ..cfg };
+        let base = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        // One field moved per case, the [`Restart`] that names it, and the cut
+        // it is expected to buy.
+        let cases = [
+            (
+                "a pitch wheel",
+                ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg),
+                Restart::Pitch,
+                GestureCut::Slabs,
+            ),
+            (
+                "a Span rung",
+                ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg),
+                Restart::Slab,
+                GestureCut::Rows,
+            ),
+            (
+                "a resize",
+                ColumnStyle::new(120, false, 0.1, 40.0, 48.0, &cfg),
+                Restart::Rows,
+                GestureCut::Rows,
+            ),
+            (
+                "a Level drag",
+                ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &dimmer),
+                Restart::Colour,
+                GestureCut::Slabs,
+            ),
+        ];
+        for (name, moved, restart, cut) in cases {
+            // The fixture moves the field it claims to: without this every case
+            // below could be naming the same change.
+            assert_eq!(base.differs(&moved), Some(restart), "{name}: moved the wrong field");
+            let mut slot = None;
+            assert!(
+                StyleMotion::observe(&mut slot, &base, 10.0, true).is_none(),
+                "{name}: first sight is not a gesture",
+            );
+            assert_eq!(
+                StyleMotion::observe(&mut slot, &moved, 10.02, true),
+                Some(cut),
+                "{name}: spent the wrong axis",
+            );
+            assert_eq!(
+                StyleMotion::observe(&mut slot, &moved, 10.04, true),
+                Some(cut),
+                "{name}: a paused drag re-decided its cut",
+            );
+        }
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
@@ -4180,6 +4460,7 @@ mod tests {
                     ppp: 2.0,
                     max_side: EDITOR_MAX_SIDE,
                     max_rows: EDITOR_MAX_SIDE,
+                    max_cols: usize::MAX,
                     pitch_len: 300.0,
                     depth_len: 800.0,
                     window: span as f64,
@@ -5415,6 +5696,352 @@ mod tests {
                      {gesture_ms:5.2} ms at {gesture} | steady {steady_ms:5.2} ms | \
                      bins_for {bins_ms:4.2} ms",
                     history.len() - start,
+                );
+            }
+        }
+    }
+
+    /// A row's read is a filter whose SUPPORT is set by the row count, so the
+    /// picture's overall brightness moves with the row count — which is what a
+    /// gesture changes, twice over, and what a pane resize changes on its own.
+    ///
+    /// Three tables, all in dB of the ramp's own domain (the default window is
+    /// 60 dB, so a figure over ~1.2 dB is over 2% of the whole range):
+    ///
+    /// - What a gesture frame adds, split into the half the row cut
+    ///   ([`gesture_rows`]) carries and the half the coarse read
+    ///   ([`RowRead::Max`]) adds on top of it.
+    /// - The same pitch range at five row counts, settled — the pane-resize
+    ///   and offline-resolution case, with no gesture in it.
+    /// - The same sweep on pure noise, which is the distribution
+    ///   [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
+    ///   converges over. It is the control: the mean's dependence there is a
+    ///   fifth of what it is over partials, so what moves the brightness is
+    ///   spectral features NARROWER than a row, not the floor the order was set
+    ///   against.
+    ///
+    /// `cargo test -p harmonigraph-ui --release brightness_across_resolutions -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn brightness_across_resolutions() {
+        let step = harmonigraph_core::spectrogram::DB_STEP;
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+        let scale_of = |span: f32| {
+            let min_midi = if span >= 119.0 {
+                harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
+            } else {
+                60.0 - span / 2.0
+            };
+            PitchScale { min_midi, max_midi: min_midi + span, span }
+        };
+        // The pane-average level an image draws: a gesture image is stretched
+        // over the pane, so its mean over its OWN rows is what the pane shows.
+        let avg = |bins: &[Bin], db: &[BucketDb]| -> f64 {
+            bins.iter().map(|b| f64::from(b.read.of(db, weight))).sum::<f64>() / bins.len() as f64
+        };
+
+        let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
+        let noise = analysed_column(&[]);
+
+        println!("\n-- what a gesture frame adds, dB --");
+        println!(
+            "{:>9} {:>6} {:>6} {:>6} {:>8} {:>8}",
+            "zoom", "pane", "rows", "wide%", "row cut", "+ read"
+        );
+        for &pane_rows in &[1408usize, 704, 448] {
+            for &span in &[119.6f32, 60.0, 24.0, 12.0, 3.0] {
+                let scale = scale_of(span);
+                let g = gesture_rows(pane_rows);
+                let settled = avg(&bins_for(pane_rows, &scale, false), &chord);
+                let cut = avg(&bins_for(g, &scale, false), &chord);
+                let coarse = avg(&bins_for(g, &scale, true), &chord);
+                let wide = bins_for(g, &scale, true)
+                    .iter()
+                    .filter(|b| matches!(b.read, RowRead::Max { .. }))
+                    .count();
+                println!(
+                    "{:>9} {:>6} {:>6} {:>5.0}% {:>+8.2} {:>+8.2}",
+                    format!("{span:.0} semi"),
+                    pane_rows,
+                    g,
+                    100.0 * wide as f32 / g as f32,
+                    (cut - settled) as f32 * step,
+                    (coarse - cut) as f32 * step,
+                );
+            }
+        }
+
+        for (name, db) in [("partials", &chord), ("noise", &noise)] {
+            println!("\n-- settled, same range at five row counts, dB from 256 rows ({name}) --");
+            for &span in &[119.6f32, 60.0, 24.0, 12.0] {
+                let scale = scale_of(span);
+                let mut line = String::new();
+                let mut base = 0.0;
+                for (k, &rows) in [256usize, 448, 704, 1408, 2816].iter().enumerate() {
+                    let a = avg(&bins_for(rows, &scale, false), db);
+                    if k == 0 {
+                        base = a;
+                    }
+                    line += &format!("  {rows}:{:+.2}", (a - base) as f32 * step);
+                }
+                println!("{:>9}{line}", format!("{span:.0} semi"));
+            }
+        }
+    }
+
+    /// One analysed column through the real transform, so the partials carry
+    /// the taper's own skirts and the floor is the transform's rather than one
+    /// this fixture picked. An empty `notes` leaves the noise alone.
+    fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
+        let sr = 48_000.0f32;
+        let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
+        let mut seed = 0x1234_5678u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+        };
+        let buf: Vec<f32> = (0..1 << 16)
+            .map(|i| {
+                let t = i as f32 / sr;
+                // Sawtooths by partial, rolled off 1/k and band-limited by hand.
+                let v: f32 = notes
+                    .iter()
+                    .flat_map(|&m| {
+                        let f = harmonigraph_core::spectrum::midi_to_hz(m);
+                        (1..=24).map(move |k| (f * k as f32, k))
+                    })
+                    .filter(|&(fk, _)| fk < sr * 0.45)
+                    .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
+                    .sum();
+                v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
+            })
+            .collect();
+        an.push_samples(&buf);
+        an.pitch_spectrum()
+            .expect("a full window analyses")
+            .iter()
+            .map(|&p| harmonigraph_core::spectrogram::quantize(p))
+            .collect()
+    }
+
+    /// Scratch: what coarsening the TIME axis is worth, which is the knob
+    /// [`timing_parts`] does not turn. Not an assertion.
+    ///
+    /// A gesture coarsens the PITCH axis whichever axis the pointer is moving,
+    /// so a Span drag pays a brightness change on an axis it is holding still
+    /// (#491). Halving the slabs instead is the trade that costs nothing on the
+    /// axis being read — this is what it costs on the one being drawn.
+    ///
+    /// Zoomed out, where both the read and the brightness change are worst.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_slabs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_slabs() {
+        use std::time::Instant;
+
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let window_s = 120.0f64;
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let cfg = SpectrumConfig::default();
+
+        println!(
+            "{:>6} {:>6} {:>7} {:>6} {:>9} {:>8}",
+            "cols", "rows", "read", "slabs", "restart", "MB"
+        );
+        for target_cols in [1024usize, 512, 256] {
+            let keep = target_cols + RING_HEADROOM;
+            let bucket = live_slab(window_s, target_cols);
+            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
+            let n = (span_needed / interval) as usize;
+            let mut history = crate::SpectrumHistory::default();
+            let mut phase = 0.0f32;
+            for i in 0..n {
+                let mut power = [0.0f32; SPECTRUM_BINS];
+                for h in 1usize..8 {
+                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
+                        % SPECTRUM_BINS;
+                    power[idx] = 0.1 / h as f32;
+                }
+                for (b, p) in power.iter_mut().enumerate() {
+                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
+                }
+                phase += 0.01;
+                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
+            }
+            let newest = history.back().unwrap().time;
+            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
+            let mut agg = SpectrogramAgg::new();
+            let (centers, power) = agg.window(&history, first, bucket, keep);
+            let w = centers.len();
+            let first_key = (centers[0] / bucket).floor() as i64;
+            let last_key = first_key + w as i64 - 1;
+
+            for rows in [1408usize, 704] {
+                for coarse in [false, true] {
+                    let bins = bins_for(rows, &full, coarse);
+                    let h = bins.len();
+                    let style = style_for(h, bucket, window_s, &full);
+                    let shades = Shades::new(&cfg, &bins);
+                    let capacity = ring_capacity(keep, w);
+                    let t0 = Instant::now();
+                    let mut sink = 0usize;
+                    for _ in 0..6 {
+                        let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
+                        let px = restart_pixels(
+                            &ring,
+                            capacity * 2,
+                            h,
+                            first_key,
+                            last_key,
+                            |i, out| fill_column_into(&shades, &bins, slab_of(&power, i), out),
+                        );
+                        sink += px.len();
+                    }
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
+                    assert!(sink > 0);
+                    println!(
+                        "{target_cols:>6} {rows:>6} {:>7} {w:>6} {ms:>9.2} {:>8.1}",
+                        if coarse { "max" } else { "mean" },
+                        (capacity * 2 * h * 4) as f64 / 1e6,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Scratch: what changing the slab width costs the AGGREGATOR, which is the
+    /// term `timing_slabs` does not carry. Not an assertion.
+    #[test]
+    #[ignore]
+    fn timing_refold() {
+        use std::time::Instant;
+
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        for window_s in [12.0f64, 120.0] {
+            let target_cols = 1024usize;
+            let keep = target_cols + RING_HEADROOM;
+            let fine = live_slab(window_s, target_cols);
+            let coarse = live_slab(window_s, target_cols / 4);
+            let span_needed = keep as f64 * coarse * 1.1 + 5.0;
+            let n = (span_needed / interval) as usize;
+            let mut history = crate::SpectrumHistory::default();
+            let mut phase = 0.0f32;
+            for i in 0..n {
+                let mut power = [0.0f32; SPECTRUM_BINS];
+                for h in 1usize..8 {
+                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
+                        % SPECTRUM_BINS;
+                    power[idx] = 0.1 / h as f32;
+                }
+                phase += 0.01;
+                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
+            }
+            let first = history
+                .partition_point(|c| c.time < history.back().unwrap().time - window_s)
+                .saturating_sub(1);
+
+            let mut agg = SpectrogramAgg::new();
+            let t0 = Instant::now();
+            let _ = agg.window(&history, first, fine, keep);
+            let cold = t0.elapsed().as_secs_f64() * 1000.0;
+
+            // The incremental path: same bucket, nothing new to fold.
+            let t0 = Instant::now();
+            for _ in 0..20 {
+                let _ = agg.window(&history, first, fine, keep);
+            }
+            let warm = t0.elapsed().as_secs_f64() * 1000.0 / 20.0;
+
+            // Alternating buckets, which is what opening and settling a pitch
+            // gesture would do: every call is a refold.
+            let t0 = Instant::now();
+            for i in 0..10 {
+                let b = if i % 2 == 0 { coarse } else { fine };
+                let _ = agg.window(&history, first, b, keep);
+            }
+            let flip = t0.elapsed().as_secs_f64() * 1000.0 / 10.0;
+
+            println!(
+                "window={window_s:>5}s cols={n:>6} fine={fine:.3}s coarse={coarse:.3}s | \
+                 first fold {cold:6.2} | carry-forward {warm:6.2} | refold {flip:6.2} ms"
+            );
+        }
+    }
+
+    /// What [`GESTURE_SLAB_CUT`] costs the picture, which is the other half of
+    /// the trade [`brightness_across_resolutions`] measures on the pitch side.
+    ///
+    /// A slab is a MAX over the columns in it, so widening one can only raise a
+    /// texel — the same shape as the row cut's, on the axis a pitch gesture is
+    /// holding still. What bounds it is that the columns are nearly the same
+    /// data: the hop is 8 ms against a 171 ms window, so neighbours share ~95%
+    /// of their samples and a max over more of them has little room to climb.
+    ///
+    /// Driven by an ENVELOPE rather than a steady tone, because a steady tone
+    /// is the case where a max over more columns is trivially free. Staccato is
+    /// the worst case a gesture meets — a note whose slab is mostly silence is
+    /// exactly where one loud column carries the whole widened slab.
+    ///
+    /// `cargo test -p harmonigraph-ui --release brightness_of_the_slab_cut -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn brightness_of_the_slab_cut() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+        let step = harmonigraph_core::spectrogram::DB_STEP;
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let bins = bins_for(1408, &full, false);
+
+        println!("{:>10} {:>8} {:>9} {:>9} {:>8}", "material", "window", "fine", "coarse", "delta");
+        for (name, duty) in [("sustained", 1.0f64), ("legato", 0.75), ("staccato", 0.25)] {
+            for window_s in [12.0f64, 120.0] {
+                let target = 1024usize;
+                let keep = target + RING_HEADROOM;
+                let fine = live_slab(window_s, target);
+                let coarse = live_slab(window_s, target / GESTURE_SLAB_CUT);
+                let n = ((keep as f64 * coarse * 1.1 + 5.0) / interval) as usize;
+
+                let mut history = crate::SpectrumHistory::default();
+                for i in 0..n {
+                    let t = i as f64 * interval;
+                    // One note per half second, sounding for `duty` of it.
+                    let on = (t % 0.5) < 0.5 * duty;
+                    let mut power = [0.0f32; SPECTRUM_BINS];
+                    for h in 1usize..12 {
+                        let idx = (700 + h * 640).min(SPECTRUM_BINS - 1);
+                        power[idx] = if on { 0.2 / h as f32 } else { 0.0 };
+                    }
+                    for (b, p) in power.iter_mut().enumerate() {
+                        *p += 1e-8 * (1.0 + ((b * 7 + i) % 13) as f32);
+                    }
+                    history.push(crate::SpectrogramColumn::from_power(t, &power));
+                }
+                let newest = history.back().unwrap().time;
+                let first =
+                    history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
+
+                // Pane-average level over the whole drawn image, both ways.
+                let avg = |bucket: f64| -> f64 {
+                    let mut agg = SpectrogramAgg::new();
+                    let (centers, power) = agg.window(&history, first, bucket, keep);
+                    let w = centers.len();
+                    let total: f64 = (0..w)
+                        .map(|i| {
+                            let slab = slab_of(&power, i);
+                            bins.iter().map(|b| f64::from(b.read.of(slab, weight))).sum::<f64>()
+                                / bins.len() as f64
+                        })
+                        .sum();
+                    total / w as f64
+                };
+                let (a, b) = (avg(fine), avg(coarse));
+                println!(
+                    "{name:>10} {:>7.0}s {:>9.1} {:>9.1} {:>+7.2} dB",
+                    window_s,
+                    a * f64::from(step),
+                    b * f64::from(step),
+                    (b - a) as f32 * step,
                 );
             }
         }
