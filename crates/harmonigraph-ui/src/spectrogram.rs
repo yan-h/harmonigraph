@@ -5542,4 +5542,90 @@ mod tests {
             .map(|&p| harmonigraph_core::spectrogram::quantize(p))
             .collect()
     }
+
+    /// Scratch: what coarsening the TIME axis is worth, which is the knob
+    /// [`timing_parts`] does not turn. Not an assertion.
+    ///
+    /// A gesture coarsens the PITCH axis whichever axis the pointer is moving,
+    /// so a Span drag pays a brightness change on an axis it is holding still
+    /// (#491). Halving the slabs instead is the trade that costs nothing on the
+    /// axis being read — this is what it costs on the one being drawn.
+    ///
+    /// Zoomed out, where both the read and the brightness change are worst.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_slabs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_slabs() {
+        use std::time::Instant;
+
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let window_s = 120.0f64;
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let cfg = SpectrumConfig::default();
+
+        println!(
+            "{:>6} {:>6} {:>7} {:>6} {:>9} {:>8}",
+            "cols", "rows", "read", "slabs", "restart", "MB"
+        );
+        for target_cols in [1024usize, 512, 256] {
+            let keep = target_cols + RING_HEADROOM;
+            let bucket = live_slab(window_s, target_cols);
+            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
+            let n = (span_needed / interval) as usize;
+            let mut history = crate::SpectrumHistory::default();
+            let mut phase = 0.0f32;
+            for i in 0..n {
+                let mut power = [0.0f32; SPECTRUM_BINS];
+                for h in 1usize..8 {
+                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
+                        % SPECTRUM_BINS;
+                    power[idx] = 0.1 / h as f32;
+                }
+                for (b, p) in power.iter_mut().enumerate() {
+                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
+                }
+                phase += 0.01;
+                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
+            }
+            let newest = history.back().unwrap().time;
+            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
+            let mut agg = SpectrogramAgg::new();
+            let (centers, power) = agg.window(&history, first, bucket, keep);
+            let w = centers.len();
+            let first_key = (centers[0] / bucket).floor() as i64;
+            let last_key = first_key + w as i64 - 1;
+
+            for rows in [1408usize, 704] {
+                for coarse in [false, true] {
+                    let bins = bins_for(rows, &full, coarse);
+                    let h = bins.len();
+                    let style = style_for(h, bucket, window_s, &full);
+                    let shades = Shades::new(&cfg, &bins);
+                    let capacity = ring_capacity(keep, w);
+                    let t0 = Instant::now();
+                    let mut sink = 0usize;
+                    for _ in 0..6 {
+                        let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
+                        let px = restart_pixels(
+                            &ring,
+                            capacity * 2,
+                            h,
+                            first_key,
+                            last_key,
+                            |i, out| fill_column_into(&shades, &bins, slab_of(&power, i), out),
+                        );
+                        sink += px.len();
+                    }
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
+                    assert!(sink > 0);
+                    println!(
+                        "{target_cols:>6} {rows:>6} {:>7} {w:>6} {ms:>9.2} {:>8.1}",
+                        if coarse { "max" } else { "mean" },
+                        (capacity * 2 * h * 4) as f64 / 1e6,
+                    );
+                }
+            }
+        }
+    }
 }
