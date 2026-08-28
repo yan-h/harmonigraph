@@ -13,6 +13,7 @@ mod glow_markers;
 mod glow_meld;
 mod glow_reach;
 mod glow_standoff;
+mod golden;
 mod labels;
 mod marks;
 mod octaves;

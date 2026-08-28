@@ -192,6 +192,37 @@ whole-tree rewrite. Comments carry the rationale, so rewriting them in bulk
 is a change of content dressed as a sweep, and no reviewer can read past it
 to find the sentences that actually moved.
 
+## Two defects that actually ship here: cache keys and fixture reach
+
+Both are cheap to write, invisible to `ci.sh`, and each has landed more than
+once. They are the standing prior when reading a diff — your own or anyone's.
+
+**A cache key is wrong in two directions, and the second one is this repo's.**
+For every cache, memo, dirty flag or derived value, write down what it is
+keyed on and then ask both questions. What else feeds the value and is
+missing from the key serves a stale value. What the key carries that decides
+nothing about the value is never stale and never still — it churns at the
+rate of whatever it should not be watching. The too-wide key is the one with
+a record here: a spectrogram column keyed on a whole `SpectrumConfig`
+re-uploaded the heatmap on every frame of a drag (`4a4ae66`), and a mark's
+key minted fresh per pass held that cache at its eviction limit until a
+texture was freed mid-pass (`51d337e`).
+
+A too-wide key is also not merely slow. It restarts the thing it guards often
+enough to hide what the carry-forward path gets wrong, so narrowing one is a
+change of behaviour rather than of speed: `a2e6e01` is a correctness bug that
+was there all along and only became reachable once the key stopped wiping the
+evidence every frame. A diff that narrows a key owes an answer for what is
+newly reachable.
+
+**A test reaches a path only if its fixture is big enough to get there.** A
+fixture too small to reach the new branch passes for the wrong reason and
+reads as coverage, which is worse than no test — a green light with nothing
+behind it. Issue #450 is the worked example: four shadow tests, each missing
+the shape it claims to measure for its own reason, and a disc passing for a
+cross through all 145. For a path this diff adds, name the test that executes
+it and check the fixture actually arrives.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a
