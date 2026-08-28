@@ -37,8 +37,15 @@ code as it is written rather than catching it afterwards.
 Nothing agent-shaped replaces the per-branch half, because the class that
 actually slips through here is a picture change and no diff reader sees one
 at any effort: #453 moved the frame by a mean 3.3–3.7/255 with local swings
-of −90 while the suite stayed 146/0 green. The replacement is a golden-frame
-regression gate in `ci.sh` — specified in issue #459, not yet built.
+of −90 while the suite stayed 146/0 green. What replaces it is mechanical —
+the golden frames in `harmonigraph-render`'s `lattice_tests::golden`, two
+byte-exact pictures covering the parts a feature PR is not supposed to reach.
+
+**A changed golden is a stated picture change**, and the PR body is where it
+is stated. Re-baseline with `HARMONIGRAPH_BLESS=1 cargo test -p
+harmonigraph-render golden`, and read the contact sheet the failure names
+before you do — a bless nobody looked at is the failure the gate exists to
+catch, not a step on the way past it.
 
 **Yan: run `/audit-merges` after a batch of merges lands.** Parallel
 sessions produce branches that are each correct against the `main` they
