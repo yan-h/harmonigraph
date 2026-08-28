@@ -1234,7 +1234,7 @@ pub struct ViewConfig {
     /// Two things follow. A node dims the light it stands in whoever laid it
     /// down, its NEIGHBOURS' halos included, that being what the melded field
     /// holds; and it dims that light wherever the light reaches, not only
-    /// under its own Clearance — a node that clears nothing still stands its
+    /// under its own clearing — a node that clears nothing still stands its
     /// rings off.
     ///
     /// On a node it is its RINGS, and a node draws nothing else: inside the
@@ -1274,8 +1274,8 @@ pub struct ViewConfig {
     /// units: the shadow is solid out to `shadow - soft` and the light is given
     /// back over the rest. The Shadow bar's low handle.
     ///
-    /// Held inside the shadow (`sanitize`), as the Clearance's fade is, because
-    /// that is the shape the bar draws: its low handle is where the fade
+    /// Held inside the shadow (`sanitize`) because that is the shape the bar
+    /// draws: its low handle is where the fade
     /// starts and cannot stand below the axis. A fade the whole width of the
     /// shadow is the bar's low handle at 0 — no solid band at all, the light
     /// coming off a ring at one steady rate — and that is the one a wide shadow
@@ -1338,8 +1338,8 @@ pub struct ViewConfig {
     /// lattice.wgsl.
     ///
     /// 1 is a hole: where the standoff is solid, the ground comes back bare,
-    /// exactly the frame with no glow in it, and across its fade — and the
-    /// Clearance's, which it is floored at — to a blend of the two. Below
+    /// exactly the frame with no glow in it, and across its fade — the hole
+    /// falls off through that same fade — to a blend of the two. Below
     /// it the rings sit in a DIMMER POOL
     /// of their own light instead of in a void, which is the whole difference
     /// between a shadow that reads as shade and one that reads as ink. 0 is the
@@ -2336,8 +2336,8 @@ impl ViewConfig {
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
         self.glow_meld = finite_or(self.glow_meld, fresh.glow_meld).clamp(0.0, 1.0);
-        // The standoff and its fade, one control over two numbers on the
-        // Clearance pair's terms above: the fade is measured back from the
+        // The standoff and its fade, one control over two numbers: the fade is
+        // measured back from the
         // shadow's end, so one wider than the shadow is a low end off the bottom of
         // the axis, and it draws the same as one exactly as wide either way
         // (`standoff_coverage` floors it at the ring's edge).

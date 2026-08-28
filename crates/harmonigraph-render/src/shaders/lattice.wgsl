@@ -63,10 +63,11 @@ struct Uniforms {
     // they get here. w: how deep the melody/bass marks reach past the ring
     // they stand off, same units; 0 = no marks.
     misc5: vec4<f32>,
-    // x/y: unused — they carried the trail's mark style and strength, from
+    // x/y/z: unused — x/y carried the trail's mark style and strength, from
     //    when a memory was a change to the idle marker rather than a kept
-    //    note name. z: the sevens knockout's fade width, read below by the
-    //    vertex stage. w: the melody/bass marks' shimmer pattern
+    //    note name, and z the sevens knockout's own fade width, from when the
+    //    hole had a bar apart from the Shadow that casts it.
+    //    w: the melody/bass marks' shimmer pattern
     //    (0 off, then one index per pattern; see Pulse::shader_index), read
     //    by mark_pulse — NOT a free slot.
     misc6: vec4<f32>,
@@ -150,8 +151,9 @@ struct Uniforms {
     // itself paints. Both readers of the light scale it by the same layer, so
     // nothing is ever erased out of the light target.
     //
-    // ZEROED WHOLE with misc10, on the same rule and for the same reason:
-    // there is one off switch for the glow and it is `u.misc10.x > 0.0`.
+    // NOT zeroed with misc10: packed whatever the glow says, the hole being a
+    // shape a node cuts with no light in the picture at all. Zero here is the
+    // whole feature off, and `glow_shadow` is the one test either half takes.
     misc11: vec4<f32>,
     // The node glow's plumbing row, which is not a dial. x: how many rows the
     // ink strip has — the row map's CAPACITY and not this frame's instance
@@ -2500,11 +2502,10 @@ fn ring_shade(sd: f32, soft: f32, level: f32) -> f32 {
 /// with nothing inside the innermost ring claiming the pixel, the light runs in
 /// to the centre and stops one Shadow short of that ring's inner edge.
 ///
-/// [`node_clearing`] measures the same annuli and cuts them by the same slices,
-/// which is what makes the two Shadow bars one family: what a node holds the
-/// light off is what it hides, and neither is the empty circle its innermost
-/// ring encloses. What is still its own function is the FALLOFF — a decay here
-/// against that one's ramp.
+/// [`node_clearing`] measures the same annuli, cuts them by the same slices and
+/// falls off through the same [`standoff_coverage`], which is what makes the
+/// shade and the hole one bar: what a node holds the light off is what it
+/// hides, and neither is the empty circle its innermost ring encloses.
 ///
 /// A ring that reaches the centre itself has no such middle, its own annulus
 /// being a disc: the standoff then covers what it covers, and the light is a
@@ -3259,8 +3260,9 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     );
     let corner = corners[vertex_index];
     // The arm in the node's uv, as `vs_plus_glow` takes it and collapsing the
-    // same way: `misc13` is zeroed whole where the glow is off, and a marker
-    // with no unit to be measured in casts no hole.
+    // same way: a marker with no unit to be measured in casts no hole. The unit
+    // is packed whatever the glow says, so this is the marker's own test and
+    // not the light's.
     let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.misc13.y > 0.0);
     // Grown to hold the CLEARING as well as the ink, in arms: the hole reaches
     // one `gap_reach` out from the cross, and that is a node's length where
@@ -3885,10 +3887,10 @@ fn gap_shade(cov: f32) -> f32 {
 /// The exit a depth of 0 buys is stated here rather than inside the mapping,
 /// which is where the walk it skips lives. It is EXACT rather than an
 /// approximation, which is what lets it stand outside `EARLY_OUT`: a depth of 0
-/// keeps every scrap of the light by definition, and `u.misc11` is zeroed whole
-/// with the glow, so the whole feature being off is the same answer arrived at
-/// by the same line — where [`glow_standoff`] is otherwise a walk over every
-/// mark per fragment for nothing.
+/// keeps every scrap of the light by definition — where [`glow_standoff`] is
+/// otherwise a walk over every mark per fragment for nothing. The glow being
+/// off never arrives here to need the same answer: `glow_draws` skips the pass
+/// whole, so the depth is the only thing this line is standing in for.
 fn glow_shade(in: VsOut, d: f32) -> f32 {
     if glow_shadow_depth() <= 0.0 {
         return 0.0;
@@ -4074,11 +4076,11 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     );
     let corner = corners[vertex_index];
     let unit = marker_unit();
-    // `misc13` is zeroed whole where the glow is off, so a unit of nothing is
-    // the marker field having no shadow to draw — and the floor `marker_unit`
-    // puts under the division would otherwise turn an arm into a quad the width
-    // of the pane. The collapse is what the row means, said here rather than
-    // left to the floor.
+    // A unit of nothing is the marker field having no shadow to draw — and the
+    // floor `marker_unit` puts under the division would otherwise turn an arm
+    // into a quad the width of the pane. The collapse is what the row means,
+    // said here rather than left to the floor. The unit is packed whatever the
+    // glow says, so this tests the marker and not the light.
     let arm = select(0.0, inst.pos_radius.w / unit, u.misc13.y > 0.0);
     // Sized to where the standoff's own window has shut ([`glow_shadow_stop`]),
     // measured out from the arm it is cast by, which is `vs_glow`'s rule for a

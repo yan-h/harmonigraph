@@ -216,7 +216,7 @@ fn the_meld_leaves_a_node_lighting_a_pixel_alone_untouched() {
 /// bare ground, reading the glow target back through `node_paint` — so it mixes
 /// the same pair the composite does, and has to mix it the same way. A clearing
 /// left on the screen while the ground around it took the max is a node sitting
-/// on a plateau with a step at its Clearance, which is a halo drawn round every
+/// on a plateau with a step at its Shadow, which is a halo drawn round every
 /// node: the one failure the light being ONE field under the whole lattice
 /// exists to prevent.
 ///
