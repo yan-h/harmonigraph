@@ -5419,4 +5419,127 @@ mod tests {
             }
         }
     }
+
+    /// A row's read is a filter whose SUPPORT is set by the row count, so the
+    /// picture's overall brightness moves with the row count — which is what a
+    /// gesture changes, twice over, and what a pane resize changes on its own.
+    ///
+    /// Three tables, all in dB of the ramp's own domain (the default window is
+    /// 60 dB, so a figure over ~1.2 dB is over 2% of the whole range):
+    ///
+    /// - What a gesture frame adds, split into the half the row cut
+    ///   ([`gesture_rows`]) carries and the half the coarse read
+    ///   ([`RowRead::Max`]) adds on top of it.
+    /// - The same pitch range at five row counts, settled — the pane-resize
+    ///   and offline-resolution case, with no gesture in it.
+    /// - The same sweep on pure noise, which is the distribution
+    ///   [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
+    ///   converges over. It is the control: the mean's dependence there is a
+    ///   fifth of what it is over partials, so what moves the brightness is
+    ///   spectral features NARROWER than a row, not the floor the order was set
+    ///   against.
+    ///
+    /// `cargo test -p harmonigraph-ui --release brightness_across_resolutions -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn brightness_across_resolutions() {
+        let step = harmonigraph_core::spectrogram::DB_STEP;
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+        let scale_of = |span: f32| {
+            let min_midi = if span >= 119.0 {
+                harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
+            } else {
+                60.0 - span / 2.0
+            };
+            PitchScale { min_midi, max_midi: min_midi + span, span }
+        };
+        // The pane-average level an image draws: a gesture image is stretched
+        // over the pane, so its mean over its OWN rows is what the pane shows.
+        let avg = |bins: &[Bin], db: &[BucketDb]| -> f64 {
+            bins.iter().map(|b| f64::from(b.read.of(db, weight))).sum::<f64>() / bins.len() as f64
+        };
+
+        let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
+        let noise = analysed_column(&[]);
+
+        println!("\n-- what a gesture frame adds, dB --");
+        println!(
+            "{:>9} {:>6} {:>6} {:>6} {:>8} {:>8}",
+            "zoom", "pane", "rows", "wide%", "row cut", "+ read"
+        );
+        for &pane_rows in &[1408usize, 704, 448] {
+            for &span in &[119.6f32, 60.0, 24.0, 12.0, 3.0] {
+                let scale = scale_of(span);
+                let g = gesture_rows(pane_rows);
+                let settled = avg(&bins_for(pane_rows, &scale, false), &chord);
+                let cut = avg(&bins_for(g, &scale, false), &chord);
+                let coarse = avg(&bins_for(g, &scale, true), &chord);
+                let wide = bins_for(g, &scale, true)
+                    .iter()
+                    .filter(|b| matches!(b.read, RowRead::Max { .. }))
+                    .count();
+                println!(
+                    "{:>9} {:>6} {:>6} {:>5.0}% {:>+8.2} {:>+8.2}",
+                    format!("{span:.0} semi"),
+                    pane_rows,
+                    g,
+                    100.0 * wide as f32 / g as f32,
+                    (cut - settled) as f32 * step,
+                    (coarse - cut) as f32 * step,
+                );
+            }
+        }
+
+        for (name, db) in [("partials", &chord), ("noise", &noise)] {
+            println!("\n-- settled, same range at five row counts, dB from 256 rows ({name}) --");
+            for &span in &[119.6f32, 60.0, 24.0, 12.0] {
+                let scale = scale_of(span);
+                let mut line = String::new();
+                let mut base = 0.0;
+                for (k, &rows) in [256usize, 448, 704, 1408, 2816].iter().enumerate() {
+                    let a = avg(&bins_for(rows, &scale, false), db);
+                    if k == 0 {
+                        base = a;
+                    }
+                    line += &format!("  {rows}:{:+.2}", (a - base) as f32 * step);
+                }
+                println!("{:>9}{line}", format!("{span:.0} semi"));
+            }
+        }
+    }
+
+    /// One analysed column through the real transform, so the partials carry
+    /// the taper's own skirts and the floor is the transform's rather than one
+    /// this fixture picked. An empty `notes` leaves the noise alone.
+    fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
+        let sr = 48_000.0f32;
+        let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
+        let mut seed = 0x1234_5678u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+        };
+        let buf: Vec<f32> = (0..1 << 16)
+            .map(|i| {
+                let t = i as f32 / sr;
+                // Sawtooths by partial, rolled off 1/k and band-limited by hand.
+                let v: f32 = notes
+                    .iter()
+                    .flat_map(|&m| {
+                        let f = harmonigraph_core::spectrum::midi_to_hz(m);
+                        (1..=24).map(move |k| (f * k as f32, k))
+                    })
+                    .filter(|&(fk, _)| fk < sr * 0.45)
+                    .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
+                    .sum();
+                v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
+            })
+            .collect();
+        an.push_samples(&buf);
+        an.pitch_spectrum()
+            .expect("a full window analyses")
+            .iter()
+            .map(|&p| harmonigraph_core::spectrogram::quantize(p))
+            .collect()
+    }
 }
