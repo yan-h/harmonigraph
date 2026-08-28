@@ -1,10 +1,10 @@
 //! The Display tab's Colors page: both color tables, and the light on them.
 //!
-//! Note colors are the one table every pitch-colored shape reads — the
+//! MIDI pitch colors are the one table every pitch-colored shape reads — the
 //! lattice's discs and octave glyphs, the trail, the Analyzer's note ribbons
 //! and the Spiral's dots — written by the gradient and the Color range, with
 //! Bloom the light riding on the result, post-process on every one of those
-//! pictures at once. Heatmap colors
+//! pictures at once. Audio volume colors
 //! are the other table: level->color, read by the spectrogram, by the Spiral
 //! that draws the same frame, and by the lattice's audio ring, which takes it
 //! re-anchored on the node's own ground rather than on the heatmap's black bed.
@@ -205,7 +205,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         &mut cfg.volume_floor_db,
         &mut cfg.volume_ceiling_db,
         crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
-        "Color range",
+        "Volume range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
     .display(|db| format!("{db:.0} dB"))

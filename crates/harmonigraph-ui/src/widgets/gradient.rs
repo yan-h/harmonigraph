@@ -1080,7 +1080,7 @@ impl SpreadGrab {
 /// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`:
 /// the spectrogram's two rest under their readout on a 300pt row — Aurora
 /// opens them past four fifths of their axes — and stand clear of it by the
-/// ~423pt the settings column opens at. The Note colors group's two rest clear at
+/// ~423pt the settings column opens at. The MIDI pitch colors group's two rest clear at
 /// every width. So at rest this is a narrow-column problem; at a normal width
 /// it is reached by dragging, which is the ordinary use of the control.
 ///
@@ -2878,7 +2878,7 @@ mod tests {
                 // and only a second knockout over the same ground repairs it.
                 // Not a contrived pair — `chroma_ramp` is 0.0 in both
                 // `Gradient::default()` and `ViewConfig::default()`, so the
-                // Note colors group opens its chroma bar with coincident thumbs.
+                // MIDI pitch colors group opens its chroma bar with coincident thumbs.
                 ((of(0.9), 0.0), "a flat ramp parked under the readout"),
             ] {
                 let shapes = paint_bar_clipped(spread, pair);
@@ -2942,7 +2942,7 @@ mod tests {
     ///
     /// What it finds is narrower than "you see it the moment you open the
     /// pane", and the numbers are worth keeping because the temptation is to
-    /// state it wider. Measured at 300, 423 and 680pt: the Note colors group's two
+    /// state it wider. Measured at 300, 423 and 680pt: the MIDI pitch colors group's two
     /// bars rest clear of both runs at every width — brightness at `L*`
     /// 37.5→68.5, and chroma FLAT at 60.2%, both thumbs at one x. The
     /// spectrogram's two rest under their readout at 300pt only — Aurora opens

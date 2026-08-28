@@ -331,18 +331,13 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     section(ui, "Spectrogram");
     ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
         "A frequency-vs-time heatmap of the audio, behind the roll on the same \
-         time axis. Reads the Spectrum's Level range and Tilt. Turn Note history \
-         off to see it alone.",
+         time axis. Reads the Tilt, and takes its colors from the Colors page's \
+         Volume range. Turn Note history off to see it alone.",
     );
     // Where its colors are, rather than a second copy of the bars: the heatmap
     // gradient is one of the two color tables, and both are dialled on the
     // Colors page (see [`crate::panes::color`]).
     ui.weak("Its colors are set on the Colors page.");
-    // The checkbox and that pointer are the whole of the section. An opacity, a
-    // contrast curve and a private level range would each go here and each is
-    // deliberately absent — see
-    // [`spectrogram_gradient`](crate::SpectrumConfig::spectrogram_gradient) for
-    // why the neutral setting is the only one worth having.
 
     // One button for the pane's two accumulations rather than one under each
     // section, because they are one picture: the ribbons and the heatmap are
