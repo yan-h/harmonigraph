@@ -10,38 +10,35 @@ repo and branch protection is not available on this plan, so `ci.sh` via
 the `.githooks/pre-push` hook is the only automatic gate, and it checks
 clippy, the tests, the plugin package check, baseview's own tests, the rustdoc
 doc links, the `harmonigraph-core` dependency guard, the worktree-reclaim
-lock cases and the bundle swap — not judgement. `ci.sh`'s own header is the list to copy when this
-one looks stale. Review is therefore a habit, in two
-halves, and each half catches a class the other cannot.
+lock cases and the bundle swap — not judgement. `ci.sh`'s own header is the
+list to copy when this one looks stale.
 
-**`/self-review` reviews a branch's own diff — run it when Yan asks, not on
-your own initiative.** The harness already tells a session not to call the
-Agent tool unless the user requested it, and that rule stands; a per-task
-"run self-review" or "use subagents" in the prompt satisfies it same as
-`/self-review` typed directly, but nothing in this skill is a standing
-instruction to spawn one before every PR. Not with `/code-review` either —
-that is a built-in whose frontmatter sets `disable-model-invocation`, and the
-harness treats that as locked: no setting re-enables it, and there is no
-Bash route to a slash command either — for the `/code-review ultra` variant,
-sessions are told in so many words not to try. It is billed, so it is Yan's
-to run. The gate is per-skill and deliberate — `/simplify` sits beside it in
-the same built-in family and is model-invocable — so this is a boundary to
-work within, not an oversight to work around.
+**No session reviews its own branch, and it has no command to do it with.**
+`/code-review` is a built-in whose frontmatter sets
+`disable-model-invocation`, and the harness treats that as locked: no setting
+re-enables it, and there is no Bash route to a slash command either — for the
+`/code-review ultra` variant, sessions are told in so many words not to try.
+It is billed, so it is Yan's to run, at the effort and on the target he picks.
+The gate is per-skill and deliberate — `/simplify` sits beside it in the same
+built-in family and is model-invocable — so this is a boundary to work within,
+not an oversight to work around.
 
-`/self-review` is the project-local command that goes where `/code-review`
-cannot: it spawns a single `diff-reviewer` subagent on `git diff main...HEAD`,
-which works four readings in one pass — conventions, bugs, cache keys and
-test reach. A session has full context on what it just wrote, which makes
-this cheap; it is also biased toward its own work, which is what the
-subagent corrects for, since it did not write it. This half catches the bugs
-that live entirely inside one branch — a cache key carrying the wrong inputs
-in either direction, an underflow, a test whose fixture never reaches the
-new path.
+A project-local `/self-review` used to fill that gap with a `diff-reviewer`
+subagent over `git diff main...HEAD`. It is retired, and the reasoning is
+here so it is not rebuilt: it existed to be the one review a session could
+start on its own, and once it became manual-trigger-only it cost a typed
+command exactly like `/code-review` while returning findings no refuter had
+touched, triaged by the session that wrote the code. It was 11% of all credit
+spend across 189 runs. The two readings in it that were not generic — a cache
+key asked in both directions, and whether a fixture is big enough to reach
+the path it claims to test — moved to the root `CLAUDE.md`, where they shape
+code as it is written rather than catching it afterwards.
 
-The findings come back **unverified** — there is no refuter pass — so the
-calling session is the only thing between a first reading and a commit. The
-command says how to settle each kind: prose by reading the code it describes,
-behaviour by naming the input and watching it fail.
+Nothing agent-shaped replaces the per-branch half, because the class that
+actually slips through here is a picture change and no diff reader sees one
+at any effort: #453 moved the frame by a mean 3.3–3.7/255 with local swings
+of −90 while the suite stayed 146/0 green. The replacement is a golden-frame
+regression gate in `ci.sh` — specified in issue #459, not yet built.
 
 **Yan: run `/audit-merges` after a batch of merges lands.** Parallel
 sessions produce branches that are each correct against the `main` they
@@ -100,28 +97,28 @@ the last thirty.
 
 ## The agents in `.claude/agents/`
 
-`merge-auditor` does the reading for `/audit-merges`; `diff-reviewer` does it
-for `/self-review`, one instance per review. Both hand back candidate findings
-and the fix is written in the calling session. That split is the point:
-neither goes from "this looks wrong" to a commit without the failing test in
-between.
+`merge-auditor` does the reading for `/audit-merges`. It hands back candidate
+findings and the fix is written in the calling session. That split is the
+point: it does not go from "this looks wrong" to a commit without the failing
+test in between.
 
 Be precise about how much of that is enforced, because it is easy to read as
-more than it is. Both are granted `Read, Grep, Glob, Bash`: `Write` and
-`Edit` are withheld, but **`Bash` writes files, and can commit**. So the split
-is instructed, not enforced — the prompt tells them to return findings, and
-nothing stops them doing otherwise. `Bash` is granted deliberately: the #85
-audit's findings were proved with `cargo test`, `git merge-base` and `git
-blame`, and a reviewer that cannot run the suite cannot tell a bug from a
-guess. Narrowing `Bash` to read-only patterns would buy enforcement at that
-price; the trade is open, not settled.
+more than it is. It is granted `Read, Grep, Glob, Bash`: `Write` and `Edit`
+are withheld, but **`Bash` writes files, and can commit**. So the split is
+instructed, not enforced — the prompt tells it to return findings, and nothing
+stops it doing otherwise. `Bash` is granted deliberately: the #85 audit's
+findings were proved with `cargo test`, `git merge-base` and `git blame`, and
+a reviewer that cannot run the suite cannot tell a bug from a guess. What that
+costs when it goes wrong is on record: the retired `diff-reviewer` ran
+`load-plugin.sh` in three separate sessions, evicting the build Yan was
+testing, and successively more explicit prompts did not stop it. Narrowing
+`Bash` to read-only patterns would buy enforcement at the price of the audit's
+own evidence; the trade is open, not settled.
 
-Two is the whole list, and the rule that keeps it short is worth stating:
+One is the whole list, and the rule that keeps it short is worth stating:
 **an agent encodes a job or a constraint, never a description of the code.**
-Both describe a method, and a method does not go stale when a type is
-renamed. `diff-reviewer` earns its file on the constraint half — it is the
-read-only half of a review whose repair half happens in the calling session,
-and the readings it works are passed in per call rather than baked into it.
+`merge-auditor` describes a method, and a method does not go stale when a type
+is renamed.
 
 A `spectral` agent carrying the spectrogram's retention and aggregation
 invariants was written and then deleted before it ever ran, which is the

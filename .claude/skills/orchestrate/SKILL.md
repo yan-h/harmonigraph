@@ -93,7 +93,7 @@ over-scoped once it has finished and you have already paid. Measured here:
 | 100+ | 290k |
 
 Aim for an agent that finishes in 25–60 responses; the median is 43, and the
-work-shaped agents here sit inside that (`Explore` 31, `diff-reviewer` 35,
+work-shaped agents here sit inside that (`Explore` 31 and
 `general-purpose` 46). Past ~100 — the p95 — it has usually stopped answering
 and started exploring, which is judgment rather than a measurement, since
 nothing here scores an agent's answer.
@@ -106,7 +106,7 @@ Do not set a context ceiling instead. A subagent's peak is 142k at the median
 and 250k at p90, so any round number in that range is the tail of ordinary
 behaviour rather than a fault: `merge-auditor` alone has a 236k MEDIAN, because
 auditing a merge range honestly needs the material, while a mis-scoped
-`diff-reviewer` at 116k would sail under the same line.
+review agent at 116k would sail under the same line.
 
 ## State the return contract in the prompt
 
@@ -135,9 +135,8 @@ workflow to discover what the list is.
 ## Pin the model where it must not vary
 
 Subagents inherit this session's model unless the call overrides it. A fable
-session in practice overrides to opus on most calls but not all — this repo's
-`diff-reviewer` has run on both, 3 spawns opus and 7 fable, deciding it fresh
-each time. Where a role must not vary, pin `model:` in its
+session in practice overrides to opus on most calls but not all — one review role here
+ran on both, 3 spawns opus and 7 fable, decided fresh each time. Where a role must not vary, pin `model:` in its
 `.claude/agents/*.md` frontmatter and stop relying on the coin flip.
 
 ## Re-deriving these numbers
