@@ -443,23 +443,32 @@ mod tests {
         }
     }
 
-    /// The two shaders agree on what "no ink within reach" is spelled as.
+    /// The two shaders agree on what a seed IS: the sentinel that stands for
+    /// none within reach, and the coverage that makes a texel one.
     ///
-    /// It has to be written twice — there is no linkage between shader modules
-    /// here — and the two halves fail SILENTLY if they part: the flood writes a
-    /// sentinel the reader does not recognise, so every pixel reads as a seed
-    /// at (65535, 65535), and every name's shadow becomes a smooth gradient
-    /// toward the bottom-right corner of the pane.
+    /// Both have to be written twice — there is no linkage between shader
+    /// modules here — and both fail SILENTLY if they part. A sentinel the
+    /// reader does not recognise makes every pixel a seed at (65535, 65535),
+    /// and every name's shadow a smooth gradient toward the bottom-right corner
+    /// of the pane. A floor that has parted puts the reader's contour somewhere
+    /// inside the texels the flood seeds rather than on the edge of them, which
+    /// draws every name's standoff a fraction of a texel off its own letters.
     #[test]
     fn a_names_field_and_its_flood_agree_on_no_seed() {
-        let value = |src: &str| {
+        let value = |src: &str, name: &str| {
             src.lines()
-                .find(|l| l.trim_start().starts_with("const NO_SEED"))
+                .find(|l| l.trim_start().starts_with(&format!("const {name}")))
                 .and_then(|l| l.split('=').nth(1))
                 .map(|v| v.trim().trim_end_matches(';').trim_end_matches('u').to_string())
-                .expect("both shaders declare NO_SEED")
+                .unwrap_or_else(|| panic!("both shaders declare {name}"))
         };
-        assert_eq!(value(FIELD_SRC), value(crate::text::TEXT_SRC));
+        for name in ["NO_SEED", "INK_FLOOR"] {
+            assert_eq!(
+                value(FIELD_SRC, name),
+                value(crate::text::TEXT_SRC, name),
+                "the flood's {name} and the reader's have drifted apart",
+            );
+        }
     }
 
     /// The flood answers the TRUE distance, everywhere inside its reach, for a

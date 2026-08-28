@@ -1202,6 +1202,25 @@ pub(crate) mod tests {
         patch_at([16, 0], 64, 1)
     }
 
+    /// [`atlas`]'s patch with its outer ring only PART covered: the same block,
+    /// its edge falling mid-texel, which is what a rasterizer reports for every
+    /// edge the grid does not land on.
+    ///
+    /// A KEY of its own, which is what lets a test shoot this and [`atlas`] in
+    /// one run: the sheets are mirrored by key, so a second one wearing the
+    /// first's would never be uploaded and both shots would draw the solid
+    /// block while the test went on comparing them.
+    pub(crate) fn edged_atlas(edge: u8) -> FontAtlas {
+        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+        for y in 8..16 {
+            for x in 8..16 {
+                let rim = x == 8 || x == 15 || y == 8 || y == 15;
+                image[(x, y)] = egui::Color32::from_white_alpha(if rim { edge } else { 255 });
+            }
+        }
+        FontAtlas { image: std::sync::Arc::new(image), key: 2 }
+    }
+
     /// A `width`x32 sheet with one opaque 8x8 patch at `at`.
     fn patch_at([left, top]: [usize; 2], width: usize, key: u64) -> FontAtlas {
         let mut image = egui::ColorImage::filled([width, 32], egui::Color32::TRANSPARENT);

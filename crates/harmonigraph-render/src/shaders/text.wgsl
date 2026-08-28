@@ -778,13 +778,13 @@ fn field_coord(coord: vec2<i32>) -> vec2<i32> {
 fn field_standoff(coord: vec2<i32>) -> vec2<f32> {
     let here = field_coord(coord);
     let own = textureLoad(field_ink, here, 0);
-    // The fragment's OWN ink first, at the coverage the sheet actually holds
-    // there. The flood answers in whole texels — a pixel is a seed or it is not
-    // — so a letter's antialiased edge would come back as a hard one, and at a
-    // Shadow narrow enough that the dilation reaches nowhere the edge is the
-    // entire picture. This is the term the sampled dilation started from for
-    // the same reason, and `standoff_coverage(0)` is 1, so it is exactly the
-    // profile evaluated at a distance of nothing.
+    // The fragment's OWN ink is the floor, at the coverage the sheet actually
+    // holds there. Under [`INK_FLOOR`] a texel is no seed, so the flood says
+    // nothing about it at all — and at a Shadow narrower than a texel the flood
+    // reaches nowhere, which makes that edge the entire picture. A floor rather
+    // than a term of its own: `standoff_coverage(0)` is 1, so wherever the
+    // Shadow does reach it is the profile at a distance of nothing and the
+    // comparison below carries it.
     var cov = clamp(own.r, 0.0, 1.0);
     var strength = own.g;
     let seed = textureLoad(field_tex, here, 0).xy;
@@ -794,14 +794,25 @@ fn field_standoff(coord: vec2<i32>) -> vec2<f32> {
     if seed.x != NO_SEED {
         let at = vec2<i32>(seed);
         let ink = textureLoad(field_ink, at, 0);
-        // Scaled by the SEED's own coverage, which is what makes this the
-        // dilation's own term rather than a step function's. The flood answers
-        // in whole texels, so a half-covered texel is as much a seed as a solid
-        // one; taking the profile alone would report a fragment sitting on its
-        // own half-lit edge as fully covered, and a name's shadow would start
-        // one texel wider than its ink.
-        let dilated = clamp(ink.r, 0.0, 1.0)
-            * standoff_coverage(length(vec2<f32>(coord - at)) / locals.pixels_per_point);
+        // The seed's own coverage is spent on the DISTANCE, never on the
+        // profile's height. A seed is a whole texel, and the contour the eye
+        // reads the letter by crosses it: a texel covered `c` has its centre
+        // `c - INK_FLOOR` INSIDE that contour, to within the straight-edge
+        // approximation a rasterizer's own coverage already is. Subtracting it
+        // puts the profile's origin on the letter's edge rather than on the
+        // grid, which is a correction of at most half a texel.
+        //
+        // A HEIGHT scaled by that coverage is the one thing it must not be.
+        // Coverage runs the whole of `[INK_FLOOR, 1]` along any contour not
+        // parallel to the grid, so neighbouring seeds differ by up to a factor
+        // of two — and each seed owns a wedge of the plane that widens with
+        // distance, so the pair reads as bright and dark rays fanning out of
+        // every curve, and as a hard seam wherever two strokes' wedges meet.
+        // The correction here is bounded by half a texel of DISTANCE instead,
+        // which is a fraction of a percent of the same ramp.
+        let contour = clamp(ink.r, 0.0, 1.0) - INK_FLOOR;
+        let sd = max(length(vec2<f32>(here - at)) - contour, 0.0);
+        let dilated = standoff_coverage(sd / locals.pixels_per_point);
         // The deeper of the two wins, and takes its own strength with it: a
         // level belongs to the ink casting the shadow, and which ink that is is
         // exactly what this comparison decides.
@@ -817,6 +828,16 @@ fn field_standoff(coord: vec2<i32>) -> vec2<f32> {
 /// the standoff's curve is: there is no linkage between shader modules here.
 /// `a_names_field_and_its_flood_agree_on_no_seed` pins the pair.
 const NO_SEED: u32 = 65535u;
+
+/// The coverage field.wgsl seeds the flood at, spelled twice for [`NO_SEED`]'s
+/// reason and pinned by the same test.
+///
+/// Here it is the contour a seed's coverage is measured FROM: the flood picks
+/// the texels at or above it, so this is the coverage whose texel centre stands
+/// on the letter's own edge, and the two numbers have to be the one number or
+/// the correction in [`field_standoff`] is taken about a contour the flood does
+/// not seed at.
+const INK_FLOOR: f32 = 0.5;
 
 /// The shadow every lattice name holds the light off by, laid into the glow
 /// pass across the whole pane at once.

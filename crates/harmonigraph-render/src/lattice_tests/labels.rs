@@ -971,3 +971,130 @@ fn a_name_covers_the_rings_it_stands_on() {
         outside.len(),
     );
 }
+
+/// The contour a name's shadow stands off from is where its ink's coverage
+/// says, and how DEEP that shadow is owes that coverage nothing.
+///
+/// Two blocks, one solid and one whose outer ring is half covered — which is
+/// what a rasterizer reports for any edge falling mid-texel. They seed the
+/// field at the same texels, so the whole of their difference is where inside
+/// those texels each one's edge lies: half a texel, and the second's shadow is
+/// the first's read half a texel further out.
+///
+/// Spending that coverage on the shadow's HEIGHT is what this rules out, and it
+/// is not a fine distinction: coverage runs the whole of `[INK_FLOOR, 1]` along
+/// any contour the texel grid does not run parallel to, so two neighbouring
+/// texels of one curve cast shadows a factor of two apart. Each owns a wedge of
+/// the plane that widens as it goes, which draws bright and dark rays fanning
+/// out of every letter and a hard seam wherever two strokes of one stand near
+/// each other.
+///
+/// A BLOCK is what makes that measurable. An axis-aligned edge puts one
+/// coverage in every texel along it, so the error stops being a fan — which no
+/// single pixel is the place to read — and becomes one factor over a whole
+/// scanline. The curve is the picture the artefact shows up in; the block is
+/// the picture it can be measured in.
+///
+/// The name stands at the node's own centre, in the flat middle of its light:
+/// the reading is the SHARE of the light taken, so the ground under it has to
+/// be one value for a scanline rather than a gradient the share would carry.
+#[test]
+fn a_names_shadow_is_cast_from_its_contour_and_not_from_its_alpha() {
+    const SIZE: [u32; 2] = [384, 384];
+    /// Narrow enough that the shadow's whole ramp stands well inside the node's
+    /// rings, where its own standoff — the same bar, and a `max` against this
+    /// one — would otherwise be the deeper of the two and take the reading.
+    const SHADOW: f32 = 0.2;
+    /// The block, in points, which the pane draws one to a pixel: the patch is
+    /// 8 texels square, so at 8 points its contour reaches the field as sharp as
+    /// the one epaint rasterizes.
+    const BLOCK: f32 = 8.0;
+    /// How far out the two profiles are compared, in pixels from the solid
+    /// block's edge. Clear of the ink itself at the near end, and short of where
+    /// the ramp has run out at the far end.
+    const BAND: std::ops::RangeInclusive<i32> = 2..=20;
+    /// What lies between the two contours, in pixels. A solid ring's edge
+    /// stands half a texel out from the texels' centres and [`HALF`]'s stands
+    /// on them, so the second block is the first shrunk by exactly this — and
+    /// its shadow is the first's read this much further out.
+    const SHIFT: f32 = 0.5;
+    /// The half-covered ring, as a byte. Over `INK_FLOOR` rather than at it, so
+    /// the ring seeds the field: a texel under the floor is no seed at all, and
+    /// the contour would jump a whole texel inward instead of half of one.
+    const HALF: u8 = 128;
+
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let mut scene = lit_node_and_a_name(2.5, SHADOW, 1.0);
+    // Big enough that the ramp above is tens of pixels wide, which is what puts
+    // the half texel this measures well inside one.
+    scene.node_radius = 2.6;
+    let centre = scene
+        .projector(glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32))
+        .project(glam::Vec3::ZERO)
+        .expect("the node stands in front of the camera");
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let ink = scene.lattice_ground;
+    let block = |atlas: crate::FontAtlas| LatticeLabels {
+        glyphs: vec![GlyphInstance {
+            rect: [centre.x - BLOCK / 2.0, centre.y - BLOCK / 2.0, BLOCK, BLOCK],
+            fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
+            rim: [0, 0, 0, 255],
+            ..crate::text::tests::glyph()
+        }],
+        labels: vec![Label { node: 0, glyphs: 1 }],
+        node_points: scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32),
+        atlas: Some(atlas),
+        marks: Some(crate::text::tests::mark_sheet()),
+        slide: SlideAxis::default(),
+    };
+    let bare = shooter.shot(&scene);
+    let solid = shooter.shot_with(&scene, block(crate::text::tests::atlas()));
+    let half = shooter.shot_with(&scene, block(crate::text::tests::edged_atlas(HALF)));
+
+    // Sampled between pixels, because half a texel is the quantity: rounding to
+    // the nearer one would round away exactly what the two shots differ by.
+    let at = |shot: &[u8], x: f32| -> f32 {
+        let (x0, y0) = (x.floor() as u32, centre.y.floor() as u32);
+        let fx = x - x0 as f32;
+        let read = |shot: &[u8], x: u32| {
+            let i = ((y0 * SIZE[0] + x) * 4) as usize;
+            brightness(&shot[i..i + 3]) as f32
+        };
+        let ground = read(&bare, x0) * (1.0 - fx) + read(&bare, x0 + 1) * fx;
+        let lit = read(shot, x0) * (1.0 - fx) + read(shot, x0 + 1) * fx;
+        (ground - lit) / ground
+    };
+
+    let edge = centre.x + BLOCK / 2.0;
+    let (mut worst, mut own, mut shifted) = (0.0f32, 0.0f32, 0.0f32);
+    for d in BAND {
+        let x = edge + d as f32;
+        let (a, b) = (at(&solid, x + SHIFT), at(&half, x));
+        worst = worst.max((b - a).abs());
+        shifted += (b - a).abs();
+        own += (b - at(&solid, x)).abs();
+    }
+    // The band spans the whole ramp, which is what makes a disagreement over it
+    // a disagreement about the profile rather than about its tail.
+    let (near, far) =
+        (at(&solid, edge + *BAND.start() as f32), at(&solid, edge + *BAND.end() as f32));
+    assert!(near > 0.8 && far < 0.2, "the band runs {near:.2} to {far:.2}, which is no ramp");
+    // A twentieth of the share. A height scaled by the ring's coverage is worth
+    // 0.16 of it at the worst pixel of this band, and the contour's own half
+    // texel 0.01, so the threshold has either side of it by a factor of three.
+    assert!(
+        worst < 0.05,
+        "a half-covered edge cast a shadow {worst:.3} of the light away from the same edge \
+         drawn solid, over and above the half texel between them",
+    );
+    // And the half texel is a real shift and not a rounding: what the ring's
+    // coverage buys is a contour inside its own texel, so the shifted profile
+    // has to be the nearer of the two by a clear margin.
+    assert!(
+        shifted * 2.0 < own,
+        "the half-covered block's shadow sits {shifted:.3} from the solid block's read half a \
+         texel out and {own:.3} from it read where it stands — the contour is not moving",
+    );
+}
