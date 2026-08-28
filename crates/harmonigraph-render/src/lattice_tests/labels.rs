@@ -1098,3 +1098,182 @@ fn a_names_shadow_is_cast_from_its_contour_and_not_from_its_alpha() {
          texel out and {own:.3} from it read where it stands — the contour is not moving",
     );
 }
+
+/// How much ground stands between the two strokes below, in points.
+///
+/// Narrow against the Shadow the pair is shot at, which is the whole of what
+/// makes the fixture REACH: a gap wider than `shadow_stop` draws two shadows
+/// that never meet, and both tests would pass on a picture with nothing in it
+/// to measure (#450). Both assert their own reach rather than trusting this.
+const STROKE_GAP: f32 = 5.0;
+
+/// The Shadow depth those two shots are read at.
+///
+/// Short of the bar's top on purpose. At a full depth the standoff takes very
+/// nearly all the light — `SHADOW_KEEP_FLOOR` is a thousandth — so the ground
+/// in the gap is already black and a claim that a second stroke darkens it
+/// further has two or three levels to live in. Here the pair reads about a
+/// tenth under the deeper stroke alone, which is a margin rather than a
+/// rounding.
+const STROKE_DEPTH: f32 = 0.6;
+
+/// [`one_name`]'s block, drawn twice with [`STROKE_GAP`] of ground between the
+/// copies — either of them alone, or the pair.
+///
+/// A pair of GLYPHS where the picture's own case is the bowl and the crossbar
+/// of one letter, and the same geometry either way: the ink mask every name on
+/// the pane is flooded from is written under a `max` (`fs_glyph_ink`), so the
+/// field knows only where ink is and never which glyph put it there. What a
+/// pair of blocks buys over a letter is that the gap is a number this file
+/// sets, rather than one the test atlas's opaque patch has no way to hold.
+fn facing_strokes(scene: &Scene, size: [u32; 2], left: bool, right: bool) -> LatticeLabels {
+    let mut labels = name_at(scene, size, NAME_AT);
+    let one = labels.glyphs[0];
+    let apart = NAME_SIZE + STROKE_GAP;
+    let mut glyphs = Vec::new();
+    for (shipped, side) in [(left, -0.5f32), (right, 0.5)] {
+        if shipped {
+            let mut glyph = one;
+            glyph.rect[0] += side * apart;
+            glyphs.push(glyph);
+        }
+    }
+    labels.labels = vec![Label { node: 0, glyphs: glyphs.len() as u32 }];
+    labels.glyphs = glyphs;
+    labels
+}
+
+/// The column the two strokes stand either side of, and the rows they span.
+///
+/// The rows are the middle of the blocks' own height, where the ground in the
+/// gap sees two facing EDGES. Nearer either end it sees two corners instead,
+/// which is a different geometry from the one these claims are about.
+fn between_the_strokes(scene: &Scene, size: [u32; 2]) -> (usize, std::ops::Range<usize>) {
+    let at = scene
+        .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
+        .project(NAME_AT)
+        .expect("the strokes stand in front of the camera");
+    let rows = (at.y - NAME_SIZE / 4.0) as usize..(at.y + NAME_SIZE / 4.0) as usize;
+    (at.x as usize, rows)
+}
+
+/// Two strokes facing each other across a gap hold the light off the ground
+/// between them TWICE, where the deeper of the two alone holds it off once.
+///
+/// The `min` a distance field answers with is what makes this worth pinning. A
+/// profile of a `min` is a `max` of profiles, so the second stroke contributes
+/// nothing beyond winning the comparison, and the ground in the gap is exactly
+/// as dark as the nearer stroke makes it on its own. That is #490: not merely a
+/// shadow too shallow, but a gradient crease along the line where the nearer
+/// stroke changes hands, which reads as one shadow shoving the other aside
+/// rather than as the two meeting.
+///
+/// The control is the DEEPER of the two strokes shot alone, pixel by pixel, and
+/// that is what makes the claim about accumulation rather than about which
+/// stroke is nearer. A `max` over profiles leaves exactly that frame — so
+/// comparing against one NAMED stroke instead passes on a measurement column
+/// half a pixel off the midline, the far stroke being the nearer one there and
+/// a plain `max` explaining the whole difference.
+///
+/// The reach is asserted, not assumed. A gap wider than the Shadow's own stop
+/// puts each stroke outside the other's profile, where the honest answer IS
+/// zero and this would pass on an empty measurement.
+#[test]
+fn two_facing_strokes_hold_the_light_off_twice() {
+    const SIZE: [u32; 2] = [512, 512];
+    const SHADOW: f32 = 0.6;
+    /// How much darker the pair has to leave the gap, summed over the three
+    /// channels [`brightness`] adds. Above a rounding in each of them, so the
+    /// claim cannot be carried by the last bit of a colour.
+    const MARGIN: i64 = 4;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = lit_node_and_a_name(1.6, SHADOW, STROKE_DEPTH);
+    let (column, rows) = between_the_strokes(&scene, SIZE);
+    let mut shot =
+        |left, right| shooter.shot_with(&scene, facing_strokes(&scene, SIZE, left, right));
+    let near_alone = shot(true, false);
+    let far_alone = shot(false, true);
+    let pair = shot(true, true);
+    let bare = shot(false, false);
+
+    let at = |row: usize| (row * SIZE[0] as usize + column) * 4;
+    let lit = |shot: &[u8], i: usize| brightness(&shot[i..i + 3]);
+    let both_reach: Vec<usize> = rows
+        .clone()
+        .map(at)
+        .filter(|&i| lit(&near_alone, i) < lit(&bare, i) && lit(&far_alone, i) < lit(&bare, i))
+        .collect();
+    assert!(
+        both_reach.len() > rows.len() / 2,
+        "both strokes' shadows reach the gap at only {} of its {} rows; \
+         a gap wider than the Shadow's stop leaves nothing here to measure",
+        both_reach.len(),
+        rows.len(),
+    );
+
+    let short: Vec<(usize, i64)> = both_reach
+        .iter()
+        .map(|&i| (i / 4, lit(&near_alone, i).min(lit(&far_alone, i)) - lit(&pair, i)))
+        .filter(|&(_, deepened)| deepened < MARGIN)
+        .collect();
+    assert!(
+        short.is_empty(),
+        "at {} of {} rows the pair left the gap within {MARGIN} of the deeper of \
+         the two strokes alone (pixel, deepening: {short:?})",
+        short.len(),
+        both_reach.len(),
+    );
+}
+
+/// A stroke with nothing facing it casts the shadow its curve says, to the
+/// byte.
+///
+/// The other half of the pair above, and the reason the far side is read as an
+/// EXCESS over what an open fragment would have found rather than as a term of
+/// its own. The Shadow is one bar across a node's rings, a marker's cross and a
+/// name (`the_names_shadow_is_the_rings_own_curve`); a union term that also
+/// moved the ordinary case would be a name whose standoff is a different shape
+/// from the standoff beside it, at every setting of a bar carrying both.
+///
+/// Read on the ground OUTSIDE the pair, where the near stroke stands between
+/// the fragment and the far one — every pixel of it, so a term leaking at one
+/// angle has nowhere to hide.
+#[test]
+fn a_stroke_with_nothing_facing_it_casts_the_shadow_it_would_alone() {
+    const SIZE: [u32; 2] = [512, 512];
+    const SHADOW: f32 = 0.6;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = lit_node_and_a_name(1.6, SHADOW, STROKE_DEPTH);
+    let (column, _) = between_the_strokes(&scene, SIZE);
+    let mut shot =
+        |left, right| shooter.shot_with(&scene, facing_strokes(&scene, SIZE, left, right));
+    let bare = shot(false, false);
+    let near_alone = shot(true, false);
+    let pair = shot(true, true);
+    // Clear of the near stroke's own rect, whose ink the far stroke moves
+    // nothing about but whose edge is antialiased against ground the pair does
+    // change.
+    let outside = column - (NAME_SIZE as usize + STROKE_GAP as usize);
+    let ground: Vec<usize> = (0..SIZE[1] as usize)
+        .flat_map(|row| (0..outside).map(move |col| (row * SIZE[0] as usize + col) * 4))
+        .collect();
+    let shadowed = ground.iter().filter(|&&i| near_alone[i..i + 4] != bare[i..i + 4]).count();
+    assert!(
+        shadowed > 200,
+        "the near stroke shadows only {shadowed} pixels outside the pair; \
+         there is nothing out here for a leak to move",
+    );
+    let moved: Vec<usize> =
+        ground.iter().copied().filter(|&i| near_alone[i..i + 4] != pair[i..i + 4]).collect();
+    assert!(
+        moved.is_empty(),
+        "a stroke added on the far side moved {} of the {shadowed} pixels the near \
+         stroke shadows on its own (first at {})",
+        moved.len(),
+        moved[0] / 4,
+    );
+}

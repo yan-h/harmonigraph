@@ -752,16 +752,153 @@ fn field_coord(coord: vec2<i32>) -> vec2<i32> {
     return clamp(coord, vec2<i32>(0, 0), edge);
 }
 
+/// What the flood found nearest `coord`: how far its ink stands in PIXELS, the
+/// strength that ink carries, and where it sits.
+///
+/// [`NO_INK`] in `dist` where there is none within reach — off the pane as well
+/// as out of the flood's own range, which is the rule field.wgsl's own jumps
+/// take: reading the border texel's seed instead smears that column's answer
+/// across the margin.
+struct FieldInk {
+    dist: f32,
+    strength: f32,
+    /// From `coord` TO that ink, in pixels, and zero where there is none. What
+    /// [`field_pair`] takes its direction from.
+    toward: vec2<f32>,
+}
+
+/// A distance no pane holds, standing for "no ink within the flood's reach".
+const NO_INK: f32 = 3.4e38;
+
+fn field_ink_at(coord: vec2<i32>) -> FieldInk {
+    let none = FieldInk(NO_INK, 0.0, vec2<f32>(0.0, 0.0));
+    let size = vec2<i32>(textureDimensions(field_tex));
+    if any(coord < vec2<i32>(0, 0)) || any(coord >= size) {
+        return none;
+    }
+    let seed = textureLoad(field_tex, coord, 0).xy;
+    // The chain runs only as far as `shadow_stop` (see `steps` in field.rs), so
+    // this is also every pixel the Shadow has nothing to say about.
+    if seed.x == NO_SEED {
+        return none;
+    }
+    let at = vec2<i32>(seed);
+    let ink = textureLoad(field_ink, at, 0);
+    let toward = vec2<f32>(at - coord);
+    // The seed's own coverage is spent on the DISTANCE, never on the profile's
+    // height. A seed is a whole texel, and the contour the eye reads the letter
+    // by crosses it: a texel covered `c` has its centre `c - INK_FLOOR` INSIDE
+    // that contour, to within the straight-edge approximation a rasterizer's
+    // own coverage already is. Subtracting it puts the profile's origin on the
+    // letter's edge rather than on the grid, which is a correction of at most
+    // half a texel.
+    //
+    // A HEIGHT scaled by that coverage is the one thing it must not be.
+    // Coverage runs the whole of `[INK_FLOOR, 1]` along any contour not
+    // parallel to the grid, so neighbouring seeds differ by up to a factor of
+    // two — and each seed owns a wedge of the plane that widens with distance,
+    // so the pair reads as bright and dark rays fanning out of every curve, and
+    // as a hard seam wherever two strokes' wedges meet. The correction here is
+    // bounded by half a texel of DISTANCE instead, which is a fraction of a
+    // percent of the same ramp.
+    let contour = clamp(ink.r, 0.0, 1.0) - INK_FLOOR;
+    return FieldInk(max(length(toward) - contour, 0.0), ink.g, toward);
+}
+
+/// What the ink on the FAR side of a fragment adds to the coverage its nearest
+/// ink already casts: the union term, and exactly zero wherever the ground can
+/// see ink on one side only.
+///
+/// A distance carries no count of what it is a distance to. `min` is the whole
+/// reason the field is cheap, and a profile of a `min` is a `max` of profiles,
+/// so between the bowl and the crossbar of a `G` the second stroke contributes
+/// nothing at all: the ground there is as dark as it is beside either stroke
+/// alone, and the medial axis where the nearer of the two changes hands is a
+/// gradient CREASE in an otherwise smooth field. Occlusion accumulates, and
+/// what the eye reads instead is one shadow shoving the other aside (#490).
+///
+/// ONE probe answers it. Step away from the nearest ink and ask the field
+/// again: the step plus what the step found is a path from the fragment to the
+/// ink on the far side, so it bounds how far that ink stands. Run the bound
+/// through the same profile, and keep the excess over what an OPEN fragment
+/// would have found — which is what leaves the shared curve exactly where it is.
+///
+/// **How far to step is derived, not dialled: `near.dist` itself.** That is the
+/// radius of the largest ball around the fragment the field says is empty, so
+/// it is the longest step that cannot pass THROUGH the ink it is looking for —
+/// and a step that passes through turns the path into one that goes out and
+/// comes back, which reads as no second stroke at all. It buys:
+///
+/// - Nothing at a lone edge, at any angle. A distance field off a straight edge
+///   is a plane, so the probe stands exactly `took` further out than the
+///   fragment did and the two readings are one number. Off a CONVEX edge it
+///   stands further out again, and the term clamps to zero — so this is a
+///   concavity detector, and fires only where the ground has ink on more than
+///   one side of it.
+/// - The far ink's distance EXACTLY, not a bound, wherever the step lands on
+///   it: `took + probe.dist` is then the gap itself. The whole medial axis of a
+///   counter is such a place, the two strokes being equidistant there.
+/// - Ink out to three times the nearest ink's own distance, dying off smoothly
+///   at that edge rather than switching off — the probe reaches the far side's
+///   territory exactly when the far side is nearer than that.
+///
+/// What one probe cannot buy is the whole union. The baseline subtracted is the
+/// profile at three times `near.dist`, which is where the probe's own reach
+/// ends: ink out there and no ink at all are the same answer, so subtracting it
+/// is what makes the term unbiased rather than what weakens it. At the midline
+/// of a counter that leaves `p(d) - p(3d)` where the true union wants `p(d)`.
+/// The shortfall is spent on the CREASE rather than on the depth: it leaves a
+/// residual slope at the medial axis, of the other sign and a fraction of the
+/// one the `max` broke, so the crease is flattened rather than abolished. How
+/// large a fraction moves with `shadow_shape`, the steep end of that bar being
+/// the kind one — a quarter at the worst point of the plain exponential.
+///
+/// It can only DEEPEN, and only inside the footprint the nearest ink already
+/// has: past `shadow_stop` every reading is zero, so the reach the flood is run
+/// to and the box the knockout is grown by are what they were.
+///
+/// No quarrel with the `max` the shade attachment blends under (`glow_targets`
+/// in lib.rs). That one is across EMITTERS, where compounding would draw a pit
+/// wherever a ring, a cross and a name cross each other's standoffs. This is
+/// one emitter's own ink counted where it really does stand on both sides.
+fn field_pair(here: vec2<i32>, near: FieldInk) -> f32 {
+    let span = length(near.toward);
+    // Nowhere to step: the fragment stands on its own seed and has no direction
+    // to leave in, or its step rounds to none at all.
+    if span <= 0.0 || near.dist < 0.5 {
+        return 0.0;
+    }
+    let away = -near.toward / span;
+    // Whole texels, the field being loaded rather than sampled (`Rg16Uint` is
+    // no filterable format). The step actually TAKEN is what both readings
+    // below are measured from, so rounding moves the probe without biasing it:
+    // at a straight edge the two land on one number whatever the rounding did,
+    // and the difference stays exactly zero.
+    let step = round(away * near.dist);
+    let probe = field_ink_at(here + vec2<i32>(step));
+    // Nothing within reach of the probe is nothing within `shadow_stop` of the
+    // fragment either, the probe standing that much nearer to whatever is out
+    // there than the fragment does.
+    if probe.dist >= NO_INK {
+        return 0.0;
+    }
+    let took = length(step);
+    let ppp = locals.pixels_per_point;
+    let found = standoff_coverage((took + probe.dist) / ppp);
+    let open = standoff_coverage((took + near.dist + dot(step, away)) / ppp);
+    return max(found - open, 0.0);
+}
+
 /// How much of the Shadow's own coverage stands at this pixel, and at what
 /// strength: `(coverage, strength)`, off the jump flood's field.
 ///
-/// The distance is to the nearest ink of ANY name on the pane, which for the
-/// SHADE is exactly the answer a per-name dilation gives and not an
-/// approximation of it: the shade is written under a `max` blend and
-/// [`standoff_coverage`] falls monotonically, so the brightest of the profiles
-/// is already the profile of the smallest distance. For the HOLE the union is
-/// the stronger rule rather than an equal one — see [`fs_glyph_gutter`], where
-/// cutting once off the union is what stops two holes compounding into a pit.
+/// The distance is to the nearest ink of ANY name on the pane, and the coverage
+/// is what stands around the fragment rather than that one distance's profile:
+/// two strokes of one letter hold the light off twice, which a per-name
+/// dilation blended under a `max` cannot say (see [`field_pair`]). For the HOLE
+/// the union is the stronger rule rather than an equal one — see
+/// [`fs_glyph_gutter`], where cutting once off the union is what stops two
+/// holes compounding into a pit.
 ///
 /// The INK, not a rim: the letters are what the eye reads a name by, exactly as
 /// the arms are what it reads a cross by, and `plus_standoff` casts a marker's
@@ -787,39 +924,23 @@ fn field_standoff(coord: vec2<i32>) -> vec2<f32> {
     // comparison below carries it.
     var cov = clamp(own.r, 0.0, 1.0);
     var strength = own.g;
-    let seed = textureLoad(field_tex, here, 0).xy;
-    // No ink within the flood's reach. The chain runs only as far as
-    // `shadow_stop` (see `steps` in field.rs), so this is also every pixel the
-    // Shadow has nothing to say about.
-    if seed.x != NO_SEED {
-        let at = vec2<i32>(seed);
-        let ink = textureLoad(field_ink, at, 0);
-        // The seed's own coverage is spent on the DISTANCE, never on the
-        // profile's height. A seed is a whole texel, and the contour the eye
-        // reads the letter by crosses it: a texel covered `c` has its centre
-        // `c - INK_FLOOR` INSIDE that contour, to within the straight-edge
-        // approximation a rasterizer's own coverage already is. Subtracting it
-        // puts the profile's origin on the letter's edge rather than on the
-        // grid, which is a correction of at most half a texel.
-        //
-        // A HEIGHT scaled by that coverage is the one thing it must not be.
-        // Coverage runs the whole of `[INK_FLOOR, 1]` along any contour not
-        // parallel to the grid, so neighbouring seeds differ by up to a factor
-        // of two — and each seed owns a wedge of the plane that widens with
-        // distance, so the pair reads as bright and dark rays fanning out of
-        // every curve, and as a hard seam wherever two strokes' wedges meet.
-        // The correction here is bounded by half a texel of DISTANCE instead,
-        // which is a fraction of a percent of the same ramp.
-        let contour = clamp(ink.r, 0.0, 1.0) - INK_FLOOR;
-        let sd = max(length(vec2<f32>(here - at)) - contour, 0.0);
-        let dilated = standoff_coverage(sd / locals.pixels_per_point);
+    let near = field_ink_at(here);
+    if near.dist < NO_INK {
+        let dilated = standoff_coverage(near.dist / locals.pixels_per_point);
         // The deeper of the two wins, and takes its own strength with it: a
         // level belongs to the ink casting the shadow, and which ink that is is
         // exactly what this comparison decides.
         if dilated > cov {
             cov = dilated;
-            strength = ink.g;
+            strength = near.strength;
         }
+        // The ink on the far side, spent geometrically over what the nearest
+        // ink holds off. The strength stays with the NEAREST, a pixel carrying
+        // one owner here as it does above: what that costs is a far stroke
+        // belonging to a name at a DIFFERENT level being counted at the near
+        // one's, which is a name easing in beside a settled one and lasts as
+        // long as the ease does.
+        cov = 1.0 - (1.0 - cov) * (1.0 - field_pair(here, near));
     }
     return vec2<f32>(cov, strength);
 }
@@ -866,9 +987,10 @@ const INK_FLOOR: f32 = 0.5;
 /// ONE full-screen quad for every name on the pane, where a node's rings and a
 /// marker's cross each write their own billboard. The field already holds the
 /// nearest ink's distance and strength at every pixel, so there is nothing per
-/// name left to draw — and the `max` blend this writes under makes the two
-/// identical rather than merely close, a max of profiles over one shared
-/// minimum distance being the profile of that distance.
+/// name left to draw — and what comes off it is MORE than a stack of billboards
+/// under a `max` can write, that blend being the profile of the nearest name
+/// and nothing else. The field can be asked what stands on the FAR side of a
+/// fragment as well (see [`field_pair`]), and a billboard has nobody to ask.
 @fragment
 fn fs_field_shade(@builtin(position) pos: vec4<f32>) -> GlowOut {
     if locals.shadow_depth <= 0.0 {
