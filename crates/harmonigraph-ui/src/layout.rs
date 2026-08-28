@@ -14,8 +14,8 @@
 //! ```ron
 //! (
 //!     background: (14, 14, 18),
-//!     margin: 24.0,
-//!     gap: 16.0,
+//!     margin: 0.0,
+//!     gap: 0.0,
 //!     panes: [
 //!         (pane: Lattice,  rect: (0.0, 0.0, 0.68, 1.0)),
 //!         (pane: Spectral, rect: (0.68, 0.0, 1.0, 1.0)),

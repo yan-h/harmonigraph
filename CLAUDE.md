@@ -10,6 +10,8 @@ gotcha or a contract — the rest of the repo explains itself by being read.
   overlay tag, recovering an evicted build.
 - **`capture-daw-state`** — recovering live settings out of a Bitwig project
   (`./read-plugin-state.py`), and the editor-window trap.
+- **`orchestrate`** — what a subagent actually costs, so a fan-out is sized
+  against it rather than reached for by reflex.
 - **`pr-hygiene`** — review habit, squash vs merge commit, and the rule for
   when an agent earns a file in `.claude/agents/`.
 
