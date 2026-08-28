@@ -1884,7 +1884,15 @@ struct RingInk {
     /// picked at, with neither the coverage nor the node's ring presence in
     /// it. What the WASH asks of the ring (`node_ink`): a wedge at 0 is the
     /// ramp's silent end, which is the rings' own ground exactly, so it is
-    /// grey the analyzer is not lighting rather than anything it is.
+    /// grey the ramp is not colouring rather than anything it is.
+    ///
+    /// Read off the VOLUME window (`spectrum_color_at`) because that argument
+    /// is a claim about the COLOUR, and the colour is picked there. The
+    /// analyzer's own window is a second axis under a second pair of bars — it
+    /// decides whether the ring is drawn at all (`RingGate`, on the CPU) and
+    /// nothing about what this share is worth. A wedge read off that one
+    /// instead is bright ink the bar treats as ground: painted off the ramp,
+    /// wearing the whole light, blazing beside the wedges the bar has washed.
     lit: f32,
 };
 
@@ -1953,12 +1961,11 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // The reading itself goes out beside the colour it picks, un-scaled by
     // either: how loud this wedge is and how much of the node's ring is showing
     // are two questions, and the wash asks the first one alone.
-    let level = spectrum_at(pitch);
     let color_level = spectrum_color_at(pitch);
     return RingInk(
         spectral_lut_color(color_level),
         cov * in.ring,
-        clamp(level, 0.0, 1.0),
+        clamp(color_level, 0.0, 1.0),
     );
 }
 

@@ -56,7 +56,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
             ..Default::default()
         };
         scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.glow_strength = 2.0;
         scene.glow_shadow = 0.16;
         // The fade the whole width of the shadow, which is the fresh pair.
         scene.glow_shadow_soft = 0.16;
@@ -201,6 +201,98 @@ fn the_wash_reaches_a_lit_slice_and_nothing_else() {
         "the bar moved {strays} pixels outside the lit ink, of {} it moved in all: it is \
          reaching ink that has to wear the whole light whatever it says",
         moved.len(),
+    );
+}
+
+/// The Wash reaches a wedge the VOLUME ramp painted, whatever the analyzer's
+/// own window makes of the same bucket.
+///
+/// `RingInk::lit` is what the bar asks the ring for, and the argument for it is
+/// a claim about the COLOUR: a wedge at 0 is the ramp's silent end, which
+/// `SpectralPaint::new` pins onto the lattice ground exactly, so it is grey the
+/// analyzer is not lighting rather than anything it is. That holds only while
+/// the share and the colour are read off ONE level. They are two axes — the
+/// colour off the volume window, the gate off the analyzer's — so a wedge can
+/// be painted bright by one while the other reads its bucket silent, and the
+/// share has to follow the ink the eye can see.
+///
+/// The two windows are DIALLED APART here, which nothing else in the suite
+/// does: every other ring fixture clones one grid into both, and a fixture
+/// wearing one level cannot tell which of the two the share was read from.
+///
+/// Read on the RING's own pixels — found by taking the partial away — because
+/// the octave held to light the node is lit too, and the bar moving the band
+/// would answer for the wedge. The agreeing case is the control: it moves in
+/// either reading, so a zero from the split case is the share and not a fixture
+/// that drew no wedge.
+#[test]
+fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    // The octave is held to put a light on the node at all; the partial is what
+    // the reading is about.
+    let at = |partial: Option<f32>, split: bool, reach: f32, wash: f32| -> Scene {
+        let mut scene = ringing_node(Some(slot), partial, PROBE_RANGE);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        // The Shadow off: a node cuts its own footprint out of the light
+        // (`node_clearing`), and a wedge standing in a pool cleared to the bare
+        // ground has no light for the bar to divide — the reading would be 0
+        // under either answer. The octave is held to make the node active at
+        // all; the band it lights is a layer out from the wedge and no pixel of
+        // it is in the set read below.
+        scene.glow_shadow = 0.0;
+        scene.nodes[0].glow.level = 1.0;
+        if split {
+            // The analyzer's window slid off material the volume window still
+            // paints: two bars on two pages, with nothing tying them together.
+            scene.spectral.levels.fill(0);
+        }
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_wash = wash;
+        scene
+    };
+    let differ = |a: &[u8], b: &[u8]| -> Vec<usize> {
+        (0..a.len() / 4).filter(|p| a[p * 4..p * 4 + 4] != b[p * 4..p * 4 + 4]).collect()
+    };
+    // Found with the light OFF, as every lit set in this file is: a shot
+    // carrying the halo would hand the set every pixel the light reaches.
+    let with_partial = shooter.shot(&at(Some(sounding), false, 0.0, 1.0));
+    let without = shooter.shot(&at(None, false, 0.0, 1.0));
+    let ring: Vec<usize> = differ(&with_partial, &without);
+    assert!(ring.len() > 50, "the fixture's wedge covers only {} pixels", ring.len());
+
+    // The light the bar is dividing, summed over the wedge's own pixels: how
+    // much brighter the wedge stands with the bar up than with it down. A
+    // wedge the bar does not reach answers 0 whatever it is painted.
+    let mut wash_light = |split: bool| -> i64 {
+        let full = shooter.shot(&at(Some(sounding), split, 3.0, 1.0));
+        let none = shooter.shot(&at(Some(sounding), split, 3.0, 0.0));
+        ring.iter()
+            .map(|&p| brightness(&full[p * 4..p * 4 + 4]) - brightness(&none[p * 4..p * 4 + 4]))
+            .sum()
+    };
+    let together = wash_light(false);
+    assert!(
+        together > 20,
+        "the bar moved {together} of light across the wedge's {} pixels: it is not reaching them",
+        ring.len(),
+    );
+    let apart = wash_light(true);
+    assert!(
+        apart * 2 > together,
+        "with the analyzer's window slid off the wedge the bar moved {apart} of light across it, \
+         against {together} with the two windows together: the wedge is painted off the volume \
+         ramp and wears the whole light anyway",
     );
 }
 
