@@ -273,14 +273,14 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         vec![
             // Both silent nodes: nothing has been drawn yet, and two names on
             // one sheet are one uninterrupted draw.
-            Draw::Label(0, 2),
+            Draw::Label(0, 2, 0),
             // The home sheet's own node — its knockout, its disc, its name.
             Draw::Clearing(0),
             Draw::Nodes(0, 1),
-            Draw::Label(2, 3),
+            Draw::Label(2, 3, 1),
             // And the near sheet's, after everything.
             Draw::Nodes(1, 2),
-            Draw::Label(3, 4),
+            Draw::Label(3, 4, 2),
         ],
         "a name goes after its own node, over the instances that ship",
     );
@@ -288,6 +288,14 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 2.0, 3.0, 0.0],
         "the glyphs are regrouped into the order they are drawn in",
+    );
+    // One box per DRAW and not per name, and the merged draw's box spans both
+    // of the names in it: the hole is cut once over whatever that draw covers,
+    // which is what stops two names' holes compounding where they overlap.
+    assert_eq!(
+        call.gutters.iter().map(|g| g.rect).collect::<Vec<_>>(),
+        vec![[1.0, 0.0, 2.0, 1.0], [3.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+        "the merged run's box holds both its names and each other box holds one",
     );
 }
 
@@ -354,9 +362,10 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last_and_apart() {
     assert_eq!(call.instances.len(), 1, "only the sounding home node ships an instance");
     assert_eq!(
         call.draws,
-        vec![Draw::Clearing(0), Draw::Nodes(0, 1), Draw::Label(0, 1), Draw::Label(1, 2)],
+        vec![Draw::Clearing(0), Draw::Nodes(0, 1), Draw::Label(0, 1, 0), Draw::Label(1, 2, 1)],
         "names from different sheets are two draws, the nearer's rim on the other's fill",
     );
+    assert_eq!(call.gutters.len(), 2, "two draws that did not merge cut two holes");
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 0.0],
