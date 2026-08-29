@@ -2771,3 +2771,45 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
         );
     }
 }
+
+/// The heatmap and the spectrum curve size themselves from ONE reading of the
+/// display's density, and that reading is raw.
+///
+/// Pinned textually because neither call site can see the other, and every
+/// pane at 1x or above draws identically either way: the count each derives
+/// declares a footprint — the heatmap's rows become the shader's `0.5 / rows`,
+/// the curve's columns become `footprint_mean`'s span — and a floor claims
+/// more pixels than the device has, so each sample integrates a fraction of
+/// the buckets it covers. Only a render BELOW 1x separates them, which
+/// `--scale` reaches with no clamp and `docs/offline-rendering.md` recommends
+/// for fitting more lattice in.
+#[test]
+fn both_spectral_pictures_size_themselves_from_one_raw_reading_of_the_density() {
+    let heatmap = include_str!("spectrogram.rs");
+    let curve = include_str!("mod.rs");
+
+    // A shallow parse fails by finding nothing, which would pass the floor
+    // assertions below, so each file shows it found its own read first.
+    assert!(
+        heatmap.contains("ppp: crate::spectrogram::pane_ppp(painter.ctx())"),
+        "the heatmap does not size its rows through `pane_ppp`, so this test \
+         is measuring nothing",
+    );
+    assert!(
+        curve.contains("let ppp = crate::spectrogram::pane_ppp(painter.ctx())"),
+        "the curve does not size its columns through `pane_ppp`, so this test \
+         is measuring nothing",
+    );
+
+    // Text sizing reads the density in the same file and is right to: a glyph
+    // is snapped onto whole pixels, where a floor costs nothing. A picture's
+    // footprint is the case that cannot carry one.
+    for (name, code) in [("the heatmap", heatmap), ("the curve", curve)] {
+        assert!(
+            !code.contains("pixels_per_point().max("),
+            "{name} floors the density it sizes a footprint from: the two \
+             pictures then read different runs of buckets below 1x, and a \
+             ridge sits at a different height from the curve drawn over it",
+        );
+    }
+}
