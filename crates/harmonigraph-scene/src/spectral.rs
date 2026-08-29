@@ -564,7 +564,7 @@ impl RingGate {
 /// buys a hard yes-or-no per node at the price of moving the edge by up to half
 /// a bucket and putting the whole of a node's annulus on which side of a centre
 /// its wedge fell. The ring's own reading is interpolated between buckets
-/// ([`level_at`], the shader's `spectrum_at`), so a gate that stepped where the
+/// ([`level_at`], the shader's `spectrum_color_at`), so a gate that stepped where the
 /// reading ramps would take the ring off a node whose wedge is visibly still
 /// showing the partial that opened it.
 pub struct RingFade {
@@ -728,11 +728,13 @@ fn window_max(levels: &SpectralLevels, half: usize) -> Box<SpectralLevels> {
 /// two buckets either side of it, or 0 where the analyzer's axis does not reach
 /// that pitch.
 ///
-/// The CPU's form of the shader's `spectrum_at`, down to the half-bucket offset
-/// ([`bucket_pitch`]) and to answering zero rather than the nearest end past
-/// the axis: what the gate is measuring is what the ring would paint, so the
-/// two have to read the grid the same way or a node is hidden while showing a
-/// partial the gate never saw.
+/// The CPU's form of the shader's `spectrum_color_at`, down to the half-bucket
+/// offset ([`bucket_pitch`]) and to answering zero rather than the nearest end
+/// past the axis. The two read different WINDOWS of the analyzer's grid — this
+/// one the Level window, the shader the volume-color one
+/// ([`SpectralPaint::color_levels`]) — so what has to match is the WALK: a
+/// gate landing on a different pair of buckets than the ring paints would hide
+/// a node that is visibly showing the partial that opened it.
 fn level_at(grid: &SpectralLevels, pitch: f32) -> f32 {
     let Some((bucket, next, across)) = grid_at(pitch) else {
         return 0.0;
@@ -756,7 +758,7 @@ fn open_at(grid: &[f32; SPECTRUM_BINS], pitch: f32) -> f32 {
 ///
 /// One definition of where a pitch lands on the grid, because three readers
 /// have to agree on it — the gate's levels, the fade's own openness, and the
-/// shader's `spectrum_at`, which is the one that draws. The half bucket is the
+/// shader's `spectrum_color_at`, which is the one that draws. The half bucket is the
 /// grid's own convention ([`bucket_pitch`]): a bucket stands for its CENTRE,
 /// and dropping it puts every partial half a bucket flat of where it sounds.
 fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {

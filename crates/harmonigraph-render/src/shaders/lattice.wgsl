@@ -187,13 +187,15 @@ struct Uniforms {
     // that is the whole difference between the plugin's two color schemes, and
     // the reason there are two tables here rather than one.
     spectral_lut: array<vec4<f32>, 64>,
-    // The analyzer's loudness at every bucket of its pitch grid, a byte
-    // apiece, sixteen buckets to a row. Read by the audio ring alone; see
-    // `spectrum_at` and the CPU gate.
-    spectrum: array<vec4<u32>, 240>,
-    // The same buckets mapped through the volume-color dB window. The audio
-    // ring reads this copy for color, while `spectrum` retains the analyzer
-    // levels used by the CPU gate.
+    // The analyzer's grid through the VOLUME-COLOR dB window, a byte per
+    // bucket, sixteen buckets to a row. Read by the audio ring alone; see
+    // `spectrum_color_at`.
+    //
+    // The one grid the GPU gets. The gate's copy — the same buckets through
+    // the analyzer's own Level window — is answered on the CPU and stays
+    // there (harmonigraph_scene's RingGate and RingFade), so what a wedge
+    // PAINTS is read here while whether a node wears a ring at all is decided
+    // off a window this shader never sees.
     spectrum_color: array<vec4<u32>, 240>,
 };
 
@@ -491,8 +493,9 @@ struct Instance {
     @location(2) params: vec3<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
-    // — its reading is the audio ring's own channel (u.spectrum), a window
-    // onto one grid the whole lattice shares rather than a level per node — so
+    // — its reading is the audio ring's own channel (u.spectrum_color), a
+    // window onto one grid the whole lattice shares rather than a level per
+    // node — so
     // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
@@ -516,8 +519,9 @@ struct Instance {
     // How much of the audio ring this node wears, 0..1: the gate the view sets
     // answered against this node's own wedges, carried on the note Fade and
     // floored by the node's envelope. The CPU decides it
-    // (harmonigraph_scene's RingGate and RingFade, against the same u.spectrum
-    // this shader reads), so the ring's annulus is the layer's own off switch
+    // (harmonigraph_scene's RingGate and RingFade, against the analyzer's own
+    // Level window — a reading this shader never gets, u.spectrum_color being
+    // the colour one), so the ring's annulus is the layer's own off switch
     // and this is which NODES the layer is on at, and how far.
     @location(11) ring: f32,
     // The node's own light: x how bright it is, y which ROW of the ink strip
@@ -1543,8 +1547,8 @@ fn spectral_lut_color(level: f32) -> vec3<f32> {
 
 // Whether each wedge of the audio ring is ONE reading taken at its own
 // octave's pitch (u.misc9.y — the FOLD) rather than a window of pitch spread
-// across the wedge. The two readings differ in what u.spectrum holds and in
-// where in the wedge it is sampled, and nowhere else.
+// across the wedge. The two readings differ in what u.spectrum_color holds
+// and in where in the wedge it is sampled, and nowhere else.
 fn folded() -> bool {
     return u.misc9.y > 0.5;
 }
@@ -1560,8 +1564,8 @@ fn folded() -> bool {
 // `SpectralReading`, reaching the shader as `folded()` above.
 //
 // FOLD — one number for the whole wedge, read at the octave's own pitch, off a
-// u.spectrum the CPU has already folded (a Gaussian kernel over a local noise
-// floor). What survives is energy concentrated AT the node's pitch rather than
+// u.spectrum_color the CPU has already folded (a Gaussian kernel over a local
+// noise floor). What survives is energy concentrated AT the node's pitch rather than
 // energy near it, so a timbre draws as a constellation across the lattice: a
 // partial sits at an exact rational multiple of its fundamental, and on a
 // 7-limit lattice the first sixteen harmonics land on six nodes.
@@ -1573,7 +1577,8 @@ fn folded() -> bool {
 // So a partial dead on the node paints down the middle of the wedge, and one a
 // comma sharp paints to the clockwise side of it: the ring reads a DETUNING,
 // which is the one thing a folded number per octave cannot say. Nothing is
-// folded into u.spectrum for it either — no kernel and no noise floor, since
+// folded into u.spectrum_color for it either — no kernel and no noise floor,
+// since
 // both are a blur across the very axis the window exists to resolve, so a
 // wedge is the picture the Spectral pane would draw of the same stretch of
 // frequency.
@@ -1610,21 +1615,15 @@ fn spectral_radii() -> vec2<f32> {
     return vec2<f32>(u.misc7.z, u.misc7.w);
 }
 
-// The analyzer's loudness at bucket `b`, unpacked from the byte it rides as.
-fn spectrum_level(b: u32) -> f32 {
-    let i = min(b, SPECTRUM_BUCKETS - 1u);
-    let word = u.spectrum[i / 16u][(i / 4u) % 4u];
-    return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
-}
-
+// The ring's loudness at bucket `b`, unpacked from the byte it rides as.
 fn spectrum_color_level(b: u32) -> f32 {
     let i = min(b, SPECTRUM_BUCKETS - 1u);
     let word = u.spectrum_color[i / 16u][(i / 4u) % 4u];
     return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
 }
 
-// The analyzer's loudness at absolute MIDI `pitch`, interpolated between the
-// two buckets either side of it, or 0 where the axis does not reach that pitch
+// The ring's loudness at absolute MIDI `pitch`, interpolated between the two
+// buckets either side of it, or 0 where the axis does not reach that pitch
 // (under 20 Hz, over 20 kHz).
 //
 // Zero rather than the nearest end's value, which is what a clamp would give:
@@ -1635,15 +1634,6 @@ fn spectrum_color_level(b: u32) -> f32 {
 // A bucket stands for its own CENTRE, which is the half-step below — the grid
 // is `SPECTRUM_MIN_MIDI + (b + 0.5) / BUCKETS_PER_SEMITONE`, and dropping the
 // half puts every partial half a bucket flat of where it sounds.
-fn spectrum_at(pitch: f32) -> f32 {
-    let x = (pitch - SPECTRUM_MIN_MIDI) * BUCKETS_PER_SEMITONE - 0.5;
-    if x < 0.0 || x > f32(SPECTRUM_BUCKETS - 1u) {
-        return 0.0;
-    }
-    let i = u32(floor(x));
-    return mix(spectrum_level(i), spectrum_level(i + 1u), x - floor(x));
-}
-
 fn spectrum_color_at(pitch: f32) -> f32 {
     let x = (pitch - SPECTRUM_MIN_MIDI) * BUCKETS_PER_SEMITONE - 0.5;
     if x < 0.0 || x > f32(SPECTRUM_BUCKETS - 1u) {
@@ -1711,10 +1701,12 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
-    // and nor is either still fading out. Decided on the CPU against this same
-    // u.spectrum (harmonigraph_scene's RingGate and RingFade) rather than
-    // rediscovered here, since the question is about the node's whole ring and
-    // this is one fragment of one wedge of it.
+    // and nor is either still fading out. Decided on the CPU against the
+    // ANALYZER's window (harmonigraph_scene's RingGate and RingFade, the second
+    // axis `RingInk::lit` names above) rather than rediscovered here, since the
+    // question is about the node's whole ring and this is one fragment of one
+    // wedge of it — and it could not be rediscovered here in any case, that
+    // window never reaching the GPU.
     if in.ring <= 0.0 {
         return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }

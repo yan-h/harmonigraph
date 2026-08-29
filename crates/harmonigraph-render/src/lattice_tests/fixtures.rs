@@ -369,6 +369,30 @@ pub(super) fn total_light(px: &[u8]) -> i64 {
     px.chunks(4).map(brightness).sum()
 }
 
+/// The pixels a marker covers IN FULL, out of two shots over black that differ
+/// by the marker alone — `bare` without it, `inked` with it — and with nothing
+/// lighting the frame.
+///
+/// Found by DIFFING the pair rather than off the geometry, so a marker the node
+/// happened to cover leaves the set empty instead of quietly handing a claim
+/// made on it to the node — and then narrowed to the pixels the marker covers
+/// completely. It is laid down flat and premultiplied over a black frame, so a
+/// pixel it covers completely carries its colour exactly and every other one
+/// carries a fraction of it: the brightest value in the set is the colour
+/// itself, read off the picture rather than converted by hand, and the pixels
+/// holding it are the ones with nothing showing through. What shows through
+/// the antialiased rim is the ground's share of whatever stands there, which is
+/// a claim about the ground.
+pub(super) fn fully_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
+    let drawn: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && inked[i..i + 4] != bare[i..i + 4])
+        .collect();
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| inked[i + c]).max().unwrap_or(0));
+    drawn.into_iter().filter(|&i| inked[i..i + 3] == full).collect()
+}
+
 /// The slot mask naming middle C's octave — the one the node below sounds
 /// in, and so the one a mark can link back to.
 pub(super) const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
