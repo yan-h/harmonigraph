@@ -3556,7 +3556,7 @@ impl CallbackTrait for LatticeCallback {
                         Draw::Label(a, b, l) => Some((b - a, packed.boxes[l as usize])),
                         _ => None,
                     })
-                    .flat_map(|(n, b)| std::iter::repeat(b).take(n as usize))
+                    .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize))
                     .collect();
                 debug_assert_eq!(cells.len(), self.glyphs.len(), "one cell per glyph");
                 queue.write_buffer(&pane.cell_buffer, 0, bytemuck::cast_slice(&cells));

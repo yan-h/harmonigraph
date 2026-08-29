@@ -153,7 +153,10 @@ pub(crate) struct Packed {
 /// scales here that is over a hundred pane-fuls of names; the fallback
 /// criterion in #498 is what a frame that reaches it calls for.
 pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_side: u32) -> Packed {
-    if casters.is_empty() || !(sigma_px > 0.0) || !(px_per_point > 0.0) {
+    // A finite positive number, which a NaN or an infinity out of a corrupt
+    // blob is not: either is no shadow rather than a kernel of nothing.
+    let positive = |x: f32| x.is_finite() && x > 0.0;
+    if casters.is_empty() || !positive(sigma_px) || !positive(px_per_point) {
         return Packed::default();
     }
     let scale = (SIGMA_CELL_MAX / sigma_px).min(1.0);
