@@ -242,13 +242,24 @@ impl ShaderWatcher {
 
         let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
         let mtime = stamp(&self.lattice)?.max(stamp(&self.common)?);
-        match self.mtime.replace(mtime) {
-            None => None, // baseline; the baked shader is current
+        match self.mtime {
+            None => {
+                self.mtime = Some(mtime); // baseline; the baked shader is current
+                None
+            }
             Some(previous) if previous == mtime => None,
-            Some(_) => Some(module_source(
-                &std::fs::read_to_string(&self.common).ok()?,
-                &std::fs::read_to_string(&self.lattice).ok()?,
-            )),
+            Some(_) => {
+                // The stamp is committed only once BOTH halves are in hand. An
+                // editor that saves through a temp file and a rename leaves a
+                // window where the metadata is the new one and the read is not,
+                // and a stamp advanced past a failed read swallows that edit
+                // until the file is saved again — twice as reachable now that
+                // one reload reads two files.
+                let common = std::fs::read_to_string(&self.common).ok()?;
+                let lattice = std::fs::read_to_string(&self.lattice).ok()?;
+                self.mtime = Some(mtime);
+                Some(module_source(&common, &lattice))
+            }
         }
     }
 }
