@@ -348,3 +348,165 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 fn the_whole_song_layout_draws_the_frame_on_record() {
     check("spectrogram-whole-song", Shot { size: TALL, range: whole_axis(), whole: true });
 }
+
+/// Frames per second the cost measurement renders at.
+///
+/// Higher than [`FPS`] only to get more frames out of the same audio: the
+/// fixed cost of standing a renderer up is divided by the frame count, and 120
+/// frames put it far enough below the per-frame figure to stop mattering.
+const TIMING_FPS: f64 = 120.0;
+
+/// Fraction of the frame's height the control's pane is squeezed into.
+const SLIVER: f32 = 0.02;
+
+/// What the pane is asked to draw for one row of the table.
+#[derive(Clone, Copy, PartialEq)]
+enum Drawn {
+    /// The pane's whole depth given to the heatmap.
+    Heatmap,
+    /// None of it, which leaves the live curve and its rulings — egui shapes
+    /// built on the CPU, and the thing the heatmap replaced the compose of.
+    Curve,
+    /// The same pane, in a sliver of the frame — [`SLIVER`] of its height,
+    /// the rest background. A layout with NO panes is refused by the renderer,
+    /// and this is the nearest thing to it: every stage still runs and the
+    /// pane still draws, over about a fiftieth of the pixels. It is the
+    /// control the other two are measured against, and it carries that
+    /// fiftieth with it, so a difference reads a hair low.
+    Sliver,
+}
+
+/// Milliseconds a frame takes end to end, and how many were rendered.
+fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
+    let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let cfg = &mut state.spectrum_config;
+    cfg.show_roll = false;
+    cfg.roll_fraction = if drawn == Drawn::Heatmap { 1.0 } else { 0.0 };
+    cfg.roll_seconds = WINDOW;
+    (cfg.low_midi, cfg.high_midi) = whole_axis();
+    let take = Take {
+        header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
+        notes: Vec::new(),
+        params: Vec::new(),
+        truncated: false,
+    };
+    let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
+    if drawn == Drawn::Sliver {
+        for placement in &mut layout.panes {
+            placement.rect.3 = SLIVER;
+        }
+    }
+    let settings = Settings {
+        layout,
+        size,
+        pixels_per_point: 1.0,
+        fps: TIMING_FPS,
+        start: 0.0,
+        end: SECONDS,
+        audio_start: 0.0,
+        whole_song_spectrogram: false,
+    };
+    let audio = probe_audio();
+    let mut replay = Replay::new(take);
+    // The clock starts at the FIRST frame and not at the call: standing a
+    // renderer up costs a few hundred milliseconds of adapter and pipeline
+    // creation, which divided over the frames is the same order as the
+    // per-frame figure being measured and does not repeat between runs.
+    let mut first: Option<std::time::Instant> = None;
+    let mut last = None;
+    let mut frames = 0u64;
+    match render(&mut replay, Some(&audio), &settings, |_| {
+        let now = std::time::Instant::now();
+        if first.is_none() {
+            first = Some(now);
+        } else {
+            frames += 1;
+        }
+        last = Some(now);
+        Ok(true)
+    }) {
+        Ok(_) => {}
+        Err(e) if e.contains("no usable GPU adapter") => return None,
+        Err(e) => panic!("{e}"),
+    }
+    let span = last?.duration_since(first?).as_secs_f64() * 1000.0;
+    Some((span / frames.max(1) as f64, frames))
+}
+
+/// What drawing the heatmap costs a rendered frame, end to end.
+///
+/// The same take rendered at one size three ways — the pane's whole depth to
+/// the heatmap, the same depth to the live curve, and no pane at all — so the
+/// analyzer, the replay, egui, the encode and the readback sit in all three
+/// and difference out. The empty layout is the control: what is left over it
+/// is what drawing that pane costs through the path that ships.
+///
+/// It has to be measured in a frame rather than around one. A microbenchmark
+/// of the draw alone cannot see it: the per-draw command overhead is larger
+/// than the fragment work, and a submit-and-wait costs milliseconds of round
+/// trip either way.
+///
+/// `#[ignore]`, and it asserts nothing: the numbers belong to the machine that
+/// ran them.
+#[test]
+#[ignore]
+fn what_the_heatmap_costs_a_frame() {
+    // Sizes the pane is really dragged to, ending past a full Retina window:
+    // the brief predicts the heatmap's share barely moves with the pitch axis,
+    // because a taller pane reads shorter runs and the runs tile the buckets
+    // either way.
+    let sizes = [[256u32, 128], [256, 384], [512, 768], [1024, 1536], [2048, 1024]];
+    eprintln!("\n== what one rendered frame costs, and the heatmap's share ==");
+    eprintln!(
+        "{:>12}  {:>8}  {:>8}  {:>8}  {:>9}  {:>8}  {:>7}",
+        "size", "sliver", "heatmap", "curve", "heatmap-", "curve-", "px"
+    );
+    // The first render of a size pays for pipeline creation and the shader
+    // compile behind it, and the readings scatter by a few tenths of a
+    // millisecond after that — so each figure is the median of REPS renders
+    // with one thrown away in front.
+    // Interleaved, not blocked: this machine drifts by most of a millisecond
+    // over a minute, and three runs of one config followed by three of another
+    // turn that drift into a difference between them. One of each per round
+    // puts the drift in all three equally, where the subtraction removes it.
+    const REPS: usize = 7;
+    let round = |size| -> Option<[(f64, u64); 3]> {
+        let mut runs = [const { Vec::new() }; 3];
+        let mut frames = 0;
+        let order = [Drawn::Sliver, Drawn::Heatmap, Drawn::Curve];
+        // A throwaway round in front: the first render of a size pays for the
+        // shader compile behind every pipeline it touches.
+        for &drawn in &order {
+            frame_ms(size, drawn)?;
+        }
+        for _ in 0..REPS {
+            for (slot, &drawn) in order.iter().enumerate() {
+                let (ms, n) = frame_ms(size, drawn)?;
+                runs[slot].push(ms);
+                frames = n;
+            }
+        }
+        let mut out = [(0.0, 0); 3];
+        for (slot, times) in runs.iter_mut().enumerate() {
+            times.sort_by(f64::total_cmp);
+            out[slot] = (times[times.len() / 2], frames);
+        }
+        Some(out)
+    };
+    for size in sizes {
+        let Some([(sliver, frames), (heatmap, _), (curve, _)]) = round(size) else {
+            eprintln!("no usable GPU adapter; skipping");
+            return;
+        };
+        let px = size[0] * size[1];
+        eprintln!(
+            "{:>5} x {:<4}  {sliver:>8.3}  {heatmap:>8.3}  {curve:>8.3}  {:>9.3}  {:>8.3}  {:>6.2}M   ({frames} frames)",
+            size[0],
+            size[1],
+            heatmap - sliver,
+            curve - sliver,
+            px as f64 / 1.0e6,
+        );
+    }
+    eprintln!("(heatmap- and curve- are each pane's cost over the sliver frame)\n");
+}
