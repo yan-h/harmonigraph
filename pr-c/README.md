@@ -1,0 +1,1 @@
+Contact sheets for #498 PR C: each frame of `crates/harmonigraph-render/golden` drawn by the PR branch against the baseline on main. Left: main. Middle: the branch. Right: the difference, amplified. Not part of the build; this branch exists only so a PR body can link them.
