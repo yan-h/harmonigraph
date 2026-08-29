@@ -400,10 +400,11 @@ impl<'a> RangeBar<'a> {
     /// the axis floor rather than at `low`, runs solid to `low`, and ramps out
     /// to nothing by `high`.
     ///
-    /// For the pairs that describe a soft edge — the lattice's knockout gutter
-    /// and the piano roll's note outline. Both are two distances from the same
-    /// place (the node's rim, the note's edge), so they are already two points
-    /// on one axis, and the ordinary two-handle reading of them is the true
+    /// For the pairs that describe a soft edge — the resting marker's arm and
+    /// its taper, the piano roll's note outline and its fade. Both are two
+    /// distances from the same place (the marker's crossing, the note's edge),
+    /// so they are already two points on one axis, and the ordinary two-handle
+    /// reading of them is the true
     /// one: solid out to `low`, gone by `high`. What the fill adds is that the
     /// bar then LOOKS like the edge it sets — the ramp on the track is the ramp
     /// on screen — which the default paint, a bright slice floating over bare

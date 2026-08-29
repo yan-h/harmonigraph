@@ -1,4 +1,5 @@
-//! The shadow a resting cross casts into the light standing over it.
+//! The shadow a resting cross casts: a blur of its own ink, multiplied into
+//! everything already in the frame under it.
 
 use super::fixtures::*;
 use crate::*;
@@ -34,9 +35,9 @@ fn shadowed_ground(
         .copied()
         .filter(|&i| brightness(&deep[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
         .collect();
-    // The pair at a depth of 0 is the other half of every claim below: with the
-    // Shadow shut a marker writes no standoff at all, and nothing else in the light
-    // can subtract.
+    // The pair at a depth of 0 is the other half of every claim below: at a
+    // depth of 0 a marker's draw multiplies by exactly 1, and nothing else it
+    // does can subtract.
     let flat_dimmed = ground
         .iter()
         .filter(|&&i| brightness(&flat[i..i + 3]) < brightness(&flat_bare[i..i + 3]))
@@ -45,19 +46,19 @@ fn shadowed_ground(
     (ground, dimmed)
 }
 
-/// A marker holds a NODE's halo off its cross, on the Shadow bars the node's own
-/// rings are held off by.
+/// A marker darkens a NODE's halo around its cross, on the Shadow bars the
+/// node's own rings cast by.
 ///
-/// The whole claim of the feature, and the reason the standoff is written into
-/// the glow's own target rather than onto the marker: what a marker stands off
-/// is the melded field, which is somebody else's light entirely. A shadow that
-/// never reached past the cross would mean the third attachment had been
-/// written somewhere the composite does not read for the rest of the lattice.
+/// The whole claim of the feature: the light is composited under everything, so
+/// what a marker's shadow lands on is the melded field, which is somebody else's
+/// light entirely. A shadow that never reached past the cross would mean the
+/// marker's own draw was multiplying nothing but the pixels its ink already
+/// covers.
 ///
-/// The pair at a depth of 0 is asserted inside [`shadowed_ground`]: with the
-/// Shadow shut nothing here subtracts, which is what says the darkening measured
-/// is the standoff and not the marker draw finding some other way to take light
-/// off the picture.
+/// The pair at a depth of 0 is asserted inside [`shadowed_ground`]: at that
+/// depth nothing here subtracts, which is what says the darkening measured is
+/// the shadow and not the marker draw finding some other way to take light off
+/// the picture.
 #[test]
 fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
     const SIZE: [u32; 2] = [256, 256];
@@ -82,11 +83,12 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
 /// the halo it stands in, and a marker that is not there takes none.
 ///
 /// This is the whole of what a marker hands the picture — one number, spent on
-/// the ink, the pool and the standoff alike (`PlusInstance::strength`) — and it
-/// is what a position handing itself back to a name looks like: the cross grows
-/// and the shadow under it grows on the same clock. A shadow closed against the
-/// LIGHT instead runs on the Glow release, so a cross fully back would stand
-/// with nothing under it for as long as the halo it stands in takes to leave.
+/// the ink and on the share of the shadow alike (`PlusInstance::strength`) —
+/// and it is what a position handing itself back to a name looks like: the
+/// cross grows and the shadow under it grows on the same clock. A shadow closed
+/// against the LIGHT instead runs on the Glow release, so a cross fully back
+/// would stand with nothing under it for as long as the halo it stands in takes
+/// to leave.
 ///
 /// Measured on the light TAKEN rather than on a pixel count, which is what
 /// makes the middle of the ramp a claim rather than a rounding: a shallower
@@ -100,10 +102,9 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
 ///
 /// The marker stands OUT in the node's halo and not at the node's own centre,
 /// which is `shadowed_markers`' delicate number and the one thing this fixture
-/// cannot do without: the shade layer is a `max`, so a cross standing inside
-/// the node's own standoff can only be read where it holds off MORE than the
-/// node does — and a half-strength one holds off less than that, which reads
-/// as a marker with no shadow at all rather than as one with half.
+/// cannot do without: shadows MULTIPLY, so a cross standing inside the node's
+/// own shadow is read on pixels the node has already darkened, and half a
+/// cross's share of what is left is not half of what a whole one takes.
 #[test]
 fn a_crosss_shadow_is_worth_its_ink() {
     const SIZE: [u32; 2] = [256, 256];
@@ -161,45 +162,6 @@ fn a_crosss_shadow_is_worth_its_ink() {
     assert_eq!(none, 0, "a marker with no ink still took {none} of light off the halo");
 }
 
-/// The Shadow's WIDTH says how far a marker's shadow reaches, on the same bar it
-/// says it to a node's rings.
-///
-/// The depth alone would be a shadow of one size that could be dialled darker,
-/// which is not what the bar means anywhere else in the picture. A superset is
-/// what says the width stretches one shape rather than deepening it: every
-/// pixel a narrow Shadow darkens, a wide one darkens too.
-///
-/// Read as the DIFFERENCE the crosses make at each Shadow, which is what keeps the
-/// claim about them: the node's own standoff widens on the same bar and the
-/// shade layer is a `max`, so a frame read on its own says which of two shadows
-/// won rather than how far this one reaches. The two frames at one Shadow carry
-/// the same node, so what survives the cancellation is the crosses' own shadow.
-#[test]
-fn a_markers_shadow_reaches_as_far_as_its_width_says() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    // [`shadowed_markers`]' own Shadow at the wide end, which is where its crosses
-    // are calibrated to stand clear of the node's standoff. Past it that
-    // standoff reaches them and wins the `max`, and pixels start leaving the
-    // count for a reason that is the node's rather than the Shadow's — at 1.2 it
-    // takes eight of them.
-    const WIDE: f32 = 0.8;
-    const NARROW: f32 = 0.15;
-    let narrow = shadowed_ground(&mut shooter, NARROW, 1.0).1;
-    let wide = shadowed_ground(&mut shooter, WIDE, 1.0).1;
-    assert!(!narrow.is_empty(), "the narrow Shadow must cast a shadow at all");
-    assert!(
-        wide.len() > narrow.len() * 2,
-        "widening the Shadow from {NARROW} to {WIDE} shadowed {} against {}",
-        wide.len(),
-        narrow.len(),
-    );
-    let missed = narrow.difference(&wide).count();
-    assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
-}
-
 /// A marker's shadow is cast by the WHOLE arm, tip and taper alike: a tapered
 /// cross shadows nearly as far out as a square-ended one of its length, and far
 /// past what its SOLID length alone would cast.
@@ -211,16 +173,16 @@ fn a_markers_shadow_reaches_as_far_as_its_width_says() {
 /// eye reads a marker by is its ARMS, and this is the claim that keeps them in
 /// the shadow.
 ///
-/// Three arms and not two, because the taper also costs the shadow DEPTH
-/// (`plus_standoff`) and a reach read off a threshold gives a little of itself
-/// up with it. The third is the ruler that says how little: an arm cut to the
-/// tapered one's solid length, which is the shadow the truncation drew.
+/// Three arms and not two, because the taper also thins the INK the blur is
+/// taken of, and a reach read off a threshold gives a little of itself up with
+/// it. The third is the ruler that says how little: an arm cut to the tapered
+/// one's solid length, which is the shadow the truncation drew.
 ///
 /// Read along the arm rather than as a pixel count, and that is what makes it a
 /// claim about the SHAPE: a count also moves when the taper moves the ink's own
 /// footprint out of the ground being counted, so two counts can differ with the
 /// shadow's reach unchanged. Each cross is walked against its OWN depth-0 frame,
-/// which is what cancels that ink; what is left is the standoff alone.
+/// which is what cancels that ink; what is left is the shadow alone.
 #[test]
 fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
     const SIZE: [u32; 2] = [256, 256];
@@ -256,7 +218,7 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
         .collect();
     let mid = cols.first().unwrap().midpoint(*cols.last().unwrap());
 
-    // The outermost column right of the crossing where the standoff reads
+    // The outermost column right of the crossing where the shadow reads
     // darker than the same frame without one. Rightward because the node
     // lighting the frame is to the LEFT: that half holds no other ink and no
     // other shadow.
@@ -354,25 +316,23 @@ fn a_tapered_arm_gives_up_the_share_of_its_shadow_it_gives_up_of_its_length() {
 /// One Shadow is ONE distance: what a marker's shadow reaches past the ink casting
 /// it is a world length off the bar, not a share of the cross.
 ///
-/// This is the whole of what sharing the node's Shadow bar buys, and it is a claim
-/// no relative measurement can hold. The standoff is taken in the QUAD's uv,
-/// where the box's half-extents carry the arm; taking it in the ARM's instead —
-/// the reading `plus_coverage` twenty lines away invites, half-extents of
-/// `misc5.y` and `misc5.x` with the distance divided by the arm — leaves every
-/// other shadow test here passing, each being monotone in the Shadow, a superset,
-/// or a comparison between two arms of one length. What it changes is that each
-/// marker's shadow scales with its own cross, so the lattice's Shadow is as many
-/// distances as there are marker sizes; only a frame holding two different arms
-/// can see it, and only against a world ruler.
+/// This is the whole of what sharing the node's Shadow bar buys, and it is a
+/// claim no relative measurement can hold. σ is a length on the PANE
+/// (`shadow::sigma_px`), taken off the home node's radius; a σ scaled by each
+/// caster's own size instead would leave every other shadow test here passing,
+/// each being monotone in the Shadow, a superset, or a comparison between two
+/// arms of one length. What it changes is that the lattice's Shadow becomes as
+/// many distances as there are marker sizes; only a frame holding two different
+/// arms can see it, and only against a world ruler.
 ///
 /// The ruler is the cross's own INK: a square-ended arm draws out to exactly its
 /// own length, so the longer marker's two arm tips are a known number of world
 /// units apart and every length below is read through that. Its own ink and not
 /// the halo it stands in, which reaches the pane's every corner and has no edge
 /// to measure — and an edge on a decay would be a threshold where this is a
-/// footprint. The shadow's own edge IS such a threshold (`standoff_coverage`
-/// never reaches zero), which is why the claim is a DIFFERENCE between two arms
-/// under one threshold rather than either arm's reach against the Shadow.
+/// footprint. The shadow's own edge IS such a threshold (a Gaussian never
+/// reaches zero), which is why the claim is a DIFFERENCE between two arms under
+/// one threshold rather than either arm's reach against the Shadow.
 #[test]
 fn one_shadow_is_one_distance_whatever_the_cross_it_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
@@ -562,166 +522,5 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     assert!(
         by_wash > 20,
         "the fixture's wash moves the marker by {by_wash}; there is nothing here to measure",
-    );
-}
-
-/// A node the analyzer lit, with no key down, keeps the cross under it.
-///
-/// The cross goes when a NAME stands over it and at no other time
-/// (`derive_pluses`), and a node ringing under no key has no name to put there.
-/// What used to take it anyway was the node's own knockout, drawn over the
-/// markers because it drew after them: the Gate hands rings out freely, so
-/// every node the analyzer reached lost the mark of the position it stands on
-/// and kept the marker's standoff, a cross-shaped hole in the light with
-/// nothing standing in it.
-///
-/// Measured against the SAME node with the Shadow dialled off, which is the one
-/// setting where the hole was never painted (`from_scene` emits no `Clearing`
-/// below it) — so the claim is that the hole no longer decides this, rather
-/// than that some ink survives. The sweep carries no slack to hide a loss in:
-/// the marker's own shade adds no pixel to the set, so the counts are EQUAL at
-/// every Shadow and one pixel of the cross going missing fails the assertion.
-#[test]
-fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut gpu) = Shooter::new(SIZE) else {
-        return;
-    };
-    // Silent but ringing: the Gate's own gift, and the case the knockout used
-    // to swallow. The light is on so there is something for a clearing to
-    // knock out and something for the marker's ink to be washed by.
-    let build = |gutter: f32, marker: bool| -> Scene {
-        let mut scene = clearing_node(0, 1.0, true, gutter);
-        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
-        scene.glow_reach = 3.0;
-        scene.glow_strength = 2.0;
-        scene.glow_feather = 1.0;
-        let node = &mut scene.nodes[0];
-        node.activation = 0.0;
-        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        node.glow.level = 1.0;
-        scene.pluses = if marker {
-            vec![one_marker(glam::Vec3::ZERO, 0.35, glam::Vec4::new(0.6, 0.6, 0.6, 1.0), 1.0)]
-        } else {
-            Vec::new()
-        };
-        scene
-    };
-    // What the cross covers, read where no clearing is painted at all.
-    let mut inked = |gutter: f32| -> Vec<usize> {
-        let with = gpu.shot(&build(gutter, true));
-        let without = gpu.shot(&build(gutter, false));
-        (0..with.len()).step_by(4).filter(|&i| with[i..i + 4] != without[i..i + 4]).collect()
-    };
-    let bare = inked(0.0);
-    assert!(bare.len() > 50, "the fixture draws no cross to lose: {} pixels", bare.len(),);
-    for gutter in [0.2f32, 0.5, 1.0] {
-        let cut = inked(gutter);
-        assert!(
-            cut.len() >= bare.len(),
-            "at a Shadow of {gutter} the ringing node took {} of the {} pixels its \
-             cross covers with the Shadow off",
-            bare.len() - cut.len(),
-            bare.len(),
-        );
-    }
-}
-
-/// A marker knocks a hole in what was drawn before it, the way a node does —
-/// so a cross standing in front of a sheet covers that sheet's rings instead of
-/// sitting on them.
-///
-/// The claim and the reading are [`a_name_covers_the_rings_it_stands_on`]'s in
-/// `super::labels`, and deliberately so: the hole is one shape across the three
-/// things the lattice draws, and it is measured the same way in each. A hole is
-/// a premultiplied over of the GROUND at its own coverage, so every pixel it
-/// touches lands BETWEEN the picture with no marker in it and that ground. The
-/// Reach is 0, so the ground is one value for the whole frame.
-///
-/// The cross is LOOSE — at a lattice position no home node holds — which is
-/// exactly the arrangement that puts it over the sheets behind home and under
-/// the home sheet (`push_loose`). One node behind it, and the ring that node
-/// draws is what the hole is read on.
-#[test]
-fn a_marker_covers_the_sheet_behind_it() {
-    const SIZE: [u32; 2] = [256, 256];
-    const SHADOW: f32 = 0.6;
-    /// Where the sheet behind stands, in world units: far enough back to sort
-    /// before the loose markers and square behind the cross on screen.
-    const BEHIND: f32 = -1.0;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let at = |shadow: f32| -> Scene {
-        let mut scene = single_marked_node(0, 0);
-        scene.camera = harmonigraph_scene::Camera {
-            projection: harmonigraph_scene::Projection::Orthographic,
-            yaw: 0.0,
-            pitch: 0.0,
-            ..Default::default()
-        };
-        // No light anywhere, so the ground a hole clears to is the background
-        // and nothing else in the frame moves with the bar below.
-        scene.glow_reach = 0.0;
-        scene.glow_shadow = shadow;
-        scene.glow_shadow_soft = shadow;
-        scene.glow_shadow_depth = 1.0;
-        // The one node, pushed back a sheet so the loose cross is drawn after
-        // it. `on_home` is what `from_scene` sorts the markers against.
-        scene.nodes[0].world_pos = glam::Vec3::new(0.0, 0.0, BEHIND);
-        scene.nodes[0].on_home = false;
-        scene
-    };
-    let cross = |scene: &Scene| -> Vec<harmonigraph_scene::PlusInstance> {
-        vec![one_marker(glam::Vec3::ZERO, scene.node_radius * 0.9, scene.lattice_ground, 1.0)]
-    };
-    let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
-        let bare = shooter.shot(&at(shadow));
-        let mut with = at(shadow);
-        with.pluses = cross(&with);
-        let marked = shooter.shot(&with);
-        (at(shadow), bare, marked)
-    };
-
-    // The cross's own INK, taken at a Shadow of 0 where a marker paints that
-    // and nothing else. It does not move with the bar.
-    let (_, flat_bare, flat) = shots(0.0);
-    let ink: std::collections::BTreeSet<usize> =
-        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] != flat_bare[i..i + 4]).collect();
-    assert!(ink.len() > 200, "the fixture's cross must land on the pane, not {} px", ink.len());
-
-    let (scene, bare, marked) = shots(SHADOW);
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let ground = [byte(scene.background.x), byte(scene.background.y), byte(scene.background.z)];
-    let mut touched = 0usize;
-    for i in (0..marked.len()).step_by(4) {
-        if ink.contains(&i) || marked[i..i + 4] == bare[i..i + 4] {
-            continue;
-        }
-        touched += 1;
-        for c in 0..3 {
-            let (was, now, to) = (bare[i + c] as i32, marked[i + c] as i32, ground[c]);
-            assert!(
-                now >= was.min(to) - 2 && now <= was.max(to) + 2,
-                "a marker moved a pixel outside its own ink to {now}, which is not between \
-                 the {was} it stood on and the {to} a hole clears to",
-            );
-        }
-    }
-    assert!(touched > 250, "a cross at Shadow {SHADOW} cleared only {touched} pixels");
-
-    // And the pixels it cleared were RING: with the sheet behind taken out of
-    // the scene, the same frame is bare ground there and there is nothing for a
-    // hole to take away.
-    let empty = shooter.shot(&Scene { nodes: Vec::new(), ..at(SHADOW) });
-    let marked_empty =
-        shooter.shot(&Scene { nodes: Vec::new(), pluses: cross(&scene), ..at(SHADOW) });
-    let on_nothing = (0..marked_empty.len())
-        .step_by(4)
-        .filter(|&i| !ink.contains(&i) && marked_empty[i..i + 4] != empty[i..i + 4])
-        .count();
-    assert_eq!(
-        on_nothing, 0,
-        "with nothing behind it a cross must clear nothing, and it changed {on_nothing} pixels",
     );
 }

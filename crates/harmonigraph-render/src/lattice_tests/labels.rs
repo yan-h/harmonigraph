@@ -94,7 +94,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     );
 
     // One glyph, `off` points to the right of that pixel, named by `node`. No
-    // standoff: the fill alone answers the question, and a shadow would spread
+    // Shadow: the fill alone answers the question, and a shadow would spread
     // the reading over pixels nothing is being asked about.
     let picture = |instance: GlyphInstance, off: f32, label: Option<u32>| -> Vec<u8> {
         let (glyphs, labels) = match label {
@@ -729,22 +729,21 @@ fn shadowed_ground(
 /// The Shadow's WIDTH says how far a name's shadow reaches, on the same bar it
 /// says it to a node's rings and a marker's cross.
 ///
-/// This is what parts the standoff a name casts from the painted rim it
-/// replaces. A rim is a radius of its own: it answers to no bar, so a lattice
-/// dialled to a wide soft shadow drew one everywhere except around the type,
-/// where a hard keyline of a fixed couple of points stayed exactly as it was.
-/// Two shadows in one picture, and the seam between them at every name.
+/// This is what parts the shadow a name casts from the painted rim it replaces.
+/// A rim is a radius of its own: it answers to no bar, so a lattice dialled to a
+/// wide soft shadow drew one everywhere except around the type, where a hard
+/// keyline of a fixed couple of points stayed exactly as it was. Two shadows in
+/// one picture, and the seam between them at every name.
 ///
 /// A superset is what says the width STRETCHES one shape rather than deepening
 /// it: every pixel a narrow Shadow darkens, a wide one darkens too.
 ///
 /// Read as the difference the NAME makes at each width, which is what keeps the
-/// claim about the name: the node's own standoff widens on the same bar and the
-/// shade layer is a `max`, so a frame read on its own says which of two shadows
-/// won rather than how far this one reaches. Both widths are chosen to leave the
-/// node's standoff short of the name — at the wide end it stops half a world unit
+/// claim about the name: the node's own shadow widens on the same bar, so a
+/// frame read on its own carries both. Both widths are chosen to leave the
+/// node's shadow short of the name — at the wide end it stops half a world unit
 /// clear of the ink — so nothing in the narrow set is a pixel the node has
-/// already claimed.
+/// already darkened.
 #[test]
 fn a_names_shadow_reaches_as_far_as_its_width_says() {
     const SIZE: [u32; 2] = [256, 256];
@@ -790,8 +789,7 @@ const GREY: f32 = 0.55;
 /// [`lit_node_and_a_name`] with no light, over a mid-grey ground: the picture
 /// is the node's ink and the ground, both bright enough that a share taken off
 /// either is a reading. The Shooter has to be cleared to the same grey
-/// ([`over_grey_clear`]) so the ground is one value inside the node's clearing
-/// and out.
+/// ([`over_grey_clear`]) so the ground is one value across the whole frame.
 fn inked_on_grey(shadow: f32, depth: f32) -> Scene {
     let mut scene = lit_node_and_a_name(0.0, shadow, depth);
     scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
@@ -1013,7 +1011,7 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     const SHADOW: f32 = 0.4;
     /// How far apart the pair stands along the sheet, in world units — under
     /// the pitch below about a drawn disc on screen, so the far node's band
-    /// keeps a crescent past the near node's clearing.
+    /// keeps a crescent past the near node's ink.
     const APART: f32 = 4.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -1063,8 +1061,8 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         radius(near),
         radius(far),
     );
-    // The near node's own OPAQUE pixels: those its disc paints the same over
-    // black as over the grey — its ink, and the ground its clearing paints.
+    // The near node's own OPAQUE pixels: those it paints the same over black as
+    // over the grey, which is its ink and nothing else.
     let alone = scene_of(&[scene.nodes[near].world_pos.y]);
     let over_grey = shooter.shot(&alone);
     shooter.clear = wgpu::Color::BLACK;

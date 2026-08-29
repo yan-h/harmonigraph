@@ -4,123 +4,6 @@ use super::fixtures::*;
 use crate::gpu_harness::headless_device;
 use crate::*;
 
-/// A ring WEARS THE WASH inside a pool the Shadow depth has cleared to the bare
-/// ground: the ground's share of the light and the ink's are one field asked
-/// for twice, and the answers are free of each other.
-///
-/// The ink takes that field WHOLE and RAW, before the standoff's factor reaches
-/// it, which is what lets a dark pool and a lit ring be had together. Ink
-/// carrying the standoff's remainder instead could not: at a depth of 1 there
-/// would be nothing left of the pool's light to tint it with, and the ring
-/// would be a silhouette cut out of the frame. So the claims below are measured
-/// at a DEPTH OF 1, where the ground around the ring is the frame with no glow
-/// in it at all:
-///
-/// - The light lifts the ink, and lifts more than half of it.
-/// - Moving the DEPTH moves the ink not at all.
-///
-/// Every lift is measured as a lift and never a loss, which is the wash's own
-/// arithmetic (`node_paint`): the ink takes the light as a screen, so every
-/// channel it moves it moves up.
-///
-/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
-/// probe is the other side of this boundary — that pixel is outside the node's
-/// ink and these are inside it, and neither bar answers for both.
-///
-/// The ink is found on the GROUND, as in
-/// [`a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light`]: a pixel
-/// the node paints opaquely is the pixel that does not move when the ground
-/// does.
-///
-/// That set is not exact, and the third claim is stated to survive it: a pixel
-/// the node paints at an alpha a hair under 1 carries a SUB-LSB sliver of
-/// ground, which a black-and-white probe rounds away and the depth still moves.
-/// The BOUND follows from how the set is chosen rather than from tuning —
-/// agreeing over both grounds forces that sliver's coefficient under 1/255, and
-/// the sliver is the only term the depth touches on such a pixel, so one byte
-/// is the most it can carry. Ink reading the standoff's remainder would move by
-/// the light's own size instead, which is the scale the shot beside it
-/// supplies.
-#[test]
-fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let at = |reach: f32, depth: f32| -> Scene {
-        let mut scene = single_marked_node(0, 0);
-        scene.camera = harmonigraph_scene::Camera {
-            projection: harmonigraph_scene::Projection::Orthographic,
-            yaw: 0.0,
-            pitch: 0.0,
-            ..Default::default()
-        };
-        scene.glow_reach = reach;
-        scene.glow_strength = 2.0;
-        scene.glow_shadow = 0.16;
-        // The fade the whole width of the shadow, which is the fresh pair.
-        scene.glow_shadow_soft = 0.16;
-        scene.glow_shadow_depth = depth;
-        scene.glow_shadow = 0.16;
-        scene
-    };
-    let mut on_ground = |bg: glam::Vec4| {
-        let mut scene = at(0.0, 1.0);
-        scene.background = bg;
-        shooter.shot(&scene)
-    };
-    let dark_ground = on_ground(glam::Vec4::new(0.0, 0.0, 0.0, 1.0));
-    let pale_ground = on_ground(glam::Vec4::ONE);
-    let ink: Vec<usize> = (0..pale_ground.len())
-        .step_by(4)
-        .filter(|&i| {
-            pale_ground[i..i + 4] != [0u8, 0, 0, 255]
-                && pale_ground[i..i + 4] == dark_ground[i..i + 4]
-        })
-        .collect();
-    assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
-
-    // The glow OFF is what the ink is measured against: no light at the pixel
-    // is the one setting left that takes the wash out of the picture.
-    let off = shooter.shot(&at(0.0, 1.0));
-    let worn = shooter.shot(&at(0.8, 1.0));
-    let open = shooter.shot(&at(0.8, 0.0));
-    let lifted =
-        ink.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
-    assert!(
-        lifted * 2 > ink.len(),
-        "inside a pool cleared to the bare ground, the light lifted {lifted} of the ring's {} \
-         opaque pixels",
-        ink.len(),
-    );
-    let dimmed = ink.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
-    assert_eq!(
-        dimmed,
-        0,
-        "the wash took light off {dimmed} of the ring's {} opaque pixels",
-        ink.len(),
-    );
-    // The furthest any one channel of the ink moves between two shots, which is
-    // what both halves of the last claim are read in.
-    let spread = |a: &[u8], b: &[u8]| {
-        ink.iter()
-            .map(|&i| (0..3).map(|c| a[i + c].abs_diff(b[i + c])).max().unwrap())
-            .max()
-            .unwrap()
-    };
-    let by_wash = spread(&worn, &off);
-    let by_depth = spread(&worn, &open);
-    assert!(
-        by_wash > 20,
-        "the fixture's wash moves the ink by {by_wash}; there is nothing here to be free of",
-    );
-    assert!(
-        by_depth <= 1,
-        "dropping the depth moved the ink by {by_depth} against the wash's own {by_wash}: the \
-         wash is reading the standoff's remainder rather than the field",
-    );
-}
-
 /// The WASH reaches a LIT SLICE and nothing else in the picture.
 ///
 /// The bar's whole scope, and the reason it is one bar rather than the two
@@ -136,8 +19,8 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
 /// - Something moves, and enough of the lit ink to be the slice rather than a
 ///   rim of it.
 /// - NOTHING outside the lit ink moves, byte for byte — not the ghost ring the
-///   lit slice sits in, not the ring's silent wedges, not the halo, the
-///   clearing or the ground.
+///   lit slice sits in, not the ring's silent wedges, not the halo and not the
+///   ground.
 ///
 /// The lit ink is FOUND rather than described, and found with the glow OFF in
 /// every shot that finds it: it is the pixels that move when the thing lighting
@@ -243,12 +126,12 @@ fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
             pitch: 0.0,
             ..Default::default()
         };
-        // The Shadow off: a node cuts its own footprint out of the light
-        // (`node_clearing`), and a wedge standing in a pool cleared to the bare
-        // ground has no light for the bar to divide — the reading would be 0
-        // under either answer. The octave is held to make the node active at
-        // all; the band it lights is a layer out from the wedge and no pixel of
-        // it is in the set read below.
+        // The Shadow off: a node multiplies the frame under it by its own
+        // blurred ink (`shadow_through`), and a wedge standing in a pool taken
+        // to the depth's floor has no light for the bar to divide — the reading
+        // would be 0 under either answer. The octave is held to make the node
+        // active at all; the band it lights is a layer out from the wedge and
+        // no pixel of it is in the set read below.
         scene.glow_shadow = 0.0;
         scene.nodes[0].glow.level = 1.0;
         if split {
@@ -421,8 +304,8 @@ fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
     const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
 
     // Non-vacuous: the ring is ON SCREEN. Against the layer's own off switch
-    // rather than against `total_light`, which the node's clearing alone would
-    // satisfy — and safe as a one-layer diff only because this node draws
+    // rather than against `total_light`, which the node's other layers alone
+    // would satisfy — and safe as a one-layer diff only because this node draws
     // nothing else: no key, no octave, no mark, so there is no layer outside
     // the ring for its width to slide inward (the stack packs outward from the
     // centre).

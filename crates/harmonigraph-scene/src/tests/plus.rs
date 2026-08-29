@@ -59,16 +59,16 @@ fn unit_of(view: &ViewConfig) -> f32 {
 /// and the quad uv its bars are dialled in — an arm reads back as the number
 /// the bar behind it holds.
 ///
-/// The shader's own reason for wanting it: the markers' standoff draw is handed
-/// world lengths (a billboard, and an arm per instance) and holds the light off
-/// by the Shadow, which is a node's bar and so in uv. One of the two has to be
-/// converted, and the conversion is the SCENE's rather than any marker's —
-/// carrying it over is what keeps `lattice.wgsl` from spelling the uv rule a
-/// second time for one more layer.
+/// The shader's own reason for wanting it: a marker's draw is handed world
+/// lengths (a billboard, and an arm per instance) and has to grow its quad by
+/// the Shadow's own reach, which is a node's bar and so in uv. One of the two
+/// has to be converted, and the conversion is the SCENE's rather than any
+/// marker's — carrying it over is what keeps `lattice.wgsl` from spelling the
+/// uv rule a second time for one more layer.
 ///
 /// Read against the bars rather than against a formula, which is the whole
-/// point: a unit that disagreed with them would leave the marker's shadow drawn
-/// at a different Shadow than every node's, on one bar.
+/// point: a unit that disagreed with them would leave the marker's quad grown
+/// by a different Shadow than every node's, on one bar.
 #[test]
 fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
     let view = ViewConfig { plus_arm: 0.2, ..plus_view() };
@@ -728,9 +728,9 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
 ///
 /// The shadow is the same claim, and it is structural rather than arithmetic: a
 /// marker hands the picture ONE number ([`PlusInstance::strength`]), spent on
-/// its ink, its pool and the standoff its cross writes into the light alike. A
-/// light term anywhere in here is what this catches, by handing the derivation
-/// a fully lit node and a dark one and requiring the same field back.
+/// its ink and on the share of the shadow its cross casts alike. A light term
+/// anywhere in here is what this catches, by handing the derivation a fully lit
+/// node and a dark one and requiring the same field back.
 #[test]
 fn a_node_lit_by_no_key_keeps_its_cross_whole() {
     let view = ViewConfig { show_labels: false, ..plus_view() };

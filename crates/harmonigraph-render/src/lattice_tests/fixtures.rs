@@ -130,8 +130,7 @@ pub(super) fn parity_scene() -> Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
         now: 1.25,
-        // The ground the knockout clears to, which every node in this scene
-        // paints — the Shadow is one number for the view (`parity_scene`).
+        // The ground the lattice stands on, as the app hands it in.
         background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
@@ -207,11 +206,10 @@ pub(super) fn parity_scene() -> Scene {
         // Melded whole, the light two overlapping halos have always made, so a
         // test that says nothing about the Meld is measuring the screen.
         glow_meld: 1.0,
-        // The fresh standoff and the shares that shape the light inside it and
-        // over a lit slice's own ink, inert at reach 0 and here to say so.
+        // The fresh Shadow and the share a lit slice's own ink takes of the
+        // light, so a test that says nothing about either measures the fresh
+        // picture.
         glow_shadow: 0.16,
-        glow_shadow_soft: 0.16,
-        glow_shadow_shape: 1.0,
         glow_shadow_depth: 0.85,
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
@@ -259,12 +257,9 @@ pub(super) struct Shooter {
     /// the pixels the shot is about.
     ///
     /// A fixture reading an ABSOLUTE frame has to keep this and
-    /// [`Scene::background`] agreeing instead. `background` is what a node's
-    /// knockout PAINTS, so a hole over a pane cleared to something else draws a
-    /// patch the app never shows — text.wgsl's own `background` uniform says
-    /// the same of a name's hole. The fixtures that set the two apart do it on
-    /// purpose, to make a hole visible that is invisible by construction in the
-    /// picture.
+    /// [`Scene::background`] agreeing instead: `background` is the ground the
+    /// app's own pane paints, so a lattice over a pane cleared to something
+    /// else is a frame standing on a colour the app never shows.
     pub(super) clear: wgpu::Color,
 }
 
@@ -463,13 +458,10 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         },
         trail: 0.0,
     }];
-    // BLACK, which is the colour `Shooter::shot` clears to: a node's knockout
-    // paints the ground it stands on (`node_paint`), and every reading taken off
-    // this fixture is of the node's own ink or of the light around it. Painting
-    // the pane's own well instead would put the hole into every one of them —
-    // as a ground lifted off black under a fading slice, and as pixels an ink
-    // mask counts as inked a couple of Shadow widths past where the ink ends. Against
-    // the clear colour the hole lands on what is already there.
+    // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the
+    // ground the scene names are one value: every reading taken off this fixture
+    // is of the node's own ink or of the light around it, and a ground lifted
+    // off black would sit under both.
     scene.background = Vec4::new(0.0, 0.0, 0.0, 1.0);
     // One node, so one row — the strip follows the scene it is handed.
     scene.glow_rows = 1;
@@ -556,11 +548,11 @@ pub(super) const PROBE_INNER: f32 = 0.0;
 /// for a pixel reading to find.
 pub(super) const PROBE_BAND_WIDTH: f32 = 0.163_084_63;
 
-/// The angular padding the clearing probe slices its wedges at, standing in
+/// The angular padding the layered probes slice their wedges at, standing in
 /// for the fresh view's own (see
-/// [`ViewConfig::octave_gap`](harmonigraph_scene::ViewConfig)): the clearing
-/// is read across a wedge's own arc, and a slicing dialled wide enough eats
-/// the arc the reading is taken over.
+/// [`ViewConfig::octave_gap`](harmonigraph_scene::ViewConfig)): a reading is
+/// taken across a wedge's own arc, and a slicing dialled wide enough eats the
+/// arc it is taken over.
 pub(super) const PROBE_OCTAVE_GAP: f32 = 0.05;
 
 /// The Range these fixtures read their partials against, standing in for the
@@ -716,32 +708,23 @@ pub(super) fn angle_apart(a: f64, b: f64) -> f64 {
     signed_apart(a, b).abs()
 }
 
-/// How far past its own body the clearing in the tests below reaches, in the uv
-/// of a node — the Shadow, which is what the hole is measured in
-/// (`ViewConfig::glow_shadow`) — and, through the fade at 0, how gradually it gets
-/// there: barely. What is left under that handle is `SHADOW_SOFT_FLOOR`, a
-/// fiftieth of a node, so the coverage is solid to within that of the reach and
-/// its tail is spent inside another one. The fade the app ships spreads the same
-/// drop over the dozen pixels a reading would then have to pick a level out of.
-pub(super) const CLEAR_REACH: f32 = 0.30;
-
-/// The audio ring's width for the clearing probe, standing in for the fresh
+/// The audio ring's width for the layered probe, standing in for the fresh
 /// view's own (see [`ViewConfig::spectral_ring_width`](harmonigraph_scene::ViewConfig))
-/// the same way [`PROBE_GAP`] stands in for its gap: CLEAR_REACH is a fixed
-/// reach in uv, and a ring dialled thinner than that leaves too few pixels
-/// past it for the clearing-fraction reading below to hold its tolerance.
+/// the same way [`PROBE_GAP`] stands in for its gap: a ring dialled thinner
+/// leaves too few pixels either side of it for a per-layer reading to pick one
+/// edge out of the next.
 pub(super) const PROBE_RING_WIDTH: f32 = 0.3;
 
-/// The stack the clearing tests are measured against: three layers at the
+/// The stack the layered probes are measured against: three layers at the
 /// probe's own widths and wider padding, so a pixel reading can tell one
 /// layer's edge from the next.
 ///
 /// Every width the stack is built from is stated rather than inherited. What
-/// the clearing tests need is a node wearing all three layers with room between
+/// these probes need is a node wearing all three layers with room between
 /// them; a capture of a dialled-in look is free to dial any of them to a
-/// hairline, and each one left inheriting is a way for these readings to fail
-/// on a change that has nothing to do with clearing.
-pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
+/// hairline, and each one left inheriting is a way for a reading to fail on a
+/// change that has nothing to do with what it measures.
+pub(super) fn layered_rings() -> harmonigraph_scene::RingStack {
     let fresh = harmonigraph_scene::ViewConfig::default();
     harmonigraph_scene::ViewConfig {
         ring_inner: PROBE_INNER,
@@ -754,24 +737,23 @@ pub(super) fn clearing_rings() -> harmonigraph_scene::RingStack {
     .rings()
 }
 
-/// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
+/// One node wearing all three layers at [`layered_rings`]'s radii: `melody`
 /// names the slot its mark extends (0 for no mark), `ring` how much of its audio
 /// ring the view's Gate leaves it, `band` whether the octave band is on, and
-/// `shadow` the Shadow the hole is cut at (0 for none).
+/// `shadow` the Shadow it casts at (0 for none).
 ///
 /// The Shadow is the VIEW's, so it is set on the scene rather than on the node —
-/// every node a fixture adds beside this one clears at the same reach.
+/// every node a fixture adds beside this one casts at the same width.
 ///
-/// The ground is WHITE where the app clears to the pane's own panel: every
-/// reading below is "what changed when the gutter was turned on", and a bright
-/// ground makes that the whole range of a channel at a cleared pixel instead of
-/// a few levels over black.
+/// The ground is WHITE where the app stands on the pane's own panel: a reading
+/// taken as "what changed when the shadow was turned on" then has the whole
+/// range of a channel to move in instead of a few levels over black.
 ///
-/// The node is drawn small enough for its clearing to fit in the frame — the
-/// hole reaches a third of a node past a mark that already stands outside every
+/// The node is drawn small enough for its shadow to fit in the frame — the blur
+/// reaches a third of a node past a mark that already stands outside every
 /// ring.
-pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, shadow: f32) -> Scene {
-    let rings = clearing_rings();
+pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> Scene {
+    let rings = layered_rings();
     let mut scene = single_marked_node(melody, 0);
     scene.background = glam::Vec4::ONE;
     scene.node_radius = 1.4;
@@ -790,7 +772,6 @@ pub(super) fn clearing_node(melody: u32, ring: f32, band: bool, shadow: f32) -> 
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
     scene.glow_shadow = shadow;
-    scene.glow_shadow_soft = 0.0;
     scene.nodes[0].audio_ring = ring;
     scene
 }
@@ -816,9 +797,9 @@ pub(super) const SHIMMER_PROBE_STEP: f32 = PARITY_SHIMMER_WIDTH * 0.5;
 /// A culled node is not a blank frame, and the difference is the trap here:
 /// what says a position is there is the MARKER standing at it, which this
 /// fixture carries (`a_silent_lattice_ships_no_nodes_and_still_draws_its_markers`
-/// pins that it must). Since a marker has a light and a standoff of its own,
-/// an idle shot has content in the glow attachments as well as the scene's.
-/// A test wanting a genuinely bare frame clears `pluses` for itself.
+/// pins that it must). Since a marker draws ink and casts a shadow of its own,
+/// an idle shot is not an empty frame. A test wanting a genuinely bare one
+/// clears `pluses` for itself.
 ///
 /// The AUDIO RING has to be off for that to hold, and it is:
 /// [`parity_scene`] carries a silent [`harmonigraph_scene::SpectralPaint`].
@@ -868,13 +849,12 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
     scene.glow_strength = 2.0;
     scene.glow_feather = 1.0;
     scene.glow_shadow = shadow;
-    scene.glow_shadow_soft = shadow;
     scene.glow_shadow_depth = depth;
     scene.plus_taper_start = taper_start;
-    // Four markers out where the node's halo still reaches and its own standoff
-    // does not. The distance is the fixture's one delicate number: the shade
-    // layer is a `max`, so a marker standing inside the node's own standoff adds
-    // nothing to it and the shadow measured would be the node's.
+    // Four markers out where the node's halo still reaches and the node's own
+    // shadow does not. The distance is the fixture's one delicate number: a
+    // marker standing inside the node's own shadow would have that shadow
+    // multiplied in beside its own, and the darkness measured would be both.
     scene.pluses = [(2.6f32, 0.0f32), (-2.6, 0.0), (0.0, 2.6), (0.0, -2.6)]
         .into_iter()
         .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.4, scene.lattice_ground, 1.0))
@@ -883,13 +863,13 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
 }
 
 /// ONE square-ended marker standing out in the node's halo, with the Shadow
-/// dialled to `shadow` and the standoff switched by `depth`.
+/// dialled to `shadow` and its depth switched by `depth`.
 ///
 /// [`shadowed_markers`] with its four crosses replaced by one, so a reading can
 /// walk out from a single cross along the centre row and meet nothing else. The
-/// marker keeps that fixture's distance from the node ([`LONE_OFFSET`]): the
-/// shade layer is a `max`, so a cross standing inside the node's own standoff
-/// adds nothing to it and the shadow measured would be the node's.
+/// marker keeps that fixture's distance from the node ([`LONE_OFFSET`]): a
+/// cross standing inside the node's own shadow would have both multiplied into
+/// the same pixels, and what was measured would be the pair.
 ///
 /// It stands to the node's RIGHT, which is where a reading walks: away from the
 /// node, so the half of the frame being measured holds no other ink and no
@@ -944,14 +924,9 @@ pub(super) fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene 
     scene.glow_strength = 1.5;
     scene.glow_feather = 1.0;
     scene.glow_shadow = shadow;
-    // The fade the whole width of the shadow, which is the pairing the bar
-    // ships in and the one the width means anything simple at: `glow_shadow_soft`
-    // is clamped to the width by `ViewConfig::sanitize`, so a fixture that left
-    // it alone would narrow its own fade as it widened its shadow.
-    scene.glow_shadow_soft = shadow;
     scene.glow_shadow_depth = depth;
-    // The markers away: a cross would write a standoff of its own into the
-    // layer the name tests read.
+    // The markers away: a cross casts a shadow of its own into the frame the
+    // name tests read.
     scene.pluses.clear();
     scene
 }
@@ -965,9 +940,9 @@ pub(super) const NAME_SIZE: f32 = 12.0;
 /// Where a name stands to be read against a node's INK rather than against the
 /// ground: the middle of the octave band, on the +x axis.
 ///
-/// The empty middle is the one place a name over a node says nothing — a node's
-/// own clearing has already cleared it to the ground, so a name there paints
-/// the ground over the ground and the picture cannot tell. Derived off the
+/// The empty middle is the one place a name over a node says nothing about ink
+/// — a node paints none there, so a name standing in it is a name over the
+/// ground the rings stand around. Derived off the
 /// scene's own band radii rather than written as a number, because a fixture
 /// that retunes the stack would otherwise leave the name standing where the
 /// band no longer is: the ring radii are in quad uv, whose 1 is

@@ -178,11 +178,10 @@ fn inside(d: f32, edge: f32) -> f32 {
 /// at a led note's own end is given a shorter one ([`cap_coverage`]) — the same
 /// band, measured against a different edge and allowed less room.
 ///
-/// The same pair the lattice's knockout gutter takes, and for the same reason
-/// they are two numbers rather than one: a fade tied to the reach makes a
-/// wider outline always a blurrier one, so how far it stands out and how
-/// softly it ends are set apart. A fade at or past the reach fades the whole of it, from
-/// the note's edge outward; a fade of 0 is a hard edge.
+/// TWO numbers rather than one: a fade tied to the reach makes a wider outline
+/// always a blurrier one, so how far it stands out and how softly it ends are
+/// set apart. A fade at or past the reach fades the whole of it, from the note's
+/// edge outward; a fade of 0 is a hard edge.
 ///
 /// `d` is clamped at the note's edge rather than run on inward, which is what
 /// makes an outline of no reach paint NOTHING: run inward, its ramp would still

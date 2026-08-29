@@ -151,11 +151,11 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
-    // Three bars on the page draw a curve on themselves, and the Fade curve
+    // Two bars on the page draw a curve on themselves, and the Fade curve
     // leads — Note is the first section and the bar is its second row. The
-    // other two are the Glow section's, checked below once this one is.
+    // other is the Glow section's Feather, checked below once this one is.
     let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 3, "the Lattice page drew {} preview lines", paths.len());
+    assert_eq!(paths.len(), 2, "the Lattice page drew {} preview lines", paths.len());
     let points = &paths[0];
     assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
@@ -189,30 +189,23 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
         "a fresh view fades on a straight line; the test above proves nothing",
     );
 
-    // The Glow section's two, in the order the section lays them: the Feather
-    // drawing the light's falloff at the fresh feather, then the Shadow curve
-    // drawing the standoff's recovery at the fresh curve. Each against the
-    // scene's own function of the view's own field, so a bar handed the other's
-    // curve, or its own curve of the wrong field, is caught here and nowhere
-    // else — the widget draws whatever it is handed. Each line's own ends
-    // calibrate its box as the Fade curve's did, the two running opposite ways:
-    // the light starts full and ends at nothing, the recovery the reverse, so
-    // the lower of the two ends is the floor whichever end it is.
+    // The Glow section's one: the Feather, drawing the light's falloff at the
+    // fresh feather. Against the scene's own function of the view's own field,
+    // so a bar handed another's curve, or its own curve of the wrong field, is
+    // caught here and nowhere else — the widget draws whatever it is handed.
+    // The line's own ends calibrate its box as the Fade curve's did.
     let view = harmonigraph_scene::ViewConfig::default();
     type Curve = fn(f32, f32) -> f32;
-    let curves: [(&str, f32, Curve); 2] = [
-        ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
-        ("Shadow curve", view.glow_shadow_shape, harmonigraph_scene::standoff_recovery),
-    ];
+    let curves: [(&str, f32, Curve); 1] =
+        [("Feather", view.glow_feather, harmonigraph_scene::glow_skirt)];
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);
         assert!(last.x > first.x, "the {name} line runs backwards");
         assert!((first.y - last.y).abs() > 0.5, "the {name} line is flat, and calibrates nothing",);
         // The box off the two ENDS the curve itself has there, rather than off
-        // the track's own top and bottom: the standoff's recovery is a decay
-        // and arrives at the far end short of 1 (see `standoff_recovery`), so
-        // an end taken for the curve's extreme measures the inset instead of
-        // the shape.
+        // the track's own top and bottom: the falloff is windowed to nothing
+        // before the far end, so an end taken for the curve's extreme measures
+        // the inset instead of the shape.
         let (c0, c1) = (curve(value, 0.0), curve(value, 1.0));
         assert!((c1 - c0).abs() > 0.5, "the {name} curve is flat, and calibrates nothing");
         let scale = (last.y - first.y) / (c1 - c0);

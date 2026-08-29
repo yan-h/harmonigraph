@@ -155,10 +155,10 @@ impl Camera {
     /// The other half of [`screen_scale`](Self::screen_scale), and the same
     /// arithmetic: that one is a ratio against the default framing, this one is
     /// the framing itself. What it is for is a length the picture holds in
-    /// WORLD units — a node's radius — that something typeset in points has to
-    /// match, which is the standoff a lattice name casts (`glyph_standoff` in
-    /// the glyph shader, where a node's radius is the unit the Shadow bar is
-    /// dialled in).
+    /// WORLD units — a node's radius, a marker's arm — that something measured
+    /// on the pane has to match: the Shadow bar is dialled in node radii, and
+    /// the σ every caster is blurred at is in pixels
+    /// (`shadow::sigma_px` in harmonigraph-render).
     ///
     /// True at the focus plane under every projection, for the reason
     /// [`screen_scale`](Self::screen_scale) gives: the window's half-height is

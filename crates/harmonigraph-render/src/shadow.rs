@@ -20,9 +20,8 @@ const SHADOW_SRC: &str = include_str!("shaders/shadow.wgsl");
 /// What the atlas is kept in: one half-float coverage per texel.
 ///
 /// Half floats rather than a byte because the blur's tail is MULTIPLIED into
-/// the frame, and a tail quantized to 1/255 steps across a wide soft shadow
-/// where the light under it has none — `GLOW_SHADE_FORMAT`'s argument, for the
-/// same reader.
+/// the frame: a tail quantized to 1/255 steps across a wide soft shadow, where
+/// the light under it has no steps of its own to hide them in.
 pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The most texels a cell's σ may be. What bounds the kernel, at
@@ -43,9 +42,8 @@ pub(crate) const REACH_SIGMAS: f32 = 3.0;
 /// HALF the bar's width. A half-plane blurred at σ keeps `erfc(d / (σ√2)) / 2`
 /// of the light `d` out from its edge, which at `d = 2σ` is 2.3% — so one
 /// Shadow width is where a wide caster's shadow has all but run out, which is
-/// where the standoff curve the rings still cast on puts its own tail
-/// (`exp(-SHADOW_TAIL)` at the edge in lattice.wgsl is 1.8%). One bar, one
-/// reach, across a ring and a name.
+/// what the bar says it is. One bar, one reach, across a ring, a cross and a
+/// name.
 ///
 /// Target pixels rather than points, because the cell is drawn at the target's
 /// own resolution and sampled back in points: `render_scale` is the term #496

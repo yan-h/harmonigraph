@@ -12,9 +12,9 @@
 //! The set is two kinds of scene, and the difference is worth keeping
 //! straight because it decides what a diff MEANS.
 //!
-//! **Scenes a feature PR is not supposed to reach** — a node over the
-//! clearing it cuts, and the resting marker field standing in one node's
-//! light. A Shimmer or a Wash change leaves both alone, so a diff here on
+//! **Scenes a feature PR is not supposed to reach** — a node standing in front
+//! of what is drawn behind it, and the resting marker field standing in one
+//! node's light. A Shimmer or a Wash change leaves both alone, so a diff here on
 //! such a PR is the blast radius being wider than its author believed, which
 //! is the one thing the claim tests cannot say.
 //!
@@ -79,20 +79,19 @@ impl From<Scene> for Shot {
 // Scenes a feature PR is not supposed to reach
 // ---------------------------------------------------------------------------
 
-/// A node standing in front of what is drawn behind it, over a white ground.
+/// A node standing in front of what is drawn behind it.
 ///
-/// The subject is the CLEARING — the hole a node cuts so that it reads as
-/// being in front of the sheets and markers behind — which is depth ordering
-/// and geometry rather than any dial's look.
+/// The subject is DEPTH ORDERING and the geometry of a node's own layers,
+/// rather than any dial's look: the node draws over the sheets and markers
+/// behind it, and casts over them at whatever the Shadow says.
 ///
-/// A mark is held, so the frame carries the bulge: the hole is the node's own
-/// shape one reach out, so it swells over the wedge a mark extends and hugs
-/// the rings everywhere else.
+/// A mark is held, so the frame carries the bulge: a node's shape swells over
+/// the wedge a mark extends and hugs the rings everywhere else.
 fn node_over_its_clearing() -> Scene {
-    let mut scene = clearing_node(2, 0.6, true, 0.85);
-    // The fixture's ground is white because its own tests read the clearing as
-    // a difference against it. A golden is read as an absolute frame instead,
-    // and a saturated channel records nothing: over white, 95% of these pixels
+    let mut scene = layered_node(2, 0.6, true, 0.85);
+    // The fixture's ground is white because its own readings are differences
+    // against it. A golden is read as an absolute frame instead, and a
+    // saturated channel records nothing: over white, 95% of these pixels
     // are pure black or pure white and no shader change can move them.
     scene.background = glam::Vec4::new(0.30, 0.31, 0.36, 1.0);
     // A halo over the whole frame, so the ground outside the node carries a
@@ -105,11 +104,11 @@ fn node_over_its_clearing() -> Scene {
 
 /// The resting marker field standing in one node's light.
 ///
-/// This is where a marker's cross meets a node's halo: the ink, the standoff
-/// it holds the light off by, and the shadow the cross casts. The shape of
-/// that shadow is what #450's disc-for-a-cross mutation changes and what no
-/// claim test in the suite can see, so this frame is the one carrying the
-/// acceptance criterion.
+/// This is where a marker's cross meets a node's halo: the ink, and the shadow
+/// the cross casts into the light standing under it. The shape of that shadow
+/// is what #450's disc-for-a-cross mutation changes and what no claim test in
+/// the suite can see, so this frame is the one carrying the acceptance
+/// criterion.
 fn resting_markers_in_one_light() -> Scene {
     // The dials the marker suite measures shadows at, so the frame shows the
     // moat rather than a marker sitting in undimmed light.
@@ -184,20 +183,18 @@ fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     let mut scene = derive(Camera { target: at, ..camera });
     // The ground a lattice pane paints its own rect with, which is what the
     // light lands on in the editor. `derive_scene` already answers this; it is
-    // restated because [`on_the_ground_it_clears_to`] reads it back, and a
-    // frame whose pane and whose knockouts disagree is the one thing that
-    // helper exists to stop.
+    // restated because [`on_the_ground_it_clears_to`] reads it back, and a frame
+    // whose pane and whose scene disagree is the one thing that helper exists to
+    // stop.
     scene.background = harmonigraph_scene::skin::well_color();
     scene
 }
 
-/// A frame standing on the ground it clears its own holes to.
+/// A frame standing on the ground its own scene names.
 ///
-/// The pair has to agree: `Scene::background` is what a node's knockout paints,
-/// so a lattice over a black pane draws a patch of lighter grey round every
-/// node that the app has nowhere on screen — and every whole-lattice frame here
-/// is a lattice of them. text.wgsl's `background` uniform says the same of a
-/// name's hole from the other side.
+/// The pair has to agree: `Scene::background` is the ground the lattice pane
+/// paints, so a lattice shot over a black pane stands on a ground the app has
+/// nowhere on screen — and every whole-lattice frame here is such a shot.
 fn on_the_ground_it_clears_to(scene: Scene) -> Shot {
     let ground = scene.background;
     Shot {
@@ -242,7 +239,7 @@ fn a_chord_at_the_fresh_view() -> Scene {
 /// halo on every node saturates toward white, and 12-TET lights every node of
 /// a pitch class in the window rather than the five the chord names. A frame
 /// clipped to white records nothing — the same reason `node_over_its_clearing`
-/// does not stand on the white ground its fixture ships.
+/// does not stand on the white ground its own fixture ships.
 fn a_chord_at_a_wide_reach() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         glow_reach: 4.0,
@@ -257,9 +254,9 @@ fn a_chord_at_a_wide_reach() -> Scene {
 ///
 /// Read out of a live Bitwig project with `./read-plugin-state.py` (the
 /// `capture-daw-state` skill) on 2026-08-28. Of everything that capture holds,
-/// four fields differ from the fresh view: a Shadow a fifth wider, its fade
-/// with it, the Shadow depth at the top of its bar rather than 0.85, and the
-/// window centred one fifth along.
+/// three fields differ from the fresh view: a Shadow a fifth wider, the Shadow
+/// depth at the top of its bar rather than 0.85, and the window centred one
+/// fifth along.
 ///
 /// That is the whole of the difference and it earns the frame, because the
 /// freeze list and the shadow rework are both judged at these settings and
@@ -274,7 +271,6 @@ pub(super) fn the_live_view() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         center_threes: 1,
         glow_shadow: 0.196_915_06,
-        glow_shadow_soft: 0.196_915_06,
         glow_shadow_depth: 1.0,
         ..Default::default()
     };
@@ -393,14 +389,14 @@ fn node_points(scene: &Scene) -> f32 {
 
 /// A name standing on the INK of the node it names, at the fresh Shadow.
 ///
-/// The receiver asymmetry in one frame. Ink is washed with the RAW light and a
-/// name's shadow is a HOLE, so what a name does to the band under it is not
-/// what it does to the ground beside it — at a quarter Shadow the ground keeps
-/// 55% and the ink 75%. #498's PR B is the diff on this frame.
+/// Ink is washed with the RAW light, so what a name's shadow does to the band
+/// under it is the same share it takes off the ground beside it — the
+/// asymmetry #498 set out to remove, and the diff on this frame is where it
+/// went.
 ///
-/// The band rather than the middle: a node's own clearing has already cleared
-/// its middle to the ground, so a name there paints the ground over the ground
-/// and the picture cannot tell.
+/// The band rather than the middle: a node's middle is ground with a halo
+/// standing on it, so a name there says nothing about what a shadow does to
+/// INK.
 fn a_name_on_a_nodes_band() -> Shot {
     let scene = a_named_node(fresh_shadow());
     let labels = strokes_on_the_band(&scene, 1);
@@ -423,13 +419,10 @@ fn a_name_at_render_scale_2() -> Shot {
 
 /// Two strokes of one name at a WIDE Shadow — #490's repro.
 ///
-/// Between the bowl and the crossbar of a `G` the ground is exactly as dark as
-/// it would be beside either stroke alone, and the medial axis between them
-/// reads as one shadow shoving the other aside. `field_standoff` is
-/// `standoff_coverage(distance to the NEAREST ink)`, and nearest is a `min`:
-/// `profile(min(d1, d2)) = max(p1, p2)`, so the second stroke contributes
-/// nothing and the crease is a gradient discontinuity in an otherwise smooth
-/// field.
+/// Between the bowl and the crossbar of a `G`, two strokes of one name cast
+/// into the same pixels. A blur of the name's whole ink ADDS there, so the
+/// ground between them is darker than beside either stroke alone — the reading
+/// #490 asked for, and this frame is where it is on record.
 fn two_strokes_of_one_name() -> Shot {
     let scene = a_named_node(WIDE_SHADOW);
     let labels = strokes_on_the_band(&scene, 2);
@@ -660,11 +653,12 @@ fn check(name: &str, shot: Shot) {
     }
 }
 
-/// A node over its clearing is byte-identical to the frame on record.
+/// A node standing over what is behind it is byte-identical to the frame on
+/// record.
 ///
-/// Depth ordering and the clearing's shape are what this frame holds, so a
-/// diff here on a PR about how any one element LOOKS is reach its author did
-/// not intend.
+/// Depth ordering and the shape of a node's own layers are what this frame
+/// holds, so a diff here on a PR about how any one element LOOKS is reach its
+/// author did not intend.
 #[test]
 fn a_node_over_its_clearing_draws_the_frame_on_record() {
     check("node-clearing", node_over_its_clearing().into());

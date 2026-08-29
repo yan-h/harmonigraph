@@ -158,8 +158,6 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "fs_plus_scene",
     "vs_glow",
     "fs_glow",
-    "vs_plus_glow",
-    "fs_plus_glow",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -306,12 +304,11 @@ struct Uniforms {
     /// z: unused; w: the melody/bass marks' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
     misc6: [f32; 4],
-    /// The ground the lattice is drawn onto — the pane fill this pass gets
-    /// composited over — as the sevens knockout's target color. Without it
-    /// the gutter can only knock out to black, which on this skin is
-    /// several shades DARKER than the pane and so reads as a blob sitting
-    /// on the picture rather than as a hole through it. See
-    /// `Scene::background`.
+    /// Unused — the pane fill this pass is composited over, from when a draw
+    /// here knocked a hole through to it. Nothing cuts to the pane now: a
+    /// shadow is a multiply on what the frame already holds. Retired in place
+    /// rather than repacked, which would renumber the rows around it for
+    /// nothing. See `Scene::background`.
     background: [f32; 4],
     /// The unlit ground a node's two rings stand on (`Scene::lattice_ground`): the
     /// neutral grey the OCTAVE band's silent slices are, and the colour a
@@ -374,29 +371,22 @@ struct Uniforms {
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the three shapes beside it have nothing to shape.
     misc10: [f32; 4],
-    /// The GAP's four dials — one shape, read twice: as the hole a node cuts in
-    /// everything drawn behind it (`node_clearing` in lattice.wgsl), and as the
-    /// light that same shape dims where it stands over a ring (`glow_standoff`).
-    /// x: how far past each ring it reaches, in the same quad UV units
-    /// (`Scene::glow_shadow`); y: how much of that is spent fading it back off
-    /// (`Scene::glow_shadow_soft`); z: how the fade is skewed across that width
-    /// (`Scene::glow_shadow_shape`); w: how much of the LIGHT it takes where it
-    /// stands (`Scene::glow_shadow_depth`), off the ground the clearing paints —
-    /// what a node's own ink takes of that same field is `misc13` below.
+    /// The SHADOW's two dials. x: how wide it is, as a share of a node's radius
+    /// (`Scene::glow_shadow`) — the σ every caster's ink is blurred at
+    /// ([`shadow::sigma_px`]) and the reach every quad is grown by; w: how dark
+    /// it lands (`Scene::glow_shadow_depth`), 1 taking the frame under a solid
+    /// caster to the shader's own floor. y/z unused.
     ///
-    /// A row of its own rather than four slots scattered over the two beside
-    /// it, because the four are one control: the Shadow bar's two handles, the
-    /// curve across them, and the depth the finished coverage is scaled by on
-    /// the light's side.
+    /// A row of its own rather than two slots scattered over the ones beside
+    /// it, because the two are one control: the Shadow bar and the Shadow depth
+    /// bar under it.
     ///
     /// NOT zeroed with `misc10`, which is where this row parts company with
-    /// every other one under the glow: the hole is a shape a node cuts whether
-    /// or not there is a light in the picture, so zeroing this with the light
-    /// would take every node's knockout off with it — sheets interpenetrating,
-    /// and the resting markers uncut — the moment the Reach reached 0. What is
-    /// zeroed instead is nothing, `glow_shadow` being its own off switch on both
-    /// sides (`glow_shadow()` in lattice.wgsl), and the depth is the light's
-    /// (`glow_shade`).
+    /// every other one under the glow: an item casts whether or not there is a
+    /// light in the picture, so zeroing this with the light would take every
+    /// shadow off with it the moment the Reach reached 0. `glow_shadow` is its
+    /// own off switch (`glow_shadow()` in lattice.wgsl), and the depth is a
+    /// second one — `prepare` packs no atlas at either bar's bottom.
     misc11: [f32; 4],
     /// The node glow's plumbing row, which is not a dial. x: how many rows this
     /// frame's ink strip has (`Scene::glow_rows`) — the one thing
@@ -412,19 +402,18 @@ struct Uniforms {
     misc12: [f32; 4],
     /// The WASH. x: how much of the light a LIT slice of a node washes its own
     /// ink with (`Scene::glow_wash`), where every other piece of the lattice's
-    /// ink takes that same field whole and `misc11.w` above is the GROUND's
-    /// share of it. y: one quad uv as a world length on the markers' sheet
-    /// (`Scene::marker_unit`), which is what the markers' standoff draw
-    /// converts between its own world lengths and the uv the Shadow it holds
-    /// the light off by is dialled in. z/w unused.
+    /// ink takes that same field whole. y: one quad uv as a world length on the
+    /// markers' sheet (`Scene::marker_unit`), which is what a marker's quad
+    /// converts between its own world arm and the node uv the Shadow's reach is
+    /// dialled in (`vs_plus`). z/w unused.
     ///
-    /// A row of its own because the wash is not a term of the standoff, close
-    /// as it reads to the depth: the Shadow bars shape what the clearing
-    /// paints, and this reads the field raw, so a dial sitting among them would
-    /// carry the coupling it exists to break. Zeroed whole with `misc10`, on
-    /// the same rule — a wash with no light to lay down is a factor on nothing,
-    /// and the markers' standoff draw reads its own zero there as an off switch
-    /// (`vs_plus_glow`).
+    /// A row of its own rather than a spare slot among the glow's dials: the
+    /// wash reads the melded light RAW, where every dial up there shapes the
+    /// light itself, so a bar sitting among them would carry the coupling it
+    /// exists to break. HALF of it zeroed with `misc10` — a wash with no light
+    /// to lay down is a factor on nothing — and the unit beside it packed
+    /// whatever the glow says, a marker's quad being sized for its shadow with
+    /// no light in the picture at all.
     misc13: [f32; 4],
     /// The shadow atlas's plumbing row, which is not a dial. x/y: the pane in
     /// POINTS, the space a caster's box is packed in (`shadow::pack`), so a
@@ -573,22 +562,15 @@ struct GpuInstance {
     /// the same reason: it is the light's SIZE, and a size that stepped when
     /// the marking voice was pruned snapped a halo still at full brightness.
     glow: [f32; 4],
-    /// Which half of the node this instance draws — [`PAINT_WHOLE`], the whole
-    /// of it. See `Instance::paint` in lattice.wgsl.
-    paint: f32,
 }
-
-/// What [`GpuInstance::paint`] says, mirroring lattice.wgsl's constant of the
-/// same name: every node ships once and draws its whole picture.
-const PAINT_WHOLE: f32 = 0.0;
 
 impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        // Locations 5 and 9 are absent, not renumbered. Both are retired
-        // slots — 5 the home-sheet flag, 9 the trail level, each read only by
-        // an idle marker the nodes do not draw. The audio ring's own slot is
+        // Locations 5 and 9 are absent, not renumbered — both are the second
+        // instance-step buffer's, which rides beside this one
+        // (`shadow::ShadowBox::BESIDE_NODES`). The audio ring's own slot is
         // 11, and it carries how far the layer is on at this node rather than
         // a reading: WHAT the ring says is a window onto the shared spectrum
         // in the uniforms, and how much of one this node wears is the
@@ -601,7 +583,7 @@ impl GpuInstance {
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
-            12 => Float32x4, 13 => Float32
+            12 => Float32x4
         ],
     };
 }
@@ -650,10 +632,10 @@ struct GpuPlus {
     /// alpha is under one otherwise, a name claiming the position over it
     /// (`derive_pluses`).
     ///
-    /// The alpha is the whole marker's and not only its ink's — the pool it
-    /// gives off and the standoff its cross writes into the light are the same
-    /// number (`PlusInstance::strength`), so a position handing itself over to
-    /// a name hands all three over together.
+    /// The alpha is the whole marker's and not only its ink's — the share of
+    /// the shadow its cross casts is the same number
+    /// (`PlusInstance::strength`), so a position handing itself over to a name
+    /// hands both over together.
     color: [f32; 4],
 }
 
@@ -731,9 +713,6 @@ pub fn lattice_paint_callback(
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
-    /// The home sheet's knockouts, one per node that clears, in the order
-    /// their nodes are drawn (see [`PAINT_CLEARING`] and [`Draw::Clearing`]).
-    clearings: Vec<GpuInstance>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -787,16 +766,16 @@ type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::T
 /// back to front, and every index in one addresses the pane's own buffers.
 ///
 /// The order is MATERIALISED rather than reconstructed. Everything the pass
-/// draws — the nodes, the home sheet's knockouts, the markers and the names —
-/// is depth-sorted once, in `LatticeCallback::from_scene`, and the sequence
+/// draws — the nodes, the markers and the names — is depth-sorted once, in
+/// `LatticeCallback::from_scene`, and the sequence
 /// falls out of that one walk. What that buys is that there is no second
 /// expression of the order to keep in step with the first: a draw goes where
 /// the walk put it, so nothing has to be told which side of anything else it
 /// belongs on.
 ///
 /// The alternative is what this replaces, and it is worth naming because it
-/// looks cheaper. Carrying an INDEX into the node run per marker, knockout and
-/// name — "how many nodes go in front of me" — costs one tiebreak per
+/// looks cheaper. Carrying an INDEX into the node run per marker and name —
+/// "how many nodes go in front of me" — costs one tiebreak per
 /// collision, and the collisions are unavoidable: a node that paints nothing
 /// ships no instance, so it moves no index, and the draws either side of it
 /// land on the same number while belonging on opposite sides.
@@ -881,19 +860,16 @@ impl LatticeCallback {
         // camera is orbited, where two nodes on one sheet have different
         // depths and a plain depth sort interleaves the sheets. Interleaving
         // is not a cosmetic problem: it puts the markers in the wrong place in
-        // the order and leaves the home sheet's clearings with almost
-        // nothing drawn before them to clear, so the knockout quietly did
-        // nothing under perspective and orthographic while working under
-        // cabinet (where every home node shares one depth and the two sorts
-        // agree).
+        // the order, and every shadow in the frame is cast in that order — an
+        // item multiplies what is already under it, so which of two overlapping
+        // items darkens the other is exactly where each stands in this walk.
         //
         // Do not reorder the sheets on top of this. Forcing the home sheet
         // to the bottom (so off-sheet notes could never be hidden by it)
         // inverts the far half of the axis: the sheet BEHIND home then draws
-        // last, and its clearing takes a bite out of the home sheet in front
-        // of it. Grouping by distance from home does the same thing more
-        // thoroughly. Depth is what the reader is being shown; it is what
-        // the order has to follow.
+        // last, over the home sheet in front of it. Grouping by distance from
+        // home does the same thing more thoroughly. Depth is what the reader is
+        // being shown; it is what the order has to follow.
         //
         // The `forward.z` factor is what keeps it honest if the view is
         // orbited right around past the sheets: which way along z is "away"
@@ -923,7 +899,6 @@ impl LatticeCallback {
             scale: n.scale,
             ring: n.audio_ring,
             glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
-            paint: PAINT_WHOLE,
         };
 
         let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());
@@ -1042,39 +1017,16 @@ impl LatticeCallback {
         // The one walk: every draw the pass makes, emitted in the order it
         // makes them, filling the four buffers as it goes (see [`Draw`]).
         //
-        // Inside ONE home node the spacing is its knockout, then the cross
-        // standing at its position, then its ink. Three things ride on that,
-        // and no coarser order gives all three.
+        // Inside ONE home node the spacing is the cross standing at its
+        // position, then the node's ink over it: a node covers the cross it
+        // stands on, and shadows it, exactly as it covers the sheets behind.
         //
-        // A home node clears the home nodes BEHIND IT, which is what the
-        // clearing is for wherever two nodes overlap on one sheet — every
-        // orbited camera, where the sheet foreshortens under billboards that do
-        // not. Batching the knockouts ahead of the ink puts every hole under
-        // every ring, so the bar goes quiet on the picture it is most wanted in.
-        //
-        // A node does NOT clear the cross it stands on. That cross is not
-        // behind the node, it is AT it, and a hole punched over it takes the
-        // mark of the position while leaving the marker's standoff in the light
-        // — a cross-shaped hole with nothing standing in it
-        // (`a_node_lit_by_no_key_keeps_the_cross_under_it`). Drawn after that
-        // node's own knockout and before its ink, the cross keeps the rule it
-        // is meant to keep: it goes when a NAME stands over it and at no other
-        // time (`derive_pluses`). A node wearing an audio RING is where the two
-        // meet at all: it draws ink with no name over it, so it is the one node
-        // that carries a cross and a knockout at once.
-        //
-        // It still clears every cross BEHIND it, which is the marker field
-        // hidden by a node in front of it — the same occlusion the field takes
-        // from the sheets in front, and what puts a sounding node in a clean gap
-        // in the lattice rather than on top of it. A cross in FRONT of a node
-        // covers that node, which is the same rule read the other way and the
-        // reason the markers are in this walk at all. Face-on the case does not
-        // arise: a node's disc reaches about its own cell, so the only cross
-        // under it is its own, and drawing the whole field under the whole sheet
-        // is indistinguishable. Tilt the sheet and one disc spans a dozen
-        // positions while the billboard does not foreshorten with it, so every
-        // cross it covers is one the reader is being told is behind it — and
-        // most of them are not.
+        // The markers are in this walk at all because a cross in FRONT of a
+        // node covers that node. Face-on the case barely arises — a node's disc
+        // reaches about its own cell, so the only cross near it is its own —
+        // but tilt the sheet and one disc spans a dozen positions while the
+        // billboard does not foreshorten with it, so where each cross stands in
+        // the order is what the reader is being told about depth.
         // One node's ink as a box on the pane, in points — the space a caster
         // is packed in (`shadow::pack`). The billboard faces the camera's own
         // right and up, so those two axes project onto the screen's and one
@@ -1131,7 +1083,6 @@ impl LatticeCallback {
             scene.pluses.first().map_or(0.0, |p| (p.radius * points_per_world).max(0.0));
 
         let mut instances = Vec::with_capacity(order.len());
-        let clearings: Vec<GpuInstance> = Vec::new();
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
@@ -1167,7 +1118,7 @@ impl LatticeCallback {
                 // is a blur of, and what it multiplies the frame under it by.
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance));
-                instances.push(GpuInstance { paint: PAINT_WHOLE, ..instance });
+                instances.push(instance);
             }
             // The name, immediately after the node it names — so what covers a
             // name is exactly what covers its node.
@@ -1188,7 +1139,6 @@ impl LatticeCallback {
 
         LatticeCallback {
             instances,
-            clearings,
             glyphs,
             casters,
             node_cells,
@@ -1249,16 +1199,10 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                // Packed whatever `lights` says — see `Uniforms::misc11`. The
-                // glow-only readers are all inside the glow pass, which
-                // `glow_draws` skips entirely, so what a light-less frame does
-                // with this row is cut its holes with it and nothing else.
-                misc11: [
-                    scene.glow_shadow,
-                    scene.glow_shadow_soft,
-                    scene.glow_shadow_shape,
-                    scene.glow_shadow_depth,
-                ],
+                // Packed whatever `lights` says — see `Uniforms::misc11`: a
+                // frame with no light in it still casts every shadow the
+                // lattice has.
+                misc11: [scene.glow_shadow, 0.0, 0.0, scene.glow_shadow_depth],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
@@ -1266,10 +1210,9 @@ impl LatticeCallback {
                 },
                 // HALF of it zeroed where the glow does not draw. The wash is a
                 // share of the light and goes with it; the unit beside it is
-                // what a marker's own HOLE is measured in (`vs_plus`), and a
-                // hole is cut with no light in the picture at all — which is
-                // `misc11`'s rule above, reaching one field further now that
-                // the markers knock out as the nodes do.
+                // what a marker's own quad is sized in (`vs_plus`), and that
+                // quad has to hold a shadow cast with no light in the picture
+                // at all — which is `misc11`'s rule above.
                 misc13: [if lights { scene.glow_wash } else { 0.0 }, scene.marker_unit, 0.0, 0.0],
                 // The pane in points, which `from_scene` knows; the atlas's own
                 // size is settled where it is allocated, in `prepare`.
@@ -1344,9 +1287,9 @@ impl LatticeCallback {
     /// Whether this frame's view asks for a node glow at all — a reach to
     /// spread it over and a strength to draw it at, which `from_scene` has
     /// already reduced to one number. False and nothing is allocated, encoded
-    /// or composited: no target, no pass, and a node's clearing reading the
-    /// stand-in transparent texture rather than a light. The clearing itself
-    /// still cuts — its shape is the Shadow's, which this does not gate (see
+    /// or composited: no target, no pass, and every wash reading the stand-in
+    /// transparent texture rather than a light. The SHADOW is not gated by it
+    /// — an item casts with no light in the picture (see
     /// [`Uniforms::misc11`]).
     fn glow_draws(&self) -> bool {
         self.uniforms.misc10[0] > 0.0
@@ -1366,9 +1309,6 @@ struct LatticeResources {
     /// The node glow's own pass: one draw over the node instance buffer, into
     /// a target of the glow's own (see [`create_glow_pipeline`]).
     glow_pipeline: wgpu::RenderPipeline,
-    /// The shadow the resting markers cast into that same target — the other
-    /// half of what the glow pass draws (see [`create_glow_pipelines`]).
-    plus_glow_pipeline: wgpu::RenderPipeline,
     /// The colour it draws in, settled ahead of it: the ink read round every
     /// node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -1391,7 +1331,7 @@ struct LatticeResources {
     /// because it holds a second texture, and every other user of that one —
     /// the whole bloom chain — has exactly one to bind. Taken at group 0 by
     /// the composite that lays the light down and at group 1 by the node and
-    /// marker pipelines, whose clearings read the same mix.
+    /// marker pipelines, whose washes read the same mix.
     glow_layout: wgpu::BindGroupLayout,
     /// A 1x1 transparent texture in [`glow_layout`](Self::glow_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
@@ -1654,12 +1594,6 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
-    /// The home sheet's knockouts, each drawn at its own node
-    /// ([`Draw::Clearing`]). A buffer of its own rather than more entries in
-    /// the instance list, so the glow, the strip and the cull go on seeing
-    /// each node exactly once.
-    clearing_buffer: wgpu::Buffer,
-    clearing_capacity: usize,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
@@ -1686,7 +1620,7 @@ struct PaneBuffers {
     /// reached the buffers above.
     draws: Vec<Draw>,
     /// What the glyph shader is told about this pane: its size in points, the
-    /// atlas's, and the terms a name's standoff is cast on.
+    /// atlas's, and the terms a name's shadow is cast on.
     glyph_uniform_buffer: wgpu::Buffer,
     /// Names both mirrored sheets, so it is rebuilt whenever a fresh one has
     /// been uploaded — and `glyph_sheet_keys` is which uploads it names.
@@ -1792,16 +1726,7 @@ struct GlowTarget {
     /// and a pixel one node lights alone is identical at every setting because
     /// the two blends agree wherever only one node writes.
     max_view: wgpu::TextureView,
-    /// The STANDOFF's own attachment: how much of the light at each pixel the
-    /// lattice's rings hold off (see lattice.wgsl's `glow_shade_tex`).
-    ///
-    /// A third attachment and not a channel of either light above, because it
-    /// takes a blend neither of them does — `max` over a coverage, where those
-    /// two are a screen and a max over premultiplied colour, and a blend state
-    /// is per target. [`GLOW_SHADE_FORMAT`] is what keeps the cost of that to
-    /// half of one of them.
-    shade_view: wgpu::TextureView,
-    /// All three textures + the shared sampler, as
+    /// Both textures + the shared sampler, as
     /// [`LatticeResources::glow_layout`] takes them.
     bind_group: wgpu::BindGroup,
     /// The colour that light is drawn in, settled once per node per frame.
@@ -1862,20 +1787,6 @@ const INK_STRIP_N: u32 = 64;
 /// is a layer's level times its width — small numbers, quantized to nothing by
 /// a byte.
 const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-
-/// What the standoff layer is kept in: ONE half-float channel, being one
-/// coverage in 0..=1 and nothing else (see [`GlowTarget::shade_view`]).
-///
-/// Two bytes a texel against the four either light beside it takes, the target
-/// format being a surface one (BGRA in the plugin, RGBA in the offline
-/// renderer). Halving it is the point — the glow's target is already the larger
-/// part of a pane's offscreen memory and a coverage has no colour to carry.
-///
-/// Half floats and not a byte because the layer is MULTIPLIED into premultiplied
-/// light rather than composited over it: a coverage quantized to 1/255 puts
-/// visible steps across a wide soft band, where the light's own falloff has
-/// none.
-const GLOW_SHADE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
 struct OffscreenShared<'a> {
@@ -2215,16 +2126,13 @@ impl GlowTarget {
     /// the resolution the node bodies are and the composite is a texel-aligned
     /// blit. That is what lets `node_paint` read it back with a `textureLoad`
     /// at its own fragment's coordinate: a target at any fraction of the scene
-    /// would have to be sampled, and a filtered read of the light under a
-    /// node's clearing is a blur nobody asked for.
+    /// would have to be sampled, and a filtered read of the light a node's ink
+    /// is washed with is a blur nobody asked for.
     fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2], rows: u32) -> Self {
         let OffscreenShared { format, glow_layout, strip_layout, sampler, .. } = *shared;
-        // Every attachment at the same SIZE, the standoff included: it is read
-        // at the same coordinate as the light it scales, so a target at any
-        // other size would be a filtered read of a band with a hard edge in it.
-        // The two lights share a FORMAT besides, being one light written under
-        // two blends with the mix between them per-texel; the standoff carries
-        // one coverage and takes its own (see [`GLOW_SHADE_FORMAT`]).
+        // Both attachments at the same SIZE and in the same FORMAT: they are
+        // one light written under two blends, with the mix between them taken
+        // per texel.
         let attachment = |label, format| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -2246,7 +2154,6 @@ impl GlowTarget {
         };
         let view = attachment("lattice_glow", format);
         let max_view = attachment("lattice_glow_max", format);
-        let shade_view = attachment("lattice_glow_shade", GLOW_SHADE_FORMAT);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_bind_group"),
             layout: glow_layout,
@@ -2263,19 +2170,9 @@ impl GlowTarget {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&max_view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&shade_view),
-                },
             ],
         });
-        GlowTarget {
-            view,
-            max_view,
-            shade_view,
-            bind_group,
-            strip: InkStrip::new(device, strip_layout, rows),
-        }
+        GlowTarget { view, max_view, bind_group, strip: InkStrip::new(device, strip_layout, rows) }
     }
 }
 
@@ -2558,48 +2455,8 @@ fn create_cell_pipelines(
     )
 }
 
-/// Both pipelines that write the glow's target, from one source: the nodes'
-/// light and the shadow the resting markers cast into it.
-///
-/// They travel together for the reason the scene's pair does — one pass, one set
-/// of attachments, so a pipeline built for it is built for both — and for one
-/// more of their own: the marker's draw writes the same third attachment a
-/// node's rings write their standoff into, on the same Shadow bars.
-fn create_glow_pipelines(
-    device: &wgpu::Device,
-    shader_src: &str,
-    target_format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
-    strip_layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    (
-        create_glow_pipeline(
-            device,
-            shader_src,
-            target_format,
-            bind_group_layout,
-            strip_layout,
-            ("vs_glow", "fs_glow"),
-            GpuInstance::LAYOUT,
-        ),
-        create_glow_pipeline(
-            device,
-            shader_src,
-            target_format,
-            bind_group_layout,
-            strip_layout,
-            ("vs_plus_glow", "fs_plus_glow"),
-            GpuPlus::LAYOUT,
-        ),
-    )
-}
-
-/// The glow pass's three attachments and the blends every writer of them melds
-/// under: the light screened, the same light max-blended, and the standoff.
-///
-/// One list, because the terms are what make the field ONE: a node's rings and
-/// a marker's cross both write here, and a writer melding on terms of its own
-/// would be readable in the picture as the order the draws happened to run in.
+/// The glow pass's two attachments and the blends the light melds under: the
+/// light screened, and the same light max-blended.
 ///
 /// **Attachment 0 is SCREEN**: `src + dst * (1 - src)`, premultiplied on both
 /// channels, is what makes two neighbouring nodes' halos MELD: an overlap is
@@ -2612,17 +2469,7 @@ fn create_glow_pipelines(
 /// **Attachment 1 is MAX**, which is the same guarantee taken all the way: an
 /// overlap is exactly as bright as the brighter of the nodes lighting it, so
 /// the count of them cannot be read off the picture at all.
-///
-/// **Attachment 2 is the STANDOFF**, on the same `max` and for a different
-/// reason: there it is one of two answers a bar dials between, here it is the
-/// only sane way to meld a shadow. The deepest band at a pixel wins, so two
-/// emitters' standoffs crossing do not compound into a pit, and the operator is
-/// commutative.
-///
-/// A coverage of 0 is therefore the destination left exactly alone, which is
-/// what lets `fs_glow` write one rather than take an early-out it cannot take
-/// for the light beside it.
-fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetState>; 3] {
+fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetState>; 2] {
     let screen = wgpu::BlendState {
         color: wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
@@ -2651,11 +2498,6 @@ fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTarget
             format: target_format,
             blend: Some(brightest),
             write_mask: wgpu::ColorWrites::ALL,
-        }),
-        Some(wgpu::ColorTargetState {
-            format: GLOW_SHADE_FORMAT,
-            blend: Some(brightest),
-            write_mask: wgpu::ColorWrites::RED,
         }),
     ]
 }
@@ -2692,44 +2534,34 @@ fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTarget
 ///
 /// **No depth.** The pass this draws into carries none: it is the glow's own,
 /// ahead of the scene's, and a screen blend has no order to defend.
-///
-/// **Two pipelines, one target state.** The nodes' light and the markers'
-/// standoff differ only in what they are drawn over: one instance buffer of
-/// nodes, one of markers. `entries` and `buffers` are the whole of that
-/// difference.
 fn create_glow_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
-    entries: (&str, &str),
-    buffers: wgpu::VertexBufferLayout<'static>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
         source: wgpu::ShaderSource::Wgsl(shader_src.into()),
     });
-    // One layout for both, though only the node's light reads the strip: a
-    // pipeline may declare a binding its shader never touches, and a second
-    // layout differing in nothing else is a second thing to keep in step.
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
         ..Default::default()
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(entries.1),
+        label: Some("fs_glow"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some(entries.0),
+            entry_point: Some("vs_glow"),
             compilation_options: Default::default(),
-            buffers: &[buffers],
+            buffers: &[GpuInstance::LAYOUT],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(entries.1),
+            entry_point: Some("fs_glow"),
             compilation_options: Default::default(),
             targets: &glow_targets(target_format),
         }),
@@ -3031,14 +2863,13 @@ impl LatticeResources {
             entries: &[texture_entry(0), sampler_entry(1)],
         });
         // The glow target's pair, screened and max-blended, which every reader
-        // of the light mixes between (see `create_glow_pipeline`), and at 3 the
-        // standoff every reader then scales that mix by. The sampler sits among
-        // them at 1 rather than after them: the light is read with
+        // of the light mixes between (see `create_glow_pipeline`). The sampler
+        // sits between them at 1 rather than after them: the light is read with
         // `textureLoad` and the slot is the filter layout's shape kept, so the
         // one binding both layouts share means the same thing in both.
         let glow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_glow_bind_group_layout"),
-            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), texture_entry(3)],
+            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2)],
         });
         // Ahead of the scene pipelines because they take both at groups 1 and
         // 2: a node washes its own ink with the light the pass has just
@@ -3074,7 +2905,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let (glow_pipeline, plus_glow_pipeline) = create_glow_pipelines(
+        let glow_pipeline = create_glow_pipeline(
             device,
             SHADER_SRC,
             target_format,
@@ -3148,12 +2979,12 @@ impl LatticeResources {
         // coordinate, which is exactly what "no light here" means. The clamp
         // is the shader's and not the backend's: WGSL lets an out-of-bounds
         // `textureLoad` answer (0,0,0,1) as readily as zero, and an alpha of
-        // 1 here is every clearing painted black.
+        // 1 here is every wash laid over black.
         //
         // RENDER_ATTACHMENT alongside the binding though nothing ever draws
         // into it: that usage is what gives wgpu a way to zero-initialize the
         // texture, and a zero it cannot write is a texel of whatever the
-        // driver left there smeared under every node's clearing.
+        // driver left there smeared under every node's ink.
         let stand_in = |label, format| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -3170,7 +3001,6 @@ impl LatticeResources {
                 .create_view(&Default::default())
         };
         let glow_dummy = stand_in("lattice_glow_dummy", target_format);
-        let glow_shade_dummy = stand_in("lattice_glow_shade_dummy", GLOW_SHADE_FORMAT);
         let glow_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_dummy_bind_group"),
             layout: &glow_layout,
@@ -3189,18 +3019,6 @@ impl LatticeResources {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&glow_dummy),
-                },
-                // A standoff of nothing, which is the light kept WHOLE — the
-                // only answer that pairs with a light of nothing, since a pool
-                // dimmed out of a field that has no light in it is a dark ring
-                // over the bare ground. What has to hold is that x reads 0, and
-                // a zero-initialized texel of any float format does that: the
-                // layout entry names a SAMPLE TYPE and not a format, so binding
-                // `GLOW_SHADE_FORMAT` here buys a stand-in shaped like the
-                // attachment it stands in for and nothing the validator checks.
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&glow_shade_dummy),
                 },
             ],
         });
@@ -3234,7 +3052,6 @@ impl LatticeResources {
             blur_h_pipeline,
             blur_v_pipeline,
             glow_pipeline,
-            plus_glow_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glow_over_pipeline,
@@ -3367,12 +3184,6 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                clearing_buffer: create_vertex_buffer::<GpuInstance>(
-                    device,
-                    "lattice_clearings",
-                    INITIAL_INSTANCE_CAPACITY,
-                ),
-                clearing_capacity: INITIAL_INSTANCE_CAPACITY,
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",
@@ -3586,7 +3397,7 @@ impl CallbackTrait for LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let (glow_pipeline, plus_glow_pipeline) = create_glow_pipelines(
+                    let glow_pipeline = create_glow_pipeline(
                         device,
                         &source,
                         resources.target_format,
@@ -3607,7 +3418,6 @@ impl CallbackTrait for LatticeCallback {
                     resources.pipeline = pipeline;
                     resources.plus_pipeline = plus_pipeline;
                     resources.glow_pipeline = glow_pipeline;
-                    resources.plus_glow_pipeline = plus_glow_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
@@ -3700,18 +3510,6 @@ impl CallbackTrait for LatticeCallback {
         pane.instance_count = self.instances.len() as u32;
         if !self.instances.is_empty() {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
-        }
-
-        if self.clearings.len() > pane.clearing_capacity {
-            pane.clearing_capacity = self.clearings.len().next_power_of_two();
-            pane.clearing_buffer = create_vertex_buffer::<GpuInstance>(
-                device,
-                "lattice_clearings",
-                pane.clearing_capacity,
-            );
-        }
-        if !self.clearings.is_empty() {
-            queue.write_buffer(&pane.clearing_buffer, 0, bytemuck::cast_slice(&self.clearings));
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -4026,12 +3824,9 @@ impl CallbackTrait for LatticeCallback {
                 }
 
                 // The same light under two blends (`create_glow_pipeline`):
-                // screened, and taken at its brightest. Then the STANDOFF cut
-                // into it, which is a third quantity rather than a third blend
-                // of the first. All three clear to transparent, which is the
-                // identity for every blend here — a screen over nothing and a
-                // max against nothing are both the source, and a coverage of
-                // zero is no ring holding any light off.
+                // screened, and taken at its brightest. Both clear to
+                // transparent, which is the identity for either — a screen over
+                // nothing and a max against nothing are both the source.
                 let light_attachment = |view| {
                     Some(wgpu::RenderPassColorAttachment {
                         view,
@@ -4048,7 +3843,6 @@ impl CallbackTrait for LatticeCallback {
                     color_attachments: &[
                         light_attachment(&glow.view),
                         light_attachment(&glow.max_view),
-                        light_attachment(&glow.shade_view),
                     ],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -4066,28 +3860,6 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
-                }
-                // The resting markers, into the same three attachments: the
-                // standoff each cross holds the light above off by. It draws in
-                // the same pass because it is the same field — one light with
-                // one shadow cut into it, laid down under the whole lattice,
-                // and a marker arriving in a pass of its own would be a second
-                // layer for the composite and every clearing to read.
-                //
-                // Order-free like the node draw beside it, on the same
-                // guarantee: the shade blend is `max`, so nothing decides which
-                // of a marker and a node reaches a pixel first.
-                //
-                // Both groups set here rather than left over from the draw
-                // above, which is skipped whenever every node is culled — a
-                // resting lattice being exactly that frame, and the one this
-                // draw exists for.
-                if pane.plus_count > 0 {
-                    pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
-                    pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
-                    pass.set_pipeline(&resources.plus_glow_pipeline);
-                    pass.draw(0..4, 0..pane.plus_count);
                 }
             }
 
@@ -4131,21 +3903,11 @@ impl CallbackTrait for LatticeCallback {
             });
 
             // The light, FIRST — under every node, marker and label in the
-            // pass, which is what makes a node a lamp rather than a hole.
-            //
-            // The node's own KNOCKOUT is the half of that which is easy to
-            // leave out. A node paints the ground filled to its CENTRE, one
-            // Shadow out past every layer (`node_clearing`), so light laid
-            // down first and then cleared to BARE ground is stamped out
-            // exactly where it is most wanted and the feature comes out as a
-            // ring of haze round a hole. The node samples this same target
-            // instead (`node_paint`), painting the light standing at its own
-            // pixel over that ground and washing its own ink with that same
-            // field, so a node's middle keeps the light while a
-            // nearer node still hides the SHAPE of what is behind it — a
-            // covered node's halo is in the field like everyone else's, and
-            // being light and nothing else it can only brighten what stands
-            // over it.
+            // pass, which is what makes a node a lamp rather than a hole and
+            // what puts the light under every SHADOW: each item multiplies
+            // whatever is already in the frame under it by its own blurred ink
+            // (`node_paint`, `plus_paint`, text.wgsl's `fs_shadow_box`), and
+            // the light is in the frame first.
             //
             // It writes BOTH attachments (`fs_glow_over`), so the bloom's
             // bright pass reads the light exactly as it reads the nodes: it is
@@ -4158,10 +3920,9 @@ impl CallbackTrait for LatticeCallback {
             }
 
             // That same target at group 1 of every node and marker draw, for
-            // the clearings to read back. The dummy where the light does not
-            // exist at all, which is the Reach bar at 0 — a transparent read
-            // is the plain ground, so nothing branches (see
-            // `glow_dummy_bind_group`).
+            // the wash to read back. The dummy where the light does not exist
+            // at all, which is the Reach bar at 0 — a transparent read is the
+            // plain ground, so nothing branches (see `glow_dummy_bind_group`).
             let light =
                 offscreen.glow.as_ref().map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
             // The finished atlas at group 2 of every node and marker draw, for
@@ -4172,10 +3933,9 @@ impl CallbackTrait for LatticeCallback {
 
             // The order, as `from_scene` laid it down (see [`Draw`]). One walk
             // forward, back to front, with nothing here deciding what goes
-            // where — a name is covered by exactly what covers its node, a
-            // knockout falls between its node's two draws, and a cross covers
-            // the nodes behind it and no others, because that is where each of
-            // them was emitted.
+            // where — a name is covered by exactly what covers its node, and a
+            // cross covers the nodes behind it and no others, because that is
+            // where each of them was emitted.
             for draw in &pane.draws {
                 match *draw {
                     Draw::Nodes(a, b) => {

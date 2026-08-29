@@ -688,14 +688,13 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
 }
 
 /// The lattice pane stands on a ground it paints itself, and paints the same
-/// one the sevens knockout is handed.
+/// one it hands the scene.
 ///
-/// Both claims in one test on purpose. A fill and a knockout ground that
-/// disagree do not show up as a bug: a cleared disc a shade off what surrounds
-/// it reads as a dimmer node, so the picture looks plausible and stays wrong.
-/// What holds the two together is that neither can move without failing here.
+/// Both claims in one test on purpose. A fill and a scene ground that disagree
+/// do not show up as a bug: the picture looks plausible and stays wrong. What
+/// holds the two together is that neither can move without failing here.
 #[test]
-fn the_lattice_pane_paints_the_ground_its_knockout_is_handed() {
+fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {

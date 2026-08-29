@@ -162,8 +162,8 @@ fn offscreen_composite_matches_direct_draw() {
         // The pane's own order, walked the same way `prepare` walks it — a
         // second expression of it here would make the two paths differ by draw
         // order rather than by the thing under test. The fixture carries no
-        // name and no knockout, so those two arms would be dead code standing
-        // in for a claim nothing here makes; they fail instead.
+        // name, so that arm would be dead code standing in for a claim nothing
+        // here makes; it fails instead.
         for draw in &pane.draws {
             match *draw {
                 Draw::Nodes(a, b) => {

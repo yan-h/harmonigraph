@@ -30,13 +30,6 @@
 // for each stays the length its own pass needs. An entry point that ever wanted
 // both would fail to compile, loudly, at pipeline creation.
 @group(0) @binding(2) var glow_max_tex: texture_2d<f32>;
-// The standoff cut into that light, at the composite-only uniform's slot and on
-// the same rule: `fs_composite` reads `bu` there and `fs_glow_over` reads this,
-// and no entry point wants both — this pass takes the scene uniforms at a group
-// of its own (`gu`) precisely because its group 0 is the glow target's. What it
-// holds is coverage in x; see lattice.wgsl's `glow_shade_tex`, which is the
-// same layer read from the other side.
-@group(0) @binding(3) var glow_shade_tex: texture_2d<f32>;
 // Head of the scene pass's Uniforms buffer (same binding, shorter view):
 // only misc2.w (bloom strength; 0 = off) is read here.
 struct BlitUniforms {
@@ -165,7 +158,7 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
 // TWO of them, mixed by the Meld bar: the light screened and the light taken at
 // its brightest, which is a dial between blends that could not be one blend
 // (`create_glow_pipeline`). The node pipelines mix the same pair the same way,
-// `node_paint` reading this target back for what its clearing paints.
+// `node_paint` reading this target back for the wash it lays over its ink.
 //
 // TWO attachments, because the pass it draws into carries two. The second is
 // the picture without the LABELS, which the bloom's bright pass reads — and the
