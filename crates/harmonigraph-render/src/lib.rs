@@ -45,6 +45,16 @@ use harmonigraph_scene::Scene;
 mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 
+/// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
+/// picture the CPU used to compose texel by texel. Here the aggregator's slab
+/// grid is the texture and the read is per fragment, so a zoom, a resize or a
+/// palette change is a uniform.
+mod spectrogram;
+pub use spectrogram::{
+    spectrogram_headless_frame, spectrogram_paint_callback, SpectrogramGrid, SpectrogramRead,
+    SpectrogramShades, SpectrogramVertex,
+};
+
 /// A halo alone, over marks a pane drew for itself — the third caller of
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
@@ -4035,7 +4045,6 @@ impl CallbackTrait for LatticeCallback {
     }
 }
 
-#[cfg(test)]
 mod gpu_harness;
 #[cfg(test)]
 mod lattice_tests;
