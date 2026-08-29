@@ -270,15 +270,15 @@ pub(crate) fn draw_spectrogram(
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the heatmap's
 /// gradient. The gradient's dark end is black at every preset, matching the
 /// region's black bed (laid down in `spectral_pane`), so silence recedes while
-/// energy stands out — and the quad is drawn untinted, so what a texel says is
-/// what lands. Shared with the spectrum curve so the two read in the same
+/// energy stands out — and the heatmap is drawn untinted, so what this answers
+/// is what lands. Shared with the spectrum curve so the two read in the same
 /// scheme.
 ///
 /// Through the same table the lattice's own colors come off
 /// ([`harmonigraph_scene::gradient_color`]), which is what lets the heatmap be
 /// a gradient at all: a cell's color is otherwise a gamut bisection and a
-/// Newton solve, and there are [`SHADES`](crate::spectrogram::SHADES) of them to
-/// build per repaint and a curve's worth per frame.
+/// Newton solve, and the heatmap's fragments look theirs up in a table of
+/// [`SHADES`](crate::spectrogram::SHADES) of them rather than solving one each.
 pub(crate) fn cell_color(gradient: Gradient, level: f32) -> Color32 {
     let c = harmonigraph_scene::gradient_color(level, gradient);
     // The table is linear-interpolated between entries and the encode is

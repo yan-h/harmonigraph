@@ -244,7 +244,7 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
 /// across a 255-level ramp) and was settled by eye against a sixteen-bit store
 /// — see `quantizing_a_bucket_does_not_move_its_colour`, which is the same
 /// judgement made one layer down. Exactness would need a table per ROW, which is
-/// a megabyte of texture per pane and slower than the arithmetic it replaces.
+/// several megabytes of texture per pane and slower than the read it serves.
 pub(crate) const SHADES: usize = 4096;
 
 /// The gradient's table as the shader reads it, and the gradient it stands for.
@@ -525,7 +525,7 @@ pub(crate) struct RunKey {
 /// Pure, and deliberately so. Every cliff this pipeline has fallen off has been
 /// in this arithmetic — a slab against the analyzer's lag, a window against the
 /// store's finest tier — and deciding it apart from the fold means it can be
-/// checked without a GPU, a texture or a frame. See
+/// checked without a GPU, a store or a frame. See
 /// `no_cache_layer_falls_back_as_the_window_scrolls`.
 pub(crate) struct Plan {
     /// The picture's pitch-axis resolution in device pixels, which is what the
@@ -2466,37 +2466,49 @@ mod tests {
             whole: false,
         };
         let columns = |len: usize, newest: f64| Columns { first: 0, len, newest };
-        let fold = |spectrum: &mut crate::AudioSpectrum, cols: &Columns| {
-            let plan = Plan::new(&view, cols);
-            let layout = run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
+        let fold = |spectrum: &mut crate::AudioSpectrum, view: &PaneView, cols: &Columns| {
+            let plan = Plan::new(view, cols);
+            let layout = run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
             let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("a run was accepted");
             (layout, sent.run.clone(), sent.dirty.clone())
         };
 
         let cols = columns(200, 91.99);
-        let (cold, run, dirty) = fold(&mut spectrum, &cols);
+        let (cold, run, dirty) = fold(&mut spectrum, &view, &cols);
         assert!(dirty.is_empty(), "the first fold patched a buffer that was never written");
         assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1);
 
         // Same columns: the key hits, so nothing is folded and the same
         // allocation goes back to the GPU.
-        let (hit, again, _) = fold(&mut spectrum, &cols);
+        let (hit, again, _) = fold(&mut spectrum, &view, &cols);
         assert_eq!(cold, hit, "the reused run drew at different geometry");
         assert!(Arc::ptr_eq(&run, &again), "a hit refolded the store");
 
         // A fresh column: the key misses, and what the GPU is told is the one
         // slab that moved — the newest, still accumulating its max.
         spectrum.push_history(92.0, &bins);
-        let (_, _, dirty) = fold(&mut spectrum, &columns(201, 92.0));
+        let (_, _, dirty) = fold(&mut spectrum, &view, &columns(201, 92.0));
         assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
         assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1, "a column forced a full upload");
+
+        // A narrower pane sizes the GPU's copy differently, and the slot a key
+        // lands in is `key mod capacity` — so the whole mapping moves and the
+        // next fold goes over whole. The resize alone folds nothing: the
+        // capacity is not the run's, which is why it is not in the key.
+        let narrow = PaneView { depth_len: 300.0, ..view };
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(201, 92.0));
+        assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
+        spectrum.push_history(92.01, &bins);
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
+        assert!(dirty.is_empty(), "a new slot mapping was patched rather than uploaded");
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 2);
 
         // And a released context is a full upload rather than a patch of a
         // buffer nothing wrote.
         spectrum.spectrogram[0].gpu.release();
-        let (_, _, dirty) = fold(&mut spectrum, &columns(201, 92.0));
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
         assert!(dirty.is_empty(), "a fresh context was sent a delta");
-        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 2);
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 3);
     }
 
     /// The gradient table is keyed on what decides a texel of it, so two
