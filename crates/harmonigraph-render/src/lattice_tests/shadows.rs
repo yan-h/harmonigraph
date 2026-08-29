@@ -741,3 +741,75 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         );
     }
 }
+
+/// A node the camera all but stands on packs a cell the atlas can hold, and
+/// every other caster in the frame still gets one.
+///
+/// Under perspective a node a fraction of a unit in front of the eye projects
+/// to a box thousands of panes wide, and `pack` sizes the WHOLE atlas off the
+/// widest box it is handed. Unclipped, that one node takes the atlas to the
+/// device's limit, and every cell packed after it falls outside it. A cell that
+/// did not fit is ZEROED, which puts it at the atlas ORIGIN — on top of
+/// whichever cell is packed there, which is always the markers' one cross. The
+/// whole resting field then reads a node's dense ink as its own blur and every
+/// marker paints an opaque box the size of its quad.
+///
+/// The reach is the first assertion: the fixture only touches this at all if
+/// some node really does project many panes wide, so the projection is
+/// measured rather than assumed.
+#[test]
+fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
+    /// How many panes across the atlas may be. A caster's box is clipped to the
+    /// pane plus the blur's reach, so a frame's cells cover a few panes' worth
+    /// of area however deep the lattice runs; a number of panes is what says
+    /// the atlas is sized off the PICTURE and not off one projection.
+    const PANES: u32 = 8;
+    let shot = super::golden::names_overlapping_on_one_sheet();
+    let pane = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32);
+    let projector = shot.scene.projector(pane);
+    // Each node's own radius on the pane, projected rather than scaled off the
+    // target plane: under perspective that is the whole point.
+    let widest = shot
+        .scene
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let at = projector.project(n.world_pos)?;
+            let edge = n.world_pos + glam::Vec3::X * shot.scene.node_radius * n.scale;
+            Some(projector.project(edge)?.distance(at))
+        })
+        .fold(0.0f32, f32::max);
+    assert!(
+        widest > 10.0 * pane.x,
+        "the widest node on this fixture draws {widest} points across a {} pane, so nothing here \
+         projects far enough to size an atlas off",
+        pane.x,
+    );
+
+    let cb = LatticeCallback::from_scene(
+        &shot.scene,
+        shot.labels,
+        egui::vec2(pane.x, pane.y),
+        wgpu::TextureFormat::Rgba8Unorm,
+        1,
+        None,
+    );
+    let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
+    assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
+    let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384);
+    let unfit = packed.boxes.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+    assert_eq!(
+        unfit,
+        0,
+        "{unfit} of {} casters got no cell, and a zeroed cell is drawn at the atlas origin over \
+         the markers' own",
+        packed.boxes.len(),
+    );
+    assert!(
+        packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
+        "the atlas came out {:?} for a {:?} pane: a caster's box is sized off a projection the \
+         pane cannot show",
+        packed.size,
+        SIZE,
+    );
+}

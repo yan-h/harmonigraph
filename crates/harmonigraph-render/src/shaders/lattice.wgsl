@@ -405,6 +405,20 @@ fn cell_texel(points: vec2<f32>, rect: vec4<f32>, cell: vec4<f32>, k: f32) -> ve
     return cell.xy + (points - rect.xy) * k;
 }
 
+// Whether a caster's cell was packed at all. A cell the atlas had no room for
+// is zeroed (`fits` in shadow.rs), and a zeroed cell sits at the ORIGIN — so a
+// draw that filled it anyway would paint its ink over whatever cell IS packed
+// there. Every fill draw asks this first and collapses its quad instead.
+fn cell_packed(cell: vec4<f32>) -> bool {
+    return cell.z > 0.0 && cell.w > 0.0;
+}
+
+// A quad with no area, off the viewport: what a fill draw emits for a cell the
+// atlas had no room for.
+fn no_quad() -> vec4<f32> {
+    return vec4<f32>(2.0, 2.0, 0.0, 1.0);
+}
+
 // That texel as a clip position, for the draws that FILL the atlas.
 //
 // The pane's own `w` is carried through rather than replaced by 1: screen
@@ -757,7 +771,7 @@ fn vs_node_cell(
 ) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
-    out.clip_pos = cell_clip(texel, out.clip_pos.w);
+    out.clip_pos = select(no_quad(), cell_clip(texel, out.clip_pos.w), cell_packed(box.cell));
     out.shadow_cell = box.cell;
     out.shadow_at = vec3<f32>(texel, box.terms.z);
     return out;
@@ -2534,6 +2548,18 @@ fn node_paint(in: VsOut) -> vec4<f32> {
 /// a derivative of the surface it landed on.
 @fragment
 fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
+    // Held inside this caster's own cell. The atlas is one texture with every
+    // cell packed into it and no scissor between them, so a quad reaching past
+    // the box its cell was sized for would paint this node's ink into the
+    // NEIGHBOUR packed beside it — and that neighbour would then multiply a
+    // stranger's ink into the frame. The box is the node's ink clipped to the
+    // pane (`node_caster`), which a billboard grown for the glow's own reach
+    // stands outside of wherever the node runs off the edge.
+    let cell = in.shadow_cell;
+    let at = in.clip_pos.xy;
+    if any(at < cell.xy) || any(at > cell.xy + cell.zw) {
+        discard;
+    }
     let g = node_geom(in);
     if !g.paints {
         return vec4<f32>(0.0);
@@ -2725,7 +2751,7 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     let rect = u.plus_shadow_rect;
     let texel = u.plus_shadow_cell.xy + corner * rect.zw * u.plus_shadow_terms.x;
     var out: PlusVsOut;
-    out.clip_pos = cell_clip(texel, 1.0);
+    out.clip_pos = select(no_quad(), cell_clip(texel, 1.0), cell_packed(u.plus_shadow_cell));
     // The box is one arm grown by the blur's reach on each side, and the
     // crossing is at its middle, so half the box in arms is this quad's margin.
     let arm_points = max(u.plus_shadow_terms.w, 1e-6);

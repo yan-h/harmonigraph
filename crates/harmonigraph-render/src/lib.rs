@@ -1042,6 +1042,13 @@ impl LatticeCallback {
                 [(ndc.x * 0.5 + 0.5) * size_points.x, (0.5 - ndc.y * 0.5) * size_points.y]
             })
         };
+        // How far a caster's blur reaches past its own ink, in POINTS. σ is
+        // half the Shadow's width over a node's radius (`shadow::sigma_px`),
+        // and the pane's pixel scale cancels between σ and the divisor that
+        // turns it back into points — so this is the reach at any device scale.
+        let node_points = scene.node_radius * camera.points_per_world(size_points.y);
+        let shadow_reach =
+            shadow::REACH_SIGMAS * 0.5 * scene.glow_shadow.max(0.0) * node_points.max(0.0);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
@@ -1069,10 +1076,26 @@ impl LatticeCallback {
             if !(hw.is_finite() && hh.is_finite() && hw > 0.0 && hh > 0.0) {
                 return empty;
             }
+            // Clipped to the pane the shadow can land on, grown by the blur's
+            // own reach. A perspective camera projects a node close to the eye
+            // onto a box thousands of panes wide, and the packer sizes the
+            // WHOLE atlas off the widest box it is handed: unclipped, one such
+            // node takes the atlas to the device's limit and every cell packed
+            // after it falls outside and casts nothing. Nothing is lost — a
+            // caster's cell is a picture of what its shadow lands on, and past
+            // this box it lands off the pane.
+            let lo = glam::Vec2::splat(-shadow_reach);
+            let hi =
+                glam::Vec2::new(size_points.x, size_points.y) + glam::Vec2::splat(shadow_reach);
+            let min = glam::Vec2::new(c[0] - hw, c[1] - hh).max(lo);
+            let max = glam::Vec2::new(c[0] + hw, c[1] + hh).min(hi);
+            if !(max.x > min.x && max.y > min.y) {
+                return empty;
+            }
             // LEVEL 1: the coverage the cell is filled with already carries
             // every layer's own envelope (`node_ink`), so a released node's
             // shadow fades with its ink and needs no second term here.
-            shadow::Caster { rect: [c[0] - hw, c[1] - hh, 2.0 * hw, 2.0 * hh], level: 1.0 }
+            shadow::Caster { rect: [min.x, min.y, max.x - min.x, max.y - min.y], level: 1.0 }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
         // the same shape at the same size — they stand on the home sheet at one
@@ -1144,7 +1167,7 @@ impl LatticeCallback {
             node_cells,
             marker_arm_points,
             draws,
-            node_points: scene.node_radius * camera.points_per_world(size_points.y),
+            node_points,
             atlas: labels.atlas,
             marks: labels.marks,
             slide: labels.slide,

@@ -61,10 +61,10 @@ fn golden_dir() -> PathBuf {
 
 /// One golden frame: a scene, the names standing on it, and what the pane is
 /// filled with behind it.
-struct Shot {
-    scene: Scene,
-    labels: LatticeLabels,
-    clear: wgpu::Color,
+pub(super) struct Shot {
+    pub(super) scene: Scene,
+    pub(super) labels: LatticeLabels,
+    pub(super) clear: wgpu::Color,
 }
 
 impl From<Scene> for Shot {
@@ -446,7 +446,7 @@ fn two_strokes_of_one_name() -> Shot {
 /// the chord's and the window's answer, and a hand-picked index would silently
 /// stop overlapping the first time either moved — the frame would still render
 /// and would still be blessed.
-fn names_overlapping_on_one_sheet() -> Shot {
+pub(super) fn names_overlapping_on_one_sheet() -> Shot {
     let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
     let camera = Camera {
         projection: harmonigraph_scene::Projection::Perspective,
