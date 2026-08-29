@@ -44,8 +44,14 @@ struct Locals {
     /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
+    /// How much DEEPER the same shadow lands on the picture the bloom's bright
+    /// pass reads than on the picture a person sees, 0..1 — the lattice's
+    /// `glow_shadow_bloom`, mixed from `shadow_depth` toward a whole 1. Read by
+    /// [`fs_shadow_box`] alone, and 0 everywhere else, which is the two
+    /// attachments carrying the same shadow.
+    shadow_bloom: f32,
     /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
-    _pad: vec2<f32>,
+    _pad: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
     shadow_atlas_size: vec2<f32>,
@@ -580,11 +586,36 @@ fn vs_shadow_box(
 /// which casts no shadow and draws through [`fs_rim`] and [`fs_fill`] — takes a
 /// layout with group 0 and nothing else, and a pane with no atlas has no dummy
 /// to bind.
+///
+/// The one draw in the pass whose two attachments differ in the SHADOW rather
+/// than only in the ink. Everything else writes one fragment to both, and a
+/// name already writes to one — its ink is kept out of `nodes` so it neither
+/// glows nor bites the halo of the node it covers (`SceneOut`, common.wgsl) —
+/// so the label is where the picture and the bright pass's copy of it are
+/// already allowed to disagree, and `shadow_bloom` is a dial on a difference
+/// that exists rather than a new exception.
+///
+/// What it buys: the composite is `scene + bloom * strength` into an 8-bit
+/// target, so over a bright halo the unshadowed pixel is already past 1 and
+/// pins to white, and a shadow that does not carry the sum back under 1 lands
+/// as nothing at all. Modelled at a halo of 0.9 and a name's `T` of 0.62, the
+/// darkening that reaches the screen is 0.1% at `shadow_bloom` 0 and 38% by the
+/// time the bloom's own copy is taken to depth 1 — with the visible shadow left
+/// exactly as light as it was. Over an unlit node there is no bloom to take
+/// away and the bar does nothing, which is what makes it an answer to the
+/// bright case alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
     let t = shadow_transmittance(blur, locals.shadow_depth, in.level);
-    let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
-    return SceneOut(shadow, shadow);
+    // The bright pass's copy, at its own depth. The SAME function over the same
+    // blur and the same level, so what differs between the two pictures is one
+    // number and never the shape of the shadow.
+    let deeper = mix(locals.shadow_depth, 1.0, clamp(locals.shadow_bloom, 0.0, 1.0));
+    let lit = shadow_transmittance(blur, deeper, in.level);
+    return SceneOut(
+        vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
+    );
 }
