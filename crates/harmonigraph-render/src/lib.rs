@@ -47,7 +47,7 @@ mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
-/// picture the CPU used to compose texel by texel. Here the aggregator's slab
+/// picture a CPU compose would build texel by texel. Here the aggregator's slab
 /// grid is the texture and the read is per fragment, so a zoom, a resize or a
 /// palette change is a uniform.
 mod spectrogram;
@@ -145,10 +145,10 @@ pub(crate) const COMMON_SRC: &str = include_str!("shaders/common.wgsl");
 /// anything in common.wgsl is handed the result. Common goes first, so a module
 /// can call into it and it can call into no module.
 ///
-/// A module that names nothing in it — blit.wgsl, shadow.wgsl, glow.wgsl,
-/// roll.wgsl — is compiled as it stands. Handing them the common half anyway
-/// would be a second declaration of `glow_max_tex` at blit.wgsl's own slot for
-/// it, which is a compile error rather than a tidy-up.
+/// A module that names nothing in it is compiled as it stands. Handing one the
+/// common half anyway would be a second declaration of `glow_max_tex` at
+/// blit.wgsl's own slot for it, which is a compile error rather than a
+/// tidy-up.
 pub(crate) fn module_source(common: &str, module: &str) -> String {
     format!("{common}\n{module}")
 }
@@ -640,8 +640,9 @@ struct Uniforms {
     /// cannot be bound while it is the target being written, so its size
     /// cannot be read off it.
     ///
-    /// Both halves are settled in `prepare`: the atlas is sized there, after
-    /// the packing, and the pane's points are the screen descriptor's.
+    /// The two halves are settled in different places: the pane's points in
+    /// `from_scene`, the atlas's size in `prepare`, which is after the packing
+    /// and so the earliest the size is known.
     misc14: [f32; 4],
     /// The ONE cell every resting marker's shadow is read out of, as three
     /// rows rather than a buffer: every cross is the same shape at the same σ

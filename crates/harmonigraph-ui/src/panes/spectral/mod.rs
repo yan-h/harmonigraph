@@ -144,8 +144,9 @@ pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     now: f64,
-    // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
-    // Render preview, so two live copies don't clobber one shared texture.
+    // Which spectrogram surface this is: 0 the docked pane / offline render,
+    // 1 the Render preview — two live spectrograms in a frame need their own
+    // grid.
     surface: usize,
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};

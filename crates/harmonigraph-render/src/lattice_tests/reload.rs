@@ -66,7 +66,8 @@ fn an_edit_to_the_common_half_reaches_the_text_module_and_the_lattice_one() {
 }
 
 /// The other two files are watched on their own account, and each produces the
-/// pair: text.wgsl was reachable from no reload at all before this, and an edit
+/// pair: an edit to text.wgsl has to rebuild the lattice's own glyph pipelines,
+/// which read the same common half, and an edit
 /// to lattice.wgsl still has to rebuild the names, which read the same common
 /// half.
 #[test]

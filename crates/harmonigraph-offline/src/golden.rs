@@ -6,14 +6,13 @@
 //! shape while the look is moving and the wrong one for #503, which rewrites
 //! the compose as a fragment shader and has to say exactly what the picture
 //! did.
-//! Nothing else in the tree can say that: the heatmap is built on the CPU and
-//! uploaded, so a claim test can read the arithmetic and never the pixels.
+//! Nothing else in the tree can say that: a claim test reads the arithmetic
+//! and never the pixels the shader actually writes.
 //!
-//! Here rather than in `harmonigraph-ui`, because the spectrogram is not a
-//! function anything can call for a frame — it is a pane, an egui texture and
-//! a mesh, and this crate is where those are drawn without a window. The set
-//! is the offline renderer's, so it also holds the exports honest, which is
-//! the half of the picture the DAW cannot show.
+//! Here rather than in `harmonigraph-ui` because the set is the offline
+//! renderer's: it holds the EXPORTS honest, which is the half of the picture
+//! the DAW cannot show, and a pane drawn without a window is what this crate
+//! is for.
 //!
 //! **Each frame reaches one thing #503 changes**, and that is what makes the
 //! set worth its runtime rather than one frame worth four:
@@ -28,8 +27,8 @@
 //!   between two of them instead. Its half-bucket centre offset is one of the
 //!   things #503's own trap list calls easy to lose in the port, and no
 //!   zoomed-out frame executes it at all.
-//! - the WHOLE-SONG layout, which folds its own grid and owns its texture
-//!   outright rather than scrolling a ring. It is a second build path, ported
+//! - the WHOLE-SONG layout, which folds a grid over the entire take rather
+//!   than scrolling a window across it. It is a second build path, ported
 //!   separately, and the live frames say nothing about it.
 //!
 //! Each frame was held against the read it claims, by breaking that read and
@@ -184,12 +183,14 @@ fn whole_axis() -> (f32, f32) {
 
 /// The taller of the two panes, in output pixels.
 ///
-/// A multiple of the 64-pixel quantum the live build rounds its height up to,
-/// so the image has exactly this many rows and the picture is not a shorter
-/// one resampled.
+/// Its height is what the pair measures: the same bucket-space image is
+/// resampled to exactly this many rows, so a frame that moves with the pane's
+/// height rather than with its contents shows up against [`SHORT`].
 const TALL: [u32; 2] = [256, 384];
 
-/// The shorter pane: two quanta against the tall one's six.
+/// The shorter pane, a third of [`TALL`]'s height on the same width — far
+/// enough apart that a per-pixel footprint which does not tile the axis
+/// separates the two means.
 const SHORT: [u32; 2] = [256, 128];
 
 /// The pane the zoomed-in shot is drawn on: narrow, and taller than either of

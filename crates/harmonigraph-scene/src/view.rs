@@ -217,9 +217,9 @@ pub struct ViewConfig {
     // ---- The sevens layer ------------------------------------------------
     // How the sheets other than the home one draw. Both settings go inert
     // while `extent_sevens` is 0, which is where a fresh view starts. What
-    // makes a small node legible over a large one is the KNOCKOUT, and that is
-    // not here: it is the Glow section's Shadow ([`glow_shadow`](Self::glow_shadow)),
-    // cut at any extent and by every drawing node on every sheet.
+    // makes a small node legible over a large one is the Glow section's Shadow
+    // ([`glow_shadow`](Self::glow_shadow)) — each item multiplying the frame
+    // under it by its own blurred ink, at any extent and on every sheet.
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
