@@ -1356,12 +1356,20 @@ name = "harmonigraph-core"
 version = "0.3.0"
 
 [[package]]
+name = "harmonigraph-golden"
+version = "0.3.0"
+dependencies = [
+ "png",
+]
+
+[[package]]
 name = "harmonigraph-offline"
 version = "0.3.0"
 dependencies = [
  "egui",
  "egui-wgpu",
  "harmonigraph-core",
+ "harmonigraph-golden",
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
@@ -1419,9 +1427,9 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "harmonigraph-core",
+ "harmonigraph-golden",
  "harmonigraph-scene",
  "naga",
- "png",
  "pollster",
 ]
 

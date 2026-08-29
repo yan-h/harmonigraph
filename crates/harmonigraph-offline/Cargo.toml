@@ -28,3 +28,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # `SharedState`. A probe that sets a field whose type lives in
 # `harmonigraph-scene` has to be able to name that type.
 harmonigraph-scene = { workspace = true }
+# The byte-exact frame gate the golden set is measured by.
+harmonigraph-golden = { workspace = true }

@@ -14,6 +14,8 @@
 
 mod align;
 mod frames;
+#[cfg(test)]
+mod golden;
 mod render;
 mod replay;
 mod sink;

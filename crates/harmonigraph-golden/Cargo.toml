@@ -1,0 +1,12 @@
+[package]
+name = "harmonigraph-golden"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# Reads and writes the golden frames and the contact sheet. Already in the
+# lock file by way of the GUI stack, so this pins no new download.
+png = "0.18"
