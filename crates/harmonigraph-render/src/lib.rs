@@ -56,10 +56,9 @@ pub use glow::{glow_paint_callback, GlowDot};
 mod text;
 pub use text::{text_paint_callback, FontAtlas, GlyphInstance, SlideAxis, TextRing};
 
-/// How far every pixel of a lattice pane stands from the nearest ink of a name
-/// on it — what a name's Shadow is cast from, where a ring's is cast from its
-/// own radius.
-mod field;
+/// A name's shadow: its ink blurred into a cell of an atlas, which the name's
+/// own draw multiplies the frame by.
+mod shadow;
 
 /// The lattice's own labels: the glyphs of every node name it wants drawn,
 /// and which node each of them belongs to.
@@ -94,11 +93,11 @@ pub struct LatticeLabels {
     pub labels: Vec<Label>,
     /// A node's own radius on this pane, in POINTS.
     ///
-    /// A lattice name paints no rim; what holds a halo off it is the standoff
-    /// it casts into the light (`fs_glyph_glow`), and that is dialled in node
-    /// radii like every other standoff in the picture. The glyph pass has no
-    /// node under a letter to measure one against, so the conversion is made
-    /// here, where the pane's own height and the camera both are.
+    /// A lattice name paints no rim; what holds a halo off it is the shadow it
+    /// casts (`fs_shadow_box`), and that is dialled in node radii like every
+    /// other shadow in the picture. The glyph pass has no node under a letter
+    /// to measure one against, so the conversion is made here, where the
+    /// pane's own height and the camera both are.
     ///
     /// One number for the pane, as the size the names are typeset at is: an
     /// off-sheet node draws smaller and its name with it, and its shadow is
@@ -733,9 +732,10 @@ struct LatticeCallback {
     clearings: Vec<GpuInstance>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
-    /// One box per run of them: what that run's knockout is cut on, in the
-    /// order the runs are drawn (see [`Draw::Label`]).
-    gutters: Vec<text::GutterInstance>,
+    /// One caster per name — its ink's box and its level — in the order the
+    /// names are drawn (see [`Draw::Label`]). What `prepare` packs the shadow
+    /// atlas from.
+    casters: Vec<shadow::Caster>,
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
     /// A node's radius on this pane in points, which is the unit the standoff
@@ -793,19 +793,16 @@ enum Draw {
     /// A run of markers, as a range into `pluses`.
     Pluses(u32, u32),
     /// One name's glyphs, as a range into `glyphs`, plus the index into
-    /// `gutters` of the box its knockout is cut on.
+    /// `casters` of the name itself — the box its shadow is drawn over.
     ///
-    /// Per NAME rather than over the whole frame, which is what interleaving
-    /// costs and all it costs: a name has to land at its own node's place in
-    /// the back-to-front order, so two names on different nodes overlapping is
-    /// the nearer one sitting on the other. Adjacent names on ONE sheet merge
-    /// into a single entry, being one uninterrupted draw; across a sheet
-    /// boundary they do not.
-    ///
-    /// The gutter travels WITH the range rather than in a list the pass walks
-    /// beside it, because the merge above rewrites the range: two names that
-    /// merge are one hole over one box, and a second list would have to be
-    /// told that.
+    /// Per NAME, and never merged with the name beside it, because a name is
+    /// TWO draws: its shadow over its box, then its glyphs. The shadow has to
+    /// land on everything already in the frame — the neighbouring name's ink
+    /// included, wherever it reaches it — and the ink has to land after its
+    /// own shadow; two names as one draw would put the second's shadow under
+    /// the first's ink. A name lands at its own node's place in the
+    /// back-to-front order, so two names on different nodes overlapping is the
+    /// nearer one sitting on, and shadowing, the other.
     Label(u32, u32, u32),
 }
 
@@ -1070,19 +1067,10 @@ impl LatticeCallback {
         let mut clearings = Vec::new();
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
-        let mut boxes: Vec<text::GutterInstance> = Vec::new();
+        let mut casters: Vec<shadow::Caster> = Vec::new();
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
-        // Which sheet the last name went on, as a run index into the sorted
-        // order. Runs of one sheet depth are contiguous, that depth being the
-        // sort's first key, and two names merge into one draw only inside one
-        // of them (see [`Draw::Label`]).
-        let mut label_sheet = u32::MAX;
-        let mut sheet = 0u32;
         let mut loose_drawn = false;
         for (k, &(_, _, i)) in order.iter().enumerate() {
-            if k > 0 && order[k - 1].0 != order[k].0 {
-                sheet += 1;
-            }
             if k == split {
                 push_loose(&mut draws, &mut pluses, &loose);
                 loose_drawn = true;
@@ -1120,26 +1108,8 @@ impl LatticeCallback {
                 let at = glyphs.len() as u32;
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
-                // The box the run's hole is cut on, grown over every glyph that
-                // reaches this draw — including the ones a merge adds, which is
-                // why the box is finished at `seal` and not here.
-                let gutter = match draws.last_mut() {
-                    Some(Draw::Label(_, end, g)) if label_sheet == sheet => {
-                        *end = at + count;
-                        *g
-                    }
-                    _ => {
-                        let g = boxes.len() as u32;
-                        boxes.push(text::GutterInstance::empty());
-                        draws.push(Draw::Label(at, at + count, g));
-                        g
-                    }
-                };
-                let cover = &mut boxes[gutter as usize];
-                for glyph in run {
-                    cover.cover(glyph.rect);
-                }
-                label_sheet = sheet;
+                draws.push(Draw::Label(at, at + count, casters.len() as u32));
+                casters.push(shadow::caster_of(run));
             }
         }
         // The home run can be empty and can run to the end of the order, in
@@ -1152,7 +1122,7 @@ impl LatticeCallback {
             instances,
             clearings,
             glyphs,
-            gutters: boxes.into_iter().map(text::GutterInstance::seal).collect(),
+            casters,
             draws,
             node_points: labels.node_points,
             atlas: labels.atlas,
@@ -1369,32 +1339,18 @@ struct LatticeResources {
     ///
     /// A name is the resting field's ink, so it takes the light on the field's
     /// terms: the fill is washed by the halo it stands in (`fs_fill_lit`, which
-    /// is why this one carries the glow at group 1), and the shadow it holds
-    /// that halo off by is the pair's other half — written into the light's own
-    /// pass, exactly as a marker's cross writes its own.
+    /// is why this one carries the glow at group 1). What it does to that halo
+    /// is its shadow, the draw before it (`shadow_box_pipeline`).
     glyph_fill_pipeline: wgpu::RenderPipeline,
-    /// Every name's ink into the mask the distance field is seeded from, and
-    /// the two flood passes that turn that mask into the field (`crate::field`).
-    glyph_ink_pipeline: wgpu::RenderPipeline,
-    field_seed_pipeline: wgpu::RenderPipeline,
-    field_step_pipeline: wgpu::RenderPipeline,
-    /// The shadow every name holds the light off by, as one quad over the pane
-    /// in the glow pass, and the hole each RUN of them knocks out of the scene
-    /// pass — the two readers of that field.
-    ///
-    /// Both are laid off the finished field rather than drawn per glyph, and
-    /// that is the whole of what makes the Shadow solid at any width: a
-    /// dilation evaluated at the fragment has to SAMPLE its way outward, and no
-    /// affordable number of samples fills the disc a wide Shadow asks for.
-    field_shade_pipeline: wgpu::RenderPipeline,
-    glyph_gutter_pipeline: wgpu::RenderPipeline,
+    /// The shadow atlas's three stages (`crate::shadow`): every name's glyphs
+    /// into its cell, the blur over the cells along each axis, and the box
+    /// each name multiplies the scene by off its finished cell.
+    glyph_cell_pipeline: wgpu::RenderPipeline,
+    shadow_blur_pipelines: (wgpu::RenderPipeline, wgpu::RenderPipeline),
+    shadow_box_pipeline: wgpu::RenderPipeline,
     glyph_layout: wgpu::BindGroupLayout,
-    /// The flood's own bindings, and the pair its readers take. Separate
-    /// because they name different things: a pass in the chain reads the field
-    /// it is stepping and the jump it is taking, a reader reads the finished
-    /// field and the ink behind it.
-    field_chain_layout: wgpu::BindGroupLayout,
-    field_reader_layout: wgpu::BindGroupLayout,
+    /// How the atlas is read, by the blur and the box alike.
+    shadow_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
     /// This renderer's copies of the two sheets a glyph can be cut from —
     /// egui's font atlas and the drawn marks'. Its own, not the text
@@ -1622,14 +1578,16 @@ struct PaneBuffers {
     glyph_buffer: wgpu::Buffer,
     glyph_capacity: usize,
     glyph_count: u32,
-    /// One box per run of those glyphs — the knockout each run cuts
-    /// ([`Draw::Label`]). A buffer of its own for the reason the clearings
-    /// have one: it is a different SHAPE drawn by a different pipeline, and
-    /// folding it into the glyph list would put a box where every walk over
-    /// that list expects a letter.
-    gutter_buffer: wgpu::Buffer,
-    gutter_capacity: usize,
-    gutter_count: u32,
+    /// One box per name — its cell of the shadow atlas and the quad its shadow
+    /// is drawn over ([`Draw::Label`]) — and the same box again once per GLYPH,
+    /// beside the glyph buffer, for the draw that rasterizes each glyph into
+    /// its name's cell (`vs_glyph_cell`). The second is what one instanced
+    /// draw over the glyphs costs to know which cell each belongs to; it is
+    /// kept at the glyph buffer's own capacity.
+    box_buffer: wgpu::Buffer,
+    box_capacity: usize,
+    box_count: u32,
+    cell_buffer: wgpu::Buffer,
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
     draws: Vec<Draw>,
@@ -1696,14 +1654,13 @@ struct Offscreen {
     carried_strip: Option<InkStrip>,
     /// The node glow's own target, present only while the view asks for one.
     glow: Option<GlowTarget>,
-    /// The names' distance field, present only while the Shadow bar is off its
-    /// bottom (`ensure_field`).
+    /// The names' shadow atlas, present only while a frame has names casting a
+    /// shadow (`ensure_shadow`).
     ///
     /// Its own lifetime rather than a member of [`GlowTarget`], because the two
-    /// answer to different bars: a name's hole is knocked out at a Reach of 0,
-    /// where there is no light and no glow target at all, and the Shadow is
-    /// what says whether there is a hole to knock.
-    field: Option<field::FieldTarget>,
+    /// answer to different bars: a name's shadow lands on the ground at a Reach
+    /// of 0, where there is no light and no glow target at all.
+    shadow: Option<shadow::ShadowTarget>,
     /// Composite: scene color + blurred bloom (quarter A) + uniforms.
     composite_bind_group: wgpu::BindGroup,
     size: [u32; 2],
@@ -1837,10 +1794,9 @@ struct OffscreenShared<'a> {
     /// One texture, unfiltered: what both stages of the ink strip are read
     /// through (see [`InkStrip`]).
     strip_layout: &'a wgpu::BindGroupLayout,
-    /// The names' distance field, from both sides — the flood's own bindings
-    /// and its readers'; see [`LatticeResources::field_chain_layout`].
-    field_chain_layout: &'a wgpu::BindGroupLayout,
-    field_reader_layout: &'a wgpu::BindGroupLayout,
+    /// The shadow atlas as its readers take it; see
+    /// [`LatticeResources::shadow_layout`].
+    shadow_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
 }
 
@@ -2064,7 +2020,7 @@ impl Offscreen {
         Offscreen {
             bloom,
             glow: None,
-            field: None,
+            shadow: None,
             carried_strip,
             composite_bind_group,
             color_view,
@@ -2127,27 +2083,35 @@ impl Offscreen {
         }
     }
 
-    /// Make this pane's name field exist exactly while `want` says so — the
-    /// same bargain [`ensure_glow`](Offscreen::ensure_glow) strikes, on the
-    /// Shadow bar instead of the Reach.
+    /// Make this pane's shadow atlas hold `want` texels — none at all where
+    /// `want` is `None` — the bargain [`ensure_glow`](Offscreen::ensure_glow)
+    /// strikes, on the names' shadows instead of the Reach.
     ///
-    /// Three pane-sized textures, so a view with the Shadow at its bottom holds
-    /// none of them. Nothing is carried across a rebuild the way a glow's ink
-    /// strip is: the field is a pure function of this frame's names and is
-    /// rewritten from the mask up every frame it is used, so there is nothing
-    /// in it that a fresh one would lack.
-    fn ensure_field(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
-        match (want, self.field.is_some()) {
-            (true, false) => {
-                self.field = Some(field::FieldTarget::new(
-                    device,
-                    shared.field_chain_layout,
-                    shared.field_reader_layout,
-                    self.size,
-                ));
+    /// Grown to demand and never shrunk while it is wanted: a layout is a pure
+    /// function of its frame (`shadow::pack`), so the texture's size decides
+    /// nothing drawn, and a smaller one rebuilt on every frame a name leaves
+    /// would be an allocation per frame of a fade. Nothing is carried across a
+    /// rebuild the way a glow's ink strip is: the atlas is rewritten from the
+    /// ink up every frame it is used.
+    fn ensure_shadow(
+        &mut self,
+        device: &wgpu::Device,
+        shared: &OffscreenShared<'_>,
+        want: Option<[u32; 2]>,
+    ) {
+        match want {
+            Some(size) => {
+                if self.shadow.as_ref().is_none_or(|s| !s.holds(size)) {
+                    let held = self.shadow.as_ref().map_or([0, 0], |s| s.size);
+                    self.shadow = Some(shadow::ShadowTarget::new(
+                        device,
+                        shared.shadow_layout,
+                        shared.sampler,
+                        [size[0].max(held[0]), size[1].max(held[1])],
+                    ));
+                }
             }
-            (false, true) => self.field = None,
-            _ => {}
+            None => self.shadow = None,
         }
     }
 }
@@ -2467,10 +2431,9 @@ fn create_glow_pipelines(
 /// The glow pass's three attachments and the blends every writer of them melds
 /// under: the light screened, the same light max-blended, and the standoff.
 ///
-/// One list, because the terms are what make the field ONE: a node's rings, a
-/// marker's cross and a name's shadow (`text::create_field_shade_pipeline`) all
-/// write here, and a writer melding on terms of its own would be readable in
-/// the picture as the order the draws happened to run in.
+/// One list, because the terms are what make the field ONE: a node's rings and
+/// a marker's cross both write here, and a writer melding on terms of its own
+/// would be readable in the picture as the order the draws happened to run in.
 ///
 /// **Attachment 0 is SCREEN**: `src + dst * (1 - src)`, premultiplied on both
 /// channels, is what makes two neighbouring nodes' halos MELD: an overlap is
@@ -2989,31 +2952,21 @@ impl LatticeResources {
             &glyph_layout,
             Some(&glow_layout),
             // The plain glyph quad, grown by the reconstruction filter's margin
-            // and nothing else: this draw paints the ink alone, the hole beside
-            // it being the gutter's own box (`fs_glyph_gutter`).
+            // and nothing else: this draw paints the ink alone, the shadow
+            // beside it being the box draw's (`fs_shadow_box`).
             ("vs_glyph", "fs_fill_lit"),
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
-        let field_chain_layout = field::chain_bind_group_layout(device);
-        let field_reader_layout = text::field_bind_group_layout(device);
-        let glyph_ink_pipeline = text::create_glyph_ink_pipeline(device, &glyph_layout);
-        let (field_seed_pipeline, field_step_pipeline) =
-            field::create_pipelines(device, &field_chain_layout);
-        let field_shade_pipeline = text::create_field_shade_pipeline(
+        let shadow_layout = shadow::read_layout(device);
+        let glyph_cell_pipeline = text::create_glyph_cell_pipeline(device, &glyph_layout);
+        let shadow_blur_pipelines = shadow::create_blur_pipelines(device, &shadow_layout);
+        let shadow_box_pipeline = text::create_shadow_box_pipeline(
             device,
             &glyph_layout,
-            &field_reader_layout,
-            &glow_targets(target_format),
-        );
-        let glyph_gutter_pipeline = text::create_glyph_gutter_pipeline(
-            device,
-            &glyph_layout,
-            &glow_layout,
-            &field_reader_layout,
+            &shadow_layout,
             target_format,
             DEPTH_FORMAT,
-            EGUI_BLEND,
         );
 
         // The stand-in light: one transparent texel. It is the format the real
@@ -3100,13 +3053,10 @@ impl LatticeResources {
             glow_dummy_bind_group,
             strip_layout,
             sampler,
-            glyph_ink_pipeline,
-            field_seed_pipeline,
-            field_step_pipeline,
-            field_shade_pipeline,
-            glyph_gutter_pipeline,
-            field_chain_layout,
-            field_reader_layout,
+            glyph_cell_pipeline,
+            shadow_blur_pipelines,
+            shadow_box_pipeline,
+            shadow_layout,
             glyph_fill_pipeline,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
@@ -3194,8 +3144,7 @@ impl LatticeResources {
             filter_layout: &self.filter_layout,
             glow_layout: &self.glow_layout,
             strip_layout: &self.strip_layout,
-            field_chain_layout: &self.field_chain_layout,
-            field_reader_layout: &self.field_reader_layout,
+            shadow_layout: &self.shadow_layout,
             sampler: &self.sampler,
         };
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
@@ -3243,13 +3192,18 @@ impl LatticeResources {
                 ),
                 glyph_capacity: INITIAL_GLYPH_CAPACITY,
                 glyph_count: 0,
-                gutter_buffer: create_vertex_buffer::<text::GutterInstance>(
+                box_buffer: create_vertex_buffer::<shadow::ShadowBox>(
                     device,
-                    "lattice_name_gutters",
-                    INITIAL_GUTTER_CAPACITY,
+                    "lattice_shadow_boxes",
+                    INITIAL_BOX_CAPACITY,
                 ),
-                gutter_capacity: INITIAL_GUTTER_CAPACITY,
-                gutter_count: 0,
+                box_capacity: INITIAL_BOX_CAPACITY,
+                box_count: 0,
+                cell_buffer: create_vertex_buffer::<shadow::ShadowBox>(
+                    device,
+                    "lattice_shadow_cells",
+                    INITIAL_GLYPH_CAPACITY,
+                ),
                 draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
@@ -3312,7 +3266,7 @@ impl LatticeResources {
             // wrong answer. This settles both.
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow, wants.rows);
-                offscreen.ensure_field(device, &shared, wants.field);
+                offscreen.ensure_shadow(device, &shared, wants.shadow);
             }
         }
         pane
@@ -3327,9 +3281,8 @@ const INITIAL_PLUS_CAPACITY: usize = 64;
 /// so a lattice's glyph count is a fraction of a text pane's.
 const INITIAL_GLYPH_CAPACITY: usize = 512;
 
-/// And for the boxes their knockouts are cut on: one per RUN of names, which is
-/// at most one per named node and fewer wherever a run merges.
-const INITIAL_GUTTER_CAPACITY: usize = 64;
+/// And for the names' shadow boxes: one per named node.
+const INITIAL_BOX_CAPACITY: usize = 64;
 
 /// Which of a pane's optional targets this frame wants, and how tall the ink
 /// strip has to be — the three answers `pane_buffers` acts on that come off the
@@ -3341,9 +3294,9 @@ const INITIAL_GUTTER_CAPACITY: usize = 64;
 struct PaneTargets {
     /// The node light, which the Reach bar switches (`Offscreen::ensure_glow`).
     glow: bool,
-    /// The names' distance field, which the Shadow's two bars switch between
-    /// them (`Offscreen::ensure_field`).
-    field: bool,
+    /// The names' shadow atlas, at the size this frame's cells pack to, or
+    /// none where no name casts one (`Offscreen::ensure_shadow`).
+    shadow: Option<[u32; 2]>,
     /// The ink strip's height: the row map's own capacity.
     rows: u32,
 }
@@ -3494,6 +3447,21 @@ impl CallbackTrait for LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
+        // The names' shadows: every caster's cell, packed for this frame
+        // (`shadow::pack`). None where no name casts one — the Shadow width or
+        // depth at the bottom of its bar, or no name in the frame — and that
+        // is what takes the atlas and its passes off a resting lattice. σ is
+        // in the TARGET's pixels, which is where the cells are drawn and what
+        // #496 found the field's reach missing.
+        let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
+        let sigma =
+            shadow::sigma_px(self.uniforms.misc11[0], self.node_points, ppp, self.render_scale);
+        let packed = if has_atlas && self.uniforms.misc11[3] > 0.0 {
+            shadow::pack(&self.casters, sigma, ppp * self.render_scale, max_dim)
+        } else {
+            shadow::Packed::default()
+        };
+        let shadow_wanted = (!packed.boxes.is_empty()).then_some(packed.size);
         let pane = resources.pane_buffers(
             device,
             self.pane_id,
@@ -3501,14 +3469,7 @@ impl CallbackTrait for LatticeCallback {
             screen_size,
             PaneTargets {
                 glow,
-                // The names' field, wanted by EITHER of the Shadow's two
-                // switches. They gate different readers and neither implies the
-                // other: the hole is cut at every depth and the shade at every
-                // width, so a width of 0 still shades the light in the shape of
-                // the ink (a standoff's coverage at a distance of nothing is 1,
-                // which is a ring's reading too), and a depth of 0 still cuts
-                // the hole.
-                field: self.uniforms.misc11[0] > 0.0 || self.uniforms.misc11[3] > 0.0,
+                shadow: shadow_wanted,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
@@ -3566,19 +3527,39 @@ impl CallbackTrait for LatticeCallback {
                     "lattice_glyphs",
                     pane.glyph_capacity,
                 );
-            }
-            pane.glyph_count = self.glyphs.len() as u32;
-            if self.gutters.len() > pane.gutter_capacity {
-                pane.gutter_capacity = self.gutters.len().next_power_of_two();
-                pane.gutter_buffer = create_vertex_buffer::<text::GutterInstance>(
+                pane.cell_buffer = create_vertex_buffer::<shadow::ShadowBox>(
                     device,
-                    "lattice_name_gutters",
-                    pane.gutter_capacity,
+                    "lattice_shadow_cells",
+                    pane.glyph_capacity,
                 );
             }
-            pane.gutter_count = self.gutters.len() as u32;
-            if !self.gutters.is_empty() {
-                queue.write_buffer(&pane.gutter_buffer, 0, bytemuck::cast_slice(&self.gutters));
+            pane.glyph_count = self.glyphs.len() as u32;
+            if packed.boxes.len() > pane.box_capacity {
+                pane.box_capacity = packed.boxes.len().next_power_of_two();
+                pane.box_buffer = create_vertex_buffer::<shadow::ShadowBox>(
+                    device,
+                    "lattice_shadow_boxes",
+                    pane.box_capacity,
+                );
+            }
+            pane.box_count = packed.boxes.len() as u32;
+            if !packed.boxes.is_empty() {
+                queue.write_buffer(&pane.box_buffer, 0, bytemuck::cast_slice(&packed.boxes));
+                // Each glyph's own name's box beside it, for the cell draw. The
+                // runs are contiguous in draw order, so this is the boxes
+                // repeated by their runs' lengths — one per caster, which is
+                // what `pack` returns.
+                let cells: Vec<shadow::ShadowBox> = self
+                    .draws
+                    .iter()
+                    .filter_map(|draw| match *draw {
+                        Draw::Label(a, b, l) => Some((b - a, packed.boxes[l as usize])),
+                        _ => None,
+                    })
+                    .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize))
+                    .collect();
+                debug_assert_eq!(cells.len(), self.glyphs.len(), "one cell per glyph");
+                queue.write_buffer(&pane.cell_buffer, 0, bytemuck::cast_slice(&cells));
             }
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
@@ -3588,6 +3569,11 @@ impl CallbackTrait for LatticeCallback {
                 // what the atlas was rasterized at, and so what turns the
                 // rim's radius in points into a texel offset, whatever the
                 // render scale does to the target's pixels.
+                let atlas_size = pane
+                    .offscreen
+                    .as_ref()
+                    .and_then(|o| o.shadow.as_ref())
+                    .map_or([0.0; 2], |s| [s.size[0] as f32, s.size[1] as f32]);
                 queue.write_buffer(
                     &pane.glyph_uniform_buffer,
                     0,
@@ -3600,35 +3586,30 @@ impl CallbackTrait for LatticeCallback {
                         // What the names share with the rest of the picture,
                         // read out of the rows they were packed into rather
                         // than off the scene a second time: the Meld a name's
-                        // wash mixes the light by, and the whole Shadow row its
-                        // standoff is cast on. The same numbers the nodes and
-                        // markers took, so the bar means one thing.
+                        // wash mixes the light by, and the Shadow depth its
+                        // shadow is spent at. The same numbers the nodes and
+                        // markers took, so the bar means one thing. The
+                        // Shadow's WIDTH is not here: it is σ, spent on the
+                        // CPU where the cells are packed.
                         meld: self.uniforms.misc[2],
-                        node_points: self.node_points,
-                        shadow: self.uniforms.misc11[0],
-                        shadow_soft: self.uniforms.misc11[1],
-                        shadow_shape: self.uniforms.misc11[2],
                         shadow_depth: self.uniforms.misc11[3],
                         _pad: 0.0,
+                        // The atlas the cells are drawn into, which may be
+                        // larger than this frame's layout (`ensure_shadow`).
+                        shadow_atlas_size: atlas_size,
+                        _pad2: [0.0; 2],
                         // A lattice name paints no rim, so there is no ring for
                         // the two passes that draw one to walk. Zero samples is
                         // what says so (`ring`), and it is what keeps the fill's
                         // quad down to the reconstruction filter's own margin.
                         ring0: [0.0; 4],
                         ring1: [0.0; 4],
-                        // The ground a name's knockout clears to where no
-                        // light stands, off the same row the nodes clear to
-                        // (`Uniforms::background`): the two paint one hole
-                        // between them at a name over its own node's rings, so
-                        // a name clearing to a different ground would draw its
-                        // own outline in the seam.
-                        background: self.uniforms.background,
                     }),
                 );
             }
         } else {
             pane.glyph_count = 0;
-            pane.gutter_count = 0;
+            pane.box_count = 0;
         }
 
         // The order, held to what actually reached the buffers: every index in
@@ -3641,7 +3622,9 @@ impl CallbackTrait for LatticeCallback {
             Draw::Nodes(a, b) => a < b && b <= pane.instance_count,
             Draw::Clearing(i) => (i as usize) < self.clearings.len(),
             Draw::Pluses(a, b) => a < b && b <= pane.plus_count,
-            Draw::Label(a, b, g) => a < b && b <= pane.glyph_count && g < pane.gutter_count,
+            Draw::Label(a, b, l) => {
+                a < b && b <= pane.glyph_count && (l as usize) < self.casters.len()
+            }
         }));
 
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
@@ -3670,56 +3653,27 @@ impl CallbackTrait for LatticeCallback {
             let opening =
                 if timing { resources.timer.as_ref().and_then(GpuTimer::opening) } else { None };
 
-            // The names' distance field, ahead of everything that reads it: the
-            // shade in the glow pass, and every run's hole in the scene pass.
-            //
-            // Both of those are skipped along with this whenever the pane
-            // carries no glyphs, which is what lets the field go unwritten
-            // rather than being cleared: nothing samples a target no draw
-            // names. That matters at the resting lattice, where the alternative
-            // is a chain of full-pane passes for a frame with no names in it.
-            let field = offscreen
-                .field
-                .as_ref()
-                .filter(|_| pane.glyph_count > 0 && pane.glyph_bind_group.is_some());
-            if let Some(field) = field {
+            // The names' shadow atlas, ahead of the scene pass that samples
+            // it: every name's glyphs into its cell, then the blur over the
+            // cells. Present exactly while a name casts a shadow this frame
+            // (`PaneTargets::shadow`), so a resting lattice pays none of it —
+            // and skipped along with the boxes whenever the pane carries no
+            // glyphs, which is what lets the atlas go unwritten rather than
+            // cleared.
+            let atlas = offscreen.shadow.as_ref().filter(|_| {
+                pane.box_count > 0 && pane.glyph_count > 0 && pane.glyph_bind_group.is_some()
+            });
+            if let Some(atlas) = atlas {
                 let glyphs = pane.glyph_bind_group.as_ref().expect("filtered just above");
-                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("lattice_name_ink_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &field.ink_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        // Cleared to nothing, which is the identity for the max
-                        // blend the glyphs arrive under: no ink and no strength.
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&resources.glyph_ink_pipeline);
+                let mut pass = atlas.ink_pass(egui_encoder);
+                pass.set_pipeline(&resources.glyph_cell_pipeline);
                 pass.set_bind_group(0, glyphs, &[]);
                 pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.glyph_count);
                 drop(pass);
-                // How far the flood has to carry a seed. The pane's own
-                // pixels-per-point, which is what `node_points` is quoted in
-                // and what the shader converts a distance back through.
-                field.run(
-                    queue,
-                    egui_encoder,
-                    (&resources.field_seed_pipeline, &resources.field_step_pipeline),
-                    field::reach_px(
-                        self.uniforms.misc11[0],
-                        self.node_points,
-                        screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                    ),
-                );
+                let (blur_x, blur_y) = &resources.shadow_blur_pipelines;
+                atlas.blur(egui_encoder, (blur_x, blur_y), &pane.box_buffer, pane.box_count);
             }
 
             // The node glow, into a target of its own and BEFORE the scene
@@ -3862,30 +3816,6 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_pipeline(&resources.plus_glow_pipeline);
                     pass.draw(0..4, 0..pane.plus_count);
                 }
-                // And the NAMES, whose shadow is a marker's read on the other
-                // half of the same handover: a position shows a cross or a
-                // name, and either way what it stands in the light with is a
-                // standoff on these bars.
-                //
-                // ONE quad for all of them, off the field written above, where
-                // the two draws before it write a billboard each. Nothing is
-                // lost by melding them ahead of the blend: the blend is `max`
-                // and the standoff's curve falls monotonically, so the
-                // brightest of the names' profiles IS the profile of the
-                // nearest name — the field is that nearest distance, and the
-                // per-name draws were computing the same number several times
-                // over.
-                //
-                // Group 0 as the two draws above take it, and the field at
-                // group 2: the glyph pipelines take the atlases and the pane's
-                // own Shadow row where those take the lattice's uniforms.
-                if let Some(field) = field {
-                    let glyphs = pane.glyph_bind_group.as_ref().expect("field implies a group");
-                    pass.set_bind_group(0, glyphs, &[]);
-                    pass.set_bind_group(2, &field.reader, &[]);
-                    pass.set_pipeline(&resources.field_shade_pipeline);
-                    pass.draw(0..4, 0..1);
-                }
             }
 
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3994,34 +3924,32 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
                         pass.draw(0..4, a..b);
                     }
-                    // Two draws per run of names: the hole it knocks out of
-                    // everything behind it, then the glyphs themselves, washed
-                    // by the light they stand in. A name paints no rim — what
-                    // keeps a halo off it is the shadow it holds that halo off
-                    // by, written in the light's own pass (`fs_field_shade`) as
-                    // a marker's cross writes its own.
+                    // Two draws per name: its shadow over everything already
+                    // in the frame under its box, then the glyphs themselves,
+                    // washed by the light they stand in. A name paints no rim
+                    // — what keeps a halo off it is the shadow, which is a
+                    // multiply on the frame and so lands on the light along
+                    // with everything else under it (`fs_shadow_box`).
                     //
-                    // The HOLE FIRST, and that order is the whole of what keeps
-                    // a name's letters out of its neighbour's hole: a hole cut
-                    // in the ink's own draw is protected only by the alpha of
-                    // the glyph cutting it, and two letters of one name stand
-                    // well inside each other's Shadow. It is `fs_rim`'s
-                    // argument, one pass later.
+                    // The SHADOW FIRST, which is what keeps a name's own ink
+                    // out of its own shadow: the blend's ink term is not
+                    // multiplied, so a name's letters are the one thing in the
+                    // frame its shadow never darkens.
                     //
-                    // The light at group 1, which is the same bind group the
-                    // nodes and markers above it took: a name reads the field
-                    // its neighbours wrote, not one of its own.
-                    Draw::Label(a, b, g) => {
+                    // The light at group 1 for the fill, the same bind group
+                    // the nodes and markers above it took; the atlas at group
+                    // 2 for the box, which reads its own cell and nothing else.
+                    Draw::Label(a, b, l) => {
                         let Some(bind_group) = pane.glyph_bind_group.as_ref() else {
                             continue;
                         };
                         pass.set_bind_group(0, bind_group, &[]);
                         pass.set_bind_group(1, light, &[]);
-                        if let Some(field) = field {
-                            pass.set_bind_group(2, &field.reader, &[]);
-                            pass.set_vertex_buffer(0, pane.gutter_buffer.slice(..));
-                            pass.set_pipeline(&resources.glyph_gutter_pipeline);
-                            pass.draw(0..4, g..g + 1);
+                        if let Some(atlas) = atlas.filter(|_| l < pane.box_count) {
+                            pass.set_bind_group(2, &atlas.reads[0], &[]);
+                            pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
+                            pass.set_pipeline(&resources.shadow_box_pipeline);
+                            pass.draw(0..4, l..l + 1);
                         }
                         pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                         pass.set_pipeline(&resources.glyph_fill_pipeline);
