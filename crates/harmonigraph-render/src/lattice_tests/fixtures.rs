@@ -1002,24 +1002,13 @@ pub(super) fn name_glyph(scene: &Scene, rect: [f32; 4]) -> GlyphInstance {
 }
 
 /// One name per run handed over: the node it names, and its glyphs.
-pub(super) fn names(
-    scene: &Scene,
-    size: [u32; 2],
-    runs: Vec<(u32, Vec<GlyphInstance>)>,
-) -> LatticeLabels {
+pub(super) fn names(runs: Vec<(u32, Vec<GlyphInstance>)>) -> LatticeLabels {
     LatticeLabels {
         labels: runs
             .iter()
             .map(|(node, glyphs)| Label { node: *node, glyphs: glyphs.len() as u32 })
             .collect(),
         glyphs: runs.into_iter().flat_map(|(_, glyphs)| glyphs).collect(),
-        // How large a node draws here, which is the unit the Shadow bars are
-        // dialled in and so the whole of what gives the name's standoff a size.
-        // Taken off the camera exactly as the pane takes it
-        // (`TextBatch::lattice_labels`), a fixture that made its own answer up
-        // being one that could agree with the shader while disagreeing with the
-        // picture.
-        node_points: scene.node_radius * scene.camera.points_per_world(size[1] as f32),
         atlas: Some(crate::text::tests::atlas()),
         marks: Some(crate::text::tests::mark_sheet()),
         slide: SlideAxis::default(),
@@ -1027,13 +1016,13 @@ pub(super) fn names(
 }
 
 /// [`names`] with every glyph on the scene's first node.
-pub(super) fn a_name(scene: &Scene, size: [u32; 2], glyphs: Vec<GlyphInstance>) -> LatticeLabels {
-    names(scene, size, vec![(0, glyphs)])
+pub(super) fn a_name(glyphs: Vec<GlyphInstance>) -> LatticeLabels {
+    names(vec![(0, glyphs)])
 }
 
 /// [`a_name`] as a single [`NAME_SIZE`] glyph standing at `world`.
 pub(super) fn name_at(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> LatticeLabels {
     let at = on_screen(scene, size, world);
     let rect = [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
-    a_name(scene, size, vec![name_glyph(scene, rect)])
+    a_name(vec![name_glyph(scene, rect)])
 }

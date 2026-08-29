@@ -127,7 +127,26 @@ impl ShadowBox {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
     };
+
+    /// The same rows again, at the three locations a node's own instance rows
+    /// leave free (`Instance` in lattice.wgsl, `GpuInstance::LAYOUT`) — the
+    /// second instance-step buffer the node draw and the cell draw both bind.
+    ///
+    /// Scattered rather than consecutive because a vertex attribute's location
+    /// has to be under sixteen and a node's rows already reach fifteen; which
+    /// three are free is what picks them.
+    pub(crate) const BESIDE_NODES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![5 => Float32x4, 9 => Float32x4, 14 => Float32x4],
+    };
 }
+
+/// A caster with no cell at all: what a draw carries when the frame packed
+/// nothing, and what every reader of a box answers 1 to (`shadow_through` in
+/// lattice.wgsl, `fs_shadow_box` in text.wgsl) — the frame left exactly whole,
+/// with nothing sampled.
+pub(crate) const NO_CELL: ShadowBox = ShadowBox { rect: [0.0; 4], cell: [0.0; 4], terms: [0.0; 4] };
 
 /// A frame's cells, packed: one box per caster in the caster's own order, and
 /// the atlas size that holds them.

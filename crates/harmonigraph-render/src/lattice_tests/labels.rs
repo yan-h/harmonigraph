@@ -109,7 +109,6 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
             LatticeLabels {
                 glyphs,
                 labels,
-                node_points: 0.0,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: Some(crate::text::tests::mark_sheet()),
                 slide: SlideAxis::default(),
@@ -256,7 +255,6 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0), glyph(2.0), glyph(3.0)],
             labels: [near, hush_a, hush_b, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -277,13 +275,14 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
             // [`Draw::Label`]).
             Draw::Label(0, 1, 0),
             Draw::Label(1, 2, 1),
-            // The home sheet's own node — its knockout, its disc, its name.
-            Draw::Clearing(0),
+            // The home sheet's own node, then its name. The caster indices skip
+            // where they do because a node that ships takes a cell of its own
+            // between the two names either side of it.
             Draw::Nodes(0, 1),
-            Draw::Label(2, 3, 2),
+            Draw::Label(2, 3, 3),
             // And the near sheet's, after everything.
             Draw::Nodes(1, 2),
-            Draw::Label(3, 4, 3),
+            Draw::Label(3, 4, 5),
         ],
         "a name goes after its own node, over the instances that ship",
     );
@@ -292,9 +291,17 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         vec![1.0, 2.0, 3.0, 0.0],
         "the glyphs are regrouped into the order they are drawn in",
     );
-    // One caster per name, in the same order, each the box of its own glyph.
+    // Each name's own caster is the box of its own glyph — read through the
+    // index the draw carries rather than off the list's order, which the nodes'
+    // own cells are in as well.
     assert_eq!(
-        call.casters.iter().map(|c| c.rect).collect::<Vec<_>>(),
+        call.draws
+            .iter()
+            .filter_map(|draw| match *draw {
+                Draw::Label(_, _, l) => Some(call.casters[l as usize].rect),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
         vec![
             [1.0, 0.0, 1.0, 1.0],
             [2.0, 0.0, 1.0, 1.0],
@@ -351,7 +358,6 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0)],
             labels: [near, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -365,10 +371,14 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
     assert_eq!(call.instances.len(), 1, "only the sounding home node ships an instance");
     assert_eq!(
         call.draws,
-        vec![Draw::Clearing(0), Draw::Nodes(0, 1), Draw::Label(0, 1, 0), Draw::Label(1, 2, 1)],
+        vec![Draw::Nodes(0, 1), Draw::Label(0, 1, 1), Draw::Label(1, 2, 2)],
         "names from different sheets are two draws, the nearer's shadow on the other's ink",
     );
-    assert_eq!(call.casters.len(), 2, "two names, two casters");
+    assert_eq!(
+        call.draws.iter().filter(|draw| matches!(draw, Draw::Label(..))).count(),
+        2,
+        "two names, two draws",
+    );
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 0.0],
@@ -422,7 +432,6 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
         LatticeLabels {
             glyphs: vec![glyph],
             labels: vec![Label { node: 0, glyphs: 1 }],
-            node_points: 0.0,
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
@@ -499,7 +508,6 @@ fn a_label_adds_no_light_through_the_bloom() {
             LatticeLabels {
                 glyphs,
                 labels,
-                node_points: 0.0,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: None,
                 slide: SlideAxis::default(),
@@ -823,7 +831,10 @@ fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
         return;
     };
     shooter.clear = over_grey_clear();
-    let mut scene = inked_on_grey(SHADOW, 1.0);
+    // HALF the depth bar, so that both receivers keep a brightness to take a
+    // share of: the node stands its own shadow over the ground beside its band
+    // as much as over the band, and at the top of the bar that ground is black.
+    let mut scene = inked_on_grey(SHADOW, 0.5);
     // In close, and AIMED at the band's outer edge, so the stroke stands in
     // the middle of the pane with the band's ink to one side and the ground to
     // the other, both tens of pixels wide.
@@ -832,10 +843,9 @@ fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
     let edge = on_screen(&scene, SIZE, scene.camera.target);
     let rect = [edge.x - NAME_SIZE / 2.0, edge.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
     let bare = shooter.shot(&scene);
-    let named = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![name_glyph(&scene, rect)]));
+    let named = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
 
     let row = edge.y.round() as u32;
-    let ground = brightness(&[(GREY * 255.0).round() as u8; 3]);
     // The stroke covers the pixels `left..right`; the pair `d` out is the
     // pixel whose CENTRE is `d - 0.5` beyond each edge, so the two stand at
     // one distance from the ink.
@@ -845,11 +855,12 @@ fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
         let (x_in, x_out) = (left - d, right - 1 + d);
         let (bare_in, bare_out) =
             (bright_at(&bare, SIZE, x_in, row), bright_at(&bare, SIZE, x_out, row));
-        // Only while the inward pixel is the band's ink — far from the
-        // ground's value, so a sector gap showing the ground through the band
-        // is not mistaken for it — and the outward one is the bare ground
-        // exactly.
-        if (bare_in - ground).abs() < 200 || bare_out != ground {
+        // Only where the pair is the two RECEIVERS rather than one of them
+        // twice — the stroke straddles the band's outer edge, so inward is ink
+        // and outward is ground, and they read far apart — and only where each
+        // has a brightness to take a share OF, a share of black being no
+        // reading.
+        if bare_in <= 20 || bare_out <= 20 || (bare_in - bare_out).abs() < 60 {
             continue;
         }
         let share = |shot: &[u8], x: u32, bare: i64| {
@@ -954,9 +965,9 @@ fn two_facing_strokes_cast_deeper_between_them_than_either_alone() {
     let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
     let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));
     let bare = shooter.shot(&scene);
-    let pair = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![left, right]));
-    let left_alone = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![left]));
-    let right_alone = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![right]));
+    let pair = shooter.shot_with(&scene, a_name(vec![left, right]));
+    let left_alone = shooter.shot_with(&scene, a_name(vec![left]));
+    let right_alone = shooter.shot_with(&scene, a_name(vec![right]));
 
     // Down the midline of the gap, through the strokes' middle rows.
     let x = at.x.round() as u32;
@@ -1110,9 +1121,8 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         "the stroke at {at:?} stands off the pane",
     );
     let rect = [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
-    let name = |scene: &Scene, node: usize| {
-        names(scene, SIZE, vec![(node as u32, vec![name_glyph(scene, rect)])])
-    };
+    let name =
+        |scene: &Scene, node: usize| names(vec![(node as u32, vec![name_glyph(scene, rect)])]);
 
     let bare = shooter.shot(&scene);
     let near_named = shooter.shot_with(&scene, name(&scene, near));
@@ -1129,8 +1139,13 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
         .count();
     assert!(onto_far > 20, "the near name darkened {onto_far} visible pixels of the far node");
 
-    // The far name leaves the near node's opaque pixels exactly alone...
-    let onto_near = opaque.iter().filter(|&&i| far_named[i..i + 4] != bare[i..i + 4]).count();
+    // The far name leaves the near node's opaque pixels alone, bar a level of
+    // rounding: `opaque` is the pixels whose ALPHA reaches 255, and a coverage
+    // a thousandth short of 1 lets a thousandth of what is behind through.
+    let onto_near = opaque
+        .iter()
+        .filter(|&&i| (0..4).any(|c| far_named[i + c].abs_diff(bare[i + c]) > 1))
+        .count();
     assert_eq!(onto_near, 0, "the far name's shadow reached {onto_near} pixels of the near node");
     // ...though its shadow does land there with the near node out of the way.
     let without_named = shooter.shot_with(&without, name(&without, 0));
@@ -1200,12 +1215,13 @@ fn a_names_shadow_is_the_same_width_in_points_at_render_scale_2() {
 }
 
 /// A name that casts no shadow — the Shadow's width or its depth at the bottom
-/// of the bar — paints its ink and nothing else, and a frame with no name
-/// packs no cell at all.
+/// of the bar — paints its ink and nothing else, and a name is the only thing
+/// that puts a NAME's cell in the frame.
 ///
-/// The vacuity the whole atlas rests on: no cell, no pass, no box, and the
-/// scene pass draws the name exactly as it would with the atlas never built.
-/// The light is on, so a stray multiply would have something to take.
+/// The vacuity the whole atlas rests on: with either bar shut there is no cell,
+/// no pass and no box for anything, and the scene pass draws the name exactly
+/// as it would with the atlas never built. The light is on, so a stray multiply
+/// would have something to take.
 #[test]
 fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
     const SIZE: [u32; 2] = [256, 256];
@@ -1236,14 +1252,26 @@ fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
             "at Shadow {shadow}/{depth} a name moved {outside} pixels outside its own ink",
         );
     }
+    // And the cell count against the name itself: the node and the markers cast
+    // too, so what a NAME is worth is the difference the name makes — one cell,
+    // and only where there is a name to own it.
     let scene = lit_node_and_a_name(1.6, 0.3, 1.0);
-    let call = LatticeCallback::from_scene(
-        &scene,
-        LatticeLabels::default(),
-        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
-        wgpu::TextureFormat::Rgba8Unorm,
-        1,
-        None,
+    let cells = |labels| {
+        LatticeCallback::from_scene(
+            &scene,
+            labels,
+            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+            None,
+        )
+        .casters
+        .len()
+    };
+    let bare = cells(LatticeLabels::default());
+    assert_eq!(
+        cells(one_name(&scene, SIZE)),
+        bare + 1,
+        "a name is worth exactly one cell over the {bare} the frame casts without it",
     );
-    assert!(call.casters.is_empty(), "a frame with no name has {} casters", call.casters.len());
 }

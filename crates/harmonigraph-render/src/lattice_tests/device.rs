@@ -139,7 +139,11 @@ fn offscreen_composite_matches_direct_draw() {
     // Path B: the pre-offscreen renderer — same buffers and draw order,
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let layouts = SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+    let layouts = SceneLayouts {
+        uniforms: &res.bind_group_layout,
+        glow: &res.glow_layout,
+        shadow: &res.shadow_layout,
+    };
     let (node_pipeline, plus_pipeline) =
         create_pipelines(&device, SHADER_SRC, format, layouts, false);
     // The stand-in light at group 1: this path has no glow pass to composite,
@@ -147,6 +151,13 @@ fn offscreen_composite_matches_direct_draw() {
     // the offscreen path is reading the same transparent nothing.
     let light = &res.glow_dummy_bind_group;
     let pane = res.panes.get(&7).expect("prepare created the pane");
+    // The atlas the pass above filled, which this path samples rather than
+    // fills: the shadows are part of the picture the two are compared on.
+    let cells = pane
+        .offscreen
+        .as_ref()
+        .and_then(|o| o.shadow.as_ref())
+        .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
         // The pane's own order, walked the same way `prepare` walks it — a
         // second expression of it here would make the two paths differ by draw
@@ -159,13 +170,16 @@ fn offscreen_composite_matches_direct_draw() {
                     pass.set_pipeline(&node_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, light, &[]);
+                    pass.set_bind_group(2, cells, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                     pass.draw(0..4, a..b);
                 }
                 Draw::Pluses(a, b) => {
                     pass.set_pipeline(&plus_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, light, &[]);
+                    pass.set_bind_group(2, cells, &[]);
                     pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
                     pass.draw(0..4, a..b);
                 }

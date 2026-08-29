@@ -135,7 +135,7 @@ fn a_frame_of_names_costs_this_much() {
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
     for frame in 0..frames + 10 {
-        let labels = names(&scene, SIZE, runs.clone());
+        let labels = names(runs.clone());
         let cb = LatticeCallback::from_scene(
             &scene,
             labels,

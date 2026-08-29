@@ -198,7 +198,7 @@ pub(crate) fn draw_lattice(
         lattice_paint_callback(
             rect,
             &scene,
-            batch.lattice_labels(ui.painter(), rect, &scene, state),
+            batch.lattice_labels(ui.painter(), rect, state),
             state.target_format,
             pane_id(surface),
             stats,

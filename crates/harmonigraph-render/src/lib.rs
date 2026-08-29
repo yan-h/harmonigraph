@@ -91,18 +91,6 @@ pub struct LatticeLabels {
     /// One entry per label, naming its node and how many of `glyphs` are
     /// its own.
     pub labels: Vec<Label>,
-    /// A node's own radius on this pane, in POINTS.
-    ///
-    /// A lattice name paints no rim; what holds a halo off it is the shadow it
-    /// casts (`fs_shadow_box`), and that is dialled in node radii like every
-    /// other shadow in the picture. The glyph pass has no node under a letter
-    /// to measure one against, so the conversion is made here, where the
-    /// pane's own height and the camera both are.
-    ///
-    /// One number for the pane, as the size the names are typeset at is: an
-    /// off-sheet node draws smaller and its name with it, and its shadow is
-    /// still the home sheet's width.
-    pub node_points: f32,
     /// egui's font atlas, on the frames the renderer's mirror of it is
     /// stale. `None` on the rest, which is nearly all of them.
     pub atlas: Option<FontAtlas>,
@@ -156,9 +144,10 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// two-attachment form the offscreen pass draws through; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
 /// `glow` four are the glow's own pass — a billboard and the light it lays
-/// down, once for the nodes and once for the resting markers; and the `ink`
-/// four are the strip the nodes' light is coloured out of, read and then
-/// blurred ahead of it (see [`InkStrip`]).
+/// down, once for the nodes and once for the resting markers; the `ink` four
+/// are the strip the nodes' light is coloured out of, read and then blurred
+/// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
+/// and the markers' one cross into the shadow atlas (`shadow.rs`).
 #[cfg(any(test, feature = "hot-reload"))]
 const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_main",
@@ -175,6 +164,10 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "fs_ink_strip",
     "vs_ink_blur",
     "fs_ink_blur",
+    "vs_node_cell",
+    "fs_node_cell",
+    "vs_plus_cell",
+    "fs_plus_cell",
 ];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
@@ -433,6 +426,28 @@ struct Uniforms {
     /// and the markers' standoff draw reads its own zero there as an off switch
     /// (`vs_plus_glow`).
     misc13: [f32; 4],
+    /// The shadow atlas's plumbing row, which is not a dial. x/y: the pane in
+    /// POINTS, the space a caster's box is packed in (`shadow::pack`), so a
+    /// clip position resolves back to it (`pane_points` in lattice.wgsl); z/w:
+    /// the atlas in texels, for the two draws that FILL a cell — a texture
+    /// cannot be bound while it is the target being written, so its size
+    /// cannot be read off it.
+    ///
+    /// Both halves are settled in `prepare`: the atlas is sized there, after
+    /// the packing, and the pane's points are the screen descriptor's.
+    misc14: [f32; 4],
+    /// The ONE cell every resting marker's shadow is read out of, as three
+    /// rows rather than a buffer: every cross is the same shape at the same σ
+    /// and a blur is linear, so one cell serves the whole field and each
+    /// marker spends its own opacity as a share where it reads it
+    /// (`plus_paint`). The box in the pane's points, centred on a crossing.
+    plus_shadow_rect: [f32; 4],
+    /// That box's cell in atlas texels: origin, then size.
+    plus_shadow_cell: [f32; 4],
+    /// x: points to cell texels; y: σ in those texels; z: the cell's own level,
+    /// which is 1; w: one arm in points, which is what turns a fragment's place
+    /// on a cross into a place in the cell.
+    plus_shadow_terms: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -558,25 +573,14 @@ struct GpuInstance {
     /// the same reason: it is the light's SIZE, and a size that stepped when
     /// the marking voice was pruned snapped a halo still at full brightness.
     glow: [f32; 4],
-    /// Which half of the node this instance draws: [`PAINT_WHOLE`] for both,
-    /// [`PAINT_INK`] or [`PAINT_CLEARING`] for one. See `Instance::paint` in
-    /// lattice.wgsl for what the split buys and why it comes out the same
-    /// picture.
+    /// Which half of the node this instance draws — [`PAINT_WHOLE`], the whole
+    /// of it. See `Instance::paint` in lattice.wgsl.
     paint: f32,
 }
 
-/// What [`GpuInstance::paint`] can say, mirroring lattice.wgsl's constants of
-/// the same names. Every sheet but the home one draws WHOLE; a home node is
-/// split in two so the resting markers can be drawn between its halves.
-///
-/// The clearing half rides a buffer of its own rather than extra entries in the
-/// instance list, and that is what keeps the split to the scene pass: the glow,
-/// the ink strip and the cull all walk the instance buffer whole, and a node
-/// appearing twice in it would light twice and write its strip row twice. None
-/// of them read this field.
+/// What [`GpuInstance::paint`] says, mirroring lattice.wgsl's constant of the
+/// same name: every node ships once and draws its whole picture.
 const PAINT_WHOLE: f32 = 0.0;
-const PAINT_INK: f32 = 1.0;
-const PAINT_CLEARING: f32 = 2.0;
 
 impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -732,14 +736,29 @@ struct LatticeCallback {
     clearings: Vec<GpuInstance>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
-    /// One caster per name — its ink's box and its level — in the order the
-    /// names are drawn (see [`Draw::Label`]). What `prepare` packs the shadow
-    /// atlas from.
+    /// Every caster this frame, in the order the pass draws them: the markers'
+    /// one shared cross first where the field draws any, then one per node
+    /// instance and one per name, interleaved as the walk emits them. What
+    /// `prepare` packs the shadow atlas from — a pure function of the frame,
+    /// which the offline renderer's determinism rests on.
     casters: Vec<shadow::Caster>,
+    /// Which caster each node instance's shadow is, by index into `casters` —
+    /// parallel to `instances`, since the walk interleaves the two lists.
+    node_cells: Vec<u32>,
+    /// One arm of a resting marker in the pane's points, and 0 where the field
+    /// casts nothing: what maps a fragment's place on a cross into the shared
+    /// cell. The cell itself is `casters[0]` wherever this is above zero.
+    marker_arm_points: f32,
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
-    /// A node's radius on this pane in points, which is the unit the standoff
-    /// its names cast is dialled in — see [`LatticeLabels::node_points`].
+    /// A node's own radius on this pane, in POINTS: the unit every shadow in
+    /// the picture is dialled in (`shadow::sigma_px`).
+    ///
+    /// ONE number for the pane, as the size the names are typeset at is: an
+    /// off-sheet node draws smaller and its name with it, and its shadow is
+    /// still the home sheet's width. Derived here rather than handed in,
+    /// because a node and a marker cast whether or not the frame carries a
+    /// single name.
     node_points: f32,
     /// The two sheets, on the frames either has moved.
     atlas: Option<FontAtlas>,
@@ -788,8 +807,6 @@ type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::T
 enum Draw {
     /// A run of node instances, as a range into `instances`.
     Nodes(u32, u32),
-    /// One home node's knockout, by index into `clearings`.
-    Clearing(u32),
     /// A run of markers, as a range into `pluses`.
     Pluses(u32, u32),
     /// One name's glyphs, as a range into `glyphs`, plus the index into
@@ -910,11 +927,6 @@ impl LatticeCallback {
         };
 
         let split = order.iter().position(|&(plane, _, _)| plane <= 0.0).unwrap_or(order.len());
-        // And where it ENDS: the sheets in front are the negative half of the
-        // same axis, so the home run is exactly the nodes at a depth of 0. A
-        // sheet in FRONT keeps its clearing whole — hiding the markers is the
-        // ordinary occlusion every sheet does to the one behind it.
-        let home_end = order.iter().position(|&(plane, _, _)| plane < 0.0).unwrap_or(order.len());
         // A node that can paint nothing is not shipped at all. The shader
         // already discards it per fragment, but the billboard is deliberately
         // bigger than the node (QUAD_MARGIN and then some), so the discard is
@@ -1063,11 +1075,76 @@ impl LatticeCallback {
         // positions while the billboard does not foreshorten with it, so every
         // cross it covers is one the reader is being told is behind it — and
         // most of them are not.
+        // One node's ink as a box on the pane, in points — the space a caster
+        // is packed in (`shadow::pack`). The billboard faces the camera's own
+        // right and up, so those two axes project onto the screen's and one
+        // corner along each bounds the circle the node fits inside.
+        //
+        // A node the projection cannot place — behind the eye, or collapsed to
+        // nothing — casts no shadow rather than a box of infinities for the
+        // packer to size.
+        let to_points = |p: glam::Vec3| {
+            let clip = view_proj * p.extend(1.0);
+            (clip.w > 1e-4).then(|| {
+                let ndc = clip / clip.w;
+                [(ndc.x * 0.5 + 0.5) * size_points.x, (0.5 - ndc.y * 0.5) * size_points.y]
+            })
+        };
+        let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
+            // The circle the node's ink fits inside, in its own uv: `node_rim`
+            // in lattice.wgsl, widened by the audio ring, which is dialled on
+            // radii of its own and may stand outside the ring stack.
+            let mut rim = scene.rings_outer.max(0.0);
+            if (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0 {
+                rim = rim.max(scene.mark_inner + scene.mark_thickness);
+            }
+            if ringing && g.ring > 0.0 {
+                rim = rim.max(scene.spectral.outer);
+            }
+            // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
+            // which is the one conversion between the bars' unit and the world.
+            let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
+            let empty = shadow::Caster { rect: [0.0; 4], level: 0.0 };
+            let (Some(c), Some(x), Some(y)) = (
+                to_points(n.world_pos),
+                to_points(n.world_pos + right * reach),
+                to_points(n.world_pos + up * reach),
+            ) else {
+                return empty;
+            };
+            let half = |axis: usize| (x[axis] - c[axis]).abs().max((y[axis] - c[axis]).abs());
+            let (hw, hh) = (half(0), half(1));
+            if !(hw.is_finite() && hh.is_finite() && hw > 0.0 && hh > 0.0) {
+                return empty;
+            }
+            // LEVEL 1: the coverage the cell is filled with already carries
+            // every layer's own envelope (`node_ink`), so a released node's
+            // shadow fades with its ink and needs no second term here.
+            shadow::Caster { rect: [c[0] - hw, c[1] - hh, 2.0 * hw, 2.0 * hh], level: 1.0 }
+        };
+        // One arm of a resting marker on this pane, in points. Every cross is
+        // the same shape at the same size — they stand on the home sheet at one
+        // radius (`derive_pluses`) — so one number answers for the whole field,
+        // through the same conversion a node's own radius takes.
+        let points_per_world = camera.points_per_world(size_points.y);
+        let marker_arm_points =
+            scene.pluses.first().map_or(0.0, |p| (p.radius * points_per_world).max(0.0));
+
         let mut instances = Vec::with_capacity(order.len());
-        let mut clearings = Vec::new();
+        let clearings: Vec<GpuInstance> = Vec::new();
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
+        let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
+        // The markers' ONE cell, ahead of everything the walk pushes: every
+        // cross is the same shape at the same σ and a blur is linear, so the
+        // field needs one cell and each marker spends its own opacity as a
+        // share where it reads it (`plus_paint`). Centred on a crossing, which
+        // is what lets a marker map its own uv into a cell it did not place.
+        if marker_arm_points > 0.0 {
+            let a = marker_arm_points;
+            casters.push(shadow::Caster { rect: [-a, -a, 2.0 * a, 2.0 * a], level: 1.0 });
+        }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let mut loose_drawn = false;
         for (k, &(_, _, i)) in order.iter().enumerate() {
@@ -1075,17 +1152,8 @@ impl LatticeCallback {
                 push_loose(&mut draws, &mut pluses, &loose);
                 loose_drawn = true;
             }
-            let home = (split..home_end).contains(&k);
             let instance = to_gpu(&scene.nodes[i]);
             let ships = paints(&instance);
-            // The knockout hangs off the Shadow, so a view with it dialled off
-            // ships none. The cull is the ink's, since the two are one node — a
-            // node that paints nothing clears nothing either, every layer's
-            // hole being scaled by the level that paints it (`node_clearing`).
-            if ships && home && scene.glow_shadow > 0.0 {
-                draws.push(Draw::Clearing(clearings.len() as u32));
-                clearings.push(GpuInstance { paint: PAINT_CLEARING, ..instance });
-            }
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
@@ -1095,11 +1163,11 @@ impl LatticeCallback {
             }
             if ships {
                 push_node(&mut draws, instances.len() as u32);
-                // The home sheet's nodes draw twice, so the second of the two
-                // takes the ink alone; every other sheet's node is one draw
-                // carrying both (`GpuInstance::paint`).
-                let paint = if home { PAINT_INK } else { PAINT_WHOLE };
-                instances.push(GpuInstance { paint, ..instance });
+                // Its own cell of the atlas, beside it: what this node's shadow
+                // is a blur of, and what it multiplies the frame under it by.
+                node_cells.push(casters.len() as u32);
+                casters.push(node_caster(&scene.nodes[i], &instance));
+                instances.push(GpuInstance { paint: PAINT_WHOLE, ..instance });
             }
             // The name, immediately after the node it names — so what covers a
             // name is exactly what covers its node.
@@ -1123,8 +1191,10 @@ impl LatticeCallback {
             clearings,
             glyphs,
             casters,
+            node_cells,
+            marker_arm_points,
             draws,
-            node_points: labels.node_points,
+            node_points: scene.node_radius * camera.points_per_world(size_points.y),
             atlas: labels.atlas,
             marks: labels.marks,
             slide: labels.slide,
@@ -1201,6 +1271,14 @@ impl LatticeCallback {
                 // `misc11`'s rule above, reaching one field further now that
                 // the markers knock out as the nodes do.
                 misc13: [if lights { scene.glow_wash } else { 0.0 }, scene.marker_unit, 0.0, 0.0],
+                // The pane in points, which `from_scene` knows; the atlas's own
+                // size is settled where it is allocated, in `prepare`.
+                misc14: [size_points.x, size_points.y, 0.0, 0.0],
+                // The markers' shared cell, likewise: it is `casters[0]` and its
+                // place is not known until the frame is packed.
+                plus_shadow_rect: [0.0; 4],
+                plus_shadow_cell: [0.0; 4],
+                plus_shadow_terms: [0.0; 4],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
@@ -1348,6 +1426,16 @@ struct LatticeResources {
     glyph_cell_pipeline: wgpu::RenderPipeline,
     shadow_blur_pipelines: (wgpu::RenderPipeline, wgpu::RenderPipeline),
     shadow_box_pipeline: wgpu::RenderPipeline,
+    /// The other two rasterizers of a cell: a node's ink into its own, and one
+    /// cross into the markers' shared one (see [`create_cell_pipelines`]).
+    node_cell_pipeline: wgpu::RenderPipeline,
+    plus_cell_pipeline: wgpu::RenderPipeline,
+    /// A 1x1 atlas in [`shadow_layout`](Self::shadow_layout), standing in at
+    /// group 2 wherever this frame packed no cell — the Shadow width or depth
+    /// at the bottom of its bar, or nothing in the frame that casts. Every draw
+    /// then carries a box of zeros and multiplies by exactly 1, with nothing
+    /// sampled, so there is no branch and no second pipeline variant.
+    shadow_dummy_bind_group: wgpu::BindGroup,
     glyph_layout: wgpu::BindGroupLayout,
     /// How the atlas is read, by the blur and the box alike.
     shadow_layout: wgpu::BindGroupLayout,
@@ -1588,6 +1676,12 @@ struct PaneBuffers {
     box_capacity: usize,
     box_count: u32,
     cell_buffer: wgpu::Buffer,
+    /// Each node instance's own box, beside the instance buffer: the second
+    /// instance-step buffer both the node draw and the cell draw bind
+    /// (`shadow::ShadowBox::BESIDE_NODES`). Kept at the instance buffer's own
+    /// capacity, being one row per instance.
+    node_cell_buffer: wgpu::Buffer,
+    node_cell_capacity: usize,
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
     draws: Vec<Draw>,
@@ -2259,20 +2353,20 @@ impl InkStrip {
     }
 }
 
-/// The two bind group layouts a scene pipeline draws through: the pane's
-/// uniforms at group 0, and the finished light at group 1 — the target a node
-/// samples to paint the light over the ground rather than the ground bare, and
-/// to wash its own ink with that same field (`node_paint`).
+/// The three bind group layouts a scene pipeline draws through: the pane's
+/// uniforms at group 0, the finished light at group 1 — the field a node washes
+/// its own ink with (`node_paint`) — and the shadow atlas at group 2, the cell
+/// each draw multiplies the frame by.
 ///
-/// Both the node and the marker pipeline take the pair though only the node's
-/// shader touches the light: they are one pass over one pane, so one layout is
-/// what lets the light be bound once for both, and a layout naming a binding
-/// its shader does not touch costs nothing. Whether there IS a light to bind
-/// is the caller's business — see `LatticeResources::glow_dummy_bind_group`.
+/// Both the node and the marker pipeline take all three: they are one pass over
+/// one pane, so one layout is what lets the light and the atlas be bound once
+/// for both. Whether there IS either to bind is the caller's business — see
+/// `LatticeResources::glow_dummy_bind_group` and `shadow_dummy_bind_group`.
 #[derive(Clone, Copy)]
 struct SceneLayouts<'a> {
     uniforms: &'a wgpu::BindGroupLayout,
     glow: &'a wgpu::BindGroupLayout,
+    shadow: &'a wgpu::BindGroupLayout,
 }
 
 /// Build one of the scene pipelines from WGSL source (startup uses the
@@ -2292,7 +2386,7 @@ fn create_pipeline(
     target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
     entry_points: (&str, &str),
-    vertex_layout: wgpu::VertexBufferLayout<'_>,
+    vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
     offscreen: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2302,7 +2396,7 @@ fn create_pipeline(
 
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_pipeline_layout"),
-        bind_group_layouts: &[Some(layouts.uniforms), Some(layouts.glow)],
+        bind_group_layouts: &[Some(layouts.uniforms), Some(layouts.glow), Some(layouts.shadow)],
         ..Default::default()
     });
 
@@ -2329,7 +2423,7 @@ fn create_pipeline(
             module: &shader,
             entry_point: Some(entry_points.0),
             compilation_options: Default::default(),
-            buffers: &[vertex_layout],
+            buffers: vertex_layouts,
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -2377,7 +2471,7 @@ fn create_pipelines(
             target_format,
             layouts,
             ("vs_main", node),
-            GpuInstance::LAYOUT,
+            &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
             offscreen,
         ),
         create_pipeline(
@@ -2386,9 +2480,81 @@ fn create_pipelines(
             target_format,
             layouts,
             ("vs_plus", plus),
-            GpuPlus::LAYOUT,
+            &[GpuPlus::LAYOUT],
             offscreen,
         ),
+    )
+}
+
+/// The two draws that FILL the shadow atlas, from one source: a node's own ink
+/// into that node's cell, and one cross into the markers' shared one.
+///
+/// Group 0 alone. Neither may bind the atlas — a texture cannot be read while
+/// it is the target being written — so both take its size off `u.misc14`
+/// instead, and neither reads the light: what a cell holds is coverage, and the
+/// colour it is laid down in is settled where the cell is READ.
+///
+/// MAX-blended over a cleared target, which is what the glyph pass beside them
+/// takes (`text::create_glyph_cell_pipeline`): a cell holds the union of
+/// whatever is drawn into it, and the order the draws arrive in decides
+/// nothing.
+fn create_cell_pipelines(
+    device: &wgpu::Device,
+    shader_src: &str,
+    uniforms: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    };
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_cell_pipeline_layout"),
+        bind_group_layouts: &[Some(uniforms)],
+        ..Default::default()
+    });
+    let pipeline = |entries: (&str, &str), buffers: &[wgpu::VertexBufferLayout<'_>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(entries.0),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(entries.0),
+                compilation_options: Default::default(),
+                buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entries.1),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: shadow::ATLAS_FORMAT,
+                    blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    (
+        pipeline(
+            ("vs_node_cell", "fs_node_cell"),
+            &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
+        ),
+        // No instance data at all: the cell is one cross at the home sheet's
+        // size, and what varies between markers is spent where it is read.
+        pipeline(("vs_plus_cell", "fs_plus_cell"), &[]),
     )
 }
 
@@ -2874,17 +3040,24 @@ impl LatticeResources {
             label: Some("lattice_glow_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), texture_entry(3)],
         });
-        // Ahead of the scene pipelines because they take it at group 1: a
-        // node paints the finished light over the ground and washes its own ink
-        // with it, which means sampling the glow target the pass has just
-        // composited.
+        // Ahead of the scene pipelines because they take both at groups 1 and
+        // 2: a node washes its own ink with the light the pass has just
+        // composited, and multiplies the frame under it by its own cell of the
+        // atlas.
+        let shadow_layout = shadow::read_layout(device);
         let (pipeline, plus_pipeline) = create_pipelines(
             device,
             SHADER_SRC,
             target_format,
-            SceneLayouts { uniforms: &bind_group_layout, glow: &glow_layout },
+            SceneLayouts {
+                uniforms: &bind_group_layout,
+                glow: &glow_layout,
+                shadow: &shadow_layout,
+            },
             true,
         );
+        let (node_cell_pipeline, plus_cell_pipeline) =
+            create_cell_pipelines(device, SHADER_SRC, &bind_group_layout);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
         // interpolating along that the shader does not walk itself.
@@ -2958,7 +3131,6 @@ impl LatticeResources {
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
-        let shadow_layout = shadow::read_layout(device);
         let glyph_cell_pipeline = text::create_glyph_cell_pipeline(device, &glyph_layout);
         let shadow_blur_pipelines = shadow::create_blur_pipelines(device, &shadow_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
@@ -3032,6 +3204,26 @@ impl LatticeResources {
                 },
             ],
         });
+        // The stand-in atlas, on the same terms: a frame with no caster packs
+        // no cell, and every draw then carries a box of zeros — which
+        // `shadow_through` reads as a caster with no cell and leaves the frame
+        // exactly whole, with nothing sampled. The binding still has to be
+        // FILLED, so this is what fills it.
+        let shadow_dummy = stand_in("lattice_shadow_dummy", shadow::ATLAS_FORMAT);
+        let shadow_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lattice_shadow_dummy_bind_group"),
+            layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&shadow_dummy),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
 
         LatticeResources {
             pipeline,
@@ -3056,6 +3248,9 @@ impl LatticeResources {
             glyph_cell_pipeline,
             shadow_blur_pipelines,
             shadow_box_pipeline,
+            node_cell_pipeline,
+            plus_cell_pipeline,
+            shadow_dummy_bind_group,
             shadow_layout,
             glyph_fill_pipeline,
             glyph_layout,
@@ -3204,6 +3399,12 @@ impl LatticeResources {
                     "lattice_shadow_cells",
                     INITIAL_GLYPH_CAPACITY,
                 ),
+                node_cell_buffer: create_vertex_buffer::<shadow::ShadowBox>(
+                    device,
+                    "lattice_node_cells",
+                    INITIAL_INSTANCE_CAPACITY,
+                ),
+                node_cell_capacity: INITIAL_INSTANCE_CAPACITY,
                 draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
@@ -3371,9 +3572,16 @@ impl CallbackTrait for LatticeCallback {
                         SceneLayouts {
                             uniforms: &resources.bind_group_layout,
                             glow: &resources.glow_layout,
+                            shadow: &resources.shadow_layout,
                         },
                         true,
                     );
+                    // ...and the two draws that fill the atlas the pair above
+                    // reads: a node's shadow is a blur of the same ink an edit
+                    // just changed, so the cell has to be rasterized by the
+                    // same build that draws the node.
+                    let (node_cell_pipeline, plus_cell_pipeline) =
+                        create_cell_pipelines(device, &source, &resources.bind_group_layout);
                     // The glow off the same source, so an edit to a node's
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
@@ -3394,6 +3602,8 @@ impl CallbackTrait for LatticeCallback {
                         &resources.bind_group_layout,
                         &resources.strip_layout,
                     );
+                    resources.node_cell_pipeline = node_cell_pipeline;
+                    resources.plus_cell_pipeline = plus_cell_pipeline;
                     resources.pipeline = pipeline;
                     resources.plus_pipeline = plus_pipeline;
                     resources.glow_pipeline = glow_pipeline;
@@ -3447,16 +3657,18 @@ impl CallbackTrait for LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        // The names' shadows: every caster's cell, packed for this frame
-        // (`shadow::pack`). None where no name casts one — the Shadow width or
-        // depth at the bottom of its bar, or no name in the frame — and that
-        // is what takes the atlas and its passes off a resting lattice. σ is
-        // in the TARGET's pixels, which is where the cells are drawn and what
-        // #496 found the field's reach missing.
+        // Every caster's cell, packed for this frame (`shadow::pack`): the
+        // markers' one cross, one per node and one per name. None where the
+        // Shadow's width or depth is at the bottom of its bar, or where nothing
+        // in the frame casts — a frame with no caster allocates no cell and
+        // every draw multiplies by exactly 1. A resting lattice pays one cell
+        // for its whole marker field. σ is in the TARGET's pixels, which is
+        // where the cells are drawn and what #496 found the field's reach
+        // missing.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let sigma =
             shadow::sigma_px(self.uniforms.misc11[0], self.node_points, ppp, self.render_scale);
-        let packed = if has_atlas && self.uniforms.misc11[3] > 0.0 {
+        let packed = if self.uniforms.misc11[3] > 0.0 {
             shadow::pack(&self.casters, sigma, ppp * self.render_scale, max_dim)
         } else {
             shadow::Packed::default()
@@ -3512,6 +3724,42 @@ impl CallbackTrait for LatticeCallback {
             queue.write_buffer(&pane.plus_buffer, 0, bytemuck::cast_slice(&self.pluses));
         }
 
+        // The casters' boxes, whether or not there is a font sheet to cut a
+        // name out of: a node and a marker cast without one.
+        if packed.boxes.len() > pane.box_capacity {
+            pane.box_capacity = packed.boxes.len().next_power_of_two();
+            pane.box_buffer = create_vertex_buffer::<shadow::ShadowBox>(
+                device,
+                "lattice_shadow_boxes",
+                pane.box_capacity,
+            );
+        }
+        pane.box_count = packed.boxes.len() as u32;
+        if !packed.boxes.is_empty() {
+            queue.write_buffer(&pane.box_buffer, 0, bytemuck::cast_slice(&packed.boxes));
+        }
+        // Each node instance's own box beside it, for the two draws that bind
+        // the pair (`shadow::ShadowBox::BESIDE_NODES`). Written whatever the
+        // packing says: a frame that packed nothing hands every instance a box
+        // of zeros, which is a caster with no cell and a multiply of 1.
+        if pane.instance_count as usize > pane.node_cell_capacity {
+            pane.node_cell_capacity = (pane.instance_count as usize).next_power_of_two();
+            pane.node_cell_buffer = create_vertex_buffer::<shadow::ShadowBox>(
+                device,
+                "lattice_node_cells",
+                pane.node_cell_capacity,
+            );
+        }
+        if pane.instance_count > 0 {
+            let boxes: Vec<shadow::ShadowBox> = self
+                .node_cells
+                .iter()
+                .map(|&i| packed.boxes.get(i as usize).copied().unwrap_or(shadow::NO_CELL))
+                .collect();
+            debug_assert_eq!(boxes.len(), self.instances.len(), "one box per node instance");
+            queue.write_buffer(&pane.node_cell_buffer, 0, bytemuck::cast_slice(&boxes));
+        }
+
         // The labels. With no atlas there is nothing to sample, so the pass
         // draws none of them rather than sampling a texture that isn't there.
         if has_atlas {
@@ -3534,17 +3782,7 @@ impl CallbackTrait for LatticeCallback {
                 );
             }
             pane.glyph_count = self.glyphs.len() as u32;
-            if packed.boxes.len() > pane.box_capacity {
-                pane.box_capacity = packed.boxes.len().next_power_of_two();
-                pane.box_buffer = create_vertex_buffer::<shadow::ShadowBox>(
-                    device,
-                    "lattice_shadow_boxes",
-                    pane.box_capacity,
-                );
-            }
-            pane.box_count = packed.boxes.len() as u32;
             if !packed.boxes.is_empty() {
-                queue.write_buffer(&pane.box_buffer, 0, bytemuck::cast_slice(&packed.boxes));
                 // Each glyph's own name's box beside it, for the cell draw. The
                 // runs are contiguous in draw order, so this is the boxes
                 // repeated by their runs' lengths — one per caster, which is
@@ -3609,7 +3847,6 @@ impl CallbackTrait for LatticeCallback {
             }
         } else {
             pane.glyph_count = 0;
-            pane.box_count = 0;
         }
 
         // The order, held to what actually reached the buffers: every index in
@@ -3620,14 +3857,32 @@ impl CallbackTrait for LatticeCallback {
         pane.draws.clear();
         pane.draws.extend(self.draws.iter().copied().filter(|draw| match *draw {
             Draw::Nodes(a, b) => a < b && b <= pane.instance_count,
-            Draw::Clearing(i) => (i as usize) < self.clearings.len(),
             Draw::Pluses(a, b) => a < b && b <= pane.plus_count,
             Draw::Label(a, b, l) => {
                 a < b && b <= pane.glyph_count && (l as usize) < self.casters.len()
             }
         }));
 
-        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+        // What the shader is told about the atlas, settled HERE because the
+        // atlas is sized here: its texels, for the two draws that fill a cell
+        // and so cannot read the texture they are writing, and the markers'
+        // shared cell, which is `casters[0]` wherever the field casts at all.
+        //
+        // The arm in points is the one term `pack` has no way to know, and it
+        // is what maps a fragment's place on a cross into a cell no cross
+        // placed (`vs_plus`).
+        let mut uniforms = self.uniforms;
+        if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
+            uniforms.misc14[2] = atlas.size[0] as f32;
+            uniforms.misc14[3] = atlas.size[1] as f32;
+        }
+        if let Some(cell) = packed.boxes.first().filter(|_| self.marker_arm_points > 0.0) {
+            uniforms.plus_shadow_rect = cell.rect;
+            uniforms.plus_shadow_cell = cell.cell;
+            uniforms.plus_shadow_terms =
+                [cell.terms[0], cell.terms[1], cell.terms[2], self.marker_arm_points];
+        }
+        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
 
         let scene_start = std::time::Instant::now();
@@ -3653,24 +3908,42 @@ impl CallbackTrait for LatticeCallback {
             let opening =
                 if timing { resources.timer.as_ref().and_then(GpuTimer::opening) } else { None };
 
-            // The names' shadow atlas, ahead of the scene pass that samples
-            // it: every name's glyphs into its cell, then the blur over the
-            // cells. Present exactly while a name casts a shadow this frame
-            // (`PaneTargets::shadow`), so a resting lattice pays none of it —
-            // and skipped along with the boxes whenever the pane carries no
-            // glyphs, which is what lets the atlas go unwritten rather than
-            // cleared.
-            let atlas = offscreen.shadow.as_ref().filter(|_| {
-                pane.box_count > 0 && pane.glyph_count > 0 && pane.glyph_bind_group.is_some()
-            });
+            // The shadow atlas, ahead of the scene pass that samples it: every
+            // caster's own ink into its own cell, then the blur over the cells.
+            // Present exactly while something casts this frame
+            // (`PaneTargets::shadow`), so a frame with the Shadow shut pays
+            // none of it and its draws multiply by 1.
+            //
+            // THREE draws into one cleared target, in the order the buffers sit
+            // in rather than the picture's: the cells are disjoint, and the
+            // blend is a max, so nothing here decides anything.
+            let atlas = offscreen.shadow.as_ref().filter(|_| pane.box_count > 0);
             if let Some(atlas) = atlas {
-                let glyphs = pane.glyph_bind_group.as_ref().expect("filtered just above");
                 let mut pass = atlas.ink_pass(egui_encoder);
-                pass.set_pipeline(&resources.glyph_cell_pipeline);
-                pass.set_bind_group(0, glyphs, &[]);
-                pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
-                pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
-                pass.draw(0..4, 0..pane.glyph_count);
+                if pane.instance_count > 0 {
+                    pass.set_pipeline(&resources.node_cell_pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.instance_count);
+                }
+                // ONE cross for the whole field, at the home sheet's size and
+                // at level 1: every marker reads this same cell and spends its
+                // own opacity where it reads it.
+                if pane.plus_count > 0 && self.marker_arm_points > 0.0 {
+                    pass.set_pipeline(&resources.plus_cell_pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.draw(0..4, 0..1);
+                }
+                if let Some(glyphs) =
+                    pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
+                {
+                    pass.set_pipeline(&resources.glyph_cell_pipeline);
+                    pass.set_bind_group(0, glyphs, &[]);
+                    pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.glyph_count);
+                }
                 drop(pass);
                 let (blur_x, blur_y) = &resources.shadow_blur_pipelines;
                 atlas.blur(egui_encoder, (blur_x, blur_y), &pane.box_buffer, pane.box_count);
@@ -3891,6 +4164,11 @@ impl CallbackTrait for LatticeCallback {
             // `glow_dummy_bind_group`).
             let light =
                 offscreen.glow.as_ref().map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
+            // The finished atlas at group 2 of every node and marker draw, for
+            // each to read its own cell. The 1x1 stand-in where this frame
+            // packed none: every box is then zeros, and a caster with no cell
+            // multiplies by exactly 1 with nothing sampled (`shadow_through`).
+            let cells = atlas.map_or(&resources.shadow_dummy_bind_group, |a| &a.reads[0]);
 
             // The order, as `from_scene` laid it down (see [`Draw`]). One walk
             // forward, back to front, with nothing here deciding what goes
@@ -3904,23 +4182,16 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_pipeline(&resources.pipeline);
                         pass.set_bind_group(0, &pane.bind_group, &[]);
                         pass.set_bind_group(1, light, &[]);
+                        pass.set_bind_group(2, cells, &[]);
                         pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                        pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                         pass.draw(0..4, a..b);
-                    }
-                    // The same pipeline and the same bind groups as the nodes:
-                    // this IS one of them, drawn for one of the two things it
-                    // paints (`PAINT_CLEARING`).
-                    Draw::Clearing(i) => {
-                        pass.set_pipeline(&resources.pipeline);
-                        pass.set_bind_group(0, &pane.bind_group, &[]);
-                        pass.set_bind_group(1, light, &[]);
-                        pass.set_vertex_buffer(0, pane.clearing_buffer.slice(..));
-                        pass.draw(0..4, i..i + 1);
                     }
                     Draw::Pluses(a, b) => {
                         pass.set_pipeline(&resources.plus_pipeline);
                         pass.set_bind_group(0, &pane.bind_group, &[]);
                         pass.set_bind_group(1, light, &[]);
+                        pass.set_bind_group(2, cells, &[]);
                         pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
                         pass.draw(0..4, a..b);
                     }

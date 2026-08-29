@@ -176,7 +176,11 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
-        let layouts = SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+        let layouts = SceneLayouts {
+            uniforms: &res.bind_group_layout,
+            glow: &res.glow_layout,
+            shadow: &res.shadow_layout,
+        };
         let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
@@ -272,6 +276,11 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         };
         let light = &light;
         let pane = res.panes.get(&11).expect("prepare created the pane");
+        let cells = pane
+            .offscreen
+            .as_ref()
+            .and_then(|o| o.shadow.as_ref())
+            .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
         let draw = |pipeline: &wgpu::RenderPipeline| {
@@ -279,7 +288,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, light, &[]);
+                // The atlas `prepare` filled above, so the shadow each node
+                // multiplies the frame by is in the comparison: the fragments
+                // outside a node's ink are exactly the ones its early-out
+                // decides, and they are the ones the shadow lives on.
+                pass.set_bind_group(2, cells, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             });
             readback(&device, &queue, &texture, SIZE)
@@ -891,8 +906,7 @@ fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
     assert_eq!(
         call.draws,
         vec![
-            // The far node: its knockout, its own cross, its ink.
-            Draw::Clearing(0),
+            // The far node: its own cross, then its ink over it.
             Draw::Pluses(0, 1),
             Draw::Nodes(0, 1),
             // Then the near position, which draws nothing but its cross — over

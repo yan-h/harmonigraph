@@ -382,12 +382,11 @@ fn strokes_on_the_band(scene: &Scene, strokes: usize) -> LatticeLabels {
             name_glyph(scene, [x, at.y - h / 2.0, w, h])
         })
         .collect();
-    a_name(scene, GOLDEN_SIZE, glyphs)
+    a_name(glyphs)
 }
 
 /// A node's own radius on the golden pane, in points — the unit every Shadow
-/// in the picture is dialled in, and what `LatticeLabels::node_points` carries
-/// to the glyph pass.
+/// in the picture is dialled in, spelled here as `from_scene` derives it.
 fn node_points(scene: &Scene) -> f32 {
     scene.node_radius * scene.camera.points_per_world(GOLDEN_SIZE[1] as f32)
 }
@@ -519,11 +518,8 @@ fn names_overlapping_on_one_sheet() -> Shot {
     );
     let glyph =
         |at: glam::Vec2| name_glyph(&scene, [at.x - size / 2.0, at.y - size / 2.0, size, size]);
-    let labels = names(
-        &scene,
-        GOLDEN_SIZE,
-        vec![(far.0 as u32, vec![glyph(far.1)]), (near.0 as u32, vec![glyph(near.1)])],
-    );
+    let labels =
+        names(vec![(far.0 as u32, vec![glyph(far.1)]), (near.0 as u32, vec![glyph(near.1)])]);
     Shot { labels, ..on_the_ground_it_clears_to(scene) }
 }
 

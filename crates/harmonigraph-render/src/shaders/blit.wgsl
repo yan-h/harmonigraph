@@ -184,21 +184,12 @@ fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     // A mix of two premultiplied colours is premultiplied, so what reaches the
     // pass below is the same kind of value either end of the bar hands it.
     let melded = mix(brightest, screened, clamp(gu.misc.z, 0.0, 1.0));
-    // The STANDOFF, applied here and nowhere earlier: the light's own target
-    // holds the field whole, and every reader of it takes this same multiply.
-    // The other reader is lattice.wgsl's `node_paint`, which is what a node's
-    // clearing repaints its ground from — so the two must agree exactly, on the
-    // same terms the Meld above is mixed identically in both.
-    //
-    // One factor on premultiplied light takes the colour and the coverage
-    // together: a shade of 1 leaves nothing, which is that pixel with no glow
-    // in it at all, and a shade of 0 is the light untouched.
-    //
-    // This is also where a node's dark pool stops blooming. The second
-    // attachment is what the bright pass reads, so the light reaching the
-    // threshold is the light AFTER the standoff rather than before it, and a
-    // pool cannot be filled back in by the halo of the ring standing in it.
-    let shade = clamp(textureSample(glow_shade_tex, scene_samp, in.uv).x, 0.0, 1.0);
-    let light = melded * (1.0 - shade);
-    return GlowOverOut(light, light);
+    // The field WHOLE. What darkens it is every item drawn over it — each one
+    // multiplies the frame under it by its own blurred ink (lattice.wgsl's
+    // `node_paint` and `plus_paint`, text.wgsl's `fs_shadow_box`) — so the
+    // light is laid down first and takes every shadow by being under
+    // everything, on both attachments. A pool round a ring is that multiply
+    // landing on the light, and it stops blooming for the same reason: the
+    // second attachment is what the bright pass reads, and the shadow is in it.
+    return GlowOverOut(melded, melded);
 }
