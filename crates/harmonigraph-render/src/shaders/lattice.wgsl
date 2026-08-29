@@ -792,9 +792,11 @@ fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
-/// needs — 0 for the node draw, and for the glow draw whichever of the Reach and
-/// the Shadow reaches further (see [`vs_glow`]). `light` says which of the two rims
-/// sizes the quad ([`glow_rim`]); both are handed on either way, since the
+/// needs — 0 for the node draw and the Reach for the glow draw (see
+/// [`vs_glow`]). The margin below grows the quad by whichever of `extra` and
+/// the Shadow's own reach is the larger, for both draws alike, since a shadow
+/// lands past the ink whichever one is drawing. `light` says which of the two
+/// rims sizes the quad ([`glow_rim`]); both are handed on either way, since the
 /// fragment stages of one draw never read the other's.
 fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> VsOut {
     var corners = array<vec2<f32>, 4>(
@@ -2195,15 +2197,12 @@ struct NodeInk {
 
 /// What a node paints OF ITSELF at this fragment: every layer's ink,
 /// premultiplied, how much of the fragment it covers, and how much of that ink
-/// is a LIT slice — nothing of the hole it knocks out of the picture behind it.
+/// is a LIT slice.
 ///
-/// Split from [`node_paint`] so that the node's own picture and the hole it
-/// knocks in everyone else's are two readable pieces rather than one function
-/// of three hundred lines: what a layer paints is decided here, and what it
-/// CLEARS is decided once, uniformly, over every layer at the end. The two
-/// answers are different shapes — a layer's ink is a set of slices cut out of
-/// its annulus, its hole is that whole annulus dilated by the reach — and
-/// reading them together is what made the second easy to get wrong.
+/// Split from [`node_paint`] so that what the layers paint and what the
+/// fragment does with it are two readable pieces rather than one function of
+/// three hundred lines: the ink is decided here, and the node's own shadow is
+/// spent once, at the end, over whatever the layers came to.
 fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeInk {
     let activation = in.params.x;
 

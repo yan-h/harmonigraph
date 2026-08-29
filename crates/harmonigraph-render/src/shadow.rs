@@ -184,9 +184,22 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
     // the box's own edge still lands inside the cell.
     let pad_cell = (REACH_SIGMAS * sigma_cell).ceil() + 1.0;
     let pad = pad_cell / k;
+    // What a caster's level comes to where it is spent (`terms.z` below): a
+    // level at zero, or a NaN out of the same corrupt blob, darkens nothing.
+    let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0;
     let cells: Vec<([f32; 4], [u32; 2])> = casters
         .iter()
         .map(|c| {
+            // A caster that darkens nothing takes NO cell: `shadow_through`
+            // hands the frame back whole at level 0, so the cell it would fill
+            // is one nothing ever samples. Nodes clipped off the pane and nodes
+            // projected behind the eye arrive here at level 0 in numbers
+            // (`node_caster`), and a cell each would widen the atlas every blur
+            // pass sweeps and be rasterized by the whole node shader for no
+            // picture at all.
+            if !casts(c) {
+                return ([0.0; 4], [0, 0]);
+            }
             let rect =
                 [c.rect[0] - pad, c.rect[1] - pad, c.rect[2] + 2.0 * pad, c.rect[3] + 2.0 * pad];
             let texels = |points: f32| ((points * k).ceil() as u32).max(1);
@@ -202,6 +215,12 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
     let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
     let mut placed = Vec::with_capacity(cells.len());
     for &(_, [w, h]) in &cells {
+        // A caster with no cell is not shelved, and holds its index with a
+        // placement `fits` reads as no cell below.
+        if w == 0 || h == 0 {
+            placed.push([0, 0]);
+            continue;
+        }
         if x + w > width && x > 0 {
             y += shelf;
             x = 0;
@@ -217,7 +236,7 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
         .zip(&cells)
         .zip(&placed)
         .map(|((caster, &(rect, [w, h])), &[x, y])| {
-            let fits = x + w <= width && y + h <= height;
+            let fits = w > 0 && h > 0 && x + w <= width && y + h <= height;
             ShadowBox {
                 rect,
                 cell: if fits { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] },
@@ -575,6 +594,30 @@ pub(crate) mod tests {
         for b in packed.boxes.iter().filter(|b| b.terms[2] == 0.0) {
             assert_eq!(b.cell, [0.0; 4]);
         }
+    }
+
+    /// A caster that darkens nothing takes no cell, and the frame packs as if
+    /// it had never been handed over.
+    ///
+    /// Nodes clipped off the pane and nodes projected behind the eye arrive at
+    /// level 0 in numbers (`node_caster`), and `shadow_through` hands the frame
+    /// back whole below that level. A cell for one is atlas area every blur
+    /// pass sweeps, and a rasterization of the whole node shader, for texels
+    /// nothing ever samples.
+    #[test]
+    fn a_caster_that_darkens_nothing_takes_no_cell_and_no_room() {
+        let live = caster(0.0, 0.0, 100.0, 100.0);
+        let dead = Caster { level: 0.0, ..live };
+        let without = pack(&[live, live], 2.0, 1.0, 4096);
+        let with_dead = pack(&[live, dead, live], 2.0, 1.0, 4096);
+        assert_eq!(with_dead.boxes[1].cell, [0.0; 4], "the dead caster took a cell");
+        assert_eq!(with_dead.boxes[1].terms[2], 0.0, "the dead caster kept a level");
+        assert_eq!(with_dead.size, without.size, "the dead caster sized the atlas");
+        assert_eq!(
+            [with_dead.boxes[0].cell, with_dead.boxes[2].cell],
+            [without.boxes[0].cell, without.boxes[1].cell],
+            "the dead caster moved a live cell",
+        );
     }
 
     /// σ is half the Shadow's width in target pixels, and shut for a width or

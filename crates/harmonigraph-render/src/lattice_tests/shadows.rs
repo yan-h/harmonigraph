@@ -743,7 +743,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
 }
 
 /// A node the camera all but stands on packs a cell the atlas can hold, and
-/// every other caster in the frame still gets one.
+/// every other caster that darkens something still gets one.
 ///
 /// Under perspective a node a fraction of a unit in front of the eye projects
 /// to a box thousands of panes wide, and `pack` sizes the WHOLE atlas off the
@@ -797,13 +797,17 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
     let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384);
-    let unfit = packed.boxes.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+    // Read over the casters that darken something: one at level 0 is packed as
+    // no cell on purpose (`pack`), and most of this fixture's nodes project
+    // clean off the pane.
+    let casting = || cb.casters.iter().zip(&packed.boxes).filter(|(c, _)| c.level > 0.0);
+    let unfit = casting().filter(|(_, b)| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
     assert_eq!(
         unfit,
         0,
-        "{unfit} of {} casters got no cell, and a zeroed cell is drawn at the atlas origin over \
-         the markers' own",
-        packed.boxes.len(),
+        "{unfit} of {} casters that darken something got no cell, and a zeroed cell is drawn at \
+         the atlas origin over the markers' own",
+        casting().count(),
     );
     assert!(
         packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
