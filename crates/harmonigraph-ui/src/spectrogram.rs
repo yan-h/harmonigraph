@@ -121,6 +121,46 @@ pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
     bucket
 }
 
+/// How far past a rung boundary the window must fall before the slab width
+/// steps back DOWN, as a fraction of the boundary — see [`Plan::new`].
+///
+/// Eight drag-points of the Span gesture (`DEPTH_ZOOM_PER_DRAG_POINT` is 0.6%
+/// of the window each). One point is what a resting finger clears on tremor
+/// alone, which is the whole reason this exists; eight is past that and still
+/// inside the 2x the rung itself is worth, so what the margin can cost the
+/// picture is bounded by what the ladder already costs it.
+const RUNG_HOLD: f64 = 0.05;
+
+/// [`live_slab`]'s ladder with hysteresis: the rung `held` names, while the
+/// window is still comfortably on it, and the fresh rung otherwise.
+///
+/// The ladder alone re-decides the rung from the window on every frame, so a
+/// Span parked within a drag-point of a boundary alternates its slab width for
+/// as long as the hand holds still. That is not merely frequent but expensive:
+/// `bucket` is the aggregator's one layout input AND a [`RunKey`] field, so
+/// both caches miss together and every frame pays a full refold and rewrites
+/// every slab it folded. One drag-point is 0.6% of the Span, which a resting
+/// finger clears on tremor alone.
+///
+/// The hold is on the way DOWN only, and the asymmetry is what keeps it safe
+/// rather than being a preference. A held rung is always the COARSER one, so
+/// the run it cuts is shorter than the one the pane sized its ring for; hold a
+/// FINER rung past its boundary and the run outgrows `capacity`, which is two
+/// keys in one slot. Stepping UP happens at the boundary, and stepping back
+/// down waits for the window to fall [`RUNG_HOLD`] below it.
+///
+/// The rung below `b` takes over at `target_cols * b / 2`, which is what the
+/// margin is measured against. A window far below that — a zoom that crossed
+/// several rungs in one gesture — fails the test and takes the fresh rung, so
+/// a hold cannot strand the grid at a width the window has left behind.
+fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
+    let fresh = live_slab(window, target_cols);
+    match held {
+        Some(b) if b > fresh && window > target_cols as f64 * b * 0.5 * (1.0 - RUNG_HOLD) => b,
+        _ => fresh,
+    }
+}
+
 /// A run of empty slabs this short is a seam in the sample stream rather than a
 /// stall in the analyzer, and holds the previous column instead of reading as
 /// silence.
@@ -573,18 +613,29 @@ pub(crate) struct Plan {
     bucket: f64,
     /// Slabs the GPU's copy holds, and so the most the aggregator keeps folded.
     ///
-    /// Sized off the PANE rather than off the window, which is what makes it
-    /// hold still: the widest run a window can have at this slab width is
-    /// `target_cols` of them, whatever the Span is doing inside that rung, so a
-    /// drag never resizes the buffer. Unused by the whole-song build, whose run
-    /// is its own capacity.
+    /// Sized off the PANE rather than off the window, which is what holds it
+    /// still under a SPAN drag: the widest run a window can have at this slab
+    /// width is `target_cols` of them, whatever the Span is doing inside that
+    /// rung. What holds it still under a PANE drag is [`ring_slots`] — the
+    /// pane's own pixel count moves every frame of one. Unused by the
+    /// whole-song build, whose run is its own capacity.
     capacity: usize,
     first: usize,
     pub(crate) key: RunKey,
 }
 
 impl Plan {
-    pub(crate) fn new(view: &PaneView, columns: &Columns) -> Plan {
+    /// The plan for a frame drawn after `held`, which is the slab width the
+    /// previous frame drew at — `None` on the first frame of a surface.
+    ///
+    /// It reaches the slab width through [`held_slab`], which is where the
+    /// ladder's hysteresis and the reason for it are. What that costs the
+    /// picture is that the width near a rung boundary depends on which side the
+    /// Span arrived from: zooming in holds the blockier grid for a further
+    /// [`RUNG_HOLD`] of Span. That is the same factor of two the rung itself is,
+    /// moved by a twentieth of a Span, against a picture that otherwise stops
+    /// dead under a resting finger.
+    pub(crate) fn new(view: &PaneView, columns: &Columns, held: Option<f64>) -> Plan {
         // One row per device pixel of the pitch axis, and one slab per pixel of
         // the depth axis, under the cap the slab count takes.
         let rows = pitch_pixels(view.pitch_len, view.ppp);
@@ -599,7 +650,7 @@ impl Plan {
             // hold still — its grid is laid out once and cached for the render.
             (view.window / target_cols as f64).max(MIN_BUCKET)
         } else {
-            live_slab(view.window, target_cols)
+            held_slab(view.window, target_cols, held)
         };
         let key = RunKey {
             first: columns.first,
@@ -608,7 +659,7 @@ impl Plan {
             bucket_bits: bucket.to_bits(),
             whole: view.whole,
         };
-        Plan { rows, bucket, capacity: target_cols + RING_HEADROOM, first: columns.first, key }
+        Plan { rows, bucket, capacity: ring_slots(target_cols), first: columns.first, key }
     }
 }
 
@@ -750,6 +801,13 @@ pub(crate) fn run_for(
     plan: &Plan,
     view: &PaneView,
 ) -> Option<TexLayout> {
+    // The width this frame settles on is the next frame's incumbent — the LIVE
+    // width alone, since only that arm reads it. The whole-song build cuts its
+    // grid straight from the window rather than off the ladder, so its bucket
+    // is not a rung, and a live frame holding one would sit at a width the
+    // ladder never offers for as long as the window stayed near it. See
+    // [`Plan::new`].
+    spectrum.spectrogram[surface].held_bucket = (!view.whole).then_some(plan.bucket);
     match spectrum.spectrogram[surface].gpu.hit(&plan.key) {
         Some(layout) => Some(layout),
         None => build(spectrum, whole, surface, plan, view),
@@ -1237,12 +1295,36 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
     planned.max(visible + 2)
 }
 
-/// Slabs of headroom [`ring_capacity`] holds past the PANE's own column count —
-/// `target_cols`, which is what the capacity is sized off, so it holds still
-/// across a Span drag. Four covers the breathing described there (a column's
-/// spacing at the far edge is at most one slab, plus a floor at each end); the
-/// rest is margin, and `ring_capacity`'s body leans on the whole eight.
+/// Slabs of headroom [`ring_capacity`] holds past the rung [`ring_slots`] rounds
+/// the pane's own column count up to, which is at least `target_cols` — so it
+/// holds still across a Span drag and across most of a pane one. Four covers
+/// the breathing described there (a column's spacing at the far edge is at most
+/// one slab, plus a floor at each end); the rest is margin, and
+/// `ring_capacity`'s body leans on the whole eight.
 const RING_HEADROOM: usize = 8;
+
+/// Slots to give the ring for a pane asking for `target_cols` slabs: the count
+/// rounded UP to a power of two, plus the headroom.
+///
+/// A ladder for the same reason [`live_slab`] is one, against the other drag.
+/// The slot a key lands in is `key mod capacity`, so every change of capacity
+/// moves the whole mapping — the buffer is reallocated and every slab in it
+/// re-sent ([`GpuGrid::accept`], and `SpectrogramCallback::prepare` behind it).
+/// Taken straight off the pane, that is a fresh megabytes-sized buffer and a
+/// whole-ring upload on EVERY FRAME of a pane resize, since a horizontal drag
+/// moves the depth axis by a pixel or more per frame. On the ladder a drag
+/// crosses ten of them end to end.
+///
+/// Rounding up rather than down is what keeps the run inside the ring: it is at
+/// most `target_cols + 2` slabs (see [`ring_capacity`]), and the headroom sits
+/// past a power of two that is already at least `target_cols`.
+///
+/// The slack costs nothing the ring was not already sized for. `target_cols` is
+/// capped at [`LIVE_SLAB_CAP`], itself a power of two, so the widest ring this
+/// can ask for is the one the widest pane already asks for.
+fn ring_slots(target_cols: usize) -> usize {
+    target_cols.next_power_of_two() + RING_HEADROOM
+}
 
 /// The level the heatmap's pixels actually go through, for the crate's own
 /// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
@@ -1872,7 +1954,7 @@ mod tests {
             whole,
         };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
-        let plan = |v: &PaneView| Plan::new(v, &columns);
+        let plan = |v: &PaneView| Plan::new(v, &columns, None);
 
         // Rows are PIXELS, not points: on a 2x screen the picture is read at
         // the density it will be drawn at, rather than upsampled from half of
@@ -2001,6 +2083,7 @@ mod tests {
                     whole: true,
                 },
                 &Columns { first: 0, len: 361, newest: TAKE },
+                None,
             )
         };
 
@@ -2117,7 +2200,7 @@ mod tests {
             whole: true,
         };
         let columns_in = Columns { first: 0, len: ws.columns.len(), newest: 60.2 };
-        let plan = Plan::new(&view, &columns_in);
+        let plan = Plan::new(&view, &columns_in, None);
         let mut spectrum = crate::AudioSpectrum::default();
         let layout = build(&mut spectrum, Some(&ws), 0, &plan, &view)
             .expect("a whole-song fold over columns this dense");
@@ -2199,7 +2282,7 @@ mod tests {
                 // interval` of them) to make a case these already bracket.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
-                    let planned = cols as usize + RING_HEADROOM;
+                    let planned = ring_slots(cols as usize);
                     let bucket = live_slab(span, cols as usize);
                     let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
 
@@ -2284,7 +2367,7 @@ mod tests {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // One rung, end to end: at the 1024-slab cap a width holds while the
         // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
         // 32.8 s. The sweep stops just inside both ends, since crossing a rung
@@ -2394,7 +2477,7 @@ mod tests {
     fn a_span_drag_refolds_once_per_rung_crossed() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // Two rungs of travel each way: 50 s sits in the 64 ms rung and 10 s on
         // the ladder's floor, so a drag between them crosses at 32.768 s and
         // 16.384 s. Below the floor the width cannot move at all, which is why
@@ -2455,32 +2538,26 @@ mod tests {
         );
     }
 
-    /// A Span sitting ON a rung boundary refolds every frame, because the
-    /// ladder has no hysteresis.
+    /// A Span sitting ON a rung boundary settles on one slab width instead of
+    /// alternating, so the picture does not stop under a resting finger.
     ///
     /// [`a_span_drag_refolds_once_per_rung_crossed`] bounds a drag that TRAVELS.
-    /// This is the other regime, and it is not a corner: [`live_slab`] re-decides
-    /// the rung from the window alone on every frame, so a Span parked within one
-    /// drag-point of a boundary alternates its slab width for as long as the hand
-    /// holds still. One point is 0.6% of the Span, which a resting finger clears
-    /// on tremor alone.
+    /// This is the other regime, and it is not a corner: the bare ladder
+    /// re-decides the rung from the window alone on every frame, and one
+    /// drag-point is 0.6% of the Span — which a resting finger clears on tremor
+    /// alone. Both caches then miss together, which is what makes it expensive
+    /// rather than merely frequent: `bucket` is the aggregator's one layout
+    /// input AND a [`RunKey`] field, so every frame pays a full refold and
+    /// rewrites every slab it folded.
     ///
-    /// Both caches then miss together, which is what makes it expensive rather
-    /// than merely frequent: `bucket` is the aggregator's one layout input AND a
-    /// [`RunKey`] field, so every frame pays a full refold and rewrites every
-    /// slab it folded — the cascade the test above shows a travelling drag
-    /// avoids.
-    ///
-    /// Asserted as the cost it is rather than as a bug, since nothing here fixes
-    /// it. What would is hysteresis in [`live_slab`] — holding the current rung
-    /// until the window is some way past the boundary — and that is shipping-code
-    /// work with its own picture question, since the rung then depends on which
-    /// side the Span arrived from.
+    /// [`held_slab`] is what settles it, and the claim is the one the hysteresis
+    /// exists to make: the tremor below straddles the boundary the whole way, so
+    /// the ladder ALONE answers two widths and refolds on all 300 frames.
     #[test]
-    fn a_span_dithering_across_a_rung_refolds_every_frame() {
+    fn a_span_dithering_across_a_rung_settles_on_one_width() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // The boundary between the 32 ms and 64 ms rungs: `live_slab` steps up
         // exactly where the window stops fitting in `cols` slabs.
         let boundary = 0.032 * cols as f64;
@@ -2494,7 +2571,11 @@ mod tests {
         let mut now = history.back().expect("filled").time;
 
         let mut agg = SpectrogramAgg::new();
-        let mut widths = std::collections::BTreeSet::new();
+        let mut held: Option<f64> = None;
+        // How often the width MOVES, which is what a refold is paid for — the
+        // set of widths seen cannot tell one step up from three hundred.
+        let (mut moves, mut bare_moves) = (0u32, 0u32);
+        let mut bare_prev: Option<f64> = None;
         const FRAME: f64 = 1.0 / 144.0;
         // One point of tremor either way, alternating: the hand is still and the
         // Span is not.
@@ -2507,19 +2588,225 @@ mod tests {
                 let t = history.back().map_or(0.0, |c| c.time) + interval;
                 history.push(col(t, &[(4, 0.5), (10, 1.0)]));
             }
-            let bucket = live_slab(span, cols);
-            widths.insert((bucket * 1e6).round() as i64);
+            let raw = live_slab(span, cols);
+            bare_moves += u32::from(bare_prev.is_some_and(|p| p != raw));
+            bare_prev = Some(raw);
+            let bucket = held_slab(span, cols, held);
+            moves += u32::from(held.is_some_and(|p| p != bucket));
+            held = Some(bucket);
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
             let _ = agg.window(&history, first, bucket, planned);
         }
 
-        assert_eq!(widths.len(), 2, "the dither did not straddle a rung: {widths:?} us");
-        // Every frame but the first, which is the opening build.
+        // The fixture reaches the thing it is about: without the hold this
+        // tremor moves the width on every frame but the first.
         assert_eq!(
-            agg.rebuilds, frames,
+            bare_moves,
+            frames - 1,
+            "the dither did not straddle a rung on every frame: {bare_moves} of {frames}",
+        );
+        // One step UP, at the first frame that does not fit the finer rung, and
+        // nothing after it: the hold takes the boundary out of the tremor's reach.
+        assert_eq!(moves, 1, "the width moved {moves} times under a still hand");
+        // The opening build, and the one refold that step costs.
+        assert_eq!(
+            agg.rebuilds, 2,
             "a Span parked on a rung boundary refolded {} times in {frames} frames",
             agg.rebuilds,
         );
+    }
+
+    /// A slow drag with a hand's tremor on it crosses a rung ONCE, in either
+    /// direction.
+    ///
+    /// [`a_span_dithering_across_a_rung_settles_on_one_width`] holds the still
+    /// hand. This is the regime between that and a travelling drag, and it is
+    /// the one [`RUNG_HOLD`]'s size is actually chosen against: a hand crossing
+    /// a boundary at a fifth of a drag-point a frame spends tens of frames
+    /// within tremor's reach of it, and every one of those the bare ladder
+    /// answers differently is a full refold.
+    ///
+    /// Two drag-points of tremor is 1.2% of the Span, against a margin of 5%.
+    /// The `bare` count is what says the fixture is inside the boundary's reach
+    /// at all — a drag that merely passed it would read 1 there too.
+    #[test]
+    fn a_slow_drag_with_tremor_crosses_a_rung_once() {
+        let cols = LIVE_SLAB_CAP as usize;
+        // The 32/64 ms rungs part where a window stops fitting in `cols` slabs.
+        let boundary = 0.032 * cols as f64;
+        let pt = f64::from(DEPTH_ZOOM_PER_DRAG_POINT);
+        const TREMOR_PTS: f64 = 2.0;
+        const PER_FRAME_PTS: f64 = 0.2;
+
+        for travel in [PER_FRAME_PTS, -PER_FRAME_PTS] {
+            // Open far enough the other side of the boundary that the drag
+            // reaches it well inside the run below.
+            let opening = if travel > 0.0 { 0.94 } else { 1.06 };
+            let mut window = boundary * opening;
+            let (mut held, mut bare) = (None, None);
+            let (mut moves, mut bare_moves) = (0u32, 0u32);
+            for i in 0..400 {
+                // Tremor as a smooth deterministic wobble; the claim is about
+                // its AMPLITUDE, and a hand does not shake in a straight line.
+                let shake = (i as f64 * 2.399_963).sin() * TREMOR_PTS * pt;
+                let w = window * shake.exp();
+                let raw = live_slab(w, cols);
+                bare_moves += u32::from(bare.is_some_and(|p| p != raw));
+                bare = Some(raw);
+                let b = held_slab(w, cols, held);
+                moves += u32::from(held.is_some_and(|p| p != b));
+                held = Some(b);
+                window *= (travel * pt).exp();
+            }
+            assert!(
+                bare_moves > 4,
+                "the drag never lingered at the boundary: {bare_moves} bare moves at {travel} pt/frame",
+            );
+            assert_eq!(moves, 1, "a {travel} pt/frame drag re-cut the grid {moves} times");
+        }
+    }
+
+    /// Whether `bucket` is a rung of [`live_slab`]'s ladder — the floor, times a
+    /// power of two.
+    fn is_rung(bucket: f64) -> bool {
+        let steps = bucket / (crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS);
+        steps > 0.0 && (steps.log2() - steps.log2().round()).abs() < 1e-9
+    }
+
+    /// A live frame drawn after a whole-song one cuts its grid on a LADDER
+    /// RUNG, not on the width the whole-song build happened to leave behind.
+    ///
+    /// The two builds share a surface but not a ladder: whole-song cuts its
+    /// grid straight from the window (`window / target_cols`), so its width is
+    /// an arbitrary real and not a rung. Held into a live frame it would sit
+    /// there for as long as the window stayed near it — and the ladder's
+    /// guarantee that the STORE is fine enough to fill the grid
+    /// (see [`live_slab`]) is a claim about rungs, so a live grid cut at a
+    /// non-rung width has nothing standing behind it.
+    ///
+    /// The fixture is built to be held if anything is: the whole-song width is
+    /// coarser than the live rung and inside the live window's [`RUNG_HOLD`]
+    /// margin, which are the two things [`held_slab`] asks.
+    #[test]
+    fn a_live_frame_after_a_whole_song_one_cuts_on_a_rung() {
+        // A whole-song frame at 50 s over 1000 slabs: a width of 0.05 s, which
+        // is between the 32 ms and 64 ms rungs and so on neither.
+        let (start, span) = (0.0, 50.0);
+        let columns: Vec<_> = (0..((span / crate::AudioSpectrum::FFT_INTERVAL) as usize))
+            .map(|i| col(i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
+            .collect();
+        let ws =
+            crate::WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() };
+        let mut spectrum = crate::AudioSpectrum::default();
+        let whole_view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 500.0,
+            window: span,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
+            whole: true,
+        };
+        let whole_columns = Columns { first: 0, len: ws.columns.len(), newest: span };
+        let whole_plan = Plan::new(&whole_view, &whole_columns, None);
+        assert!(
+            !is_rung(whole_plan.bucket),
+            "the fixture's whole-song width {} IS a rung, so it cannot be told apart",
+            whole_plan.bucket,
+        );
+        run_for(&mut spectrum, Some(&ws), 0, &whole_plan, &whole_view).expect("a whole run");
+
+        // The live frame on that same surface. Its own rung is 32 ms, and the
+        // whole-song width above is both coarser and inside the hold's margin
+        // (30 s is past 1024 * 0.05 * 0.5 * 0.95), so a held one would stick.
+        let mut clock = 0.0;
+        let mut bins = [0.0f32; SPECTRUM_BINS];
+        bins[1000] = 0.8;
+        while clock < 40.0 {
+            spectrum.push_history(clock, &bins);
+            clock += crate::AudioSpectrum::FFT_INTERVAL;
+        }
+        let live_view = PaneView {
+            window: 30.0,
+            depth_len: LIVE_SLAB_CAP * 0.5,
+            whole: false,
+            cfg: SpectrumConfig { roll_seconds: 30.0, ..SpectrumConfig::default() },
+            ..whole_view
+        };
+        let hist = spectrum.history();
+        let live_columns = Columns {
+            first: hist.partition_point(|c| c.time < clock - live_view.window).saturating_sub(1),
+            len: hist.len(),
+            newest: hist.back().map_or(clock, |c| c.time),
+        };
+        let held = spectrum.spectrogram[0].held_bucket;
+        let live_plan = Plan::new(&live_view, &live_columns, held);
+        assert!(
+            is_rung(live_plan.bucket),
+            "a live frame after a whole-song one was cut at {} s, off the ladder",
+            live_plan.bucket,
+        );
+    }
+
+    /// The hold reaches the pane through the SURFACE: a Span dithering on a
+    /// boundary refolds twice, not once a frame.
+    ///
+    /// [`a_span_dithering_across_a_rung_settles_on_one_width`] is the same claim
+    /// about [`held_slab`] alone. This one is about the wiring, which is the
+    /// half that can be right in the ladder and wrong in the pane: the width a
+    /// frame settles on has to be written back where the NEXT frame's plan
+    /// reads it ([`run_for`]), and a plan built without it is the bare ladder
+    /// with extra steps.
+    #[test]
+    fn the_held_width_survives_a_frame_through_the_surface() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let mut spectrum = crate::AudioSpectrum::default();
+        let mut bins = [0.0f32; SPECTRUM_BINS];
+        bins[1000] = 0.8;
+        // The pane below asks for 1024 slabs, so the 32/64 ms rungs part at a
+        // Span of 32.768 s; fill past it and settle.
+        let boundary = 0.032 * LIVE_SLAB_CAP as f64;
+        let mut clock = 0.0;
+        while clock < boundary * 2.0 {
+            spectrum.push_history(clock, &bins);
+            clock += interval;
+        }
+        let view = |window: f64| PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: LIVE_SLAB_CAP * 0.5,
+            window,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
+            whole: false,
+        };
+        let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
+
+        // One drag-point of tremor either way, which is the hand holding still.
+        let mut buckets = std::collections::BTreeSet::new();
+        for i in 0..200 {
+            let window = if i % 2 == 0 { boundary * step } else { boundary / step };
+            for _ in 0..2 {
+                spectrum.push_history(clock, &bins);
+                clock += interval;
+            }
+            let view = view(window);
+            let hist = spectrum.history();
+            let columns = Columns {
+                first: hist.partition_point(|c| c.time < clock - window).saturating_sub(1),
+                len: hist.len(),
+                newest: hist.back().map_or(clock, |c| c.time),
+            };
+            let held = spectrum.spectrogram[0].held_bucket;
+            let plan = Plan::new(&view, &columns, held);
+            buckets.insert((plan.bucket * 1e6).round() as i64);
+            run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
+        }
+
+        // The opening frame's rung and the one it steps up to, and nothing after.
+        assert_eq!(buckets.len(), 2, "the pane saw more than one step: {buckets:?} us");
+        let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
+        assert_eq!(refolds, 2, "a still hand on a rung boundary refolded {refolds} times in 200");
     }
 
     /// A frame that folds nothing re-sends the run it already holds, and a
@@ -2550,7 +2837,7 @@ mod tests {
         };
         let columns = |len: usize, newest: f64| Columns { first: 0, len, newest };
         let fold = |spectrum: &mut crate::AudioSpectrum, view: &PaneView, cols: &Columns| {
-            let plan = Plan::new(view, cols);
+            let plan = Plan::new(view, cols, None);
             let layout = run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
             let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("a run was accepted");
             let held = (layout, sent.run.clone(), sent.dirty.clone());
@@ -2577,11 +2864,13 @@ mod tests {
         assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
         assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1, "a column forced a full upload");
 
-        // A narrower pane sizes the GPU's copy differently, and the slot a key
-        // lands in is `key mod capacity` — so the whole mapping moves and the
-        // next fold goes over whole. The resize alone folds nothing: the
-        // capacity is not the run's, which is why it is not in the key.
-        let narrow = PaneView { depth_len: 300.0, ..view };
+        // A pane a RUNG narrower sizes the GPU's copy differently, and the slot
+        // a key lands in is `key mod capacity` — so the whole mapping moves and
+        // the next fold goes over whole. A rung is what it takes: inside one
+        // the copy is the same size and the delta survives the resize, which is
+        // [`ring_slots`]' whole job. The resize alone folds nothing either way:
+        // the capacity is not the run's, which is why it is not in the key.
+        let narrow = PaneView { depth_len: 250.0, ..view };
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(201, 92.0));
         assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
         spectrum.push_history(92.01, &bins);
@@ -2642,7 +2931,7 @@ mod tests {
                 time += 0.01;
             }
             let fold = |spectrum: &mut crate::AudioSpectrum, newest: f64, len: usize| {
-                let plan = Plan::new(&view, &Columns { first: 0, len, newest });
+                let plan = Plan::new(&view, &Columns { first: 0, len, newest }, None);
                 run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
                 let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("accepted");
                 (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
@@ -3034,7 +3323,7 @@ mod tests {
             whole: false,
         };
         let columns = Columns { first: 3, len: 200, newest: 5.0 };
-        let key = |v: &PaneView, c: &Columns| Plan::new(v, c).key;
+        let key = |v: &PaneView, c: &Columns| Plan::new(v, c, None).key;
         let base = key(&base_view, &columns);
         assert_eq!(base, key(&base_view, &columns), "the same fold must hit");
 
@@ -3460,7 +3749,7 @@ mod tests {
                     len: hist.len(),
                     newest: hist.back().map_or(t.clock, |c| c.time),
                 };
-                let plan = Plan::new(view, &columns);
+                let plan = Plan::new(view, &columns, None);
                 let uploads = spectrum.spectrogram[0].gpu.full_uploads();
                 let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
                 let hit = spectrum.spectrogram[0].gpu.hit(&plan.key).is_some();
@@ -3581,7 +3870,7 @@ mod tests {
                 len: hist.len(),
                 newest: hist.back().map_or(tally.clock, |c| c.time),
             };
-            let plan = Plan::new(&view, &columns);
+            let plan = Plan::new(&view, &columns, None);
             run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
             let (moved, shades) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
             assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
@@ -3660,7 +3949,7 @@ mod tests {
                     len: hist.len(),
                     newest: hist.back().map_or(now, |c| c.time),
                 };
-                let plan = Plan::new(&view, &columns);
+                let plan = Plan::new(&view, &columns, None);
                 run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
                 let (grid, _) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
                 let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
@@ -4165,6 +4454,101 @@ mod tests {
                     println!("{:>9}{line}", format!("{span:.0} semi"));
                 }
             }
+        }
+
+        /// A pane resize re-sends the whole heatmap a handful of times, not
+        /// once per frame.
+        ///
+        /// The ring's slot for a key is `key mod capacity`, so every change of
+        /// capacity moves the whole mapping: the buffer is reallocated and
+        /// every slab in it re-sent. Sized straight off the pane's pixels that
+        /// is megabytes a frame for as long as a horizontal drag lasts, since
+        /// the depth axis moves by a pixel or more per frame of one.
+        /// [`ring_slots`] is the ladder that bounds the re-sends by the RUNGS a
+        /// drag crosses instead of by the frames it lasts.
+        ///
+        /// Through the GPU rather than off [`GpuGrid::full_uploads`] alone,
+        /// because the delta path is only reachable once the callback has
+        /// acknowledged the run it is patching (see [`SentRun::dirty`]) — a
+        /// counter read without one says every frame rebuilt, whatever the
+        /// capacity did, and the reading would be of the missing
+        /// acknowledgement rather than of the ring.
+        #[test]
+        fn a_pane_resize_does_not_re_send_the_grid_every_frame() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [64, 64];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            // A Span deep enough to sit well up the ladder. Both ladders step
+            // on the travel below — `live_slab` reads `target_cols` too — and
+            // the budget at the bottom counts the crossings of each.
+            let window = 180.0;
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut clock = 0.0f64;
+            let mut n = 0usize;
+            let push = |spectrum: &mut crate::AudioSpectrum, clock: &mut f64, n: &mut usize| {
+                let mut bins = [0.02f32; SPECTRUM_BINS];
+                bins[400 + (*n * 13) % 3000] = 1.0;
+                spectrum.push_history(*clock, &bins);
+                *clock += interval;
+                *n += 1;
+            };
+            while clock < window + 5.0 {
+                push(&mut spectrum, &mut clock, &mut n);
+            }
+
+            // One frame at a pane this wide, with the columns a live stream
+            // delivers between two frames.
+            let frame = |spectrum: &mut crate::AudioSpectrum,
+                         headless: &mut SpectrogramHeadless,
+                         clock: &mut f64,
+                         n: &mut usize,
+                         depth_len: f32| {
+                for _ in 0..2 {
+                    push(spectrum, clock, n);
+                }
+                let view = PaneView {
+                    ppp: 2.0,
+                    pitch_len: 400.0,
+                    depth_len,
+                    window,
+                    scale: whole_axis(),
+                    cfg,
+                    whole: false,
+                };
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist.partition_point(|c| c.time < *clock - window).saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(*clock, |c| c.time),
+                };
+                let plan = Plan::new(&view, &columns, None);
+                run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let (grid, shades) = frame_data(spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let read = read_of(&view, plan.rows);
+                headless.frame(0, SIZE, run_quad(slabs, SIZE), grid, read, shades);
+            };
+
+            // Settle, so the run the drag starts from is one the GPU has
+            // acknowledged rather than the first fold of all.
+            for _ in 0..4 {
+                frame(&mut spectrum, &mut headless, &mut clock, &mut n, 100.0);
+            }
+            let was = spectrum.spectrogram[0].gpu.full_uploads();
+            // A point a frame, which is the rate a hand delivers a drag at, over
+            // travel that takes the depth axis from a sliver to past the cap.
+            const TRAVEL: u32 = 400;
+            for step in 0..TRAVEL {
+                let depth_len = 100.0 + step as f32;
+                frame(&mut spectrum, &mut headless, &mut clock, &mut n, depth_len);
+            }
+            let sent = spectrum.spectrogram[0].gpu.full_uploads() - was;
+            // Ten rungs reach from a two-slab ring to the cap and this travel
+            // crosses three of them, `live_slab`'s own rungs a few more.
+            assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");
         }
     }
 }
