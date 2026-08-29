@@ -1,10 +1,12 @@
 //! A GPU-timer probe: what a frame of the live view with a name on every lit
-//! node costs to encode and draw, for the number each PR of #498 states
-//! against main. `#[ignore]`d — it prints a figure and asserts nothing.
+//! node costs to draw, for the number each PR of #498 states against main.
+//! `#[ignore]`d — it prints a figure and asserts nothing.
 //!
-//! Timestamps round the whole of `prepare`'s encoder rather than the plugin
-//! overlay's bracket, which opens at the scene pass: the atlas and the light
-//! are drawn before that, and they are the cost this rework moves.
+//! Timestamps bracket the whole of `prepare`'s encoder rather than the plugin
+//! overlay's own bracket, which opens at the scene pass: the atlas and the
+//! light are drawn before that, and they are the cost this rework moves. Two
+//! empty passes carry the stamps, because a stamp written straight into the
+//! encoder never signals on Metal.
 //!
 //! ```text
 //! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names_costs
@@ -14,7 +16,7 @@ use super::fixtures::*;
 use super::golden::the_live_view;
 use crate::*;
 
-/// Wide enough that the names are the size the lattice typesets them at.
+/// Wide enough that the names are about the size the lattice typesets them.
 const SIZE: [u32; 2] = [768, 768];
 const FRAMES: usize = 120;
 
@@ -28,8 +30,7 @@ fn a_frame_of_names_costs_this_much() {
         eprintln!("no GPU adapter; nothing timed");
         return;
     };
-    let features =
-        wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+    let features = wgpu::Features::TIMESTAMP_QUERY;
     if !adapter.features().contains(features) {
         eprintln!("the adapter carries no timestamps; nothing timed");
         return;
@@ -40,7 +41,10 @@ fn a_frame_of_names_costs_this_much() {
     }))
     .expect("a device with timestamps");
 
-    let scene = the_live_view();
+    let mut scene = the_live_view();
+    // The default distance rather than the golden's close one, so the pane
+    // holds a lattice's worth of nodes and names.
+    scene.camera.distance = harmonigraph_scene::Camera::default().distance;
     let pane = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32);
     let projector = scene.projector(pane);
     let unit = scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32);
@@ -86,13 +90,51 @@ fn a_frame_of_names_costs_this_much() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    // The two empty passes' target.
+    let stamp_view = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("timing_stamp"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&Default::default());
+    let stamp = |encoder: &mut wgpu::CommandEncoder, index: u32| {
+        let writes = wgpu::RenderPassTimestampWrites {
+            query_set: &set,
+            beginning_of_pass_write_index: (index == 0).then_some(0),
+            end_of_pass_write_index: (index == 1).then_some(1),
+        };
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("timing_stamp_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &stamp_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Discard,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: Some(writes),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    };
     let period = queue.get_timestamp_period();
     let mut resources = CallbackResources::default();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane.x, pane.y));
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut samples = Vec::with_capacity(FRAMES);
-    for frame in 0..FRAMES + 10 {
+    let frames: usize =
+        std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
+    let mut samples = Vec::with_capacity(frames);
+    for frame in 0..frames + 10 {
         let labels = names(&scene, SIZE, runs.clone());
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -103,9 +145,9 @@ fn a_frame_of_names_costs_this_much() {
             None,
         );
         let mut encoder = device.create_command_encoder(&Default::default());
-        encoder.write_timestamp(&set, 0);
+        stamp(&mut encoder, 0);
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        encoder.write_timestamp(&set, 1);
+        stamp(&mut encoder, 1);
         encoder.resolve_query_set(&set, 0..2, &resolve, 0);
         encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
