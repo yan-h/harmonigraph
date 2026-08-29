@@ -27,6 +27,5 @@ pollster = "0.4"
 # The offscreen-vs-direct parity test builds a Scene literal, whose
 # NodeInstance carries a LatticePos.
 harmonigraph-core = { path = "../harmonigraph-core" }
-# Reads and writes the golden frames. Already in the lock file by way of the
-# GUI stack, so this pins no new download.
-png = "0.18"
+# The byte-exact frame gate the golden set is measured by.
+harmonigraph-golden = { workspace = true }
