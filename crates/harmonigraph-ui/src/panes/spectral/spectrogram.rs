@@ -90,10 +90,13 @@ pub(crate) fn footprint_mean(powers: &[f32], x0: f32, x1: f32) -> f32 {
             sum += w * power_db(p);
             total += w;
         }
-        // A run of two or more whose overlap has been clamped to nothing — the
-        // degenerate answered rather than one a pane arrives at.
+        // Unreachable — `last > idx` puts `lo` strictly below `hi`, so the
+        // weights sum to the footprint's own width — and answered anyway, in
+        // the form every other path here answers in. A raw power would be the
+        // one return that skips [`power_db`]'s floor, so a silent bucket would
+        // read 0 here and the store's floor everywhere else.
         if total <= 0.0 {
-            return powers[idx];
+            return 10f32.powf(0.1 * power_db(powers[idx]));
         }
         return 10f32.powf(0.1 * sum / total);
     }

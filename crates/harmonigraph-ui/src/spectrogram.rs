@@ -587,7 +587,7 @@ impl Plan {
     pub(crate) fn new(view: &PaneView, columns: &Columns) -> Plan {
         // One row per device pixel of the pitch axis, and one slab per pixel of
         // the depth axis, under the cap the slab count takes.
-        let rows = ((view.pitch_len * view.ppp).round() as usize).max(2);
+        let rows = pitch_pixels(view.pitch_len, view.ppp);
         let depth_px = (view.depth_len * view.ppp).round();
         // Whole-song spans an entire take, so it needs a higher cap than the
         // live window.
@@ -612,15 +612,29 @@ impl Plan {
     }
 }
 
-/// How far past its own pixel a fragment's footprint reaches, as a fraction of
-/// the visible range: one bucket shared out across the pane's pixels, so the
-/// picture's support covers the range's own edges rather than stopping inside
-/// them, and never more than half the range on top of it.
+/// Pixels the pitch axis spends: the pane's points at the display's density,
+/// floored at two so a footprint has a width to be.
 ///
-/// The footprint it widens is the shader's; this is the one term of it that
-/// needs the analyzer's constants and the pane's zoom in the same place.
-fn pitch_margin(span: f32) -> f32 {
-    (1.0 / BINS_PER_SEMITONE as f32 / span).min(0.5)
+/// One definition because TWO panes sample this axis — the heatmap's rows and
+/// the spectrum curve's columns — and sharing the resample
+/// ([`panes::spectral::spectrogram::footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean))
+/// is only half of sharing the read. The other half is the footprint handed to
+/// it, which is one of these pixels wide on each side: counted in POINTS
+/// instead, the curve would integrate `ppp` times as many buckets per column as
+/// the heatmap does, and a ridge and the curve over it would sit at different
+/// heights on any display that is not 1x.
+pub(crate) fn pitch_pixels(pitch_len: f32, ppp: f32) -> usize {
+    ((pitch_len * ppp).round() as usize).max(2)
+}
+
+/// Columns the spectrum curve is drawn in: [`pitch_pixels`], capped so a very
+/// wide pane cannot turn the fill into thousands of shapes a frame.
+///
+/// The cap is the one place the two counts part, and it parts them the safe
+/// way — past it the curve UNDERSAMPLES a shared footprint rather than reading
+/// a different run of buckets under every pixel.
+pub(crate) fn curve_cols(pitch_len: f32, ppp: f32) -> usize {
+    pitch_pixels(pitch_len, ppp).min(4096)
 }
 
 /// The level mapping in the form the shader carries it:
@@ -647,7 +661,6 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
     SpectrogramRead {
         min_midi: view.scale.min_midi,
         span: view.scale.span,
-        margin: pitch_margin(view.scale.span),
         rows: rows as u32,
         spectrum_min_midi: SPECTRUM_MIN_MIDI,
         bins_per_semitone: BINS_PER_SEMITONE as f32,
@@ -1856,6 +1869,19 @@ mod tests {
         }
         // Twice the density really is twice the picture.
         assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.01);
+
+        // The curve counts the same axis in the same pixels — see
+        // [`pitch_pixels`], and `the_curve_and_the_heatmap_read_a_run_of_buckets_alike`
+        // for the operator those pixels are read through.
+        for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.5, 517.0), (3.0, 91.0)] {
+            assert_eq!(
+                curve_cols(pitch, ppp) as f32,
+                rows_at(ppp, pitch),
+                "the curve drew {} columns over a heatmap of {} pixels at {ppp}x",
+                curve_cols(pitch, ppp),
+                rows_at(ppp, pitch),
+            );
+        }
 
         // A slab is never finer than the columns arrive, whatever the pane's
         // width asks for: a shorter one leaves empty slabs between columns, and
@@ -3149,7 +3175,7 @@ mod tests {
 
         fn foot_of(read: &SpectrogramRead, r: u32) -> Foot {
             let rows = read.rows as f32;
-            let half = 0.5 * (1.0 + 2.0 * read.margin) / rows;
+            let half = 0.5 / rows;
             let t = (r as f32 + 0.5) / rows;
             Foot { lo_t: t - half, hi_t: t + half, midi: read.min_midi + t * read.span }
         }
@@ -3947,14 +3973,14 @@ mod tests {
             };
 
             // One row over the whole picture, so the frame IS that row's read,
-            // once per slab. The visible range sets how many buckets it covers:
-            // below a sixteenth of a semitone the margin is capped and widens it,
-            // above that the range itself does — between them they reach every run
-            // length from a pair to a full 32.
-            let spans: Vec<f32> = [0.01f32, 0.025, 0.05]
-                .into_iter()
-                .chain((5..=32).map(|n: u32| (n - 3) as f32 / 32.0))
-                .collect();
+            // once per slab. At one row the footprint IS the visible range, so
+            // the range alone decides how many buckets it covers: a span of `k`
+            // buckets straddles `k + 1` of them, and the half bucket keeps both
+            // ends off a boundary, where a tie would decide the count instead.
+            // That reaches every run length from a pair to a full 32, which the
+            // assertion at the end holds this to rather than trusting it.
+            let spans: Vec<f32> =
+                (1..=31).map(|k| (k as f32 + 0.5) / BINS_PER_SEMITONE as f32).collect();
             let size = [W, 1];
             let mut lengths = std::collections::BTreeSet::new();
             for span in spans {

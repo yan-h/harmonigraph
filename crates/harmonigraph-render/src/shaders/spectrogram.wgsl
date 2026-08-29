@@ -18,10 +18,6 @@ struct Locals {
     /// The visible pitch range: MIDI at pitch fraction 0, and semitones across.
     min_midi: f32,
     span: f32,
-    /// How far past its own pixel a footprint reaches, in pitch fraction: one
-    /// bucket shared out across the pane's pixels, so the picture's support
-    /// covers the range's own edges rather than stopping inside them.
-    margin: f32,
     /// MIDI of bucket 0's lower edge, and how many buckets one semitone holds.
     spectrum_min_midi: f32,
     bins_per_semitone: f32,
@@ -43,7 +39,11 @@ struct Locals {
     first_slot: u32,
     /// Slabs in the visible run.
     run_slabs: u32,
-    _pad: vec2<u32>,
+    /// Scalars, not a `vec3`: a vector here would align to 16 and shift itself
+    /// off the offset the Rust struct writes.
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -117,8 +117,8 @@ fn bucket_level(slot: u32, b: u32) -> f32 {
 /// The level one fragment reads out of the slab in slot `slot`: an image
 /// resample of [`bucket_level`] over the pitch this fragment covers.
 ///
-/// The footprint is the fragment's own — one pane pixel of the pitch axis,
-/// widened by `margin` at each end — and which of it and the bucket grid is
+/// The footprint is the fragment's own — exactly one pane pixel of the pitch
+/// axis, so the footprints TILE it — and which of it and the bucket grid is
 /// finer picks the arm.
 ///
 /// MINIFYING (a pixel wider than a bucket) it is the AREA-WEIGHTED MEAN of the
@@ -139,7 +139,7 @@ fn bucket_level(slot: u32, b: u32) -> f32 {
 /// floor divides them, which is the 0.5; the clamp keeps the upper tap inside
 /// the spectrum.
 fn read_level(slot: u32, t: f32) -> f32 {
-    let half = 0.5 * (1.0 + 2.0 * locals.margin) / f32(locals.rows);
+    let half = 0.5 / f32(locals.rows);
     let x0 = bucket_x(t - half);
     let x1 = bucket_x(t + half);
     let top = f32(locals.bins) - 1.0;

@@ -365,8 +365,17 @@ pub(crate) fn spectral_pane(
             // carries the same fault on its own account, since the largest of N
             // draws grows with N, so the curve's noise floor would lift as the
             // pitch axis was zoomed out.
+            //
+            // DEVICE pixels, which is what the heatmap's `rows` counts, and the
+            // reason `ppp` is here at all: sharing the operator is only half of
+            // sharing the read, since the footprint fed to it is the width of
+            // one column. Sampled per POINT this integrates `ppp` times as many
+            // buckets per column as the heatmap does, which on a 2x display is
+            // the same disagreement a MAX would cause, arrived at from the
+            // other side.
             let bucket_x = |midi: f32| (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
-            let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
+            let ppp = painter.ctx().pixels_per_point();
+            let cols = crate::spectrogram::curve_cols(axes.pitch_len(), ppp);
             let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;

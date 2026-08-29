@@ -10,7 +10,7 @@
 //! The read lives once, in shaders/spectrogram.wgsl, each piece carrying the
 //! constraint that pins it; this crate is handed the constants as data and
 //! never learns what a bucket is. `harmonigraph-ui` folds the grid and derives
-//! those constants — the row geometry's margin, the level mapping's affine —
+//! those constants — the visible pitch range, the level mapping's affine —
 //! and holds nothing that reads a slab.
 //!
 //! The read is an image resample: a fragment covers its own footprint of the
@@ -89,10 +89,6 @@ pub struct SpectrogramRead {
     /// MIDI at pitch fraction 0, and semitones across the visible range.
     pub min_midi: f32,
     pub span: f32,
-    /// How far past its own pixel a footprint reaches, in pitch fraction: one
-    /// bucket, `(1 / BINS_PER_SEMITONE / span).min(0.5)`, shared out across
-    /// the pane's pixels.
-    pub margin: f32,
     /// Pixels the pane spends on the pitch axis. It sets how wide one
     /// fragment's footprint is, and so how finely the image is sampled — not
     /// how bright it comes out.
@@ -214,7 +210,6 @@ struct SpectrogramUniforms {
     viewport_points: [f32; 2],
     min_midi: f32,
     span: f32,
-    margin: f32,
     spectrum_min_midi: f32,
     bins_per_semitone: f32,
     level0: f32,
@@ -226,7 +221,7 @@ struct SpectrogramUniforms {
     capacity: u32,
     first_slot: u32,
     run_slabs: u32,
-    _pad: [u32; 2],
+    _pad: [u32; 3],
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -612,7 +607,6 @@ impl CallbackTrait for SpectrogramCallback {
             ],
             min_midi: self.read.min_midi,
             span: self.read.span,
-            margin: self.read.margin,
             spectrum_min_midi: self.read.spectrum_min_midi,
             bins_per_semitone: self.read.bins_per_semitone,
             level0: self.read.level0,
@@ -624,7 +618,7 @@ impl CallbackTrait for SpectrogramCallback {
             capacity: self.grid.capacity,
             first_slot: slot_of(self.grid.first_key, self.grid.capacity),
             run_slabs: run_slabs as u32,
-            _pad: [0; 2],
+            _pad: [0; 3],
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -801,7 +795,6 @@ mod tests {
         SpectrogramRead {
             min_midi,
             span,
-            margin: (1.0 / BINS_PER_SEMITONE / span).min(0.5),
             rows,
             spectrum_min_midi: SPECTRUM_MIN_MIDI,
             bins_per_semitone: BINS_PER_SEMITONE,
@@ -893,7 +886,7 @@ mod tests {
 
         /// The footprint a fragment at `t` covers, in bucket coordinates.
         fn foot(&self, t: f32) -> (f32, f32) {
-            let half = 0.5 * (1.0 + 2.0 * self.read.margin) / self.read.rows as f32;
+            let half = 0.5 / self.read.rows as f32;
             (self.bucket_x(t - half), self.bucket_x(t + half))
         }
 
