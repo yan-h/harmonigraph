@@ -44,7 +44,7 @@ use egui::Color32;
 
 use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::note_color;
-use super::spectral::spectrogram::{cell_color, power_mean};
+use super::spectral::spectrogram::{cell_color, footprint_mean};
 use crate::SharedState;
 
 /// How much of the disc's radius the hole in the middle keeps, as a share of
@@ -682,19 +682,15 @@ fn strip(
     let cap = (span * BINS_PER_SEMITONE as f32).max(MIN_STEPS);
     let steps = (arc_len(r_in, r_out, span / 12.0) / SEGMENT_PT).clamp(MIN_STEPS, cap) as usize;
 
-    // The run of buckets one step covers, read by the heatmap's own power mean
-    // and not by a MAX — the same read the Spectral pane's curve takes, and for
-    // the same reason: the largest of N buckets grows with N, so a max would
-    // lift this pane's noise floor as the pitch range was widened.
+    // The run of buckets one step covers, resampled by the heatmap's own
+    // operator and not read by a MAX — the same read the Spectral pane's curve
+    // takes, and for the same reason: the largest of N buckets grows with N, so
+    // a max would lift this pane's noise floor as the pitch range was widened.
     let half_step = span / (2.0 * steps as f32);
     let level = |midi: f32| {
         let Some(levels) = levels else { return 0.0 };
-        let bucket = |m: f32| {
-            (((m - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as isize)
-                .clamp(0, levels.len() as isize - 1) as usize
-        };
-        let (b0, b1) = (bucket(midi - half_step), bucket(midi + half_step));
-        power_mean(&levels[b0..=b1.max(b0)])
+        let bucket_x = |m: f32| (m - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
+        footprint_mean(levels, bucket_x(midi - half_step), bucket_x(midi + half_step))
     };
 
     let mut mesh = egui::Mesh::default();
@@ -1195,7 +1191,7 @@ mod tests {
     /// the reason it has to exist: every other fixture builds `fresh()`, whose
     /// analyzer has no samples, so `display` answers `None` and the level
     /// closure returns 0.0 at every step. Without this, the bucket lookup, the
-    /// bucket-run slice, `power_mean`, `loudness` and `cell_color` are reached
+    /// bucket-run footprint, `footprint_mean`, `loudness` and `cell_color` are reached
     /// by nothing at all, and the picture's whole colour path reads as covered
     /// while being untested.
     ///
@@ -1205,10 +1201,10 @@ mod tests {
     /// `frac(midi/12)` fails this, and would otherwise draw a perfectly
     /// plausible spiral).
     ///
-    /// What it does not pin is the ORDER of the power mean — a single-bucket
-    /// read would still put the peak here. That choice is argued in `strip`'s
-    /// own comment and is shared with the Spectral pane, whose
-    /// `power_mean` tests hold it.
+    /// What it does not pin is which operator the run is read by — a
+    /// single-bucket read would still put the peak here. That choice is argued
+    /// in `strip`'s own comment and is shared with the Spectral pane, whose
+    /// `footprint_mean` tests hold it.
     #[test]
     fn a_tone_lands_on_its_own_pitch_class() {
         let mut state = fresh();

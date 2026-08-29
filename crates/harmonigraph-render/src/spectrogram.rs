@@ -13,12 +13,10 @@
 //! those constants — the row geometry's margin, the level mapping's affine —
 //! and holds nothing that reads a slab.
 //!
-//! Four taps blended in GAMMA space per fragment, which is the filtering an
-//! `Rgba8Unorm` egui texture gets — that is what makes this a port rather than
-//! a new picture, and the vertex rule feeding those taps is `heatmap_mesh`'s.
-//! egui's path also dithers the blended colour (`RendererOptions::dithering`,
-//! on by default) where this one hands over the blend itself, which is where a
-//! heatmap's single-level flips against a golden frame come from.
+//! The read is an image resample: a fragment covers its own footprint of the
+//! pitch axis and combines the bucket levels under it, so the pane's pixel
+//! height sets how finely the image is sampled and not how bright it is. The
+//! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,11 +89,13 @@ pub struct SpectrogramRead {
     /// MIDI at pitch fraction 0, and semitones across the visible range.
     pub min_midi: f32,
     pub span: f32,
-    /// How far past the visible range the edge rows reach, in pitch fraction:
-    /// one bucket, `(1 / BINS_PER_SEMITONE / span).min(0.5)`.
+    /// How far past its own pixel a footprint reaches, in pitch fraction: one
+    /// bucket, `(1 / BINS_PER_SEMITONE / span).min(0.5)`, shared out across
+    /// the pane's pixels.
     pub margin: f32,
-    /// Rows of the picture along pitch — the pane's pitch-axis device pixels.
-    /// It decides both the row geometry and the pitch axis' own filtering.
+    /// Pixels the pane spends on the pitch axis. It sets how wide one
+    /// fragment's footprint is, and so how finely the image is sampled — not
+    /// how bright it comes out.
     pub rows: u32,
     /// MIDI at bucket 0's lower edge, and buckets per semitone.
     pub spectrum_min_midi: f32,
@@ -105,16 +105,12 @@ pub struct SpectrogramRead {
     ///
     /// Derived on the CPU from `spectrogram_level_raw`, which is affine in
     /// both — never re-derived here, so the mapping has one definition and the
-    /// window, the tilt and their pivot stay the pane's business.
+    /// window, the tilt and their pivot stay the pane's business. Evaluated
+    /// per BUCKET and clamped there, which is what makes the resample a
+    /// resample of the picture rather than of the arithmetic behind it.
     pub level0: f32,
     pub level_per_step: f32,
     pub level_per_midi: f32,
-    /// `ROW_MEAN_STEPS`: stored steps the power mean falls per halving of the
-    /// summed weight.
-    pub mean_steps: f32,
-    /// `ROW_WEIGHT`: the weight of a bucket `j` stored steps below its run's
-    /// loudest.
-    pub weight: Arc<[f32; 256]>,
 }
 
 /// The gradient sampled at equal level slices — `cell_color((i + 0.5) / n)` for
@@ -224,14 +220,13 @@ struct SpectrogramUniforms {
     level0: f32,
     level_per_step: f32,
     level_per_midi: f32,
-    mean_steps: f32,
     rows: u32,
     bins: u32,
     stride: u32,
     capacity: u32,
     first_slot: u32,
     run_slabs: u32,
-    _pad: u32,
+    _pad: [u32; 2],
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -275,7 +270,6 @@ struct LutTexture {
 
 struct SpectrogramPane {
     uniform_buffer: wgpu::Buffer,
-    weight_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     count: u32,
@@ -307,13 +301,12 @@ impl SpectrogramResources {
             entries: &[
                 buffer_entry(0, wgpu::BufferBindingType::Uniform),
                 buffer_entry(1, storage),
-                buffer_entry(2, storage),
                 wgpu::BindGroupLayoutEntry {
-                    binding: 3,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        // Loaded, never sampled: the four taps and their blend
-                        // are the shader's own.
+                        // Loaded, never sampled: the resample and the blend
+                        // that feed it are the shader's own.
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
@@ -347,12 +340,6 @@ impl SpectrogramPane {
                 label: Some("spectrogram_uniforms"),
                 size: std::mem::size_of::<SpectrogramUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            weight_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spectrogram_weights"),
-                size: std::mem::size_of::<[f32; 256]>() as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
             vertex_buffer: create_vertex_buffer::<SpectrogramVertex>(
@@ -571,10 +558,6 @@ impl CallbackTrait for SpectrogramCallback {
                     wgpu::BindGroupEntry { binding: 1, resource: grid.buffer.as_entire_binding() },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: pane.weight_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
                         resource: wgpu::BindingResource::TextureView(&lut.view),
                     },
                 ],
@@ -591,7 +574,6 @@ impl CallbackTrait for SpectrogramCallback {
         }
         pane.count = self.vertices.len() as u32;
         queue.write_buffer(&pane.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
-        queue.write_buffer(&pane.weight_buffer, 0, bytemuck::cast_slice(&self.read.weight[..]));
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let uniforms = SpectrogramUniforms {
@@ -609,14 +591,13 @@ impl CallbackTrait for SpectrogramCallback {
             level0: self.read.level0,
             level_per_step: self.read.level_per_step,
             level_per_midi: self.read.level_per_midi,
-            mean_steps: self.read.mean_steps,
             rows: self.read.rows,
             bins: self.grid.bins,
             stride,
             capacity: self.grid.capacity,
             first_slot: slot_of(self.grid.first_key, self.grid.capacity),
             run_slabs: run_slabs as u32,
-            _pad: 0,
+            _pad: [0; 2],
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -764,15 +745,6 @@ mod tests {
     /// Buckets in a test spectrum: 32 semitones of it, which is enough range
     /// for a fixture to sit inside and for another to run off the top.
     const BINS: u32 = 1024;
-    /// `ROW_MEAN_STEPS`: stored steps per halving of the summed weight, at
-    /// order 4 over a 0.5 dB store.
-    const MEAN_STEPS: f32 = 10.0 / (4.0 * 0.5 * std::f32::consts::LOG2_10);
-
-    /// `ROW_WEIGHT`: the weight of a bucket `j` stored steps below its run's
-    /// loudest.
-    fn weights() -> Arc<[f32; 256]> {
-        Arc::new(std::array::from_fn(|j| 10f32.powf(-0.1 * 4.0 * (j as f32 * 0.5))))
-    }
 
     /// A gradient table shaped like the real one: 4096 samples of a ramp whose
     /// channels are 8-bit, so one index of slack is one level of one channel
@@ -794,9 +766,10 @@ mod tests {
     }
 
     /// The read's scalars for a visible range of `span` semitones from
-    /// `min_midi`, drawn at `rows`. The level mapping spends most of the 0..1
-    /// on the fixtures' own byte range and tilts with pitch, so a row that
-    /// lands on the wrong bucket lands on the wrong colour.
+    /// `min_midi`, at a pane spending `rows` pixels on pitch. The level
+    /// mapping spends most of the 0..1 on the fixtures' own byte range and
+    /// tilts with pitch, so a fragment that lands on the wrong bucket lands on
+    /// the wrong colour.
     fn read_of(min_midi: f32, span: f32, rows: u32) -> SpectrogramRead {
         SpectrogramRead {
             min_midi,
@@ -808,8 +781,6 @@ mod tests {
             level0: 0.0,
             level_per_step: 0.0035,
             level_per_midi: 0.002,
-            mean_steps: MEAN_STEPS,
-            weight: weights(),
         }
     }
 
@@ -858,35 +829,20 @@ mod tests {
         vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
     }
 
-    /// One row of the picture, as `row_of` lays them out.
-    #[derive(Clone, Copy)]
-    struct Row {
-        lo_t: f32,
-        hi_t: f32,
-        t: f32,
-        midi: f32,
+    /// The pitch fraction pixel row `py` of the frame samples, as
+    /// [`full_quad`] lays the coordinate out.
+    fn t_at(py: u32) -> f32 {
+        1.0 - (py as f32 + 0.5) / SIZE[1] as f32
     }
 
     /// The read the shader performs, in Rust — the same arms, the same
-    /// rounding, the same four-tap blend in gamma space, indexing the run
-    /// DIRECTLY rather than through a slot, so a slot rule that disagrees with
-    /// the scatter shows up as a wrong column.
+    /// weights, the same blend in level space, indexing the run DIRECTLY
+    /// rather than through a slot, so a slot rule that disagrees with the
+    /// scatter shows up as a wrong column.
     struct Reference {
         grid: SpectrogramGrid,
         read: SpectrogramRead,
         shades: SpectrogramShades,
-    }
-
-    /// Nearest whole number, ties away from zero — `f32::round`, which the
-    /// shader's `round_half_away` reproduces because WGSL's own `round` takes
-    /// ties to even.
-    fn round_half_away(x: f32) -> f32 {
-        let f = x.floor();
-        if x - f >= 0.5 {
-            f + 1.0
-        } else {
-            f
-        }
     }
 
     impl Reference {
@@ -902,57 +858,60 @@ mod tests {
             self.grid.run[j * self.bins() + bucket]
         }
 
-        fn row_of(&self, r: u32) -> Row {
-            let m = self.read.margin;
-            let reach = 1.0 + 2.0 * m;
-            let rows = self.read.rows as f32;
-            let lo_t = -m + reach * r as f32 / rows;
-            let hi_t = -m + reach * (r + 1) as f32 / rows;
-            let t = 0.5 * (lo_t + hi_t);
-            Row { lo_t, hi_t, t, midi: self.read.min_midi + t * self.read.span }
-        }
-
-        fn bucket_of(&self, t: f32) -> usize {
+        /// Where a pitch fraction sits on the bucket axis.
+        fn bucket_x(&self, t: f32) -> f32 {
             let midi = self.read.min_midi + t * self.read.span;
-            let b = ((midi - self.read.spectrum_min_midi) * self.read.bins_per_semitone).floor();
-            b.clamp(0.0, self.bins() as f32 - 1.0) as usize
+            (midi - self.read.spectrum_min_midi) * self.read.bins_per_semitone
         }
 
-        fn read_row(&self, j: usize, row: Row) -> f32 {
-            let idx = self.bucket_of(row.lo_t);
-            let last = self.bucket_of(row.hi_t);
+        /// The footprint a fragment at `t` covers, in bucket coordinates.
+        fn foot(&self, t: f32) -> (f32, f32) {
+            let half = 0.5 * (1.0 + 2.0 * self.read.margin) / self.read.rows as f32;
+            (self.bucket_x(t - half), self.bucket_x(t + half))
+        }
+
+        /// The buckets a fragment at `t` covers, where it covers two or more —
+        /// which is the arm as well as the run, since one bucket is the lerp.
+        fn run_at(&self, t: f32) -> Option<std::ops::Range<usize>> {
+            let (x0, x1) = self.foot(t);
+            let top = self.bins() as f32 - 1.0;
+            let idx = x0.floor().clamp(0.0, top) as usize;
+            let last = x1.floor().clamp(0.0, top) as usize;
+            (last > idx).then_some(idx..last + 1)
+        }
+
+        fn bucket_level(&self, j: usize, b: usize) -> f32 {
+            let midi = self.read.spectrum_min_midi + (b as f32 + 0.5) / self.read.bins_per_semitone;
+            let v = f32::from(self.stored(j, b));
+            (self.read.level0 + self.read.level_per_step * v + self.read.level_per_midi * midi)
+                .clamp(0.0, 1.0)
+        }
+
+        fn read_level(&self, j: usize, t: f32) -> f32 {
+            let (x0, x1) = self.foot(t);
+            let bins = self.bins();
+            let top = bins as f32 - 1.0;
+            let idx = x0.floor().clamp(0.0, top) as usize;
+            let last = x1.floor().clamp(0.0, top) as usize;
             if last > idx {
-                let to = (last + 1).min(self.bins());
-                let top = (idx..to).map(|b| self.stored(j, b)).max().expect("a non-empty run");
-                let n = to - idx;
-                if n < 2 {
-                    return f32::from(top);
+                let lo = x0.clamp(0.0, bins as f32);
+                let hi = x1.clamp(0.0, bins as f32);
+                let (mut sum, mut total) = (0.0f32, 0.0f32);
+                for b in idx..=last {
+                    let w = (hi.min(b as f32 + 1.0) - lo.max(b as f32)).max(0.0);
+                    sum += w * self.bucket_level(j, b);
+                    total += w;
                 }
-                let sum: f32 =
-                    (idx..to).map(|b| self.read.weight[usize::from(top - self.stored(j, b))]).sum();
-                let steps = -(sum / n as f32).log2() * self.read.mean_steps;
-                return (f32::from(top) - round_half_away(steps)).max(0.0);
+                if total <= 0.0 {
+                    return self.bucket_level(j, idx);
+                }
+                return sum / total;
             }
-            let x = (row.midi - self.read.spectrum_min_midi) * self.read.bins_per_semitone - 0.5;
-            let lo = x.floor().clamp(0.0, self.bins() as f32 - 2.0) as usize;
-            let f = (x - lo as f32).clamp(0.0, 1.0);
-            let (a, b) = (f32::from(self.stored(j, lo)), f32::from(self.stored(j, lo + 1)));
-            round_half_away(a + (b - a) * f)
-        }
-
-        fn shade(&self, j: usize, row: Row) -> [f32; 4] {
-            let value = self.read_row(j, row);
-            let row0 = self.read.level0 + self.read.level_per_midi * row.midi;
-            let level = (row0 + self.read.level_per_step * value).clamp(0.0, 1.0);
-            let levels = self.shades.lut.len();
-            let i = ((level * levels as f32) as usize).min(levels - 1);
-            let c = self.shades.lut[i];
-            [
-                f32::from(c[0]) / 255.0,
-                f32::from(c[1]) / 255.0,
-                f32::from(c[2]) / 255.0,
-                f32::from(c[3]) / 255.0,
-            ]
+            let x = self.bucket_x(t) - 0.5;
+            let b = x.floor().clamp(0.0, bins as f32 - 2.0) as usize;
+            let f = (x - b as f32).clamp(0.0, 1.0);
+            let (a, c) = (self.bucket_level(j, b), self.bucket_level(j, b + 1));
+            a + (c - a) * f
         }
 
         fn color_at(&self, slab: f32, t: f32) -> [u8; 4] {
@@ -962,32 +921,12 @@ mod tests {
             let j1 = (j0 + 1).min(n - 1);
             let fx = (slab - 0.5 - jx).clamp(0.0, 1.0);
 
-            let rows = self.read.rows;
-            let t0c = self.row_of(0).t;
-            let tnc = self.row_of(rows - 1).t;
-            let denom = tnc - t0c;
-            let v = if denom == 0.0 { 0.0 } else { (t - t0c) / denom };
-            let y = v * rows as f32 - 0.5;
-            let ry = y.floor().clamp(0.0, rows as f32 - 1.0);
-            let r0 = ry as u32;
-            let r1 = (r0 + 1).min(rows - 1);
-            let fy = (y - ry).clamp(0.0, 1.0);
-
-            let (low, high) = (self.row_of(r0), self.row_of(r1));
-            let mix = |a: [f32; 4], b: [f32; 4], f: f32| {
-                std::array::from_fn(|c| a[c] * (1.0 - f) + b[c] * f)
-            };
-            let c = mix(
-                mix(self.shade(j0, low), self.shade(j1, low), fx),
-                mix(self.shade(j0, high), self.shade(j1, high), fx),
-                fy,
-            );
-            [
-                (c[0] * 255.0).round() as u8,
-                (c[1] * 255.0).round() as u8,
-                (c[2] * 255.0).round() as u8,
-                255,
-            ]
+            let (a, b) = (self.read_level(j0, t), self.read_level(j1, t));
+            let level = a + (b - a) * fx;
+            let levels = self.shades.lut.len();
+            let i = ((level * levels as f32) as usize).min(levels - 1);
+            let c = self.shades.lut[i];
+            [c[0], c[1], c[2], 255]
         }
 
         /// The frame [`full_quad`] draws, pixel by pixel.
@@ -1007,45 +946,29 @@ mod tests {
             out
         }
 
-        /// How many rows take each arm — `(mean, lerp)`. A fixture claiming an
-        /// arm is checked against this rather than assumed to reach it.
+        /// How many of the frame's sampled rows take each arm — `(mean,
+        /// lerp)`. A fixture claiming an arm is checked against this rather
+        /// than assumed to reach it.
         fn arms(&self) -> (usize, usize) {
-            let mut mean = 0;
-            let mut lerp = 0;
-            for r in 0..self.read.rows {
-                let row = self.row_of(r);
-                if self.bucket_of(row.hi_t) > self.bucket_of(row.lo_t) {
-                    mean += 1;
-                } else {
-                    lerp += 1;
-                }
-            }
-            (mean, lerp)
+            let mean = (0..SIZE[1]).filter(|&py| self.run_at(t_at(py)).is_some()).count();
+            (mean, SIZE[1] as usize - mean)
         }
 
-        /// How many rows read a run of at least `n` buckets.
+        /// How many sampled rows cover a run of at least `n` buckets.
         fn runs_at_least(&self, n: usize) -> usize {
-            (0..self.read.rows)
-                .filter(|&r| {
-                    let row = self.row_of(r);
-                    let (idx, last) = (self.bucket_of(row.lo_t), self.bucket_of(row.hi_t));
-                    last > idx && (last + 1).min(self.bins()) - idx >= n
-                })
+            (0..SIZE[1])
+                .filter(|&py| self.run_at(t_at(py)).is_some_and(|run| run.len() >= n))
                 .count()
         }
 
-        /// How many rows take the LERP arm with its lower tap pinned at the
-        /// top of the spectrum.
+        /// How many sampled rows take the LERP arm with its lower tap pinned
+        /// at the top of the spectrum.
         fn top_clamped(&self) -> usize {
-            (0..self.read.rows)
-                .filter(|&r| {
-                    let row = self.row_of(r);
-                    if self.bucket_of(row.hi_t) > self.bucket_of(row.lo_t) {
-                        return false;
-                    }
-                    let x = (row.midi - self.read.spectrum_min_midi) * self.read.bins_per_semitone
-                        - 0.5;
-                    x.floor() >= self.bins() as f32 - 2.0
+            (0..SIZE[1])
+                .filter(|&py| {
+                    let t = t_at(py);
+                    self.run_at(t).is_none()
+                        && (self.bucket_x(t) - 0.5).floor() >= self.bins() as f32 - 2.0
                 })
                 .count()
         }
@@ -1170,54 +1093,55 @@ mod tests {
         let _resources = SpectrogramResources::new(&device, FORMAT);
     }
 
-    /// Every row wider than a bucket: the shader's MEAN arm against the same
-    /// weighted sum written in Rust, over runs of sixteen buckets.
+    /// Every pixel wider than a bucket: the shader's MINIFYING arm against the
+    /// same area-weighted mean written in Rust, over runs of seven buckets.
     ///
     /// The arm is the one thing a pure tone cannot measure, so the fixture is
-    /// a noise bed with peaks in it — see [`noisy_grid`] — and the row count
-    /// is checked below rather than assumed from the span.
-    ///
-    /// The read itself comes out bit for bit: what is left is one pixel of
-    /// 16384 whose blended channel rounds the other way into eight bits, the
-    /// GPU fusing the multiply-add the Rust reference writes out.
+    /// a noise bed with peaks in it — see [`noisy_grid`] — and the arm counts
+    /// are checked below rather than assumed from the span.
     #[test]
-    fn a_row_wider_than_a_bucket_reads_the_weighted_mean_of_its_run() {
+    fn a_pixel_wider_than_a_bucket_reads_the_mean_of_the_buckets_under_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let run = noisy_grid(BINS as usize, 6);
         let reference = Reference {
             grid: grid_of(run, BINS, 8, 0),
-            read: read_of(18.0, 24.0, 48),
+            read: read_of(18.0, 24.0, SIZE[1]),
             shades: shades(),
         };
+        let rows = SIZE[1] as usize;
         let (mean, lerp) = reference.arms();
-        assert_eq!((mean, lerp), (48, 0), "every row of this fixture must take the mean");
-        assert_eq!(reference.runs_at_least(16), 48, "the runs must be wide enough to average");
+        assert_eq!((mean, lerp), (rows, 0), "every pixel of this fixture must take the mean");
+        assert_eq!(reference.runs_at_least(7), rows, "the runs must be wide enough to average");
 
         let (worst, exact) = parity(&device, &queue, &reference);
         assert!(worst <= 1, "channels differ by {worst} levels, not the blend's own rounding");
         assert!(exact >= 0.99, "only {:.4} of pixels are exact", exact);
     }
 
-    /// Rows narrower than a bucket: the LERP arm, with the half-bucket centre
-    /// offset and the clamp that keeps its upper tap in the spectrum.
+    /// Pixels narrower than a bucket: the MAGNIFYING arm, with the half-bucket
+    /// centre offset and the clamp that keeps its upper tap in the spectrum.
     ///
-    /// A row narrower than a bucket still STRADDLES one now and then, so this
-    /// fixture reaches both arms and the counts below say in what proportion —
-    /// a shader that took the mean everywhere would fail on the majority.
+    /// A footprint narrower than a bucket still STRADDLES one now and then, so
+    /// this fixture reaches both arms and the counts below say in what
+    /// proportion — a shader that took the mean everywhere would fail on the
+    /// majority.
     ///
-    /// Two pixels of 16384 differ, both by one level of one channel and both
-    /// on a rounding boundary of the blend rather than in the read.
+    /// The span is what puts a straddle anywhere at all. The frame samples the
+    /// pitch axis on a fixed grid, so a span that makes the bucket spacing a
+    /// tidy fraction of the pixel spacing (2 semitones is half a bucket per
+    /// pixel) gives every sample the same two phases against the buckets and
+    /// the mean arm is reached by nothing.
     #[test]
-    fn a_row_narrower_than_a_bucket_reads_between_the_two_under_it() {
+    fn a_pixel_narrower_than_a_bucket_reads_between_the_two_under_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let run = noisy_grid(BINS as usize, 6);
         let reference = Reference {
             grid: grid_of(run, BINS, 8, 0),
-            read: read_of(20.0, 2.0, 512),
+            read: read_of(20.0, 1.7, 512),
             shades: shades(),
         };
         let (mean, lerp) = reference.arms();
@@ -1230,10 +1154,8 @@ mod tests {
     }
 
     /// A visible range running off the top of the spectrum: the reads that
-    /// clamp — `bucket_of` at the last bucket, and the lerp's lower tap pinned
-    /// at `bins - 2` so its upper tap still exists.
-    ///
-    /// Byte-identical to the Rust read across the whole frame.
+    /// clamp — the footprint's buckets at the last one, and the lerp's lower
+    /// tap pinned at `bins - 2` so its upper tap still exists.
     #[test]
     fn a_range_past_the_top_of_the_spectrum_reads_its_last_two_buckets() {
         let Some((device, queue)) = headless_device() else {
@@ -1246,8 +1168,8 @@ mod tests {
             shades: shades(),
         };
         let clamped = reference.top_clamped();
-        assert!(clamped > 50, "only {clamped} rows reach the clamp at the top bucket");
-        assert!(clamped < reference.read.rows as usize, "the fixture must also read inside");
+        assert!(clamped > 10, "only {clamped} sampled rows reach the clamp at the top bucket");
+        assert!(clamped < SIZE[1] as usize, "the fixture must also read inside");
 
         let (worst, exact) = parity(&device, &queue, &reference);
         assert!(worst <= 1, "channels differ by {worst} levels, not the blend's own rounding");

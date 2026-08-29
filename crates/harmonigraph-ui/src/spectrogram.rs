@@ -136,35 +136,6 @@ pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
 /// and genuinely was silence as far as the analyzer is concerned.
 const JITTER_SLABS: i64 = 1;
 
-/// Stored steps the power mean falls per halving of the summed weight — the
-/// byte-form of `(10 / ROW_MEAN_ORDER) * log10(..)`, with `log10` reached
-/// through `log2` and the dB then divided by the store's own step.
-///
-/// Uploaded as [`SpectrogramRead::mean_steps`], which is the only thing that
-/// reads it: the mean itself is a fragment's work.
-const ROW_MEAN_STEPS: f32 = 10.0
-    / (crate::panes::spectral::spectrogram::ROW_MEAN_ORDER as f32
-        * harmonigraph_core::spectrogram::DB_STEP
-        * std::f32::consts::LOG2_10);
-
-/// The weight a bucket carries in the power mean, indexed by how many stored
-/// steps BELOW the loudest bucket of its row it sits.
-///
-/// Relative to the row's own loudest rather than absolute, which is what keeps
-/// the arithmetic in range: at order 4 an absolute weight spans `10^-48` across
-/// the stored dB range and flushes to zero in an `f32`, where relative weights
-/// run from exactly 1 downward and their sum can never fall below 1.
-///
-/// Behind an `Arc` because it is a uniform now — every frame hands the same
-/// allocation to [`SpectrogramRead::weight`], so the table is built once for the
-/// process and a frame's share of it is a refcount.
-static ROW_WEIGHT: std::sync::LazyLock<Arc<[f32; 256]>> = std::sync::LazyLock::new(|| {
-    Arc::new(std::array::from_fn(|j| {
-        let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
-        10f32.powf(-0.1 * crate::panes::spectral::spectrogram::ROW_MEAN_ORDER as f32 * db)
-    }))
-});
-
 /// Where the visible slabs sit in absolute time — everything the mesh's slab
 /// coordinate needs.
 ///
@@ -571,9 +542,10 @@ pub(crate) struct RunKey {
 /// checked without a GPU, a store or a frame. See
 /// `no_cache_layer_falls_back_as_the_window_scrolls`.
 pub(crate) struct Plan {
-    /// The picture's pitch-axis resolution in device pixels, which is what the
-    /// shader reads its rows at. It bounds nothing on the GPU — the grid is
-    /// bucket-space data — so the pane's own pixels are the whole of it.
+    /// The picture's pitch-axis resolution in device pixels, which is what
+    /// sets the footprint a fragment resamples the grid over. It bounds
+    /// nothing on the GPU — the grid is bucket-space data — so the pane's own
+    /// pixels are the whole of it.
     pub(crate) rows: usize,
     /// A time slab's width, in seconds.
     bucket: f64,
@@ -618,12 +590,13 @@ impl Plan {
     }
 }
 
-/// How far past the visible range the edge rows reach, as a fraction of it: one
-/// bucket, so the filtering carries the range cleanly to the picture's own
-/// edges, and never more than half the range on top of it.
+/// How far past its own pixel a fragment's footprint reaches, as a fraction of
+/// the visible range: one bucket shared out across the pane's pixels, so the
+/// picture's support covers the range's own edges rather than stopping inside
+/// them, and never more than half the range on top of it.
 ///
-/// The row geometry it belongs to is the shader's; this is the one term of it
-/// that needs the analyzer's constants and the pane's zoom in the same place.
+/// The footprint it widens is the shader's; this is the one term of it that
+/// needs the analyzer's constants and the pane's zoom in the same place.
 fn pitch_margin(span: f32) -> f32 {
     (1.0 / BINS_PER_SEMITONE as f32 / span).min(0.5)
 }
@@ -645,9 +618,8 @@ fn level_affine(cfg: &SpectrumConfig) -> (f32, f32, f32) {
     )
 }
 
-/// The scalars a fragment reads the grid through — the row geometry, the level
-/// mapping and the mean's weights, for a picture `rows` pixels up the pitch
-/// axis.
+/// The scalars a fragment reads the grid through — the footprint's width and
+/// the level mapping — for a pane spending `rows` pixels on the pitch axis.
 pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
     let (level0, level_per_step, level_per_midi) = level_affine(&view.cfg);
     SpectrogramRead {
@@ -660,8 +632,6 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
         level0,
         level_per_step,
         level_per_midi,
-        mean_steps: ROW_MEAN_STEPS,
-        weight: ROW_WEIGHT.clone(),
     }
 }
 
@@ -765,14 +735,15 @@ pub(crate) fn frame_data(
 /// OVERLAPPED stream (95% at the live rate, and 84% even where
 /// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
 /// so the max is over near-copies of one measurement rather than over a
-/// distribution. Pitch takes a power mean instead, because a row zoomed out
-/// spans a dozen INDEPENDENT buckets, and the max of a dozen samples of a noise
-/// floor is a function of how many were drawn.
+/// distribution. Pitch is RESAMPLED instead
+/// ([`footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean)),
+/// because a pixel zoomed out spans a dozen INDEPENDENT buckets and the max of
+/// a dozen samples of a noise floor is a function of how many were drawn.
 ///
 /// Maxing the buckets FIRST and reading the rows from the result is not the
 /// same picture as reading each column and maxing the answers — a mean over a
 /// slab's maxed buckets can only come out at or above the max of the per-column
-/// means, and a lerp across a maxed pair is not the max of the lerps. The
+/// resamples, and a lerp across a maxed pair is not the max of the lerps. The
 /// difference lives entirely inside one slab, between columns that are
 /// near-copies of one measurement (the same overlap argument as the max
 /// itself), where it is a fraction of a dB; what it buys is the fold's
@@ -3038,32 +3009,31 @@ mod tests {
     mod gpu {
         use super::*;
         use crate::panes::spectral::axes::spectrogram_level_db;
-        use crate::panes::spectral::spectrogram::power_mean;
+        use crate::panes::spectral::spectrogram::footprint_mean;
         use harmonigraph_render::{SpectrogramHeadless, SpectrogramVertex};
 
         /// Pixels across a test frame, and so slabs across it: a readback row must
         /// be 256-byte aligned, which puts the width at a multiple of 64.
         const W: u32 = 64;
 
-        /// One row of the picture as `row_of` in spectrogram.wgsl lays it out.
+        /// The pitch a fragment at the centre of pixel row `r` covers, as
+        /// spectrogram.wgsl lays the footprint out.
         ///
-        /// Here to PLACE a fixture — which buckets a row will reach for — and to
-        /// write the controls that give a claim its teeth. It never stands in for
-        /// the read: what a row comes out at is measured off the frame.
-        struct Row {
+        /// Here to PLACE a fixture — which buckets a pixel will reach for — and
+        /// to write the controls that give a claim its teeth. It never stands
+        /// in for the read: what a pixel comes out at is measured off the
+        /// frame.
+        struct Foot {
             lo_t: f32,
             hi_t: f32,
-            t: f32,
             midi: f32,
         }
 
-        fn row_of(read: &SpectrogramRead, r: u32) -> Row {
-            let reach = 1.0 + 2.0 * read.margin;
+        fn foot_of(read: &SpectrogramRead, r: u32) -> Foot {
             let rows = read.rows as f32;
-            let lo_t = -read.margin + reach * r as f32 / rows;
-            let hi_t = -read.margin + reach * (r + 1) as f32 / rows;
-            let t = 0.5 * (lo_t + hi_t);
-            Row { lo_t, hi_t, t, midi: read.min_midi + t * read.span }
+            let half = 0.5 * (1.0 + 2.0 * read.margin) / rows;
+            let t = (r as f32 + 0.5) / rows;
+            Foot { lo_t: t - half, hi_t: t + half, midi: read.min_midi + t * read.span }
         }
 
         fn bucket_of(read: &SpectrogramRead, t: f32) -> usize {
@@ -3072,11 +3042,11 @@ mod tests {
             b.clamp(0.0, SPECTRUM_BINS as f32 - 1.0) as usize
         }
 
-        /// The buckets row `r` reads, whichever arm it takes.
+        /// The buckets pixel row `r` reads, whichever arm it takes.
         fn run_of(read: &SpectrogramRead, r: u32) -> std::ops::Range<usize> {
-            let row = row_of(read, r);
-            let idx = bucket_of(read, row.lo_t);
-            idx..(bucket_of(read, row.hi_t) + 1).min(SPECTRUM_BINS)
+            let foot = foot_of(read, r);
+            let idx = bucket_of(read, foot.lo_t);
+            idx..(bucket_of(read, foot.hi_t) + 1).min(SPECTRUM_BINS)
         }
 
         /// The whole pitch axis, which is where a row spans the most buckets and
@@ -3126,13 +3096,14 @@ mod tests {
         }
 
         /// A quad over `size`, mapping pixel column `px` to slab `px + 0.5` and
-        /// pixel row `py` to row `py`.
+        /// pixel row `py` to the pane pixel of the same index.
         ///
-        /// Those are the taps' own centres, where the four-tap blend collapses onto
-        /// one texel — so a pixel of the frame IS a texel of the picture, and a
-        /// claim about a texel can be read off it with no filter in between. That
-        /// costs the width and the height: `size` must be the slab count by the row
-        /// count.
+        /// Slab `px + 0.5` is a slab's own centre, where the time axis' blend
+        /// collapses onto one slab; the pitch coordinate is the plain fraction
+        /// the pane's own mesh carries, so a pixel of the frame reads the
+        /// footprint pixel `py` of the pane reads and a claim about a pixel can
+        /// be read off it. That costs the width and the height: `size` must be
+        /// the slab count by the pane's row count.
         fn texel_quad(
             read: &SpectrogramRead,
             slabs: u32,
@@ -3140,13 +3111,10 @@ mod tests {
         ) -> Vec<SpectrogramVertex> {
             assert_eq!(size, [slabs, read.rows], "a texel per pixel means one pixel per texel");
             let (w, h) = (size[0] as f32, size[1] as f32);
-            // The shader stretches the FIRST and LAST row centres across whatever
-            // `t` the quad carries, so those centres are the quad's own ends.
-            let (t0, t1) = (row_of(read, 0).t, row_of(read, read.rows - 1).t);
             let v = |x: f32, y: f32| SpectrogramVertex {
                 pos: [x, y],
                 slab: x / w * slabs as f32,
-                t: t0 + (t1 - t0) * y / h,
+                t: y / h,
             };
             vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
         }
@@ -3170,14 +3138,19 @@ mod tests {
             }
         }
 
-        /// [`read_of`]'s scalars with the level mapping replaced by `byte / 256`.
+        /// [`read_of`]'s scalars with the level mapping replaced by
+        /// `(byte + 0.5) / 256`.
         ///
         /// [`probe_shades`] then lands on the byte itself: the shader's index is
-        /// `min(u32(level * 256), 255)`, the division is exact in binary, and the
-        /// read is integer-valued in both arms.
+        /// `min(u32(level * 256), 255)` and the division is exact in binary, so
+        /// the half puts a whole byte at the CENTRE of its table slice and the
+        /// truncating index becomes a rounding. Without it the read's last bit
+        /// decides the answer — a footprint over thirty copies of one level
+        /// sums and divides to that level plus or minus a rounding, and on the
+        /// truncating index half of those land an entry low.
         fn probe_read(view: &PaneView, rows: usize) -> SpectrogramRead {
             SpectrogramRead {
-                level0: 0.0,
+                level0: 0.5 / 256.0,
                 level_per_step: 1.0 / 256.0,
                 level_per_midi: 0.0,
                 ..read_of(view, rows)
@@ -3627,21 +3600,22 @@ mod tests {
             }
         }
 
-        /// The picture's noise floor SETTLES as the pitch axis zooms out, instead
-        /// of climbing with the number of buckets a row happens to span.
+        /// The picture's noise floor HOLDS STILL as the pitch axis zooms out,
+        /// instead of climbing with the number of buckets a pixel happens to
+        /// span.
         ///
-        /// Read by MAX, a row asks "how large was the largest of N draws", whose
-        /// answer grows like the log of N and so has no limit: the floor between
-        /// the partials reads brighter the further out the zoom, which is a
-        /// statement about the layout rather than about the sound. The power mean
-        /// estimates a fixed property of the distribution instead — see
-        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER).
+        /// Read by MAX, a pixel asks "how large was the largest of N draws",
+        /// whose answer grows like the log of N and so has no limit: the floor
+        /// between the partials reads brighter the further out the zoom, which
+        /// is a statement about the layout rather than about the sound. The
+        /// resample answers with the floor's own mean instead, at every N — see
+        /// [`footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean).
         ///
-        /// The comparison starts at 8 buckets rather than at 1 because the step
-        /// from ONE bucket to several is inherent and belongs to neither rule: one
-        /// bucket reads a SAMPLE of the distribution, any number of them reads a
-        /// STATISTIC of it, and that step is paid once on the way off a single
-        /// bucket. What is at issue is only the part that keeps climbing.
+        /// Both widths are in the MINIFYING arm — 8 buckets to a row and 64 —
+        /// because that is the arm at issue: a row narrower than a bucket reads
+        /// between two of them and has no run whose width could lift it. The
+        /// mean of dB has no step between the two widths at all, where a max
+        /// has one that never stops.
         ///
         /// The MAX control is what gives the first assertion its teeth: it fails if
         /// the noise is too flat, or the runs too short, for either rule to be
@@ -3702,7 +3676,7 @@ mod tests {
             let (mean_8, max_8) = floor(8, &mut headless);
             let (mean_64, max_64) = floor(64, &mut headless);
             let climb = (mean_64 - mean_8) * step;
-            assert!(climb < 1.5, "the floor climbed {climb:.2} dB across a three-octave zoom");
+            assert!(climb < 0.1, "the floor moved {climb:.2} dB across a three-octave zoom");
             let by_max = (max_64 - max_8) * step;
             assert!(
                 by_max > 2.2,
@@ -3810,27 +3784,42 @@ mod tests {
             );
         }
 
-        /// The curve and the heatmap read one run of buckets the same way.
+        /// The curve and the heatmap read one footprint of buckets the same way.
         ///
         /// They hold their buckets differently — the curve as floats of power in
-        /// Rust, the heatmap as bytes of dB in WGSL — so the mean is written twice,
-        /// and two forms of one definition drift. This is the only thing holding
-        /// the shader to the Rust, and what the drift costs is visible rather than
-        /// subtle: a pixel of the curve and a row of the heatmap cover the SAME
-        /// buckets, and the pane draws both from one gradient through one loudness
-        /// mapping precisely so equal levels read equal, so a disagreement puts a
-        /// ridge and the curve over it at different heights on one tone.
+        /// Rust, the heatmap as bytes of dB in WGSL — so the operator is written
+        /// twice, and two forms of one definition drift. This is the only thing
+        /// holding the shader to the Rust, and what the drift costs is visible
+        /// rather than subtle: a pixel of the curve and a pixel of the heatmap
+        /// cover the SAME buckets, and the pane draws both from one gradient
+        /// through one loudness mapping precisely so equal levels read equal, so
+        /// a disagreement puts a ridge and the curve over it at different
+        /// heights on one tone.
         ///
-        /// The tolerance is the store's own, not a fudge: the heatmap's side rounds
-        /// to [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) twice over, once
-        /// quantizing each bucket and once re-encoding the mean, and the table it
-        /// then lands in is sampled at [`SHADES`] levels.
+        /// The tolerance is the store's own, not a fudge: the heatmap's side
+        /// quantizes each bucket to
+        /// [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) where the
+        /// curve's holds the power, and the table it then lands in is sampled at
+        /// [`SHADES`] levels.
+        ///
+        /// The dB window is dialled wide enough to hold the whole fixture,
+        /// which is what makes the two forms one claim. The heatmap resamples
+        /// the CLAMPED level image — a bucket off either end of the ramp
+        /// contributes the end it is off, which is what keeps a partial
+        /// brighter than the window's ceiling from dragging its pixel dark —
+        /// and the curve answers in powers, where there is no ramp to be off.
+        /// Inside the window the clamp is the identity and the two are the same
+        /// mean under one affine map, which is the claim being made.
         #[test]
         fn the_curve_and_the_heatmap_read_a_run_of_buckets_alike() {
             let Some(mut headless) = SpectrogramHeadless::new() else {
                 return;
             };
-            let cfg = SpectrumConfig::default();
+            let cfg = SpectrumConfig {
+                volume_floor_db: -140.0,
+                volume_ceiling_db: 20.0,
+                ..SpectrumConfig::default()
+            };
             let lut = GpuGrid::default().shades(&cfg).lut;
             let step = harmonigraph_core::spectrogram::DB_STEP;
             let mut seed = 0x9E37_79B9_7F4A_7C15u64;
@@ -3858,7 +3847,15 @@ mod tests {
                 let read = read_of(&view, 1);
                 let run = run_of(&read, 0);
                 lengths.insert(run.len());
-                let midi = row_of(&read, 0).midi;
+                let foot = foot_of(&read, 0);
+                let midi = foot.midi;
+                // The footprint in BUCKET coordinates, which is the argument the
+                // curve's form of the operator takes.
+                let x = |t: f32| {
+                    (read.min_midi + t * read.span - read.spectrum_min_midi)
+                        * read.bins_per_semitone
+                };
+                let (x0, x1) = (x(foot.lo_t), x(foot.hi_t));
                 for _ in 0..4 {
                     // A case per slab: 90 dB of spread, which is where two forms
                     // of one mean have the most room to disagree — a flat run
@@ -3867,9 +3864,11 @@ mod tests {
                         .map(|_| (0..run.len()).map(|_| 10f64.powf(-9.0 * next()) as f32).collect())
                         .collect();
                     let mut bytes = vec![0u8; W as usize * SPECTRUM_BINS];
+                    let mut spectra = vec![vec![0.0f32; SPECTRUM_BINS]; W as usize];
                     for (j, ps) in powers.iter().enumerate() {
                         for (b, &p) in run.clone().zip(ps.iter()) {
                             bytes[j * SPECTRUM_BINS + b] = q(p);
+                            spectra[j][b] = p;
                         }
                     }
                     let frame = headless.frame(
@@ -3880,8 +3879,8 @@ mod tests {
                         read.clone(),
                         SpectrogramShades { generation: 1, lut: lut.clone() },
                     );
-                    for (j, ps) in powers.iter().enumerate() {
-                        let curve = 10.0 * power_mean(ps).max(1e-30).log10();
+                    for (j, spectrum) in spectra.iter().enumerate() {
+                        let curve = 10.0 * footprint_mean(spectrum, x0, x1).max(1e-30).log10();
                         // The band the store's own rounding leaves the heatmap
                         // free to land in, widened by the one table index a level
                         // sitting on a slice boundary can fall either side of.
@@ -3950,14 +3949,13 @@ mod tests {
         /// count changes, which is the resize and offline-resolution case (#491).
         /// Not an assertion.
         ///
-        /// A row's read is a filter whose SUPPORT is set by the row count, so the
-        /// same audio at the same zoom draws brighter or darker as the pane grows
-        /// — visible when the editor and an export of the same take disagree. The
-        /// noise row is the control: the mean's dependence over a pure floor is a
+        /// A pixel's read is a filter whose SUPPORT is set by the row count, so
+        /// the same audio at the same zoom draws brighter or darker as the pane
+        /// grows unless the filter is LINEAR in the level — visible when the
+        /// editor and an export of the same take disagree. The
+        /// noise row is the control: a read's dependence over a pure floor is a
         /// fraction of what it is over partials, so what moves the brightness is
-        /// spectral features NARROWER than a row rather than the floor
-        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
-        /// was set against.
+        /// spectral features NARROWER than a pixel rather than the floor.
         ///
         /// Through the shader, so the number stands for the picture that ships;
         /// [`probe_read`] is what makes the pane mean readable off it.

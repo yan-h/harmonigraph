@@ -1599,12 +1599,22 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
 /// against the default ceiling, so the spectrum curve is drawn at its full
 /// depth budget. 1 kHz because it is the tilt's own pivot, where the slope
 /// takes nothing off and the level is the tone's alone.
+///
+/// Loud by 40 dB rather than by a little, because a pixel of the curve
+/// resamples the whole run of buckets under it
+/// ([`footprint_mean`](super::spectrogram::footprint_mean)) and a tone is
+/// narrower than that run on a small pane: at 100 points of pitch axis across
+/// the analyzer's ten octaves the tone's own buckets are a fraction of what
+/// its pixel covers, so the level drawn is a fraction of the way up from the
+/// floor. The headroom this measures is a property of the axis, so the
+/// fixture's job is only to peg the curve at the top of it.
 fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let mut state = fresh();
     state.spectrum_config = cfg;
     let sr = 48_000.0;
-    let samples: Vec<f32> =
-        (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
+    let samples: Vec<f32> = (0..48_000)
+        .map(|i| 100.0 * (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
+        .collect();
     state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
 
     // A screen of its own: `rect` here runs to 1200x400, which SCREEN could

@@ -357,24 +357,24 @@ pub(crate) fn spectral_pane(
             // each other, which was survivable only while most buckets were
             // zero.
             //
-            // The run is read by the heatmap's own power mean
-            // ([`spectrogram::power_mean`]), not by a MAX, and the two must
-            // stay the same read: a pixel of the curve and a row of the heatmap
-            // cover the same buckets. A MAX here would put a ridge and the curve above it at
-            // different heights on the same tone — and it carries the same
-            // fault on its own account, since the largest of N draws grows with
-            // N, so the curve's noise floor would lift as the pitch axis was
-            // zoomed out.
-            let bucket_at = |midi: f32| {
-                (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as isize)
-                    .clamp(0, levels.len() as isize - 1) as usize
-            };
+            // The run under a pixel is RESAMPLED by the heatmap's own operator
+            // ([`spectrogram::footprint_mean`]), not read by a MAX, and the two
+            // must stay the same read: a pixel of the curve and a pixel of the
+            // heatmap cover the same buckets. A MAX here would put a ridge and
+            // the curve above it at different heights on the same tone — and it
+            // carries the same fault on its own account, since the largest of N
+            // draws grows with N, so the curve's noise floor would lift as the
+            // pitch axis was zoomed out.
+            let bucket_x = |midi: f32| (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
             let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
             let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
-                    let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
-                    let level = spectrogram::power_mean(&levels[b0..=b1.max(b0)]);
+                    let level = spectrogram::footprint_mean(
+                        levels,
+                        bucket_x(edge(c)),
+                        bucket_x(edge(c + 1)),
+                    );
                     let t = (c as f32 + 0.5) / cols as f32;
                     (scale.min_midi + t * scale.span, t, level)
                 })

@@ -17,71 +17,93 @@
 use egui::Color32;
 use harmonigraph_render::SpectrogramVertex;
 
-use super::axes::{Axes, PitchScale, TimeAxis};
+use super::axes::{power_db, Axes, PitchScale, TimeAxis};
 use crate::spectrogram::{
     frame_data, hold_time, read_of, run_for, slab_drawn, Columns, PaneView, Plan, TexLayout,
 };
 use crate::SharedState;
 use harmonigraph_scene::Gradient;
 
-/// Order of the power mean a row takes over the run of buckets under it — how
-/// hard that read leans toward the loudest of them. Uploaded as
-/// [`SpectrogramRead::mean_steps`](harmonigraph_render::SpectrogramRead), which
-/// is the form the fragment shader reads it in.
+/// The MEAN OF dB over the buckets a pixel covers — the operator the heatmap's
+/// fragment shader performs on stored dB bytes, written here in the curve's own
+/// domain of powers, where the same operator is the geometric mean.
 ///
-/// A plain MAX is the obvious read, and it makes the picture's NOISE FLOOR a
-/// function of the ZOOM. Zoomed out a row covers a dozen-odd buckets, and the
-/// largest of a dozen samples of a fluctuating floor sits well above their
-/// typical value — 4.7 dB for the exponentially distributed power a noise floor
-/// has, against 0 dB for a row reading a single bucket. So the same passage
-/// reads brighter between its partials the further out it is zoomed, and the
-/// brightness is a statement about how wide the pane is rather than about the
-/// sound. It climbs without limit, too: the excess goes as the log of the run,
-/// so there is no zoom at which it settles.
+/// The pixel covers `[x0, x1)` of the bucket axis, where bucket `b` spans
+/// `[b, b + 1)`. Wider than a bucket, the answer is the AREA-WEIGHTED mean of
+/// what it covers: fractional weights where the footprint cuts its first and
+/// last bucket, unit weights between. Narrower, the grid is being asked for
+/// more than it holds, and the answer is read between the two bucket CENTRES
+/// the footprint's own centre sits between.
 ///
-/// A power mean estimates a fixed property of the distribution instead, so it
-/// CONVERGES as the run widens rather than climbing with it. The order sets
-/// where it sits between the plain mean (1) and the max (infinity). Four is high
-/// enough to keep a partial reading as a partial — the analysis lobe is many
-/// buckets wide wherever the axis outruns the FFT, so a lobe fills its row
-/// rather than being diluted in it — and low enough to settle quickly, landing
-/// 3.4 dB over a noise floor's mean and staying there.
+/// **What it is constrained to** is that the picture is an IMAGE of the
+/// spectrum and a pane is a window onto it, so a pane's pixel height decides
+/// how finely that image is sampled and nothing else. dB is the quantity the
+/// ramp is indexed by, so a mean of dB is LINEAR in what gets drawn; footprints
+/// tile the axis and every one of them covers the same number of buckets; so
+/// what a pane integrates is the average over the buckets on screen, at any
+/// height, and the editor and an export of one take agree by construction
+/// rather than by tuning. A power mean of any order cannot have that property:
+/// a feature narrower than a pixel is attenuated as the pixel widens (by
+/// `N^(-1/p)`) while its share of the pane grows (by `N`), and no order makes
+/// the two cancel. That is #491's 8.7 dB, and it is arithmetic rather than a
+/// dial.
 ///
-/// What it costs is absolute level on anything NARROWER than its row, which up
-/// near the top of the axis a lobe can be: alone in a run of ten buckets, it
-/// reads 2.5 dB down. That is a trade rather than a win. For a lobe WIDER than
-/// its row — which is most of the axis, since the analysis lobe spans many
-/// buckets wherever the axis outruns the FFT — the lobe reads unchanged and the
-/// floor drops away beneath it, so contrast improves by 1.3 dB over a run of
-/// four buckets and 1.8 over eight. For a narrow one both come down together.
-/// What does not vary either way is the zoom.
+/// **What it costs** is that a partial narrower than a pixel dims in proportion
+/// to its share of that pixel, exactly as it does in a photograph scaled down:
+/// a lobe alone in a run of ten reads a tenth of the way up from the floor
+/// rather than near its own level. And the noise floor reads at its own mean
+/// rather than the 3.4 dB above it an order-4 power mean settled at, so the
+/// quiet between partials sits lower and what stands out does so by keeping its
+/// own share of the pixel.
 ///
-/// Read by the CURVE as well as by the heatmap, through [`power_mean`] — the two
-/// halves of the pane draw one measurement two ways, and a pixel of each covers
-/// the same run of buckets, so a run that read differently between them would
-/// put a ridge and the curve over it at different heights.
-pub(crate) const ROW_MEAN_ORDER: i32 = 4;
-
-/// The power mean of order [`ROW_MEAN_ORDER`] over a run of POWERS — the curve's
-/// form of the read the heatmap's fragment shader performs on stored dB bytes.
+/// Read by the CURVE and by the Spiral pane as well as by the heatmap — the two
+/// halves of the Spectral pane draw one measurement two ways, and a pixel of
+/// each covers the same run of buckets, so a run that read differently between
+/// them would put a ridge and the curve over it at different heights.
+/// `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` is what holds the two
+/// forms of it together.
 ///
 /// Two implementations of one definition rather than one shared function,
 /// because the two callers hold their buckets differently and each form is the
 /// cheap one where it lives: the heatmap's are bytes of dB in a storage buffer,
-/// where the mean is a table lookup and a sum, and the curve's are floats of
-/// power, where it is this. `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` is what keeps
-/// the pair honest.
+/// where the mean is a weighted sum of them, and the curve's are floats of
+/// power, where it is this.
 ///
-/// Denominated against the run's own loudest, exactly as the table is, and for
-/// the same reason: a raw fourth power of an absolute power underflows an `f32`
-/// long before the axis runs out of quiet buckets.
-pub(crate) fn power_mean(run: &[f32]) -> f32 {
-    let top = run.iter().fold(0.0f32, |a, &b| a.max(b));
-    if run.len() < 2 || top <= 0.0 {
-        return top;
+/// Reached through [`power_db`], so a bucket the analyzer reports as silent
+/// contributes the store's own floor rather than an infinity — the same value
+/// the heatmap's byte 0 carries.
+pub(crate) fn footprint_mean(powers: &[f32], x0: f32, x1: f32) -> f32 {
+    let n = powers.len();
+    if n == 0 {
+        return 0.0;
     }
-    let sum: f32 = run.iter().map(|&p| (p / top).powi(ROW_MEAN_ORDER)).sum();
-    top * (sum / run.len() as f32).powf(1.0 / ROW_MEAN_ORDER as f32)
+    let top = n as f32 - 1.0;
+    let idx = x0.floor().clamp(0.0, top) as usize;
+    let last = x1.floor().clamp(0.0, top) as usize;
+    if last > idx {
+        let lo = x0.clamp(0.0, n as f32);
+        let hi = x1.clamp(0.0, n as f32);
+        let (mut sum, mut total) = (0.0f32, 0.0f32);
+        for (k, &p) in powers[idx..=last].iter().enumerate() {
+            let b = (idx + k) as f32;
+            let w = (hi.min(b + 1.0) - lo.max(b)).max(0.0);
+            sum += w * power_db(p);
+            total += w;
+        }
+        // A run of two or more whose overlap has been clamped to nothing — the
+        // degenerate answered rather than one a pane arrives at.
+        if total <= 0.0 {
+            return powers[idx];
+        }
+        return 10f32.powf(0.1 * sum / total);
+    }
+    // A bucket's centre sits half a bucket above where the floor divides them,
+    // which is the 0.5; the clamp keeps the upper tap inside the spectrum.
+    let x = 0.5 * (x0 + x1) - 0.5;
+    let b = x.floor().clamp(0.0, (n as f32 - 2.0).max(0.0)) as usize;
+    let f = (x - b as f32).clamp(0.0, 1.0);
+    let (a, c) = (power_db(powers[b]), power_db(powers[(b + 1).min(n - 1)]));
+    10f32.powf(0.1 * (a + (c - a) * f))
 }
 
 /// The scrolling quads the heatmap is read through, from `d_near` to `d_far`.
@@ -96,7 +118,7 @@ pub(crate) fn power_mean(run: &[f32]) -> f32 {
 /// ribbon at the same depth does. Pinning it to the slab endpoints instead jumps
 /// a whole slab at a time, which is both the picture losing the notes it is
 /// meant to register with and a per-slab stutter. `t` is the plain pitch
-/// fraction; the row geometry it maps through is the shader's.
+/// fraction; the footprint each fragment reads it over is the shader's.
 pub(super) fn heatmap_vertices(
     axes: &Axes,
     time: &TimeAxis,

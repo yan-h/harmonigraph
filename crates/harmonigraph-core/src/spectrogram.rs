@@ -14,10 +14,10 @@
 //!   The encoding therefore owes the readers two things rather than one. It is
 //!   MONOTONE, so the aggregation along TIME — a MAX, here and in the display's
 //!   slabs alike — is order-preserving and needs no decode. And it is AFFINE in
-//!   dB, so the aggregation across PITCH, which is a power mean and does have
-//!   to decode, can do it from a 256-entry table indexed by a difference of
-//!   bytes rather than by reaching for a logarithm per bucket. Neither reader
-//!   ever converts a byte back to a float of power.
+//!   dB, so the aggregation across PITCH — a mean of dB, which is what stops a
+//!   pane's pixel height deciding how bright the picture is — is a mean of the
+//!   BYTES and needs no decode either. Neither reader ever converts a byte back
+//!   to a float of power.
 //!
 //!   Half a dB was checked by eye before it was settled on: the store was
 //!   briefly sixteen bits with a toggle that drew either grid, and the two
@@ -106,7 +106,7 @@ impl SpectrogramColumn {
     /// MAX — a spectrogram cell answers "was there anything here", and averaging
     /// a bright thin partial with its quiet neighbour answers "not much". This
     /// merges two columns, so it is that axis and not the pitch one, where the
-    /// display takes a power mean instead over a run of INDEPENDENT buckets. The
+    /// display resamples a run of INDEPENDENT buckets instead. The
     /// timestamp lands at the midpoint, the least any peak inside can be moved.
     fn absorb(&mut self, older: &SpectrogramColumn) {
         for (mine, &theirs) in self.db.iter_mut().zip(older.db.iter()) {
@@ -339,7 +339,7 @@ mod tests {
     /// power, so a MAX over stored bytes is a MAX over the powers they stand
     /// for. Anything else would let the time-axis aggregation pick the quieter
     /// of two buckets. (The other half is that it is affine in dB, which is what
-    /// lets the pitch axis take a power mean off a table — the display's own
+    /// makes the pitch axis' mean of dB a mean of the BYTES — the display's own
     /// `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` holds that end.)
     #[test]
     fn quantizing_preserves_order() {
