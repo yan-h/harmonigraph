@@ -113,25 +113,71 @@ use egui_dock::{DockArea, DockState};
 /// never comes at all, where the alternative is every settings pane's wheel
 /// dead until the next click.
 ///
-/// What this cannot see is a release lost while the window keeps BOTH the focus
-/// and the pointer — a host popup handed the mouse-up, a modal opened under the
-/// finger — because every signal it reads says the gesture is still going. From
-/// in here the two are indistinguishable, so the repair is the shell's: the
-/// plugin's frame tick asks the OS whether the button is really held and
-/// synthesises the release it is owed (`settle_stuck_buttons` in the vendored
-/// baseview), which is the one authority neither egui nor this has. This stays
-/// as the guard for the shells that offer no such answer.
+/// A release lost while the window keeps BOTH the focus and the pointer — a
+/// host popup handed the mouse-up, a modal opened under the finger — is
+/// indistinguishable from a gesture still going by either signal above. Two
+/// answers cover it, and only one of them is here. The shell's is the
+/// authority: the plugin's frame tick asks the OS whether the button is really
+/// held and synthesises the release it is owed (`settle_stuck_buttons` in the
+/// vendored baseview), which is a question neither egui nor this can put. What
+/// this has of its own is the WHEEL. A notch is a hand doing something that is
+/// not holding a button, so a drag whose widget the pointer is not even over
+/// any more is finished, whatever egui still believes the button is doing —
+/// and the wheel is exactly the input that the stale drag is stopping, so the
+/// evidence arrives at the moment it is needed.
+///
+/// The exception the rule has to leave is the picture panes, where
+/// scroll-to-zoom during a drag-to-orbit is ONE gesture rather than two. There
+/// the pointer is over the widget being dragged, which is what separates the
+/// two cases without any pane having to declare which kind it is.
+///
+/// Ending the drag rather than merely reporting it is what makes the first
+/// notch scroll: egui spreads a wheel event over the frames that follow it, and
+/// the dock's scroll areas run later in this same pass.
+///
+/// The answer is a line for the Console, and only for the wheel arm. Losing the
+/// pointer or the focus mid-drag is ordinary — every gesture let go outside the
+/// window ends that way — but a drag the wheel has to step over is a release
+/// that went missing AND was not repaired by the shell, which is the state
+/// worth naming out loud while it is still reproducible.
 ///
 /// Not a `Sense::drag` problem in any one pane — a ValueBar strands the wheel
 /// exactly as well as the Analyzer's pan does, which is why this sits once at
 /// the root rather than in whichever pane the drag came from.
-fn end_stranded_drag(ctx: &egui::Context) {
-    if ctx.dragged_id().is_none() {
-        return;
-    }
-    if !kept_focus(ctx) || ctx.input(|i| i.pointer.latest_pos().is_none()) {
+fn end_stranded_drag(ctx: &egui::Context) -> Option<String> {
+    let dragged = ctx.dragged_id()?;
+    let (at, wheeled) = ctx.input(|i| {
+        (
+            i.pointer.latest_pos(),
+            i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })),
+        )
+    });
+    if !kept_focus(ctx) || at.is_none() {
         ctx.stop_dragging();
+        return None;
     }
+    if !wheeled {
+        return None;
+    }
+    // Asked outside the `input` closure: `read_response` takes the context's
+    // write lock, and reaching for it from under the read one deadlocks. It
+    // answers from the previous pass, which is the only place a rect exists
+    // this early in this one.
+    let held = ctx.read_response(dragged).map(|r| r.rect);
+    if held.zip(at).is_some_and(|(rect, at)| rect.contains(at)) {
+        return None;
+    }
+    ctx.stop_dragging();
+    Some(match held {
+        Some(r) => format!(
+            "wheel: a drag on {:.0},{:.0} {:.0}x{:.0} outlived its release",
+            r.min.x,
+            r.min.y,
+            r.width(),
+            r.height()
+        ),
+        None => "wheel: a drag on an undrawn widget outlived its release".to_owned(),
+    })
 }
 
 /// Whether the editor still has the window whatever gesture is in flight began
@@ -180,7 +226,9 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
-    end_stranded_drag(ui.ctx());
+    if let Some(stranded) = end_stranded_drag(ui.ctx()) {
+        state.console.log(stranded);
+    }
 
     // The chrome scale, before anything lays out at the old one. The shell
     // built `ui` from the style as it stood on the way in, so a scale that has
