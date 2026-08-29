@@ -271,16 +271,19 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     assert_eq!(
         call.draws,
         vec![
-            // Both silent nodes: nothing has been drawn yet, and two names on
-            // one sheet are one uninterrupted draw.
-            Draw::Label(0, 2, 0),
+            // Both silent nodes: nothing has been drawn yet. Two names, two
+            // draws — a name is its shadow and then its ink, and the second
+            // name's shadow has to land on the first's ink (see
+            // [`Draw::Label`]).
+            Draw::Label(0, 1, 0),
+            Draw::Label(1, 2, 1),
             // The home sheet's own node — its knockout, its disc, its name.
             Draw::Clearing(0),
             Draw::Nodes(0, 1),
-            Draw::Label(2, 3, 1),
+            Draw::Label(2, 3, 2),
             // And the near sheet's, after everything.
             Draw::Nodes(1, 2),
-            Draw::Label(3, 4, 2),
+            Draw::Label(3, 4, 3),
         ],
         "a name goes after its own node, over the instances that ship",
     );
@@ -289,32 +292,32 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         vec![1.0, 2.0, 3.0, 0.0],
         "the glyphs are regrouped into the order they are drawn in",
     );
-    // One box per DRAW and not per name, and the merged draw's box spans both
-    // of the names in it: the hole is cut once over whatever that draw covers,
-    // which is what stops two names' holes compounding where they overlap.
+    // One caster per name, in the same order, each the box of its own glyph.
     assert_eq!(
-        call.gutters.iter().map(|g| g.rect).collect::<Vec<_>>(),
-        vec![[1.0, 0.0, 2.0, 1.0], [3.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
-        "the merged run's box holds both its names and each other box holds one",
+        call.casters.iter().map(|c| c.rect).collect::<Vec<_>>(),
+        vec![
+            [1.0, 0.0, 1.0, 1.0],
+            [2.0, 0.0, 1.0, 1.0],
+            [3.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0]
+        ],
+        "each name casts from its own box",
     );
 }
 
 /// Two names landing next to each other in the order from different sheets are
-/// two draws, the nearer last — a merge is for one sheet only.
+/// two draws, the nearer last.
 ///
-/// Adjacent names merge into a single rim-then-fill draw, which is what stops
-/// two neighbouring letters darkening each other's ink where their rims
-/// overlap. Across a sheet boundary that is the wrong answer: the nearer name's
-/// rim is meant to separate its glyphs from the farther name's fill, and on a
-/// face-on sevens lattice the two overlap exactly, a sevens node sitting on top
-/// of its home node.
+/// On a face-on sevens lattice the two overlap exactly, a sevens node sitting
+/// on top of its home node, so which draws last is which is read: the nearer
+/// name's shadow lands on the farther name's ink and its ink over both.
 ///
 /// The state is an ordinary one: a home node sounding with a silent node on the
 /// sheet in front of it hovered. The hovered node draws nothing and is named
 /// all the same, so the two names land side by side in the walk with nothing
-/// between them to break the run.
+/// between them.
 #[test]
-fn two_adjacent_names_from_different_sheets_draw_the_nearer_last_and_apart() {
+fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
     let mut scene = parity_scene();
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
@@ -363,9 +366,9 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last_and_apart() {
     assert_eq!(
         call.draws,
         vec![Draw::Clearing(0), Draw::Nodes(0, 1), Draw::Label(0, 1, 0), Draw::Label(1, 2, 1)],
-        "names from different sheets are two draws, the nearer's rim on the other's fill",
+        "names from different sheets are two draws, the nearer's shadow on the other's ink",
     );
-    assert_eq!(call.gutters.len(), 2, "two draws that did not merge cut two holes");
+    assert_eq!(call.casters.len(), 2, "two names, two casters");
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 0.0],
@@ -755,273 +758,492 @@ fn a_names_shadow_reaches_as_far_as_its_width_says() {
     assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
 }
 
-/// One Shadow, two shaders: the curve a name's standoff is cast on is the curve
-/// a ring's and a cross's are cast on, constant for constant.
+/// The Shadow depth's floor is one number across a name and a ring:
+/// text.wgsl's `KEEP_FLOOR` is lattice.wgsl's `SHADOW_KEEP_FLOOR`.
 ///
-/// It is written twice — `standoff_coverage` and `gap_shade` in lattice.wgsl,
-/// their copies in text.wgsl — because the two draws are two shader modules and
-/// neither can call into the other. This is what that costs. Every number under
-/// the curve is tuned, and a copy of one drifting is a name whose shadow is a
-/// different shape from the shadow beside it at some setting of a bar that
-/// carries both, which no single picture makes obvious.
-///
-/// The BODIES cannot be compared this way — the lattice reads its terms off a
-/// node's uv and the glyph pass off `Locals` — so what is pinned is the
-/// arithmetic's constants, which is where drift would actually land.
+/// Written twice because there is no linkage between shader modules, and the
+/// one constant the two shadows still share: the top of the depth bar is a
+/// shadow ten stops deep on both, so a name's shadow and a ring's at that
+/// setting are the same darkness.
 #[test]
-fn the_names_shadow_is_the_rings_own_curve() {
-    let value = |src: &str, name: &str, what: &str| -> String {
-        let prefix = format!("const {name}: f32 = ");
-        src.lines()
-            .find_map(|line| line.trim().strip_prefix(&prefix))
-            .unwrap_or_else(|| panic!("{what} no longer defines {name}"))
-            .trim_end_matches(';')
-            .to_owned()
+fn the_names_shadow_depth_bottoms_out_where_the_rings_does() {
+    use crate::shadow::tests::shader_const;
+    assert_eq!(
+        shader_const(crate::text::TEXT_SRC, "KEEP_FLOOR"),
+        shader_const(SHADER_SRC, "SHADOW_KEEP_FLOOR"),
+        "the names' floor and the rings' have drifted apart",
+    );
+}
+
+/// The mid-grey the share tests stand on, as the pane's ground and the
+/// Shooter's clear alike.
+const GREY: f32 = 0.55;
+
+/// [`lit_node_and_a_name`] with no light, over a mid-grey ground: the picture
+/// is the node's ink and the ground, both bright enough that a share taken off
+/// either is a reading. The Shooter has to be cleared to the same grey
+/// ([`over_grey_clear`]) so the ground is one value inside the node's clearing
+/// and out.
+fn inked_on_grey(shadow: f32, depth: f32) -> Scene {
+    let mut scene = lit_node_and_a_name(0.0, shadow, depth);
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    scene
+}
+
+/// The Shooter's clear for a scene [`inked_on_grey`] built.
+fn over_grey_clear() -> wgpu::Color {
+    wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 }
+}
+
+/// The brightness of one pixel of `shot`, at `(x, y)` of a `size` frame.
+fn bright_at(shot: &[u8], size: [u32; 2], x: u32, y: u32) -> i64 {
+    let i = ((y * size[0] + x) * 4) as usize;
+    brightness(&shot[i..i + 3])
+}
+
+/// A name's shadow takes the same SHARE off its node's ink as off the ground
+/// beside it, at the same distance from the name.
+///
+/// The receiver asymmetry, closed. Ink and ground are both whatever is already
+/// in the frame under the name's box, and one multiply lands on both — where a
+/// hole cleared to the ground on one curve and a shade dimmed the light on
+/// another, and at a quarter Shadow the ink kept 75% where the ground kept 55%.
+/// Measured on a stroke standing across the octave band's outer edge, so the
+/// same distance out from the stroke is the band's ink on one side and the bare
+/// ground on the other.
+///
+/// No light, so what is under the name depends on nothing the Reach does; the
+/// camera in close so the band is tens of pixels deep and the pair of readings
+/// stands well inside it.
+#[test]
+fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.25;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
     };
-    for name in [
-        "SHADOW_TAIL",
-        "SHADOW_STOP",
-        "SHADOW_SHAPE_RIND",
-        "SHADOW_SHAPE_PLAIN",
-        "SHADOW_SOFT_FLOOR",
-        "SHADOW_KEEP_FLOOR",
-    ] {
-        assert_eq!(
-            value(SHADER_SRC, name, "the lattice"),
-            value(crate::text::TEXT_SRC, name, "the names"),
-            "the lattice's {name} and the names' have drifted apart",
+    shooter.clear = over_grey_clear();
+    let mut scene = inked_on_grey(SHADOW, 1.0);
+    // In close, and AIMED at the band's outer edge, so the stroke stands in
+    // the middle of the pane with the band's ink to one side and the ground to
+    // the other, both tens of pixels wide.
+    scene.camera.distance = 4.0;
+    scene.camera.target = glam::Vec3::new(scene.outer_outer * scene.marker_unit, 0.0, 0.0);
+    let edge = on_screen(&scene, SIZE, scene.camera.target);
+    let rect = [edge.x - NAME_SIZE / 2.0, edge.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
+    let bare = shooter.shot(&scene);
+    let named = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![name_glyph(&scene, rect)]));
+
+    let row = edge.y.round() as u32;
+    let ground = brightness(&[(GREY * 255.0).round() as u8; 3]);
+    // The stroke covers the pixels `left..right`; the pair `d` out is the
+    // pixel whose CENTRE is `d - 0.5` beyond each edge, so the two stand at
+    // one distance from the ink.
+    let (left, right) = (rect[0].round() as u32, (rect[0] + rect[2]).round() as u32);
+    let mut compared = 0;
+    for d in 2..48u32 {
+        let (x_in, x_out) = (left - d, right - 1 + d);
+        let (bare_in, bare_out) =
+            (bright_at(&bare, SIZE, x_in, row), bright_at(&bare, SIZE, x_out, row));
+        // Only while the inward pixel is the band's ink — far from the
+        // ground's value, so a sector gap showing the ground through the band
+        // is not mistaken for it — and the outward one is the bare ground
+        // exactly.
+        if (bare_in - ground).abs() < 200 || bare_out != ground {
+            continue;
+        }
+        let share = |shot: &[u8], x: u32, bare: i64| {
+            1.0 - bright_at(shot, SIZE, x, row) as f64 / bare as f64
+        };
+        let (share_in, share_out) = (share(&named, x_in, bare_in), share(&named, x_out, bare_out));
+        // A twentieth of the share: the band's ink is dark, so one level of
+        // rounding there is a fiftieth on its own.
+        assert!(
+            (share_in - share_out).abs() < 0.05,
+            "{d} px out, the name takes {share_in:.3} of the band's ink and {share_out:.3} of the \
+             ground",
+        );
+        if share_out > 0.1 {
+            compared += 1;
+        }
+    }
+    assert!(compared >= 6, "only {compared} pairs of pixels stood inside the shadow on both sides");
+}
+
+/// A name is not darkened by its own shadow.
+///
+/// The shadow is drawn before the ink, and the blend's ink term is not
+/// multiplied, so a name's letters are the one thing in the frame its shadow
+/// never touches — and the wash they take is the RAW light, which its shadow
+/// has not been through. Read at the top of the depth bar against the bottom
+/// of it, on the name's whole pixels; the light is on, so a shadow finding its
+/// way onto the ink would have something to take.
+#[test]
+fn a_name_is_not_darkened_by_its_own_shadow() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.3;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The name's whole pixels, read with no light in the picture: what it
+    // drew, at the brightest colour in that set, which is its ink laid flat
+    // (see `a_name_wears_the_wash_it_stands_in`). Under the light every pixel
+    // of the name wears a different wash, so this is where the set is one
+    // colour.
+    let unlit = lit_node_and_a_name(0.0, SHADOW, 0.0);
+    let bare_unlit = shooter.shot(&unlit);
+    let named_unlit = shooter.shot_with(&unlit, one_name(&unlit, SIZE));
+    let drawn: std::collections::BTreeSet<usize> = (0..bare_unlit.len())
+        .step_by(4)
+        .filter(|&i| named_unlit[i..i + 4] != bare_unlit[i..i + 4])
+        .collect();
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| named_unlit[i + c]).max().unwrap_or(0));
+    let own: Vec<usize> =
+        drawn.iter().copied().filter(|&i| named_unlit[i..i + 3] == full).collect();
+    assert!(own.len() > 30, "the name covers {} whole pixels of its own", own.len());
+
+    let flat = lit_node_and_a_name(1.6, SHADOW, 0.0);
+    let named_flat = shooter.shot_with(&flat, one_name(&flat, SIZE));
+    let deep = lit_node_and_a_name(1.6, SHADOW, 1.0);
+    let bare_deep = shooter.shot(&deep);
+    let named_deep = shooter.shot_with(&deep, one_name(&deep, SIZE));
+    let moved = own.iter().filter(|&&i| named_deep[i..i + 3] != named_flat[i..i + 3]).count();
+    assert_eq!(moved, 0, "the Shadow depth moved {moved} of the name's own {} pixels", own.len());
+    // And the same depth darkens the ground round the name, so there was a
+    // shadow here to keep off the ink.
+    let dimmed = (0..bare_deep.len())
+        .step_by(4)
+        .filter(|i| !drawn.contains(i))
+        .filter(|&i| brightness(&named_deep[i..i + 3]) < brightness(&bare_deep[i..i + 3]))
+        .count();
+    assert!(dimmed > 40, "the name's shadow darkened only {dimmed} pixels of ground");
+}
+
+/// Two facing strokes of one name cast deeper between them than either casts
+/// alone at the same distance.
+///
+/// #490's crease, closed: a shadow is a blur of the ink and a blur is linear,
+/// so the gap between two strokes holds both their ink and is darker than
+/// either side of a lone stroke — where a nearest-distance field is a `min`,
+/// so the second stroke contributed nothing and the midline was a crease.
+///
+/// The control is each stroke shot ALONE, and the claim is against the deeper
+/// of the two pixel by pixel: a `max` of the two profiles is exactly what a
+/// distance field draws, and comparing against one named stroke passes on a
+/// column half a pixel off the midline with the `max` explaining the whole
+/// difference.
+#[test]
+fn two_facing_strokes_cast_deeper_between_them_than_either_alone() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.6;
+    /// A stroke, and the gap between the pair, in points. The gap is well
+    /// under the blur's reach at this Shadow, which the fixture asserts below
+    /// rather than assumes.
+    const STROKE: [f32; 2] = [8.0, 18.0];
+    const GAP: f32 = 8.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Half depth: at the top of the bar the lone stroke's shadow is already
+    // within a level of black at the midline, and darker than black is not a
+    // reading.
+    shooter.clear = over_grey_clear();
+    let scene = inked_on_grey(SHADOW, 0.5);
+    let at = on_screen(&scene, SIZE, NAME_AT);
+    let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
+    let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));
+    let bare = shooter.shot(&scene);
+    let pair = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![left, right]));
+    let left_alone = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![left]));
+    let right_alone = shooter.shot_with(&scene, a_name(&scene, SIZE, vec![right]));
+
+    // Down the midline of the gap, through the strokes' middle rows.
+    let x = at.x.round() as u32;
+    let rows = (at.y - STROKE[1] / 2.0 + 3.0).round() as u32
+        ..(at.y + STROKE[1] / 2.0 - 3.0).round() as u32;
+    assert!(rows.len() >= 8, "the strokes are {} rows tall", rows.len());
+    for y in rows {
+        let (bare, pair, left, right) = (
+            bright_at(&bare, SIZE, x, y),
+            bright_at(&pair, SIZE, x, y),
+            bright_at(&left_alone, SIZE, x, y),
+            bright_at(&right_alone, SIZE, x, y),
+        );
+        // Each lone stroke's shadow reaches the midline: the fixture's gap is
+        // inside the blur, or the pair is two shadows that never meet.
+        assert!(left < bare - 6 && right < bare - 6, "at row {y} a lone stroke's shadow ({left}, {right}) does not reach the midline ({bare})");
+        assert!(
+            pair < left.min(right) - 6,
+            "at row {y} the pair leaves {pair} between the strokes where the deeper stroke alone \
+             leaves {}",
+            left.min(right),
         );
     }
 }
 
-/// A name knocks a hole in what was drawn before it, the way its node does —
-/// its own node's RINGS included, those being drawn immediately under it.
+/// A name on a NEARER node shadows a farther node's rings, and a name on the
+/// farther node does not shadow the nearer node's.
 ///
-/// The reading is what makes this a covering claim and not a dimming one. A
-/// hole is a premultiplied over of the GROUND at its own coverage, so every
-/// pixel it touches lands BETWEEN the picture with no name in it and that
-/// ground. Ink that merely darkened what it stood on would fail that on the
-/// first pixel where the ring is darker than the ground it stands over, and a
-/// name that painted a halo of its own would fail it everywhere.
+/// The case that is a per-NODE answer and nothing coarser: two nodes of ONE
+/// sheet, overlapping on screen under an oblique camera, so anything that
+/// groups casters by sheet would have to leave the pair alone. In the
+/// painter's order the near node is drawn after the far node's name, so its
+/// ink covers that name's shadow; its own name is drawn after everything and
+/// lands on both.
 ///
-/// The Reach is 0, so no light stands anywhere and the ground is one value for
-/// the whole frame — `Scene::background`, which is what `node_paint` and
-/// `fs_fill_lit` both clear to. With light in the picture the same claim needs
-/// the field read back per pixel, which is the shader's own arithmetic restated
-/// as a test.
-///
-/// The control is the same frame with no name in it, at the SAME Shadow.
-/// Everything else in the picture moves with that bar — the node's own hole,
-/// the standoff over it — so two shots at two Shadows say nothing about the
-/// name; two shots at one, differing only in whether the glyph ships, say all
-/// of it.
+/// The fixture asserts the overlap and that the far name's shadow WOULD have
+/// reached the near node — the far node shot alone with its name darkens the
+/// pixels the near node then covers — so the second claim is not a shadow that
+/// never got there.
 #[test]
-fn a_name_covers_the_rings_it_stands_on() {
+fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
     const SIZE: [u32; 2] = [256, 256];
-    const SHADOW: f32 = 0.6;
-    /// How far a node's own billboard reaches, in node radii —
-    /// in lattice.wgsl. The outer bound on anything a node paints, and so on
-    /// anything a hole cut in that node can be read against.
-    const NODE_QUAD: f32 = 1.6;
+    const SHADOW: f32 = 0.4;
+    /// How far apart the pair stands along the sheet, in world units — under
+    /// the pitch below about a drawn disc on screen, so the far node's band
+    /// keeps a crescent past the near node's clearing.
+    const APART: f32 = 4.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
-        let scene = lit_node_and_a_name(0.0, shadow, 1.0);
-        let bare = shooter.shot(&scene);
-        let named = shooter.shot_with(&scene, name_at(&scene, SIZE, name_on_the_band(&scene)));
-        (scene, bare, named)
+    shooter.clear = over_grey_clear();
+    // The pair, and the same scene holding any subset of it: a shot of one
+    // node alone is the same picture with the other left out.
+    let scene_of = |along: &[f32]| -> Scene {
+        let mut scene = inked_on_grey(SHADOW, 1.0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Perspective,
+            pitch: 1.1,
+            distance: 9.0,
+            target: glam::Vec3::new(0.0, APART / 2.0, 0.0),
+            ..Default::default()
+        };
+        let node = scene.nodes[0];
+        scene.nodes.clear();
+        for &y in along {
+            let mut at = node;
+            at.world_pos = glam::Vec3::new(0.0, y, 0.0);
+            scene.nodes.push(at);
+        }
+        rows_per_node(&mut scene);
+        scene
+    };
+    let scene = scene_of(&[0.0, APART]);
+
+    // Which of the two is nearer, in the terms the pass sorts by (`order` in
+    // lib.rs), and where each stands on the pane.
+    let eye = scene.camera.eye();
+    let forward = (scene.camera.target - eye).normalize_or_zero();
+    let depth = |i: usize| (scene.nodes[i].world_pos - eye).dot(forward);
+    let (near, far) = if depth(0) < depth(1) { (0usize, 1usize) } else { (1, 0) };
+    assert!(depth(near) < depth(far), "the pair stands at one depth");
+    let centre = |i: usize| on_screen(&scene, SIZE, scene.nodes[i].world_pos);
+    // The drawn disc's radius on screen: one quad uv, which is `marker_unit`
+    // world units (see `name_on_the_band`).
+    let radius = |i: usize| {
+        let edge = scene.nodes[i].world_pos + glam::Vec3::X * scene.marker_unit;
+        on_screen(&scene, SIZE, edge).distance(centre(i))
+    };
+    assert!(
+        centre(near).distance(centre(far)) < radius(near) + radius(far),
+        "the fixture's nodes must overlap on screen: {} apart at radii {} and {}",
+        centre(near).distance(centre(far)),
+        radius(near),
+        radius(far),
+    );
+    // The near node's own OPAQUE pixels: those its disc paints the same over
+    // black as over the grey — its ink, and the ground its clearing paints.
+    let alone = scene_of(&[scene.nodes[near].world_pos.y]);
+    let over_grey = shooter.shot(&alone);
+    shooter.clear = wgpu::Color::BLACK;
+    let over_black = shooter.shot(&alone);
+    shooter.clear = over_grey_clear();
+    let opaque: std::collections::BTreeSet<usize> = (0..over_grey.len())
+        .step_by(4)
+        .filter(|&i| over_grey[i..i + 4] == over_black[i..i + 4] && over_grey[i + 3] == 255)
+        .collect();
+    assert!(opaque.len() > 500, "the near node paints {} opaque pixels", opaque.len());
+    let index = |p: glam::Vec2| ((p.y.round() as u32 * SIZE[0] + p.x.round() as u32) * 4) as usize;
+    let pixel = |i: usize| {
+        let px = (i / 4) as u32;
+        glam::Vec2::new((px % SIZE[0]) as f32, (px / SIZE[0]) as f32)
     };
 
-    // The name's own INK, taken at a Shadow of 0 where a name paints that and
-    // nothing else. It does not move with the bar, so one reading answers for
-    // both shots.
-    let (_, flat_bare, flat) = shots(0.0);
-    let ink: std::collections::BTreeSet<usize> =
-        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] != flat_bare[i..i + 4]).collect();
-    assert!(ink.len() > 40, "the fixture's name must land on the pane, not {} pixels", ink.len());
+    // The far node's own ink: the band it paints, shot alone — the pixels far
+    // darker than the ground, which leaves out the faint halo round the band.
+    let without = scene_of(&[scene.nodes[far].world_pos.y]);
+    let without_bare = shooter.shot(&without);
+    let ground = brightness(&[(GREY * 255.0).round() as u8; 3]);
+    let far_ink = |i: usize| (brightness(&without_bare[i..i + 3]) - ground).abs() > 150;
 
-    let (scene, bare, named) = shots(SHADOW);
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let ground = [byte(scene.background.x), byte(scene.background.y), byte(scene.background.z)];
-    // Where the node's own billboard reaches, in pixels: uv 1 is 1.8 node
-    // radii, so nothing the node paints stands outside this and a hole inside
-    // it is a hole in the node.
-    let radius = scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32) * NODE_QUAD;
-    let centre = scene
-        .projector(glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32))
-        .project(glam::Vec3::ZERO)
-        .expect("the node stands in front of the camera");
-    let (mut touched, mut on_the_node) = (0usize, 0usize);
-    for i in (0..named.len()).step_by(4) {
-        if ink.contains(&i) || named[i..i + 4] == bare[i..i + 4] {
-            continue;
-        }
-        touched += 1;
-        for c in 0..3 {
-            let (was, now, to) = (bare[i + c] as i32, named[i + c] as i32, ground[c]);
-            assert!(
-                now >= was.min(to) - 2 && now <= was.max(to) + 2,
-                "a name moved a pixel outside its own ink to {now}, which is not between \
-                 the {was} it stood on and the {to} a hole clears to",
-            );
-        }
-        let px = (i / 4) as u32;
-        let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
-        if (x - centre.x).hypot(y - centre.y) <= radius {
-            on_the_node += 1;
-        }
-    }
-    assert!(touched > 250, "a name at Shadow {SHADOW} cleared only {touched} pixels");
-    assert!(
-        on_the_node > 150,
-        "a name must clear the node it stands on, and only {on_the_node} of {touched} \
-         cleared pixels were inside the node's own billboard",
-    );
-
-    // And with the Shadow shut it clears nothing at all: `ink` above IS the
-    // difference the name makes at 0, so a hole there would be counted into it
-    // and this asserts that set is the glyph's own footprint and no larger.
-    let outside: Vec<usize> = ink
-        .iter()
-        .copied()
-        .filter(|&i| {
-            let px = (i / 4) as u32;
-            let (x, y) = ((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
-            (x - centre.x).hypot(y - centre.y) > radius
-        })
+    // One stroke, on the far node's band where it comes out from under the
+    // near node: the visible pixel of that band nearest to anything the near
+    // node paints opaque, and the stroke stood a pixel off it on the far side.
+    // As close to the near node as a visible stroke can stand, so its shadow
+    // reaches what the near node paints — searched for rather than walked to,
+    // because where the two discs meet is a sector gap's or a rim's business.
+    let visible: Vec<glam::Vec2> = (0..without_bare.len())
+        .step_by(4)
+        .filter(|&i| far_ink(i) && !opaque.contains(&i))
+        .map(pixel)
         .collect();
+    let solid: Vec<glam::Vec2> = opaque.iter().map(|&i| pixel(i)).collect();
+    assert!(visible.len() > 100, "the far node shows {} pixels of ink", visible.len());
+    let nearest = |v: glam::Vec2| {
+        *solid.iter().min_by(|a, b| a.distance(v).total_cmp(&b.distance(v))).expect("opaque")
+    };
+    let (spot, edge) = visible
+        .iter()
+        .map(|&v| (v, nearest(v)))
+        .min_by(|(v, n), (w, m)| v.distance(*n).total_cmp(&w.distance(*m)))
+        .expect("visible");
+    let away = (spot - edge).normalize_or(glam::Vec2::Y);
+    let at = spot + away * (NAME_SIZE / 2.0 + 1.0);
     assert!(
-        outside.is_empty(),
-        "at a Shadow of 0 a name must paint its ink and nothing else, and {} pixels of it \
-         landed outside the node it names",
-        outside.len(),
+        far_ink(index(at)) && !opaque.contains(&index(at)),
+        "the stroke at {at:?} does not stand on the far node's visible ink",
+    );
+    assert!(
+        at.cmpgt(glam::Vec2::splat(NAME_SIZE)).all()
+            && at.cmplt(glam::Vec2::splat(SIZE[0] as f32 - NAME_SIZE)).all(),
+        "the stroke at {at:?} stands off the pane",
+    );
+    let rect = [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
+    let name = |scene: &Scene, node: usize| {
+        names(scene, SIZE, vec![(node as u32, vec![name_glyph(scene, rect)])])
+    };
+
+    let bare = shooter.shot(&scene);
+    let near_named = shooter.shot_with(&scene, name(&scene, near));
+    let far_named = shooter.shot_with(&scene, name(&scene, far));
+
+    // The near name darkens the far node's rings — its ink, where the near
+    // node does not cover it.
+    let far_visible = |i: usize| far_ink(i) && !opaque.contains(&i);
+    let onto_far = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| {
+            far_visible(i) && brightness(&near_named[i..i + 3]) < brightness(&bare[i..i + 3])
+        })
+        .count();
+    assert!(onto_far > 20, "the near name darkened {onto_far} visible pixels of the far node");
+
+    // The far name leaves the near node's opaque pixels exactly alone...
+    let onto_near = opaque.iter().filter(|&&i| far_named[i..i + 4] != bare[i..i + 4]).count();
+    assert_eq!(onto_near, 0, "the far name's shadow reached {onto_near} pixels of the near node");
+    // ...though its shadow does land there with the near node out of the way.
+    let without_named = shooter.shot_with(&without, name(&without, 0));
+    let would_have = opaque
+        .iter()
+        .filter(|&&i| brightness(&without_named[i..i + 3]) < brightness(&without_bare[i..i + 3]))
+        .count();
+    assert!(
+        would_have > 20,
+        "the far name's shadow reaches only {would_have} of the pixels the near node covers, so \
+         the fixture is not measuring an occlusion",
     );
 }
 
-/// The contour a name's shadow stands off from is where its ink's coverage
-/// says, and how DEEP that shadow is owes that coverage nothing.
+/// A name's shadow is the same width in POINTS at Render scale 2 as at 1.
 ///
-/// Two blocks, one solid and one whose outer ring is half covered — which is
-/// what a rasterizer reports for any edge falling mid-texel. They seed the
-/// field at the same texels, so the whole of their difference is where inside
-/// those texels each one's edge lies: half a texel, and the second's shadow is
-/// the first's read half a texel further out.
-///
-/// Spending that coverage on the shadow's HEIGHT is what this rules out, and it
-/// is not a fine distinction: coverage runs the whole of `[INK_FLOOR, 1]` along
-/// any contour the texel grid does not run parallel to, so two neighbouring
-/// texels of one curve cast shadows a factor of two apart. Each owns a wedge of
-/// the plane that widens as it goes, which draws bright and dark rays fanning
-/// out of every letter and a hard seam wherever two strokes of one stand near
-/// each other.
-///
-/// A BLOCK is what makes that measurable. An axis-aligned edge puts one
-/// coverage in every texel along it, so the error stops being a fan — which no
-/// single pixel is the place to read — and becomes one factor over a whole
-/// scanline. The curve is the picture the artefact shows up in; the block is
-/// the picture it can be measured in.
-///
-/// The name stands at the node's own centre, in the flat middle of its light:
-/// the reading is the SHARE of the light taken, so the ground under it has to
-/// be one value for a scanline rather than a gradient the share would carry.
+/// #496: the cells are drawn in the target's pixels and σ is derived in them
+/// (`shadow::sigma_px`), so a scale that doubles the pixels doubles σ with
+/// them and the shadow lands where it did. The footprint is read at both
+/// scales off the composite, which is at the pane's own size either way.
 #[test]
-fn a_names_shadow_is_cast_from_its_contour_and_not_from_its_alpha() {
-    const SIZE: [u32; 2] = [384, 384];
-    /// Narrow enough that the shadow's whole ramp stands well inside the node's
-    /// rings, where its own standoff — the same bar, and a `max` against this
-    /// one — would otherwise be the deeper of the two and take the reading.
-    const SHADOW: f32 = 0.2;
-    /// The block, in points, which the pane draws one to a pixel: the patch is
-    /// 8 texels square, so at 8 points its contour reaches the field as sharp as
-    /// the one epaint rasterizes.
-    const BLOCK: f32 = 8.0;
-    /// How far out the two profiles are compared, in pixels from the solid
-    /// block's edge. Clear of the ink itself at the near end, and short of where
-    /// the ramp has run out at the far end.
-    const BAND: std::ops::RangeInclusive<i32> = 2..=20;
-    /// What lies between the two contours, in pixels. A solid ring's edge
-    /// stands half a texel out from the texels' centres and [`HALF`]'s stands
-    /// on them, so the second block is the first shrunk by exactly this — and
-    /// its shadow is the first's read this much further out.
-    const SHIFT: f32 = 0.5;
-    /// The half-covered ring, as a byte. Over `INK_FLOOR` rather than at it, so
-    /// the ring seeds the field: a texel under the floor is no seed at all, and
-    /// the contour would jump a whole texel inward instead of half of one.
-    const HALF: u8 = 128;
-
+fn a_names_shadow_is_the_same_width_in_points_at_render_scale_2() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.3;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let mut scene = lit_node_and_a_name(2.5, SHADOW, 1.0);
-    // Big enough that the ramp above is tens of pixels wide, which is what puts
-    // the half texel this measures well inside one.
-    scene.node_radius = 2.6;
-    let centre = scene
-        .projector(glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32))
-        .project(glam::Vec3::ZERO)
-        .expect("the node stands in front of the camera");
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let ink = scene.lattice_ground;
-    let block = |atlas: crate::FontAtlas| LatticeLabels {
-        glyphs: vec![GlyphInstance {
-            rect: [centre.x - BLOCK / 2.0, centre.y - BLOCK / 2.0, BLOCK, BLOCK],
-            fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
-            rim: [0, 0, 0, 255],
-            ..crate::text::tests::glyph()
-        }],
-        labels: vec![Label { node: 0, glyphs: 1 }],
-        node_points: scene.node_radius * scene.camera.points_per_world(SIZE[1] as f32),
-        atlas: Some(atlas),
-        marks: Some(crate::text::tests::mark_sheet()),
-        slide: SlideAxis::default(),
+    shooter.clear = over_grey_clear();
+    let mut footprint = |scale: f32| -> (std::collections::BTreeSet<usize>, f32) {
+        let mut scene = inked_on_grey(SHADOW, 1.0);
+        scene.render_scale = scale;
+        let at = on_screen(&scene, SIZE, NAME_AT);
+        let bare = shooter.shot(&scene);
+        let named = shooter.shot_with(&scene, one_name(&scene, SIZE));
+        let dimmed: std::collections::BTreeSet<usize> = (0..bare.len())
+            .step_by(4)
+            .filter(|&i| {
+                let px = (i / 4) as u32;
+                let p = glam::Vec2::new((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+                // Clear of the ink itself and its resampled edge.
+                (p - at).abs().max_element() > NAME_SIZE / 2.0 + 1.5
+                    && brightness(&named[i..i + 3]) + 6 < brightness(&bare[i..i + 3])
+            })
+            .collect();
+        let reach = dimmed
+            .iter()
+            .map(|&i| {
+                let px = (i / 4) as u32;
+                glam::Vec2::new((px % SIZE[0]) as f32, (px / SIZE[0]) as f32).distance(at)
+            })
+            .fold(0.0f32, f32::max);
+        (dimmed, reach)
     };
-    let bare = shooter.shot(&scene);
-    let solid = shooter.shot_with(&scene, block(crate::text::tests::atlas()));
-    let half = shooter.shot_with(&scene, block(crate::text::tests::edged_atlas(HALF)));
+    let (at_one, reach_one) = footprint(1.0);
+    let (at_two, reach_two) = footprint(2.0);
+    assert!(at_one.len() > 100, "the shadow covers {} pixels at scale 1", at_one.len());
+    assert!(
+        (reach_one - reach_two).abs() <= 1.5,
+        "the shadow reaches {reach_one} px at Render scale 1 and {reach_two} at 2",
+    );
+    let apart = at_one.symmetric_difference(&at_two).count();
+    assert!(
+        apart * 100 < at_one.len() * 15,
+        "the two footprints differ at {apart} of {} pixels",
+        at_one.len(),
+    );
+}
 
-    // Sampled between pixels, because half a texel is the quantity: rounding to
-    // the nearer one would round away exactly what the two shots differ by.
-    let at = |shot: &[u8], x: f32| -> f32 {
-        let (x0, y0) = (x.floor() as u32, centre.y.floor() as u32);
-        let fx = x - x0 as f32;
-        let read = |shot: &[u8], x: u32| {
-            let i = ((y0 * SIZE[0] + x) * 4) as usize;
-            brightness(&shot[i..i + 3]) as f32
-        };
-        let ground = read(&bare, x0) * (1.0 - fx) + read(&bare, x0 + 1) * fx;
-        let lit = read(shot, x0) * (1.0 - fx) + read(shot, x0 + 1) * fx;
-        (ground - lit) / ground
+/// A name that casts no shadow — the Shadow's width or its depth at the bottom
+/// of the bar — paints its ink and nothing else, and a frame with no name
+/// packs no cell at all.
+///
+/// The vacuity the whole atlas rests on: no cell, no pass, no box, and the
+/// scene pass draws the name exactly as it would with the atlas never built.
+/// The light is on, so a stray multiply would have something to take.
+#[test]
+fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
     };
-
-    let edge = centre.x + BLOCK / 2.0;
-    let (mut worst, mut own, mut shifted) = (0.0f32, 0.0f32, 0.0f32);
-    for d in BAND {
-        let x = edge + d as f32;
-        let (a, b) = (at(&solid, x + SHIFT), at(&half, x));
-        worst = worst.max((b - a).abs());
-        shifted += (b - a).abs();
-        own += (b - at(&solid, x)).abs();
+    for (shadow, depth) in [(0.3f32, 0.0f32), (0.0, 1.0)] {
+        let scene = lit_node_and_a_name(1.6, shadow, depth);
+        let at = on_screen(&scene, SIZE, NAME_AT);
+        let bare = shooter.shot(&scene);
+        let named = shooter.shot_with(&scene, one_name(&scene, SIZE));
+        let (mut inside, mut outside) = (0, 0);
+        for i in (0..bare.len()).step_by(4) {
+            if named[i..i + 4] == bare[i..i + 4] {
+                continue;
+            }
+            let px = (i / 4) as u32;
+            let p = glam::Vec2::new((px % SIZE[0]) as f32, (px / SIZE[0]) as f32);
+            if (p - at).abs().max_element() <= NAME_SIZE / 2.0 + 1.0 {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        assert!(inside > 30, "at Shadow {shadow}/{depth} the name inked {inside} pixels");
+        assert_eq!(
+            outside, 0,
+            "at Shadow {shadow}/{depth} a name moved {outside} pixels outside its own ink",
+        );
     }
-    // The band spans the whole ramp, which is what makes a disagreement over it
-    // a disagreement about the profile rather than about its tail.
-    let (near, far) =
-        (at(&solid, edge + *BAND.start() as f32), at(&solid, edge + *BAND.end() as f32));
-    assert!(near > 0.8 && far < 0.2, "the band runs {near:.2} to {far:.2}, which is no ramp");
-    // A twentieth of the share. A height scaled by the ring's coverage is worth
-    // 0.16 of it at the worst pixel of this band, and the contour's own half
-    // texel 0.01, so the threshold has either side of it by a factor of three.
-    assert!(
-        worst < 0.05,
-        "a half-covered edge cast a shadow {worst:.3} of the light away from the same edge \
-         drawn solid, over and above the half texel between them",
+    let scene = lit_node_and_a_name(1.6, 0.3, 1.0);
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        1,
+        None,
     );
-    // And the half texel is a real shift and not a rounding: what the ring's
-    // coverage buys is a contour inside its own texel, so the shifted profile
-    // has to be the nearer of the two by a clear margin.
-    assert!(
-        shifted * 2.0 < own,
-        "the half-covered block's shadow sits {shifted:.3} from the solid block's read half a \
-         texel out and {own:.3} from it read where it stands — the contour is not moving",
-    );
+    assert!(call.casters.is_empty(), "a frame with no name has {} casters", call.casters.len());
 }

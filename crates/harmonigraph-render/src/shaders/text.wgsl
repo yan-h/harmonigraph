@@ -45,40 +45,22 @@ struct Locals {
     /// lattice's entry points alone; every other surface draws no light and
     /// leaves it at 0.
     meld: f32,
-    /// A node's own radius on this pane, in points.
-    ///
-    /// The unit the four Shadow terms below are dialled in: the lattice sets
-    /// them as shares of a node (`ViewConfig::glow_shadow`), and a glyph pass
-    /// has no node under it to measure a coordinate against, so the conversion
-    /// arrives here instead. ONE number for the pane, as the size the names are
-    /// typeset at is — an off-sheet node draws smaller and its name with it,
-    /// but its shadow is the home sheet's width.
-    node_points: f32,
-    /// How far a name's standoff reaches, in node radii — the lattice's Shadow
-    /// width, `glow_shadow` there.
-    shadow: f32,
-    /// How much of that width is the fade back to the light, same units —
-    /// `glow_shadow_soft`.
-    shadow_soft: f32,
-    /// How the fade is skewed across its own width, 0..1 as the bar carries it
-    /// — `glow_shadow_shape`.
-    shadow_shape: f32,
-    /// How much of the light a name holds off where its standoff is solid,
-    /// 0..1 — `glow_shadow_depth`.
+    /// How much of what stands under a name its shadow takes where that shadow
+    /// is whole, 0..1 — the lattice's `glow_shadow_depth`, the same number a
+    /// ring's standoff spends. Read by [`fs_shadow_box`] alone; every other
+    /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
-    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 64 and
-    /// this is the gap in front of them.
+    /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
     _pad: f32,
+    /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
+    /// into. The scene pass reads the same size off the texture itself.
+    shadow_atlas_size: vec2<f32>,
+    /// And the gap before the rings, which a `vec4<f32>` aligns to 16.
+    _pad2: vec2<f32>,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
     ring1: vec4<f32>,
-    /// The pane's own ground, which is what a name's KNOCKOUT clears to where
-    /// no light stands (`fs_fill_lit`). The lattice's `Scene::background`, and
-    /// the same value its nodes clear to (`u.background` there) — a hole
-    /// painting a different one is a hole that announces itself over empty
-    /// lattice, where it should be invisible.
-    background: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -97,28 +79,14 @@ struct Locals {
 // nothing else, and a pane with no light has no dummy to bind.
 @group(1) @binding(0) var glow_tex: texture_2d<f32>;
 @group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
-// The standoff cut into that light, at the third slot the layout carries it in
-// — lattice.wgsl's `glow_shade_tex`, the same layer read from a third side.
-// What the hole a name knocks out is cleared TO is the light AFTER this, which
-// is the one arrangement that lets `fs_fill_lit` and `node_paint` paint the same
-// ground at the same pixel.
-@group(1) @binding(3) var glow_shade_tex: texture_2d<f32>;
 
-// How far every pixel of the pane stands from the nearest ink of any name on
-// it, at group 2: the jump flood's finished field (field.wgsl), plus the ink
-// mask it was seeded from.
+// The shadow atlas at group 2: every name's ink blurred into a cell of its own
+// (shadow.rs), which is what [`fs_shadow_box`] multiplies the frame by.
 //
-// The field carries a nearest-seed COORDINATE rather than a distance, which is
-// what lets the ink mask be read at that coordinate — the strength a shadow is
-// cast at is the one at the ink casting it, and off a shared field that is the
-// nearest ink's and not the drawing quad's. `NO_SEED` in field.wgsl is the
-// coordinate no pane can address, and means no ink within reach.
-//
-// Bound by the LATTICE's shadow entry points alone. Every other surface's text
-// casts no shadow and names no group 2, so a pane with no field has no dummy to
-// bind.
-@group(2) @binding(0) var field_tex: texture_2d<u32>;
-@group(2) @binding(1) var field_ink: texture_2d<f32>;
+// Bound by the LATTICE's box draw alone. Every other surface's text casts no
+// shadow and names no group 2, so a pane with no atlas has no dummy to bind.
+@group(2) @binding(0) var shadow_atlas: texture_2d<f32>;
+@group(2) @binding(1) var shadow_sampler: sampler;
 
 /// The `atlas` an instance carries when it is a drawn mark rather than a
 /// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
@@ -151,6 +119,16 @@ fn rim_reach() -> f32 {
     );
 }
 
+/// A point of the pane, in points, as clip space.
+fn on_screen(pos: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        2.0 * pos.x / locals.screen_points.x - 1.0,
+        1.0 - 2.0 * pos.y / locals.screen_points.y,
+        0.0,
+        1.0,
+    );
+}
+
 @vertex
 fn vs_glyph(
     @builtin(vertex_index) vertex: u32,
@@ -163,56 +141,47 @@ fn vs_glyph(
     // Which sheet `uv` addresses.
     @location(4) sheet: u32,
 ) -> VertexOut {
-    return glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+    var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+    out.position = on_screen(out.position.xy);
+    return out;
 }
 
-/// One name run's KNOCKOUT quad: the run's own glyph rects as one box, grown
-/// by the reach the hole is cut on.
+/// The same glyph, drawn into its name's cell of the shadow atlas rather than
+/// onto the pane — [`fs_glyph_ink`]'s quad.
 ///
-/// A box per RUN rather than a quad per glyph, and the whole of the difference
-/// is that a fragment is visited ONCE. The hole is painted over what stands
-/// behind the name and composited into it, so two quads covering a pixel cut it
-/// twice: a coverage of `c` arrives as `1 - (1 - c)^2`, and a name's glyphs all
-/// overlap at any Shadow worth the name — seven quads deep, a soft 0.3 of a
-/// hole lands as 0.92 of one and the Shadow's whole fade is crushed to a block
-/// of ground. One box has no overlap to compound, and off a shared field its
-/// answer at a pixel is the same one every glyph of the run would have given.
-///
-/// `rect` is the run's bounding box in POINTS, tight around the ink; the growth
-/// is added here because [`shadow_stop`] is a uniform and the box would
-/// otherwise have to be rebuilt on the CPU every time the bar moves.
+/// The three attributes after the glyph's own are the name's `ShadowBox`
+/// (shadow.rs), one copy per glyph: the box's corner in points and the cell's
+/// in texels are the same point, and `terms.x` is the scale between the two, so
+/// the quad lands in the cell exactly where the pane's quad lands on the pane.
+/// Everything a fragment reads — `texel`, the sheet, the patch bounds — is
+/// interpolated across the quad and does not know which of the two it is on.
 @vertex
-fn vs_glyph_gutter(
+fn vs_glyph_cell(
     @builtin(vertex_index) vertex: u32,
-    // The run's bounding box in points: min, then size.
     @location(0) rect: vec4<f32>,
-) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    let reach = shadow_stop();
-    let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
-    return vec4<f32>(
-        2.0 * pos.x / locals.screen_points.x - 1.0,
-        1.0 - 2.0 * pos.y / locals.screen_points.y,
+    @location(1) uv: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) rim: vec4<f32>,
+    @location(4) sheet: u32,
+    @location(5) box_rect: vec4<f32>,
+    @location(6) box_cell: vec4<f32>,
+    @location(7) box_meta: vec4<f32>,
+) -> VertexOut {
+    var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+    let texel = box_cell.xy + (out.position.xy - box_rect.xy) * box_meta.x;
+    out.position = vec4<f32>(
+        2.0 * texel.x / locals.shadow_atlas_size.x - 1.0,
+        1.0 - 2.0 * texel.y / locals.shadow_atlas_size.y,
         0.0,
         1.0,
     );
+    return out;
 }
 
-/// The whole pane as one quad, for the shade ([`fs_field_shade`]) — the one
-/// draw here that is neither a glyph nor a run of them, the field it reads
-/// already covering every pixel.
-@vertex
-fn vs_pane(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - corner.y * 2.0, 0.0, 1.0);
-}
-
+/// Everything a glyph's quad carries, with `position` holding the corner in
+/// the PANE's points rather than in clip space — the caller maps it, because
+/// which surface the quad lands on is the caller's ([`vs_glyph`],
+/// [`vs_glyph_cell`]).
 fn glyph_vertex(
     vertex: u32,
     rect: vec4<f32>,
@@ -245,12 +214,7 @@ fn glyph_vertex(
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
-    out.position = vec4<f32>(
-        2.0 * pos.x / locals.screen_points.x - 1.0,
-        1.0 - 2.0 * pos.y / locals.screen_points.y,
-        0.0,
-        1.0,
-    );
+    out.position = vec4<f32>(pos, 0.0, 1.0);
     // Points map to texels at the device scale, and the glyph's atlas patch is
     // exactly its ink: the same corner, in the other space.
     //
@@ -534,18 +498,6 @@ fn glyph_light(coord: vec2<i32>) -> vec4<f32> {
     return mix(brightest, screened, clamp(locals.meld, 0.0, 1.0));
 }
 
-/// How much of the light at that pixel the lattice's standoffs have taken, off
-/// the layer written beside it — `glow_shade_tex`'s x, clamped into the texture
-/// the same way [`glyph_light`] clamps into its own.
-///
-/// Every emitter's, and NOT this name's alone: what a hole is cleared to is the
-/// field the picture around it stands in, so the two agree at the hole's edge.
-fn load_shade(coord: vec2<i32>) -> f32 {
-    let edge = vec2<i32>(textureDimensions(glow_shade_tex)) - vec2<i32>(1, 1);
-    let at = clamp(coord, vec2<i32>(0, 0), edge);
-    return textureLoad(glow_shade_tex, at, 0).x;
-}
-
 /// The whole of `light`, laid over ink already premultiplied by `alpha` —
 /// `wash_over` in lattice.wgsl at a share of 1, which is the share every piece
 /// of the lattice's RESTING field takes (see `plus_paint`).
@@ -572,12 +524,10 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
 /// `plus_paint`, which sets out why), and the resting field is one field
 /// whether a position is showing its name or its marker.
 ///
-/// The INK alone. What the name hides behind it is the hole
-/// [`fs_glyph_gutter`] cuts, drawn just before this over the same run — a name
-/// is one of the things the lattice puts in front of another and hides what it
-/// stands over exactly as a node and a marker do (`node_paint` in lattice.wgsl),
-/// but the hole is a shape of the RUN and the ink is a shape of the glyph, and
-/// only the second of those belongs in a per-glyph draw.
+/// The INK alone. The shadow the name casts on what stands behind it is
+/// [`fs_shadow_box`], drawn just before this over the name's own box: the
+/// shadow is a shape of the NAME and the ink a shape of the glyph, and only
+/// the second belongs in a per-glyph draw.
 ///
 /// Its own entry point rather than a branch in [`fs_fill`], because what parts
 /// them is the BINDING: only the lattice has a light to hand a glyph pipeline,
@@ -596,292 +546,120 @@ fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb), ink.a);
 }
 
-/// Every lattice name's coverage and strength, into the mask the distance field
-/// is seeded from (field.wgsl).
+/// A lattice name's coverage, into its own cell of the shadow atlas
+/// (`shadow.rs`) — what its shadow is a blur of.
 ///
-/// Both channels are written under a MAX blend, so this is the union over every
-/// glyph in the pane and the order the quads arrive in decides nothing. That is
-/// what makes one field serve every name: the Shadow is cast from the nearest
-/// ink anywhere on the pane, and a mask that composited would make it depend on
-/// which letters happened to overlap.
+/// Written under a MAX blend, so where two glyphs of one name overlap in their
+/// margins the cell holds their union and the order they arrive in decides
+/// nothing. The coverage ALONE: the name's strength is applied where the cell
+/// is read ([`fs_shadow_box`]), as a share of the shadow rather than a scale on
+/// the ink it is blurred from, and the two are not the same thing — see there.
 ///
-/// The STRENGTH rides along in `g` because a shadow's level is the one at the
-/// ink casting it. Read off a shared field, a fragment has no drawing glyph to
-/// take it from — the nearest ink may belong to a name easing out while the
-/// quad over it belongs to one at full strength — so the flood carries the
-/// coordinate and both readers take the strength back at the seed.
+/// Drawn through [`vs_glyph_cell`], at the cell's own transform rather than the
+/// pane's; nothing here knows or cares which, since `texel` is interpolated
+/// across the quad whatever the quad is mapped to.
 @fragment
-fn fs_glyph_ink(in: VertexOut) -> @location(0) vec2<f32> {
-    return vec2<f32>(coverage(in, in.texel), clamp(in.rim.a, 0.0, 1.0));
+fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
 }
 
-/// The hole a run of names knocks out of what stands behind it: the Shadow's
-/// own coverage off the shared field, cleared to the ground the picture around
-/// it stands on.
+/// How much blurred ink is a whole shadow.
 ///
-/// Drawn as its own pass over the run BEFORE any of its ink, which is the order
-/// [`fs_rim`] already carries and for the same reason — all of the hole, then
-/// all of the text. A hole painted in the ink's own draw is protected only by
-/// the alpha of the glyph drawing it, and two letters of one name stand well
-/// inside each other's Shadow, so the later one paints ground over the earlier
-/// one's letters.
+/// The blur of a caster's coverage is at most 1, and only deep inside a caster
+/// far wider than σ; a stroke of type is a few pixels against a σ of several,
+/// so its blur peaks at a fraction of that and its shadow, spent as an exponent
+/// on `keep`, would land at a fraction of the depth the bar names. This is the
+/// factor that fraction is multiplied up by, and the `min(…, 1)` under it is
+/// what keeps the Shadow depth a true FLOOR: a wide caster saturates there
+/// rather than overshooting it, and the gain only deepens the thin ones.
 ///
-/// The `(1 - ink)` is the UNION's and not one glyph's: no name's letters are
-/// ever cleared, whether they belong to this run, to a run already drawn behind
-/// it, or to one still to come. A Shadow holds LIGHT off; it is not a second
-/// occluder, and a name that erases the name behind it is the artefact the
-/// per-glyph hole shipped.
+/// One constant and not a bar, calibrated by eye on a name at the fresh view
+/// (#498, PR B): at 1 a fresh name's shadow is a faint tint beside the ring's,
+/// at 4 a hairline casts as a block. Nodes and markers join the same rule in
+/// PR C and take this number as it stands.
+const GAIN: f32 = 2.5;
+
+/// What the Shadow depth's own bar bottoms out at — `SHADOW_KEEP_FLOOR` in
+/// lattice.wgsl, spelled a second time because there is no linkage between
+/// shader modules, and pinned to it by
+/// `the_names_shadow_depth_bottoms_out_where_the_rings_does`. The depth at 1
+/// is a shadow ten stops deep rather than a hole to black, so a name's shadow
+/// and a ring's at the top of the bar are the same darkness.
+const KEEP_FLOOR: f32 = 0.0009765625;
+
+struct BoxOut {
+    @builtin(position) position: vec4<f32>,
+    /// Where this fragment reads the atlas, in atlas texels.
+    @location(0) texel: vec2<f32>,
+    /// The caster's level, 0..1.
+    @location(1) @interpolate(flat) level: f32,
+};
+
+/// A caster's box: the quad its shadow is laid over, which is its ink's own
+/// box grown by the blur's reach (`pack` in shadow.rs). The attributes are one
+/// `ShadowBox`.
+@vertex
+fn vs_shadow_box(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) cell: vec4<f32>,
+    @location(2) terms: vec4<f32>,
+) -> BoxOut {
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex & 1u) == 1u),
+        select(0.0, 1.0, (vertex & 2u) == 2u),
+    );
+    var out: BoxOut;
+    out.position = on_screen(rect.xy + corner * rect.zw);
+    // The box's own corner in the cell: the same point in the two spaces the
+    // packer related by `terms.x`, so a fragment anywhere on the quad reads the
+    // blur of the ink that stands at its own pixel.
+    out.texel = cell.xy + corner * rect.zw * terms.x;
+    out.level = terms.z;
+    return out;
+}
+
+/// The scene pass's two attachments: the picture, and the picture without its
+/// names (`Offscreen::nodes_view` in lib.rs). A shadow lands on BOTH — the
+/// bloom reads the second, and a node's halo has to bloom at the brightness
+/// the name left it — where a name's ink lands on the first alone.
+struct SceneOut {
+    @location(0) picture: vec4<f32>,
+    @location(1) nodes: vec4<f32>,
+}
+
+/// A name's shadow: everything already in the frame under the box, multiplied
+/// by the transmittance of the name's blurred ink.
 ///
-/// The strength lands on the COVERAGE here where it lands on the shade in the
-/// glow pass, which is the difference `ring_shade` sets out and the same split
-/// `node_clearing` and `glow_standoff` are two halves of: there is no depth
-/// over the hole to put it the other side of.
+/// The multiply rides on the blend the scene pass already composites under.
+/// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
+/// fragment of `rgb = 0, a = 1 - T` leaves `dst * T`: the frame under the name
+/// darkened by `T`, whatever the frame holds there — ground, a ring's ink, a
+/// marker, another name, or nothing at all (a transparent texel becomes
+/// `(0, 1 - T)`, which composites the pane's own ground to `ground * T`). No
+/// receiver carries any shadow code; the light is under everything and takes
+/// the shadow by being there first. Drawn before the name's own glyphs, so the
+/// name's ink is the one thing its shadow never touches.
+///
+/// `T` is `keep` raised to the blur, `keep` being what the Shadow depth leaves
+/// (`gap_shade` in lattice.wgsl spends the same depth the same way over a
+/// ring's coverage). The name's LEVEL is spent on the shadow as a SHARE:
+/// `1 - level * (1 - T)` is a caster of opacity `level` letting `1 - level` of
+/// the light straight through, which is what a name easing in as its marker
+/// eases out is. Spent inside the exponent instead, a name a tenth of the way
+/// in at the top of the depth bar would cast half its shadow (`KEEP_FLOOR` to
+/// the 0.1 is 0.5) — its shadow snapping on while its ink is barely there.
+///
+/// One bilinear tap. The cell is drawn at a fraction of the target's pixels
+/// once σ is past `SIGMA_CELL_MAX`, and the tap is what makes a blur wider
+/// than its own texels read smooth.
 @fragment
-fn fs_glyph_gutter(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    if locals.shadow <= 0.0 {
-        discard;
-    }
-    let coord = vec2<i32>(pos.xy);
-    let stand = field_standoff(coord);
-    let here = textureLoad(field_ink, field_coord(coord), 0);
-    let gutter = stand.x * stand.y * (1.0 - clamp(here.r, 0.0, 1.0));
-    if gutter <= 0.0 {
-        discard;
-    }
-    let light = glyph_light(coord);
-    // What the hole is cleared TO: the finished light standing at this pixel
-    // over the bare ground, which is `node_paint`'s own ground down to the
-    // multiply — the same two targets under the same Meld, cut by the same
-    // shade, over the same background. The glow is composited at the BOTTOM of
-    // this pass, so a hole painting the bare ground would stamp the light out
-    // exactly where the picture wants it.
-    let shade = clamp(load_shade(coord), 0.0, 1.0);
-    let lit = light * (1.0 - shade);
-    let ground = lit.rgb + locals.background.rgb * (1.0 - lit.a);
-    return vec4<f32>(ground * gutter, gutter);
-}
-
-/// The three attachments the lattice's glow pass carries: the light under its
-/// two blends, and the standoff every emitter cuts into it. Named here as it is
-/// in lattice.wgsl, because it is the same target.
-struct GlowOut {
-    @location(0) screened: vec4<f32>,
-    @location(1) brightest: vec4<f32>,
-    @location(2) shade: vec4<f32>,
-}
-
-// The standoff's own curve, written a second time.
-//
-// lattice.wgsl holds the first copy and the whole of the reasoning —
-// `standoff_coverage`, `gap_shade` and the five constants under them. Neither
-// module can call into the other (WGSL has no linkage across shader modules and
-// there is no source composition in this tree), and the shape has to be
-// IDENTICAL rather than merely similar: the Shadow is one bar across a node's
-// rings, a marker's cross and a name, so two curves under one bar is the bar
-// meaning two things. `the_names_shadow_is_the_rings_own_curve` reads both
-// files and pins every constant here against the one it was copied from.
-//
-// What is NOT copied is where the numbers come from. There they are read off a
-// node's own uv; here they arrive in `Locals` as shares of a node radius plus
-// the points that radius draws as, because a glyph has no node under it.
-const SHADOW_TAIL: f32 = 4.0;
-const SHADOW_STOP: f32 = 2.0;
-const SHADOW_SHAPE_RIND: f32 = 0.25;
-const SHADOW_SHAPE_PLAIN: f32 = 1.0;
-const SHADOW_SOFT_FLOOR: f32 = 0.02;
-const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
-
-/// The Shadow's outer handle in points, floored off zero as `clearing_edge`
-/// floors it.
-fn shadow_edge() -> f32 {
-    return max(locals.shadow * locals.node_points, 0.001);
-}
-
-/// The width of its fade in points, under `standoff_soft`'s own floor.
-fn shadow_soft() -> f32 {
-    return max(locals.shadow_soft, SHADOW_SOFT_FLOOR) * locals.node_points;
-}
-
-/// How far out the standoff still has anything to say, in points: where
-/// [`standoff_coverage`]'s own window has shut it.
-///
-/// What the knockout's box is grown by and how far the flood is run
-/// (`FieldChain` in lib.rs), so the coverage is exactly zero where either stops
-/// and the tail is never cut off in a screen-aligned line.
-///
-/// Free of the Shadow DEPTH, which is a factor on the LIGHT alone —
-/// `gap_reach`'s rule in lattice.wgsl: the hole a name cuts is cut at every
-/// depth, so what it is cut on has to reach at every depth. One chain serves
-/// the shade beside it because the depth only ever SHUTS that, and a field run
-/// too far costs passes rather than correctness.
-fn shadow_stop() -> f32 {
-    if locals.shadow <= 0.0 {
-        return 0.0;
-    }
-    let edge = shadow_edge();
-    let inner = clamp(edge - shadow_soft(), 0.0, edge - 0.001);
-    return inner + SHADOW_STOP * (edge - inner);
-}
-
-/// How much of the light standing `sd` points out from a name's ink that name
-/// holds off — `standoff_coverage` in lattice.wgsl, in points rather than in a
-/// node's uv.
-fn standoff_coverage(sd: f32) -> f32 {
-    let edge = shadow_edge();
-    let inner = clamp(edge - shadow_soft(), 0.0, edge - 0.001);
-    let u = max(sd - inner, 0.0) / (edge - inner);
-    let shape = SHADOW_SHAPE_RIND * pow(SHADOW_SHAPE_PLAIN / SHADOW_SHAPE_RIND,
-        clamp(locals.shadow_shape, 0.0, 1.0));
-    return exp(-SHADOW_TAIL * pow(u, shape)) * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
-}
-
-/// What a standoff coverage of `cov` leaves of the light — `gap_shade` in
-/// lattice.wgsl: the Shadow depth, spent geometrically over that coverage.
-fn glyph_shade(cov: f32) -> f32 {
-    let keep = max(1.0 - clamp(locals.shadow_depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
-    return 1.0 - pow(keep, clamp(cov, 0.0, 1.0));
-}
-
-/// `coord` clamped into the field, which is the lattice's own rule for reading
-/// a pane-sized target back (`light_coord` there, and [`glyph_light`] here):
-/// the field is the scene target's size, so a fragment stands at one of its
-/// texels and the clamp is what keeps a rounding at the last row from reading
-/// outside it.
-fn field_coord(coord: vec2<i32>) -> vec2<i32> {
-    let edge = vec2<i32>(textureDimensions(field_tex)) - vec2<i32>(1, 1);
-    return clamp(coord, vec2<i32>(0, 0), edge);
-}
-
-/// How much of the Shadow's own coverage stands at this pixel, and at what
-/// strength: `(coverage, strength)`, off the jump flood's field.
-///
-/// The distance is to the nearest ink of ANY name on the pane, which for the
-/// SHADE is exactly the answer a per-name dilation gives and not an
-/// approximation of it: the shade is written under a `max` blend and
-/// [`standoff_coverage`] falls monotonically, so the brightest of the profiles
-/// is already the profile of the smallest distance. For the HOLE the union is
-/// the stronger rule rather than an equal one — see [`fs_glyph_gutter`], where
-/// cutting once off the union is what stops two holes compounding into a pit.
-///
-/// The INK, not a rim: the letters are what the eye reads a name by, exactly as
-/// the arms are what it reads a cross by, and `plus_standoff` casts a marker's
-/// field from the arms themselves.
-///
-/// Read TWICE and one function for the two, which is `standoff_coverage`'s own
-/// arrangement in lattice.wgsl: [`fs_field_shade`] takes it as the shade laid
-/// over the light, [`fs_glyph_gutter`] as the coverage of the hole a name
-/// knocks out of what stands behind it. One shape for the two is the whole of
-/// what makes the Shadow a single bar.
-///
-/// Flat in the Shadow's width and in the number of names, where a dilation
-/// sampled at the fragment is quadratic in the first and linear in the second.
-fn field_standoff(coord: vec2<i32>) -> vec2<f32> {
-    let here = field_coord(coord);
-    let own = textureLoad(field_ink, here, 0);
-    // The fragment's OWN ink is the floor, at the coverage the sheet actually
-    // holds there. Under [`INK_FLOOR`] a texel is no seed, so the flood says
-    // nothing about it at all — and at a Shadow narrower than a texel the flood
-    // reaches nowhere, which makes that edge the entire picture. A floor rather
-    // than a term of its own: `standoff_coverage(0)` is 1, so wherever the
-    // Shadow does reach it is the profile at a distance of nothing and the
-    // comparison below carries it.
-    var cov = clamp(own.r, 0.0, 1.0);
-    var strength = own.g;
-    let seed = textureLoad(field_tex, here, 0).xy;
-    // No ink within the flood's reach. The chain runs only as far as
-    // `shadow_stop` (see `steps` in field.rs), so this is also every pixel the
-    // Shadow has nothing to say about.
-    if seed.x != NO_SEED {
-        let at = vec2<i32>(seed);
-        let ink = textureLoad(field_ink, at, 0);
-        // The seed's own coverage is spent on the DISTANCE, never on the
-        // profile's height. A seed is a whole texel, and the contour the eye
-        // reads the letter by crosses it: a texel covered `c` has its centre
-        // `c - INK_FLOOR` INSIDE that contour, to within the straight-edge
-        // approximation a rasterizer's own coverage already is. Subtracting it
-        // puts the profile's origin on the letter's edge rather than on the
-        // grid, which is a correction of at most half a texel.
-        //
-        // A HEIGHT scaled by that coverage is the one thing it must not be.
-        // Coverage runs the whole of `[INK_FLOOR, 1]` along any contour not
-        // parallel to the grid, so neighbouring seeds differ by up to a factor
-        // of two — and each seed owns a wedge of the plane that widens with
-        // distance, so the pair reads as bright and dark rays fanning out of
-        // every curve, and as a hard seam wherever two strokes' wedges meet.
-        // The correction here is bounded by half a texel of DISTANCE instead,
-        // which is a fraction of a percent of the same ramp.
-        let contour = clamp(ink.r, 0.0, 1.0) - INK_FLOOR;
-        let sd = max(length(vec2<f32>(here - at)) - contour, 0.0);
-        let dilated = standoff_coverage(sd / locals.pixels_per_point);
-        // The deeper of the two wins, and takes its own strength with it: a
-        // level belongs to the ink casting the shadow, and which ink that is is
-        // exactly what this comparison decides.
-        if dilated > cov {
-            cov = dilated;
-            strength = ink.g;
-        }
-    }
-    return vec2<f32>(cov, strength);
-}
-
-/// field.wgsl's own sentinel, which has to be spelled twice for the same reason
-/// the standoff's curve is: there is no linkage between shader modules here.
-/// `a_names_field_and_its_flood_agree_on_no_seed` pins the pair.
-const NO_SEED: u32 = 65535u;
-
-/// The coverage field.wgsl seeds the flood at, spelled twice for [`NO_SEED`]'s
-/// reason and pinned by the same test.
-///
-/// Here it is the contour a seed's coverage is measured FROM: the flood picks
-/// the texels at or above it, so this is the coverage whose texel centre stands
-/// on the letter's own edge, and the two numbers have to be the one number or
-/// the correction in [`field_standoff`] is taken about a contour the flood does
-/// not seed at.
-const INK_FLOOR: f32 = 0.5;
-
-/// The shadow every lattice name holds the light off by, laid into the glow
-/// pass across the whole pane at once.
-///
-/// A name paints no rim. What a cross keeps a halo off itself with is a shape
-/// in the LIGHT rather than one painted on the ink (`plus_standoff`), and a
-/// lattice where the crosses stand in the light and the names carry a black
-/// halo of their own reads as two pictures laid over each other. The halo is
-/// cast here instead, on the Shadow bars every other emitter is held off on:
-/// dark where there is light to hold off, and nothing at all where there is
-/// none — which a painted halo cannot be, standing at full strength over a
-/// ground no light ever reached.
-///
-/// Closed by the name's own STRENGTH, the one number the rim colour carries
-/// here (`LABEL_SHADOW` in `harmonigraph_ui`): a name easing in as the marker
-/// under it eases out grows its shadow on the same clock its ink arrives on, so
-/// a position handing itself between the two is never twice shadowed nor
-/// briefly unshadowed.
-///
-/// The strength lands on the SHADE and not on the coverage, which is
-/// `ring_shade`'s reading and for its reason: the coverage is an exponent, so a
-/// level spent there is a number of stops rather than a share of the light, and
-/// a name a tenth of the way out would still hold off half of what it held off
-/// whole.
-///
-/// ONE full-screen quad for every name on the pane, where a node's rings and a
-/// marker's cross each write their own billboard. The field already holds the
-/// nearest ink's distance and strength at every pixel, so there is nothing per
-/// name left to draw — and the `max` blend this writes under makes the two
-/// identical rather than merely close, a max of profiles over one shared
-/// minimum distance being the profile of that distance.
-@fragment
-fn fs_field_shade(@builtin(position) pos: vec4<f32>) -> GlowOut {
-    if locals.shadow_depth <= 0.0 {
-        discard;
-    }
-    let stand = field_standoff(vec2<i32>(pos.xy));
-    let shade = glyph_shade(stand.x) * stand.y;
-    if shade <= 0.0 {
-        discard;
-    }
-    // Nothing into the two light attachments: a name is ink standing in the
-    // light and never a source of any, which is also what keeps it out of the
-    // bloom (`a_label_adds_no_light_through_the_bloom`).
-    let dark = vec4<f32>(0.0);
-    return GlowOut(dark, dark, vec4<f32>(shade, 0.0, 0.0, 0.0));
+fn fs_shadow_box(in: BoxOut) -> SceneOut {
+    let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
+    let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
+    let keep = max(1.0 - clamp(locals.shadow_depth, 0.0, 1.0), KEEP_FLOOR);
+    let through = pow(keep, min(GAIN * clamp(blur, 0.0, 1.0), 1.0));
+    let t = 1.0 - clamp(in.level, 0.0, 1.0) * (1.0 - through);
+    let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
+    return SceneOut(shadow, shadow);
 }

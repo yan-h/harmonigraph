@@ -754,6 +754,10 @@ mod tests {
             // on it is drawn.
             state.view.sevens_size = 1.0;
             state.view.glow_reach = 4.0;
+            // No names: a played node's name stands on its middle and casts
+            // its own shadow there (`fs_shadow_box` in harmonigraph-render),
+            // which is a claim of its own and not the light under the body.
+            state.view.show_labels = false;
             for note in [60u8, 64, 67, 70] {
                 state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
             }

@@ -50,7 +50,16 @@ pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
 /// Entry points the text shader must provide.
 #[cfg(test)]
-pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &["vs_glyph", "fs_rim", "fs_fill"];
+pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
+    "vs_glyph",
+    "fs_rim",
+    "fs_fill",
+    "fs_fill_lit",
+    "vs_glyph_cell",
+    "fs_glyph_ink",
+    "vs_shadow_box",
+    "fs_shadow_box",
+];
 
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
 /// from, and the two colors it is drawn in.
@@ -106,64 +115,6 @@ impl GlyphInstance {
             4 => Uint32,    // atlas
         ],
     };
-}
-
-/// One run of names, as the box its KNOCKOUT is cut on: the bounding rect of
-/// every glyph in the run, in points, `[min x, min y, width, height]`.
-///
-/// Tight around the ink. What the hole reaches outside it is the Shadow's own
-/// stop, which is a uniform, so the box is grown in the vertex shader
-/// (`vs_glyph_gutter`) rather than here — a box built to a bar's current
-/// setting would have to be rebuilt every time the bar moved, and the run's
-/// glyphs have not.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GutterInstance {
-    pub rect: [f32; 4],
-}
-
-impl GutterInstance {
-    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<GutterInstance>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x4],
-    };
-
-    /// A box holding nothing, which every `min`/`max` walk over a run's glyphs
-    /// starts from.
-    pub fn empty() -> Self {
-        GutterInstance {
-            rect: [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
-        }
-    }
-
-    /// Grow the box to hold `rect`, a glyph's own `[min x, min y, w, h]`.
-    ///
-    /// Carried as min/max while the walk runs and converted to min/size once at
-    /// [`seal`](Self::seal): a union is a pair of `min`s and a pair of `max`es,
-    /// and keeping a WIDTH through it would mean adding and subtracting the
-    /// origin at every glyph.
-    pub fn cover(&mut self, rect: [f32; 4]) {
-        self.rect[0] = self.rect[0].min(rect[0]);
-        self.rect[1] = self.rect[1].min(rect[1]);
-        self.rect[2] = self.rect[2].max(rect[0] + rect[2]);
-        self.rect[3] = self.rect[3].max(rect[1] + rect[3]);
-    }
-
-    /// The box as the shader takes it: min, then SIZE.
-    ///
-    /// A box no glyph was ever added to seals to nothing rather than to the
-    /// infinities it starts as — one is unreachable (a run is emitted only for
-    /// glyphs that exist) and the other is a quad of NaNs, which is a hole over
-    /// the whole pane rather than a draw that fails.
-    pub fn seal(mut self) -> Self {
-        if !(self.rect[2] > self.rect[0] && self.rect[3] > self.rect[1]) {
-            return GutterInstance { rect: [0.0; 4] };
-        }
-        self.rect[2] -= self.rect[0];
-        self.rect[3] -= self.rect[1];
-        self
-    }
 }
 
 /// One ring of the rim: how far out it sits (points), how opaque each stamp
@@ -253,25 +204,20 @@ pub(crate) struct TextUniforms {
     /// The lattice's Meld bar, for the entry point that washes a name in the
     /// light it stands in (`fs_fill_lit`).
     pub(crate) meld: f32,
-    /// A node's radius on the pane, in points, and the four Shadow terms
-    /// dialled as shares of it — what `fs_field_shade` casts a name's standoff
-    /// from. Every other surface has no light to hold off and leaves all five
-    /// at 0, which the depth alone is enough to mean: a name that casts no
-    /// shadow, the same nothing the bar's own bottom draws.
-    pub(crate) node_points: f32,
-    pub(crate) shadow: f32,
-    pub(crate) shadow_soft: f32,
-    pub(crate) shadow_shape: f32,
+    /// The lattice's Shadow depth, 0..=1 — what a name's shadow takes of
+    /// whatever stands under it (`fs_shadow_box`). Every other surface casts
+    /// none and leaves it at 0.
     pub(crate) shadow_depth: f32,
-    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 64 and
-    /// this is the gap in front of them. Named rather than derived because
-    /// the mismatch is a validation error at first paint, not a compile one.
+    /// WGSL aligns a `vec2<f32>` to 8 bytes and a `vec4<f32>` to 16: the two
+    /// gaps, named rather than derived because a mismatch is a validation
+    /// error at first paint, not a compile one.
     pub(crate) _pad: f32,
+    /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
+    /// a name's cell into. 0 everywhere else, where nothing draws into one.
+    pub(crate) shadow_atlas_size: [f32; 2],
+    pub(crate) _pad2: [f32; 2],
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
-    /// The pane's ground, which a lattice name's knockout clears to where no
-    /// light stands. Every other surface knocks nothing out and leaves it at 0.
-    pub(crate) background: [f32; 4],
 }
 
 /// Which screen axis a surface's labels TRAVEL along, for the two taps
@@ -498,65 +444,11 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
-/// What a name's ink mask is kept in: coverage in `r`, the name's own strength
-/// in `g` (`fs_glyph_ink` in text.wgsl).
-///
-/// A byte each, where the light beside it takes half floats: both channels are
-/// coverages in 0..=1 read at ONE texel rather than integrated across a band,
-/// so the quantization the light's own falloff would show has nowhere to
-/// accumulate. The mask is pane-sized and the cheapest of the four targets a
-/// glowing pane holds.
-pub(crate) const INK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
-
-/// What the jump flood carries: a nearest-seed COORDINATE per texel, as two
-/// 16-bit unsigned integers.
-///
-/// Coordinates and not a distance, because the readers want the ink's own
-/// STRENGTH as well and the seed is where to find it (see `field_standoff` in
-/// text.wgsl). Integers and not halves because a half float is exact only to
-/// 2048 and a pane can be wider; `NO_SEED` is this format's own top value, and
-/// that is what lets one sentinel mean "no ink within reach" with no third
-/// channel to say so.
-pub(crate) const FIELD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Uint;
-
-/// The bindings a name's SHADOW is read through: the finished field, and the
-/// ink mask it was seeded from. Group 2 of every entry point that casts one.
-///
-/// Both `textureLoad`ed and neither sampled — a field of coordinates has no
-/// meaningful interpolation between two texels, and the mask is read at a seed,
-/// which is a texel by construction. So there is no sampler here at all.
-pub(crate) fn field_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("text_field_bind_group_layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Uint,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-        ],
-    })
-}
-
-/// The lattice's names into the ink mask the field is seeded from: every
-/// glyph's coverage and strength, under a MAX blend so the target is their
-/// union and the draw order decides nothing.
-pub(crate) fn create_glyph_ink_pipeline(
+/// A lattice name's glyphs into their cell of the shadow atlas: coverage under
+/// a MAX blend, so a cell holds the union of its name's glyphs whatever order
+/// they arrive in (`fs_glyph_ink`). Two vertex buffers, the glyphs and — one
+/// per glyph — the box of the name each belongs to (`vs_glyph_cell`).
+pub(crate) fn create_glyph_cell_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
@@ -569,10 +461,10 @@ pub(crate) fn create_glyph_ink_pipeline(
         device,
         "fs_glyph_ink",
         &[Some(layout)],
-        ("vs_glyph", "fs_glyph_ink"),
-        &[GlyphInstance::LAYOUT],
+        ("vs_glyph_cell", "fs_glyph_ink"),
+        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
         &[Some(wgpu::ColorTargetState {
-            format: INK_FORMAT,
+            format: crate::shadow::ATLAS_FORMAT,
             blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
             write_mask: wgpu::ColorWrites::ALL,
         })],
@@ -580,74 +472,37 @@ pub(crate) fn create_glyph_ink_pipeline(
     )
 }
 
-/// Every name's shadow into the glow pass, as ONE quad over the pane.
+/// A name's shadow into the scene pass, over the name's own box
+/// (`fs_shadow_box`).
 ///
-/// `targets` is that pass's three attachments with their own blends, handed in
-/// by the caller rather than spelled here — they are the terms a node's rings
-/// and a marker's cross write the field under (`crate::glow_targets`), and a
-/// name melding into it on terms of its own would be a shadow whose depth
-/// depended on what cast it.
+/// BOTH of the pass's attachments, under the premultiplied blend the multiply
+/// rides on: the bloom reads the second, and a halo a name darkens has to bloom
+/// as darkened. The glyphs beside it write the first alone
+/// ([`create_text_pipeline`]), which is what keeps the name itself out of the
+/// bloom.
 ///
-/// No depth: the glow pass carries none, this draw being one of the writers of
-/// the light rather than anything standing in it.
-pub(crate) fn create_field_shade_pipeline(
+/// Three groups, the middle one empty: the pane's uniforms, and the atlas at
+/// group 2 where the shader declares it — the light at group 1 is the fill's
+/// and this draw reads none.
+pub(crate) fn create_shadow_box_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    field: &wgpu::BindGroupLayout,
-    targets: &[Option<wgpu::ColorTargetState>],
-) -> wgpu::RenderPipeline {
-    glyph_pipeline(
-        device,
-        "fs_field_shade",
-        &[Some(layout), None, Some(field)],
-        ("vs_pane", "fs_field_shade"),
-        &[],
-        targets,
-        None,
-    )
-}
-
-/// The hole a run of names knocks out of the scene pass, over the run's own
-/// box.
-///
-/// Its own pipeline and its own draw rather than a branch inside the fill,
-/// because the two are different SHAPES — one box per run against one quad per
-/// glyph — and because the order matters: all of a run's hole, then all of its
-/// ink (`fs_glyph_gutter`).
-///
-/// Three groups, which is the most anything here takes: the pane's uniforms,
-/// the light the hole is cleared to, and the field its shape comes off.
-pub(crate) fn create_glyph_gutter_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    glow: &wgpu::BindGroupLayout,
-    field: &wgpu::BindGroupLayout,
+    atlas: &wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
     depth: wgpu::TextureFormat,
-    blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
+    let target = Some(wgpu::ColorTargetState {
+        format: target_format,
+        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    });
     glyph_pipeline(
         device,
-        "fs_glyph_gutter",
-        &[Some(layout), Some(glow), Some(field)],
-        ("vs_glyph_gutter", "fs_glyph_gutter"),
-        &[GutterInstance::LAYOUT],
-        &[
-            Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            }),
-            // The pass's nodes-only attachment, declared and never written —
-            // the same bargain every glyph pipeline in the scene pass makes
-            // (see [`create_text_pipeline`]), and what keeps a name's hole out
-            // of the bloom's bright pass along with its ink.
-            Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::empty(),
-            }),
-        ],
+        "fs_shadow_box",
+        &[Some(layout), None, Some(atlas)],
+        ("vs_shadow_box", "fs_shadow_box"),
+        &[crate::shadow::ShadowBox::LAYOUT],
+        &[target.clone(), target],
         Some(depth),
     )
 }
@@ -706,26 +561,6 @@ fn glyph_pipeline(
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
-    })
-}
-
-/// One pane's field, as its readers take it (see [`field_bind_group_layout`]).
-pub(crate) fn field_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    field: &wgpu::TextureView,
-    ink: &wgpu::TextureView,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("text_field_bind_group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(field),
-            },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(ink) },
-        ],
     })
 }
 
@@ -973,9 +808,8 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 /// a name there is ink standing in the light and takes the wash a marker's
 /// cross takes. Every other surface passes `None` — its text has no light to
 /// stand in, and the entry points it draws through name no group 1 for a layout
-/// to have to carry. The shadow that light is held off by is the other half of
-/// the same picture and is a pass of its own; see
-/// [`create_field_shade_pipeline`].
+/// to have to carry. The shadow a name casts is the other half of the same
+/// picture and is a draw of its own; see [`create_shadow_box_pipeline`].
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
@@ -1049,15 +883,12 @@ impl CallbackTrait for TextCallback {
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
             meld: 0.0,
-            node_points: 0.0,
-            shadow: 0.0,
-            shadow_soft: 0.0,
-            shadow_shape: 0.0,
             shadow_depth: 0.0,
             _pad: 0.0,
+            shadow_atlas_size: [0.0; 2],
+            _pad2: [0.0; 2],
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
-            background: [0.0; 4],
         };
 
         let view = resources.atlas.view().expect("checked above");
@@ -1200,25 +1031,6 @@ pub(crate) mod tests {
     /// the wrong size gives, which is transparency.
     pub(crate) fn mark_sheet() -> FontAtlas {
         patch_at([16, 0], 64, 1)
-    }
-
-    /// [`atlas`]'s patch with its outer ring only PART covered: the same block,
-    /// its edge falling mid-texel, which is what a rasterizer reports for every
-    /// edge the grid does not land on.
-    ///
-    /// A KEY of its own, which is what lets a test shoot this and [`atlas`] in
-    /// one run: the sheets are mirrored by key, so a second one wearing the
-    /// first's would never be uploaded and both shots would draw the solid
-    /// block while the test went on comparing them.
-    pub(crate) fn edged_atlas(edge: u8) -> FontAtlas {
-        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
-        for y in 8..16 {
-            for x in 8..16 {
-                let rim = x == 8 || x == 15 || y == 8 || y == 15;
-                image[(x, y)] = egui::Color32::from_white_alpha(if rim { edge } else { 255 });
-            }
-        }
-        FontAtlas { image: std::sync::Arc::new(image), key: 2 }
     }
 
     /// A `width`x32 sheet with one opaque 8x8 patch at `at`.
