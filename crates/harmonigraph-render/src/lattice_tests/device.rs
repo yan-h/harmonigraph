@@ -145,7 +145,7 @@ fn offscreen_composite_matches_direct_draw() {
         shadow: &res.shadow_layout,
     };
     let (node_pipeline, plus_pipeline) =
-        create_pipelines(&device, SHADER_SRC, format, layouts, false);
+        create_pipelines(&device, &with_common(SHADER_SRC), format, layouts, false);
     // The stand-in light at group 1: this path has no glow pass to composite,
     // and the fixture asks for none (`parity_scene` holds the reach at 0), so
     // the offscreen path is reading the same transparent nothing.

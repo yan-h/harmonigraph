@@ -120,6 +120,34 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 
+/// The half of a shader module that lattice.wgsl and text.wgsl both need —
+/// the light's two textures and the melded read of them, the wash, the shadow
+/// atlas and the transmittance a caster multiplies the frame by, and the
+/// arithmetic that maps a caster's box onto its cell. The file itself states
+/// what is allowed in there.
+pub(crate) const COMMON_SRC: &str = include_str!("shaders/common.wgsl");
+
+/// One module's WGSL: `common.wgsl` and the module's own source, concatenated.
+///
+/// WGSL has no include and naga takes a string, so this IS the linkage between
+/// the two files, and every `create_shader_module` for a module that names
+/// anything in common.wgsl is handed the result. Common goes first, so a module
+/// can call into it and it can call into no module.
+///
+/// A module that names nothing in it — blit.wgsl, shadow.wgsl, glow.wgsl,
+/// roll.wgsl — is compiled as it stands. Handing them the common half anyway
+/// would be a second declaration of `glow_max_tex` at blit.wgsl's own slot for
+/// it, which is a compile error rather than a tidy-up.
+pub(crate) fn module_source(common: &str, module: &str) -> String {
+    format!("{common}\n{module}")
+}
+
+/// [`module_source`] against the common half baked into this build, which is
+/// every caller but the hot-reload path's.
+pub(crate) fn with_common(module: &str) -> String {
+    module_source(COMMON_SRC, module)
+}
+
 /// What the bloom multiplies its blurred quarter by, out of whatever the bar
 /// or a saved blob hands over: below zero is off, and above the ceiling is
 /// the ceiling.
@@ -168,12 +196,20 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "fs_plus_cell",
 ];
 
-/// Watches the shader source on disk (dev builds only). The first sighting
-/// of the file only records a baseline mtime; edits after launch trigger
-/// reloads.
+/// Watches the two files a lattice module is made of, on disk (dev builds
+/// only). The first sighting only records a baseline mtime; edits after launch
+/// trigger reloads.
+///
+/// BOTH halves, and both are re-read from disk on a reload: an edit to
+/// common.wgsl is an edit to what a node's ink is washed and shadowed with, so
+/// leaving the baked half in place would reload a shader against arithmetic the
+/// file on disk no longer holds.
 #[cfg(feature = "hot-reload")]
 struct ShaderWatcher {
-    path: std::path::PathBuf,
+    lattice: std::path::PathBuf,
+    common: std::path::PathBuf,
+    /// The NEWER of the two files' mtimes: one stamp for the pair, so an edit
+    /// to either is one reload of the module they make together.
     mtime: Option<std::time::SystemTime>,
     next_check: std::time::Instant,
 }
@@ -182,16 +218,21 @@ struct ShaderWatcher {
 impl ShaderWatcher {
     fn new() -> Self {
         ShaderWatcher {
-            path: std::path::PathBuf::from(concat!(
+            lattice: std::path::PathBuf::from(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/shaders/lattice.wgsl"
+            )),
+            common: std::path::PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/shaders/common.wgsl"
             )),
             mtime: None,
             next_check: std::time::Instant::now(),
         }
     }
 
-    /// Returns the new shader source when the file changed since last poll.
+    /// Returns the whole module — both halves, off disk — when either file
+    /// changed since the last poll.
     fn poll(&mut self) -> Option<String> {
         let now = std::time::Instant::now();
         if now < self.next_check {
@@ -199,11 +240,15 @@ impl ShaderWatcher {
         }
         self.next_check = now + std::time::Duration::from_millis(500);
 
-        let mtime = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok()?;
+        let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mtime = stamp(&self.lattice)?.max(stamp(&self.common)?);
         match self.mtime.replace(mtime) {
             None => None, // baseline; the baked shader is current
             Some(previous) if previous == mtime => None,
-            Some(_) => std::fs::read_to_string(&self.path).ok(),
+            Some(_) => Some(module_source(
+                &std::fs::read_to_string(&self.common).ok()?,
+                &std::fs::read_to_string(&self.lattice).ok()?,
+            )),
         }
     }
 }
@@ -213,6 +258,10 @@ impl ShaderWatcher {
 /// test against the baked-in source: plugin builds have no hot-reload, so
 /// without that test a broken commit would first surface as a crash inside
 /// a DAW at first paint.
+///
+/// `source` is a WHOLE module — what [`with_common`] or the watcher hands back,
+/// never lattice.wgsl on its own, which names functions it does not declare and
+/// would fail here for that alone.
 #[cfg(any(test, feature = "hot-reload"))]
 fn validate_wgsl(source: &str) -> Result<(), String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
@@ -2289,6 +2338,21 @@ struct SceneLayouts<'a> {
     shadow: &'a wgpu::BindGroupLayout,
 }
 
+/// The lattice's own shader module, out of a WHOLE module's source: what
+/// [`with_common`] builds at startup, or what the watcher reads back off disk
+/// on a reload. Never lattice.wgsl alone, which names what common.wgsl
+/// declares.
+///
+/// The four pipelines cut from that text each build their own module of it, so
+/// this is the one place the text becomes a module and the one place that
+/// contract is stated.
+fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    })
+}
+
 /// Build one of the scene pipelines from WGSL source (startup uses the
 /// baked-in source; hot-reload rebuilds from disk). Node and marker pipelines
 /// share the module, bind group layout, blending, and topology; only entry
@@ -2309,10 +2373,7 @@ fn create_pipeline(
     vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
     offscreen: bool,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lattice_shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
-    });
+    let shader = lattice_module(device, shader_src);
 
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_pipeline_layout"),
@@ -2428,10 +2489,7 @@ fn create_cell_pipelines(
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Max,
     };
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lattice_shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
-    });
+    let shader = lattice_module(device, shader_src);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_cell_pipeline_layout"),
         bind_group_layouts: &[Some(uniforms)],
@@ -2564,10 +2622,7 @@ fn create_glow_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lattice_shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
-    });
+    let shader = lattice_module(device, shader_src);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
@@ -2634,10 +2689,7 @@ fn create_ink_strip_pipelines(
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lattice_shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
-    });
+    let shader = lattice_module(device, shader_src);
     let build = |label: &str,
                  entry_points: (&str, &str),
                  layout: &wgpu::PipelineLayout,
@@ -2899,9 +2951,12 @@ impl LatticeResources {
         // composited, and multiplies the frame under it by its own cell of the
         // atlas.
         let shadow_layout = shadow::read_layout(device);
+        // The whole module, common half and all, built once for the four
+        // pipelines cut from it.
+        let shader_src = with_common(SHADER_SRC);
         let (pipeline, plus_pipeline) = create_pipelines(
             device,
-            SHADER_SRC,
+            &shader_src,
             target_format,
             SceneLayouts {
                 uniforms: &bind_group_layout,
@@ -2911,7 +2966,7 @@ impl LatticeResources {
             true,
         );
         let (node_cell_pipeline, plus_cell_pipeline) =
-            create_cell_pipelines(device, SHADER_SRC, &bind_group_layout);
+            create_cell_pipelines(device, &shader_src, &bind_group_layout);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
         // interpolating along that the shader does not walk itself.
@@ -2930,13 +2985,13 @@ impl LatticeResources {
         });
         let glow_pipeline = create_glow_pipeline(
             device,
-            SHADER_SRC,
+            &shader_src,
             target_format,
             &bind_group_layout,
             &strip_layout,
         );
         let (ink_strip_pipeline, ink_blur_pipeline) =
-            create_ink_strip_pipelines(device, SHADER_SRC, &bind_group_layout, &strip_layout);
+            create_ink_strip_pipelines(device, &shader_src, &bind_group_layout, &strip_layout);
 
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_composite_bind_group_layout"),

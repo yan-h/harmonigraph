@@ -147,7 +147,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             glow: &res.glow_layout,
             shadow: &res.shadow_layout,
         };
-        let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
+        let build =
+            |src: &str| create_pipelines(&device, &with_common(src), format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
         // The light at group 1: one colour over the whole frame, bound to both
@@ -264,7 +265,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         let glow_draw = |src: &str| {
             let pipeline = create_glow_pipeline(
                 &device,
-                src,
+                &with_common(src),
                 format,
                 &res.bind_group_layout,
                 &res.strip_layout,
