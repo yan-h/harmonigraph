@@ -276,22 +276,29 @@ pub struct Recorder {
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
     audio_started: bool,
-    /// Set by the GUI when
-    /// [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd) is chosen:
-    /// end the take on the first loop wrap rather than splitting into another pass.
-    stop_at_loop_end: Arc<AtomicBool>,
-    /// Published for the GUI: the loop wrapped under AtLoopEnd, so the take is
-    /// done — the GUI reads this, stops, and renders the one pass.
-    hit_loop_end: Arc<AtomicBool>,
-    /// Local latch: once the loop end has been hit, record nothing more until
-    /// re-armed, so the wrapped pass never reaches the file.
+    /// Set by the GUI for every trigger whose take is over the moment the
+    /// transport goes backwards — a loop wrapping under
+    /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), and the host
+    /// returning the playhead under
+    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop).
+    /// The take ends there rather than splitting into another pass.
+    end_at_rewind: Arc<AtomicBool>,
+    /// Published for the GUI: the transport went backwards and the take is done
+    /// — the GUI reads this, stops, and renders the one pass.
+    hit_rewind: Arc<AtomicBool>,
+    /// Local latch: once the rewind has ended the take, record nothing more
+    /// until re-armed, so nothing after it reaches the file.
     finished: bool,
     /// Whether the transport has actually rolled FORWARD since arming. Under
-    /// AtLoopEnd a backward jump only counts as the loop end once this is set —
+    /// `end_at_rewind` a backward jump only ends the take once this is set —
     /// otherwise the very first backward jump (the transport snapping to the
     /// loop/play start when you hit play) would end the take before it recorded
     /// a single block.
     advanced: bool,
+    /// A backward jump arrived while the transport was stopped, so the take owes
+    /// a split — applied at the next block that actually records, not here. See
+    /// [`Recorder::observe_transport`].
+    pending_split: bool,
 }
 
 impl Recorder {
@@ -303,7 +310,8 @@ impl Recorder {
             self.audio_started = false;
             self.finished = false;
             self.advanced = false;
-            self.hit_loop_end.store(false, Ordering::Relaxed);
+            self.pending_split = false;
+            self.hit_rewind.store(false, Ordering::Relaxed);
         }
         self.was_armed = armed;
         armed
@@ -378,6 +386,17 @@ impl Recorder {
     /// A backward jump means a loop wrapped or the playhead was dragged,
     /// so the take splits. The threshold ignores a host's own jitter
     /// around a loop point; a real wrap is far larger.
+    ///
+    /// **What a backward jump costs is what the host does when an audio export
+    /// finishes: it puts the playhead back, and that lands here as one backward
+    /// block.** Under `end_at_rewind` that block ends the take, which is what
+    /// the export wants — everything the transport does afterwards belongs to no
+    /// take, and `Stop` renders the pass that holds the piece. Under OnDisarm,
+    /// which has to keep recording across a loop, the take still splits, but a
+    /// jump the host reports as NOT playing only OWES the split: it is paid at
+    /// the next block that records, so a playhead put back and left alone opens
+    /// no pass at all, and one played away from opens its pass with the block
+    /// that fills it.
     pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
         // Once the loop end has ended the take (AtLoopEnd), record nothing more
         // until a fresh arm clears the latch.
@@ -391,16 +410,17 @@ impl Recorder {
                 // the loop/play start as playback began, or the playhead was
                 // dragged.
                 //
-                // Under AtLoopEnd a wrap that comes AFTER the take has rolled
-                // forward (`advanced`) IS the take: one loop has been recorded,
-                // so latch done and tell the GUI to stop + render — WITHOUT
-                // pushing NewPass, because the writer opens the next pass
-                // eagerly and a split here would leave the empty second file as
-                // the one that renders. Keyed off the wrap itself, not the
-                // host's loop range: hosts (Bitwig included) don't flag the loop
-                // as active to the plugin, so nih-plug's loop_range stays None.
-                // The cost is that a manual rewind mid-take also ends it — fine
-                // for a mode you opt into specifically for looped recording.
+                // Under `end_at_rewind` a jump that comes AFTER the take has
+                // rolled forward (`advanced`) IS the end of the take, so latch
+                // done and tell the GUI to stop + render — WITHOUT splitting,
+                // because these triggers want exactly one file and the jump is
+                // its end. Keyed off the jump itself, not the host's loop range:
+                // hosts (Bitwig included) don't flag the loop as active to the
+                // plugin, so nih-plug's loop_range stays None. It is also what a
+                // host does when an audio export finishes and it puts the
+                // playhead back; everything the transport does after that
+                // belongs to no take. The cost is that a manual rewind mid-take
+                // also ends it, which is the bargain both triggers are.
                 //
                 // But a backward jump BEFORE any forward motion is just the
                 // transport arriving at the loop/play start (the playhead was
@@ -408,25 +428,30 @@ impl Recorder {
                 // nothing recorded — an empty file and a broken render. So
                 // instead begin the pass here: no NewPass (AtLoopEnd only ever
                 // wants one file), no end.
-                if self.stop_at_loop_end.load(Ordering::Relaxed) {
+                if self.end_at_rewind.load(Ordering::Relaxed) {
                     if self.advanced {
                         self.finished = true;
-                        self.hit_loop_end.store(true, Ordering::Relaxed);
+                        self.hit_rewind.store(true, Ordering::Relaxed);
                         self.last_position = Some(position);
                         self.rolling.store(false, Ordering::Relaxed);
                         return false;
                     }
                     self.last_params = [f32::NAN; ParamKey::ALL.len()];
                     self.audio_started = false;
+                    // One file, so an owed split is dropped rather than
+                    // carried into the pass beginning here.
+                    self.pending_split = false;
                     true
+                } else if !playing {
+                    // OnDisarm, and the playhead moved while the transport was
+                    // stopped: note where it went and owe a split, but record
+                    // nothing here.
+                    self.pending_split = true;
+                    self.last_position = Some(position);
+                    self.rolling.store(false, Ordering::Relaxed);
+                    return false;
                 } else {
-                    self.push(Entry::NewPass);
-                    // A new file starts empty, so every parameter must be
-                    // written again or the new pass replays with whatever the
-                    // previous one happened to end on. The next pass's audio
-                    // also starts somewhere new.
-                    self.last_params = [f32::NAN; ParamKey::ALL.len()];
-                    self.audio_started = false;
+                    self.pending_split = true;
                     true
                 }
             }
@@ -441,6 +466,16 @@ impl Recorder {
             None => playing,
         };
         self.last_position = Some(position);
+        // An owed split lands on the first block that records again, ahead of
+        // that block's own events — which belong to the new pass. A new file
+        // starts empty, so every parameter must be written again or the new pass
+        // replays with whatever the previous one happened to end on, and the
+        // next pass's audio starts somewhere new.
+        if rolling && std::mem::take(&mut self.pending_split) {
+            self.push(Entry::NewPass);
+            self.last_params = [f32::NAN; ParamKey::ALL.len()];
+            self.audio_started = false;
+        }
         self.rolling.store(rolling, Ordering::Relaxed);
         rolling
     }
@@ -475,12 +510,11 @@ pub struct Control {
     /// the transport is moving.
     rolling: Arc<AtomicBool>,
     with_audio: Arc<AtomicBool>,
-    /// Mirror of [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd)
-    /// for the audio thread.
-    stop_at_loop_end: Arc<AtomicBool>,
-    /// Set by the audio thread when a loop wrapped under AtLoopEnd: the take is
+    /// Mirror for the audio thread of whether a backward jump ends the take.
+    end_at_rewind: Arc<AtomicBool>,
+    /// Set by the audio thread when the transport went backwards: the take is
     /// done and the GUI should stop + render it.
-    hit_loop_end: Arc<AtomicBool>,
+    hit_rewind: Arc<AtomicBool>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
     /// Shared by every render this Control starts, so a new request cancels
@@ -493,17 +527,18 @@ impl Control {
         self.recording.load(Ordering::Relaxed)
     }
 
-    /// Tell the audio thread whether to end the take at the first loop wrap
-    /// (the [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd)
-    /// mode). Called every GUI frame.
-    pub fn set_stop_at_loop_end(&self, on: bool) {
-        self.stop_at_loop_end.store(on, Ordering::Relaxed);
+    /// Tell the audio thread whether a backward jump ends the take rather than
+    /// splitting it — true for every trigger but
+    /// [`OnDisarm`](harmonigraph_take::RenderTrigger::OnDisarm), which is the
+    /// one that has to survive a looping transport. Called every GUI frame.
+    pub fn set_end_at_rewind(&self, on: bool) {
+        self.end_at_rewind.store(on, Ordering::Relaxed);
     }
 
-    /// Whether the audio thread has reached the loop end and ended the take —
-    /// the GUI's cue to stop recording and render the one pass.
-    pub fn hit_loop_end(&self) -> bool {
-        self.hit_loop_end.load(Ordering::Relaxed)
+    /// Whether the audio thread saw the transport go backwards and ended the
+    /// take — the GUI's cue to stop recording and render the one pass.
+    pub fn hit_rewind(&self) -> bool {
+        self.hit_rewind.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread last saw the transport moving.
@@ -586,7 +621,7 @@ impl Control {
         self.rolling.store(false, Ordering::Relaxed);
         // Clear a previous take's loop-end latch so it can't end this one before
         // the transport even rolls. The audio thread also clears it on arm.
-        self.hit_loop_end.store(false, Ordering::Relaxed);
+        self.hit_rewind.store(false, Ordering::Relaxed);
         self.armed.store(true, Ordering::Relaxed);
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
@@ -734,8 +769,8 @@ pub fn channel() -> (Recorder, Control) {
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
-    let stop_at_loop_end = Arc::new(AtomicBool::new(false));
-    let hit_loop_end = Arc::new(AtomicBool::new(false));
+    let end_at_rewind = Arc::new(AtomicBool::new(false));
+    let hit_rewind = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
@@ -796,10 +831,11 @@ pub fn channel() -> (Recorder, Control) {
             audio_started: false,
             audio: audio_producer,
             with_audio: with_audio.clone(),
-            stop_at_loop_end: stop_at_loop_end.clone(),
-            hit_loop_end: hit_loop_end.clone(),
+            end_at_rewind: end_at_rewind.clone(),
+            hit_rewind: hit_rewind.clone(),
             finished: false,
             advanced: false,
+            pending_split: false,
         },
         Control {
             commands,
@@ -810,8 +846,8 @@ pub fn channel() -> (Recorder, Control) {
             recording,
             rolling,
             with_audio,
-            stop_at_loop_end,
-            hit_loop_end,
+            end_at_rewind,
+            hit_rewind,
             progress,
             render,
         },
@@ -847,6 +883,12 @@ struct Open {
     /// The WAV recorded beside this pass, if audio was asked for.
     audio: Option<harmonigraph_take::WavWriter>,
     spec: Option<AudioSpec>,
+    /// Whether a note has STARTED in this pass. A pass without one draws an
+    /// empty lattice however many parameter records it holds, so it is not a
+    /// pass worth rendering; see [`Open::finish`].
+    voiced: bool,
+    /// The most recent earlier pass that was voiced, to fall back to.
+    last_voiced: Option<std::path::PathBuf>,
 }
 
 impl Open {
@@ -882,7 +924,16 @@ impl Open {
                 } else {
                     format!("pass {pass} -> {}", path.display())
                 };
-                Some(Open { writer, header, base, pass, audio, spec })
+                Some(Open {
+                    writer,
+                    header,
+                    base,
+                    pass,
+                    audio,
+                    spec,
+                    voiced: false,
+                    last_voiced: None,
+                })
             }
             Err(err) => {
                 *status.lock() = format!("cannot write {}: {err}", path.display());
@@ -900,14 +951,34 @@ impl Open {
         }
     }
 
-    /// Close both files and hand back the take's path.
+    /// Close both files and hand back the take to render.
+    ///
+    /// **That is the last VOICED pass, not simply the last one opened.** A take
+    /// can end on a pass that holds parameter records and no notes — a host
+    /// restoring the playhead when an audio export finishes lands as a backward
+    /// jump, and a split rewrites every parameter into the pass it opens — and
+    /// rendering that one produces a video of an empty lattice while the pass
+    /// with the music sits unused beside it. An unvoiced tail is left on disk
+    /// rather than deleted: it is evidence about what the host did, and it costs
+    /// a few hundred bytes.
     fn finish(self) -> std::path::PathBuf {
-        let path = self.path();
+        let path = self.take_path();
         if let Some(audio) = self.audio {
             let _ = audio.finish();
         }
         drop(self.writer);
         path
+    }
+
+    /// Which of this pass and its predecessors is the take: this one if anything
+    /// played in it, else the last one where something did. A first pass with no
+    /// notes has nothing to fall back to and stands as the (empty) take, which
+    /// is what "you recorded nothing" looks like.
+    fn take_path(&self) -> std::path::PathBuf {
+        match &self.last_voiced {
+            Some(previous) if !self.voiced => previous.clone(),
+            _ => self.path(),
+        }
     }
 
     /// The file this pass is writing to.
@@ -917,7 +988,8 @@ impl Open {
 
     /// Close this pass's files and open the next pass's.
     fn next_pass(self, status: &Mutex<String>) -> Option<Open> {
-        let Open { mut header, base, pass, writer, audio, spec } = self;
+        let carried = self.voiced_so_far();
+        let Open { mut header, base, pass, writer, audio, spec, .. } = self;
         if let Some(audio) = audio {
             let _ = audio.finish();
         }
@@ -925,7 +997,19 @@ impl Open {
         // Each pass records its own audio from its own start, so the
         // previous pass's alignment must not be inherited.
         header.audio_start = None;
-        Open::create(header, base, pass + 1, spec, status)
+        let mut next = Open::create(header, base, pass + 1, spec, status)?;
+        next.last_voiced = carried;
+        Some(next)
+    }
+
+    /// The latest pass up to and including this one that anything played in, so
+    /// a run of unvoiced passes keeps pointing at the last one carrying music.
+    fn voiced_so_far(&self) -> Option<std::path::PathBuf> {
+        if self.voiced {
+            Some(self.path())
+        } else {
+            self.last_voiced.clone()
+        }
     }
 }
 
@@ -957,7 +1041,12 @@ fn drain(
             }
             continue;
         }
-        let Some(writer) = open.as_mut().map(|o| &mut o.writer) else { continue };
+        let Some(current) = open.as_mut() else { continue };
+        // A note starting is what makes this pass the one worth rendering.
+        if matches!(entry, Entry::Note { kind: NoteEventKind::On { .. }, .. }) {
+            current.voiced = true;
+        }
+        let writer = &mut current.writer;
         let _ = match entry {
             Entry::Note { t, channel, note, kind } => writer.note(harmonigraph_take::NoteRecord {
                 t,
@@ -1506,8 +1595,8 @@ mod tests {
         entries: rtrb::Consumer<Entry>,
         samples: rtrb::Consumer<f32>,
         armed: Arc<AtomicBool>,
-        stop_at_loop_end: Arc<AtomicBool>,
-        hit_loop_end: Arc<AtomicBool>,
+        end_at_rewind: Arc<AtomicBool>,
+        hit_rewind: Arc<AtomicBool>,
         dropped: Arc<AtomicU64>,
     }
 
@@ -1516,8 +1605,8 @@ mod tests {
             let (producer, entries) = rtrb::RingBuffer::new(1024);
             let (audio, samples) = rtrb::RingBuffer::new(1024);
             let armed = Arc::new(AtomicBool::new(false));
-            let stop_at_loop_end = Arc::new(AtomicBool::new(false));
-            let hit_loop_end = Arc::new(AtomicBool::new(false));
+            let end_at_rewind = Arc::new(AtomicBool::new(false));
+            let hit_rewind = Arc::new(AtomicBool::new(false));
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
@@ -1531,16 +1620,17 @@ mod tests {
                     last_position: None,
                     rolling: Arc::new(AtomicBool::new(false)),
                     audio_started: false,
-                    stop_at_loop_end: stop_at_loop_end.clone(),
-                    hit_loop_end: hit_loop_end.clone(),
+                    end_at_rewind: end_at_rewind.clone(),
+                    hit_rewind: hit_rewind.clone(),
                     finished: false,
                     advanced: false,
+                    pending_split: false,
                 },
                 entries,
                 samples,
                 armed,
-                stop_at_loop_end,
-                hit_loop_end,
+                end_at_rewind,
+                hit_rewind,
                 dropped,
             }
         }
@@ -1551,12 +1641,12 @@ mod tests {
             assert!(self.rec.is_armed(), "the arming edge");
         }
 
-        fn stop_at_loop_end(&self) {
-            self.stop_at_loop_end.store(true, Ordering::Relaxed);
+        fn end_at_rewind(&self) {
+            self.end_at_rewind.store(true, Ordering::Relaxed);
         }
 
-        fn hit_loop_end(&self) -> bool {
-            self.hit_loop_end.load(Ordering::Relaxed)
+        fn hit_rewind(&self) -> bool {
+            self.hit_rewind.load(Ordering::Relaxed)
         }
 
         /// Everything pushed since the last call, rendered as comparable
@@ -2135,19 +2225,19 @@ mod tests {
     fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
         let (mut rec, ctrl) = channel();
         ctrl.armed.store(true, Ordering::Relaxed);
-        ctrl.set_stop_at_loop_end(true);
+        ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed(), "arming clears last_position and the done latch");
 
         // One loop's worth of forward motion.
         assert!(rec.observe_transport(0.0, true));
         assert!(rec.observe_transport(1.0, true));
         assert!(rec.observe_transport(2.0, true));
-        assert!(!ctrl.hit_loop_end(), "still mid-loop");
+        assert!(!ctrl.hit_rewind(), "still mid-loop");
 
         // The transport wraps back to the loop start: end the take here, and
         // signal the GUI — do NOT keep rolling into a second pass.
         assert!(!rec.observe_transport(0.0, true), "the wrap ends the take");
-        assert!(ctrl.hit_loop_end(), "GUI is told to stop and render the pass");
+        assert!(ctrl.hit_rewind(), "GUI is told to stop and render the pass");
 
         // Latched: nothing rolls again until a fresh arm.
         assert!(!rec.observe_transport(1.0, true));
@@ -2157,25 +2247,25 @@ mod tests {
     fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
         let (mut rec, ctrl) = channel();
         ctrl.armed.store(true, Ordering::Relaxed);
-        // stop_at_loop_end stays off — the default OnDisarm/looping behavior.
+        // end_at_rewind stays off — the default OnDisarm/looping behavior.
         assert!(rec.is_armed());
         assert!(rec.observe_transport(0.0, true));
         assert!(rec.observe_transport(2.0, true));
         // The wrap starts a new pass but keeps recording, as before.
         assert!(rec.observe_transport(0.0, true), "a normal loop keeps going");
-        assert!(!ctrl.hit_loop_end());
+        assert!(!ctrl.hit_rewind());
     }
 
     #[test]
     fn re_arming_clears_the_loop_end_latch() {
         let (mut rec, ctrl) = channel();
         ctrl.armed.store(true, Ordering::Relaxed);
-        ctrl.set_stop_at_loop_end(true);
+        ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed());
         assert!(rec.observe_transport(0.0, true));
         assert!(rec.observe_transport(2.0, true));
         assert!(!rec.observe_transport(0.0, true), "the wrap ends the first take");
-        assert!(ctrl.hit_loop_end());
+        assert!(ctrl.hit_rewind());
 
         // Disarm, then re-arm: the done latch and the loop-end flag clear, so
         // the next take records from scratch rather than starting finished.
@@ -2183,7 +2273,7 @@ mod tests {
         assert!(!rec.is_armed());
         ctrl.armed.store(true, Ordering::Relaxed);
         assert!(rec.is_armed(), "re-arm");
-        assert!(!ctrl.hit_loop_end(), "the latch cleared on re-arm");
+        assert!(!ctrl.hit_rewind(), "the latch cleared on re-arm");
         assert!(rec.observe_transport(0.0, true), "records again");
     }
 
@@ -2191,7 +2281,7 @@ mod tests {
     fn at_loop_end_ignores_the_jump_to_the_loop_start_when_playback_begins() {
         let (mut rec, ctrl) = channel();
         ctrl.armed.store(true, Ordering::Relaxed);
-        ctrl.set_stop_at_loop_end(true);
+        ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed());
 
         // Playhead parked PAST the loop start, transport stopped.
@@ -2201,7 +2291,7 @@ mod tests {
         // that produced empty takes — it must NOT end the take, because nothing
         // has been recorded yet. It begins the pass instead.
         assert!(rec.observe_transport(0.0, true), "the jump-to-start begins the pass");
-        assert!(!ctrl.hit_loop_end(), "the initial jump is not a loop end");
+        assert!(!ctrl.hit_rewind(), "the initial jump is not a loop end");
 
         // Now it rolls forward through the loop...
         assert!(rec.observe_transport(1.0, true));
@@ -2209,7 +2299,7 @@ mod tests {
 
         // ...and THIS wrap, after real forward motion, is the loop end.
         assert!(!rec.observe_transport(0.0, true), "the real wrap ends the take");
-        assert!(ctrl.hit_loop_end());
+        assert!(ctrl.hit_rewind());
     }
 
     /// Rolling is the UNION of "the position advanced" and "the host says
@@ -2264,7 +2354,7 @@ mod tests {
     fn a_playhead_parked_for_several_blocks_has_not_advanced() {
         let mut b = Bench::new();
         b.arm();
-        b.stop_at_loop_end();
+        b.end_at_rewind();
 
         // Parked past the loop start, transport stopped, for several blocks.
         for _ in 0..4 {
@@ -2274,7 +2364,7 @@ mod tests {
         // Hit play: the transport snaps back to the loop start. Nothing has
         // been recorded yet, so this begins the pass rather than ending it.
         assert!(b.rec.observe_transport(0.0, true), "the jump-to-start begins the pass");
-        assert!(!b.hit_loop_end(), "a parked playhead has not advanced");
+        assert!(!b.hit_rewind(), "a parked playhead has not advanced");
         // Beginning the pass is not splitting it: AtLoopEnd only ever wants one
         // file, and a `NewPass` here would leave the take's notes in the second
         // one while the first — the one that renders — stayed empty.
@@ -2284,7 +2374,7 @@ mod tests {
         // Real forward motion, and only then does a wrap mean the loop end.
         assert!(b.rec.observe_transport(1.0, true));
         assert!(!b.rec.observe_transport(0.0, true), "the real wrap ends the take");
-        assert!(b.hit_loop_end());
+        assert!(b.hit_rewind());
     }
 
     /// The backward-jump threshold is there to ignore a host's own jitter
@@ -2329,7 +2419,7 @@ mod tests {
 
         let mut b = Bench::new();
         b.arm();
-        b.stop_at_loop_end();
+        b.end_at_rewind();
         assert!(b.rec.observe_transport(0.0, true));
         assert!(b.rec.observe_transport(2.0, true));
         assert!(!b.rec.observe_transport(0.0, true), "the loop end ends the take");
@@ -2338,6 +2428,151 @@ mod tests {
             split.is_empty(),
             "a split here leaves the empty second file as the one that renders: {split:?}"
         );
+    }
+
+    /// The shape a faster-than-realtime audio export leaves behind: the take
+    /// rolls the whole song through, then the host puts the playhead back where
+    /// it was — one backward block, with the transport stopped.
+    ///
+    /// Splitting there is what rendered an empty video out of a full export. The
+    /// take is finished by the GUI a beat later, and it renders the LAST pass, so
+    /// a pass opened by the restore is the one it finds. `playing = false`
+    /// throughout is deliberate and not an edge case: it is what a host reports
+    /// while nothing is being played, which is every block of an offline render.
+    #[test]
+    fn a_playhead_restored_after_an_export_neither_records_nor_splits() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(!b.rec.observe_transport(0.0, false), "nothing to compare on the first block");
+        assert!(b.rec.observe_transport(40.0, false), "the position advancing IS the export");
+        assert!(b.rec.observe_transport(180.0, false));
+        b.pushed();
+
+        assert!(!b.rec.observe_transport(5.0, false), "the restore is not the take rolling");
+        let restore = b.pushed();
+        assert!(restore.is_empty(), "the restore must not split the take, but pushed {restore:?}");
+
+        // Parked, which is what lets the GUI's stop debounce run out.
+        assert!(!b.rec.observe_transport(5.0, false));
+        assert!(b.pushed().is_empty());
+    }
+
+    /// A rewind the transport then rolls away from IS a new pass. The split just
+    /// waits for the block that records, so it lands ahead of that block's own
+    /// events rather than opening a file nothing follows into — and it is owed
+    /// once, not re-paid every block after.
+    #[test]
+    fn a_rewind_while_stopped_splits_at_the_block_that_records_again() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(b.rec.observe_transport(60.0, true));
+        assert!(b.rec.observe_transport(90.0, true));
+        b.pushed();
+
+        assert!(!b.rec.observe_transport(0.0, false), "dragged back with the transport stopped");
+        assert!(b.pushed().is_empty(), "no file is owed one yet");
+
+        assert!(b.rec.observe_transport(0.5, true), "playing again");
+        assert_eq!(b.pushed(), ["new-pass"]);
+        assert!(b.rec.observe_transport(1.0, true));
+        assert!(b.pushed().is_empty(), "the split is owed once, not every block after");
+    }
+
+    /// The take ends where the host took the playhead back, which is the block a
+    /// finished audio export produces. Positions are from a real Bitwig export
+    /// that rendered the wrong file: 82 seconds captured, then the restore.
+    ///
+    /// Ending on the audio thread is what the frame-counted stop in the editor
+    /// cannot do. The restore arrives well inside the debounce, so the take is
+    /// still armed for whatever the transport does next — and under the old rule
+    /// that opened a pass which, being the last, was the one rendered.
+    #[test]
+    fn a_playhead_restored_after_an_export_ends_the_take_there() {
+        let mut b = Bench::new();
+        b.arm();
+        b.end_at_rewind();
+        assert!(!b.rec.observe_transport(0.0, false), "nothing to compare on the first block");
+        assert!(b.rec.observe_transport(4.254, false), "the position advancing IS the export");
+        assert!(b.rec.observe_transport(86.372, false));
+        b.pushed();
+
+        assert!(!b.rec.observe_transport(4.254, false), "the restore ends the take");
+        assert!(b.hit_rewind(), "the GUI is told to stop and render this pass");
+        let after = b.pushed();
+        assert!(after.is_empty(), "no pass is opened for what follows, but pushed {after:?}");
+
+        // Whatever rolls after that belongs to no take — the 0.1s fragment the
+        // export was followed by is what got rendered in place of the piece.
+        assert!(!b.rec.observe_transport(4.35, true));
+        assert!(b.pushed().is_empty());
+    }
+
+    /// A one-file trigger drops a split the take owed from before it was chosen,
+    /// rather than carrying it into the pass that begins here — that split would
+    /// leave the take's notes in a second file while the first is what renders.
+    #[test]
+    fn switching_to_a_one_file_trigger_drops_a_split_the_take_owed() {
+        let mut b = Bench::new();
+        b.arm();
+        // OnDisarm: parked past the start, then dragged back with the transport
+        // stopped, which owes a split and has advanced nothing.
+        assert!(!b.rec.observe_transport(10.0, false));
+        assert!(!b.rec.observe_transport(5.0, false));
+        assert!(b.pushed().is_empty());
+
+        // Finish changes to a trigger that wants one file, and the take resumes.
+        b.end_at_rewind();
+        assert!(b.rec.observe_transport(0.0, true));
+        let split = b.pushed();
+        assert!(split.is_empty(), "one file, so the owed split is dropped: {split:?}");
+    }
+
+    /// A take that ends on a pass with no notes renders the pass that has them.
+    ///
+    /// "The last file opened" and "the file worth rendering" are different
+    /// questions, and an unvoiced tail is not empty enough to tell apart by size:
+    /// a split rewrites every parameter into the pass it opens, so the file has
+    /// content and draws nothing.
+    #[test]
+    fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-unvoiced-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let base = dir.join("take.take");
+        let status = Mutex::new(String::new());
+        let (mut producer, mut consumer) = rtrb::RingBuffer::new(64);
+        let mut open =
+            Open::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+        assert!(open.is_some(), "the fixture has to actually open a file to write into");
+
+        let note =
+            Entry::Note { t: 0.0, channel: 0, note: 60, kind: NoteEventKind::On { velocity: 1.0 } };
+        producer.push(note).expect("ring has room");
+        producer.push(Entry::NewPass).expect("ring has room");
+        producer.push(Entry::Param { t: 1.0, key: 0, value: 0.5 }).expect("ring has room");
+        drain(&mut consumer, &mut open, &status);
+        assert_eq!(open.as_ref().expect("still open").pass, 2, "the split did open a second file");
+        assert_eq!(
+            open.expect("still open").take_path(),
+            base,
+            "the pass with the notes is the take that renders",
+        );
+
+        // A voiced tail renders itself, which is the ordinary loop-recording
+        // case and the reason this cannot just always pick the first pass.
+        let mut open =
+            Open::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+        producer.push(note).expect("ring has room");
+        producer.push(Entry::NewPass).expect("ring has room");
+        producer.push(note).expect("ring has room");
+        drain(&mut consumer, &mut open, &status);
+        assert_eq!(
+            open.expect("still open").take_path(),
+            Open::path_for(&base, 2),
+            "the second pass was played too, so it is the take",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The notes are what the take is FOR, and they reach the ring with the
@@ -2444,7 +2679,7 @@ mod tests {
     fn re_checking_armed_mid_take_does_not_reset_the_take() {
         let mut b = Bench::new();
         b.arm();
-        b.stop_at_loop_end();
+        b.end_at_rewind();
         assert!(b.rec.observe_transport(0.0, true));
         assert!(b.rec.is_armed(), "still armed, one block later");
         assert!(b.rec.observe_transport(2.0, true));
@@ -2452,9 +2687,9 @@ mod tests {
 
         // The wrap is still seen as one, and still ends the take.
         assert!(!b.rec.observe_transport(0.0, true), "the wrap ends the take");
-        assert!(b.hit_loop_end());
+        assert!(b.hit_rewind());
         assert!(b.rec.is_armed());
-        assert!(b.hit_loop_end(), "the latch survives the next block's arm check");
+        assert!(b.hit_rewind(), "the latch survives the next block's arm check");
         assert!(!b.rec.observe_transport(1.0, true), "and the take stays finished");
     }
 
@@ -2486,7 +2721,7 @@ mod tests {
     /// capture along with the notes.
     ///
     /// The Video pane reaches it from more than one place — the toggle, and the
-    /// loop-end handler that fires when the audio thread latches `hit_loop_end`
+    /// loop-end handler that fires when the audio thread latches `hit_rewind`
     /// — so it has to be safe to call twice. Disarming twice is harmless, but
     /// sending a second `Stop` is not: the writer would close a file it had
     /// already closed and launch a second render of the take the first `Stop`

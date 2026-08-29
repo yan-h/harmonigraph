@@ -231,18 +231,18 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // Tell the audio thread whether to end the take at the first loop wrap.
-        self.take.set_stop_at_loop_end(
-            self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd,
-        );
+        // Whether a backward jump ends the take on the audio thread.
+        let ends_at_rewind = self.ui.take.render_config.trigger.ends_at_rewind();
+        self.take.set_end_at_rewind(ends_at_rewind);
 
-        // AtLoopEnd: the audio thread reached the loop end and ended the take
-        // (one pass captured, exactly at the loop boundary). Reflect it in the
-        // toggle and render that pass.
-        if self.take.is_recording()
-            && self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd
-            && self.take.hit_loop_end()
-        {
+        // The audio thread saw the transport go backwards and ended the take
+        // there — one pass, cut exactly at the loop boundary or at the point the
+        // host took the playhead back. Reflect it in the toggle and render that
+        // pass. This is what the export case needs and the frame-counted stop
+        // below cannot give it: a host that restores the playhead does so before
+        // the debounce runs out, and whatever the transport does next would
+        // otherwise open a pass that ends up being the one rendered.
+        if self.take.is_recording() && ends_at_rewind && self.take.hit_rewind() {
             self.ui.take.recording = false;
             self.take
                 .stop(harmonigraph_record::RenderRequest::from_config(&self.ui.take.render_config));

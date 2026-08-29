@@ -276,8 +276,9 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             (
                 crate::RenderTrigger::OnTransportStop,
                 "On stop",
-                "Render as soon as the transport stops after recording something, disarming at \
-                 the same moment — a play-through renders itself.",
+                "Render as soon as the transport stops after recording something, or the \
+                 playhead jumps back — disarming at the same moment. A play-through renders \
+                 itself, and so does an audio export, which ends on the playhead being put back.",
             ),
             (
                 crate::RenderTrigger::AtLoopEnd,
