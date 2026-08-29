@@ -696,6 +696,23 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  short, which is how a shadow says how thick the ink casting it \
                  is. 0% is the picture with no shadow at all.",
             );
+        // A name's alone, and directly under the depth it is measured against.
+        ValueBar::new(&mut view.glow_shadow_bloom, 0.0..=1.0, "Shadow on bloom")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much of the Bloom a note name's shadow takes away, on top \
+                 of what it takes from the picture. A name over a dark node \
+                 reads clearly against its own shadow; the same name over a \
+                 bright, sounding one loses it, because the Bloom is light \
+                 ADDED after the shadow has been spent and the two together \
+                 run off the top of what the screen can show. This darkens the \
+                 halo under the name instead of darkening the name's shadow, \
+                 so the shadow you see everywhere else does not change and \
+                 only the bright case moves. It costs a dimming of the halo \
+                 around the name, a little wider than the name itself. 0% is \
+                 the picture with this bar absent.",
+            );
         // The ink's own share of the same field, under the bar that says the
         // ground's: the pair is one question asked twice, and the answers are
         // free of each other on purpose — a dark pool with a tinted ring in it

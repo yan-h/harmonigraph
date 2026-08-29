@@ -556,6 +556,7 @@ pub fn derive_scene(
         // outside the bar is a quad nothing can fill.
         glow_shadow: view.glow_shadow.clamp(0.0, crate::GLOW_SHADOW_MAX),
         glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
+        glow_shadow_bloom: view.glow_shadow_bloom.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),

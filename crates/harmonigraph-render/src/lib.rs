@@ -1441,7 +1441,7 @@ impl LatticeCallback {
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
                 // lattice has.
-                misc11: [scene.glow_shadow, 0.0, 0.0, scene.glow_shadow_depth],
+                misc11: [scene.glow_shadow, scene.glow_shadow_bloom, 0.0, scene.glow_shadow_depth],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
@@ -3849,7 +3849,13 @@ impl CallbackTrait for LatticeCallback {
                         // Shadow's WIDTH is not here: it is σ, spent on the
                         // CPU where the cells are packed.
                         shadow_depth: self.uniforms.misc11[3],
-                        _pad: [0.0; 2],
+                        // And how much deeper that same shadow lands on the
+                        // copy the bloom's bright pass reads. The one number in
+                        // the picture that a name spends and nothing else does,
+                        // its ink already being the one thing kept out of that
+                        // copy (`fs_shadow_box`).
+                        shadow_bloom: self.uniforms.misc11[1],
+                        _pad: 0.0,
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,

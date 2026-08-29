@@ -506,6 +506,25 @@ pub(crate) mod tests {
         );
     }
 
+    /// The pedestal the kernel is lowered by is the Gaussian's own value at
+    /// the distance the kernel reaches, which is the whole of why the blur
+    /// lands on zero rather than stepping off a cliff there.
+    ///
+    /// Two constants in one file and no linkage between them: a pedestal short
+    /// of this leaves part of the step, and one past it clips the kernel inside
+    /// the padding the packer laid down and narrows the Shadow by more than the
+    /// 4.3% the bar is documented to lose.
+    #[test]
+    fn the_kernels_pedestal_is_its_own_weight_at_the_reach() {
+        let reach: f32 = shader_const(SHADOW_SRC, "REACH").parse().expect("a number");
+        let pedestal: f32 = shader_const(SHADOW_SRC, "PEDESTAL").parse().expect("a number");
+        let want = (-0.5 * reach * reach).exp();
+        assert!(
+            (pedestal - want).abs() < 5e-7,
+            "the kernel is lowered by {pedestal} where its own weight at {reach}σ is {want}",
+        );
+    }
+
     /// σ never exceeds the cap in any cell, at any width of the Shadow: past
     /// the cap the cell shrinks rather than the kernel widening.
     #[test]

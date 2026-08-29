@@ -64,6 +64,18 @@ const REACH: f32 = 3.0;
 /// copy of the packer's rule: a cell arriving over it draws wrong, not forever.
 const MAX_RADIUS: i32 = 9;
 
+/// What every weight is dropped by, so the kernel arrives at [`REACH`] σ on
+/// zero: the Gaussian's own value there. Past that distance the drop takes a
+/// weight below zero and the clamp holds it, so the kernel's support is exactly
+/// ±REACH σ however far `ceil` put the loop's last tap.
+///
+/// Below σ 0.35 texels every tap but the centre clamps away and the blur is a
+/// pass-through. That is a blur a third of a texel wide — narrower than the
+/// thing it would be blurring — and it is reachable only at a Shadow the eye
+/// cannot see at all, the packer holding σ at the cap for every width past
+/// about 0.14 of the bar.
+const PEDESTAL: f32 = 0.011109;
+
 /// The Gaussian along `axis` at this fragment, over this cell's texels and no
 /// others.
 ///
@@ -72,6 +84,23 @@ const MAX_RADIUS: i32 = 9;
 /// and still counts, and the blur of a half-plane comes out at exactly half at
 /// its edge. Normalising over the taps that landed would lift every cell's
 /// edge back toward its interior.
+///
+/// The kernel is LOWERED onto zero at [`REACH`] rather than cut there. A
+/// Gaussian truncated at three σ still carries `½erfc(3/√2)` ≈ 1.3e-3 of the
+/// light at the cut, and a caster's quad ends on that same distance — so the
+/// shadow stopped at a step, which `shadow_transmittance` spends as 5.9/255 at
+/// the top of the depth bar, in a straight line along the caster's BOX. Every
+/// weight is dropped by [`PEDESTAL`] and clamped at zero, which is the standard
+/// treatment for a truncated kernel: same taps, same padding, and the blur of a
+/// half-plane reaches exactly zero where the quad ends.
+///
+/// It costs 4.3% of the effective σ — the pedestal comes out of the kernel's
+/// own width — so the Shadow bar reads a hair narrower than it did, and that is
+/// the whole of what the goldens' re-baseline pays for. Taken against the
+/// constant and not against the loop's own last tap, which is where it wants to
+/// be written: `radius` is a CEILING, so a pedestal read off it would step
+/// every time `ceil` did and swing the effective σ by ±3% as the bar moves,
+/// where this holds it at 0.955..0.963 of σ across the whole range.
 fn blur(in: CellOut, axis: vec2<i32>) -> f32 {
     let sigma = max(in.sigma, 1.0e-3);
     let radius = min(i32(ceil(REACH * sigma)), MAX_RADIUS);
@@ -79,7 +108,7 @@ fn blur(in: CellOut, axis: vec2<i32>) -> f32 {
     var sum = 0.0;
     var weight = 0.0;
     for (var i = -radius; i <= radius; i = i + 1) {
-        let w = exp(-0.5 * f32(i * i) / (sigma * sigma));
+        let w = max(exp(-0.5 * f32(i * i) / (sigma * sigma)) - PEDESTAL, 0.0);
         weight = weight + w;
         let tap = at + axis * i;
         let centre = vec2<f32>(tap) + vec2<f32>(0.5);
