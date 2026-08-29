@@ -861,8 +861,9 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
         pitch: 0.0,
         ..Default::default()
     };
-    // A halo across the whole pane, so every marker has light to hold off
-    // wherever it stands.
+    // A reach several times the markers' own distance and the Strength at its
+    // ceiling, so the falloff still has light out at 2.6 world units for every
+    // marker to hold off.
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
     scene.glow_shadow = shadow;

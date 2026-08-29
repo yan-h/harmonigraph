@@ -619,10 +619,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 ///
 /// The bars run in the order the questions do: what the light IS before what
 /// colour it is, both before what holds it off the rings, and its own clock
-/// last. Everything under Reach greys
-/// while Reach is 0 rather than hiding, so the rows keep their place and the
-/// numbers they are dialled to stay readable — the arrangement the audio
-/// ring's own settings use.
+/// last. Everything under Reach greys while Reach is 0 rather than hiding, so
+/// the rows keep their place and the numbers they are dialled to stay
+/// readable — the arrangement the audio ring's own settings use.
 fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Glow");
     // A share of the node's radius, the unit the two gaps and the Clearance in
@@ -650,11 +649,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text("How much light a node lays down. 1 is the tuned amount.");
         // What colour the light comes out, between the amount of it and the
-        // Shadow under it. "Color blend" and not "Spread": under this
-        // heading, beside a Reach that is about distance, a "spread" reads as
-        // how far the light goes, and this moves no light
-        // at all. It reads as a percentage because it is a SHARE — of a whole
-        // turn — and not a distance.
+        // Shadow under it. "Color blend" and not "Spread": under this heading,
+        // beside a Reach that is about distance, a "spread" reads as how far
+        // the light goes, and this moves no light at all. It reads as a
+        // percentage because it is a SHARE — of a whole turn — and not a
+        // distance.
         ValueBar::new(&mut view.glow_blend, 0.0..=1.0, "Color blend")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)

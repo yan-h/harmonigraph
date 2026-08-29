@@ -1085,12 +1085,6 @@ pub struct ViewConfig {
     /// It is the ONLY light a node has: a view with this at 0 draws exactly the
     /// ink the ring stack describes and nothing around it.
     ///
-    /// How the falloff is SHAPED and how two halos combine are no longer
-    /// fields: the shape is one exponential and the combination is a screen.
-    /// Saved blobs may still carry the keys those rode on (`glow_feather`,
-    /// `glow_meld`); serde ignores unknown keys, so such a blob loads intact
-    /// and drops them on the next save.
-    ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
     /// blending, so two neighbours' halos meld like light rather than summing
     /// to white and neither one's draw order is readable in the overlap. That
@@ -2158,7 +2152,6 @@ impl ViewConfig {
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
-
         // The Shadow, which every caster's quad is grown by: a number from
         // outside the bar is a quad nothing can fill.
         self.glow_shadow =

@@ -886,7 +886,6 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-
     /// The Shadow: how wide every caster's blur is, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to
     /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no

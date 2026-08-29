@@ -35,12 +35,6 @@ struct BlitUniforms {
     misc2: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: BlitUniforms;
-// The same head again, at a group of its own, for `fs_glow_over`: its group 0
-// is the glow target's two textures, which is a different bind group from the
-// composite's, so the one buffer is reached through two slots rather than the
-// two passes being made to share a layout that fits neither.
-//
-// It reads misc.z, how much two nodes' overlapping light adds up. That this
 // The strength on its own, for a caller with no scene uniforms to take the
 // head of — the roll, which draws its notes straight into the egui pass and
 // wants only the halo laid over them. Its own binding rather than a second

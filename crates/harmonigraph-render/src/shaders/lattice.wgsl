@@ -3106,15 +3106,6 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     return vec4<f32>(ink.xyz * alpha, alpha);
 }
 
-/// What a fragment of the light's draw emits: ONE value to both attachments.
-/// What differs between them is the blend they are written under, which is
-/// fixed-function state and not something a fragment can vary (see
-/// `create_glow_pipeline`).
-struct GlowOut {
-    @location(0) screened: vec4<f32>,
-    @location(1) brightest: vec4<f32>,
-};
-
 /// The light draw. No depth in it: this is a pass of its own ahead of the
 /// scene's, so every node's halo melds into one layer before any node is drawn
 /// over it, and no sheet's light is legible as having come first. It is also
@@ -3134,12 +3125,11 @@ struct GlowOut {
 /// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
 /// stage asks how big the node is on screen.
 @fragment
-fn fs_glow(in: VsOut) -> GlowOut {
+fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
     if EARLY_OUT && glow_level(in) <= 0.0 {
         discard;
     }
-    let light = glow_layer(in, length(in.uv));
-    return GlowOut(light, light);
+    return glow_layer(in, length(in.uv));
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

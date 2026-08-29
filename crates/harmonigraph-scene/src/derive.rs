@@ -551,7 +551,6 @@ pub fn derive_scene(
         // uses, so a number from outside the bar is a quad it cannot fill.
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
-
         // The Shadow on the same footing, a bar's range rather than a
         // billboard's: every caster's quad is grown by it, so a number from
         // outside the bar is a quad nothing can fill.
