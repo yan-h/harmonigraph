@@ -87,7 +87,6 @@ fn a_node_in_its_own_shadow() -> Scene {
     // gradient rather than one flat value.
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
-    scene.glow_feather = 1.0;
     scene
 }
 
@@ -232,7 +231,6 @@ fn a_chord_at_the_fresh_view() -> Scene {
 fn a_chord_at_a_wide_reach() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         glow_reach: 4.0,
-        glow_feather: 1.0,
         glow_strength: 0.16,
         ..Default::default()
     };

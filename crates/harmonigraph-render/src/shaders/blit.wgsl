@@ -25,11 +25,6 @@
 // Composite-only bindings (declared module-wide; pipelines whose entry
 // points don't reference them omit them from their layout).
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-// The glow target's max-blended half, at the composite-only slot above: no
-// entry point reads both, so the two share a binding and the pipeline layout
-// for each stays the length its own pass needs. An entry point that ever wanted
-// both would fail to compile, loudly, at pipeline creation.
-@group(0) @binding(2) var glow_max_tex: texture_2d<f32>;
 // Head of the scene pass's Uniforms buffer (same binding, shorter view):
 // only misc2.w (bloom strength; 0 = off) is read here.
 struct BlitUniforms {
@@ -46,9 +41,6 @@ struct BlitUniforms {
 // two passes being made to share a layout that fits neither.
 //
 // It reads misc.z, how much two nodes' overlapping light adds up. That this
-// pass can see only the HEAD of the scene's uniforms is why that dial lives up
-// there rather than among the glow's own rows.
-@group(1) @binding(0) var<uniform> gu: BlitUniforms;
 // The strength on its own, for a caller with no scene uniforms to take the
 // head of — the roll, which draws its notes straight into the egui pass and
 // wants only the halo laid over them. Its own binding rather than a second
@@ -155,11 +147,6 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
 // transparent everywhere else, so this is a plain premultiplied-over blit and
 // every decision about the shape was taken in lattice.wgsl.
 //
-// TWO of them, mixed by the Meld bar: the light screened and the light taken at
-// its brightest, which is a dial between blends that could not be one blend
-// (`create_glow_pipeline`). The node pipelines mix the same pair the same way,
-// `node_paint` reading this target back for the wash it lays over its ink.
-//
 // TWO attachments, because the pass it draws into carries two. The second is
 // the picture without the LABELS, which the bloom's bright pass reads — and the
 // glow belongs in it: it is light the nodes emit, so it blooms exactly as the
@@ -172,11 +159,7 @@ struct GlowOverOut {
 
 @fragment
 fn fs_glow_over(in: BlitOut) -> GlowOverOut {
-    let screened = textureSample(scene_tex, scene_samp, in.uv);
-    let brightest = textureSample(glow_max_tex, scene_samp, in.uv);
-    // A mix of two premultiplied colours is premultiplied, so what reaches the
-    // pass below is the same kind of value either end of the bar hands it.
-    let melded = mix(brightest, screened, clamp(gu.misc.z, 0.0, 1.0));
+    let light = textureSample(scene_tex, scene_samp, in.uv);
     // The field WHOLE. What darkens it is every item drawn over it — each one
     // multiplies the frame under it by its own blurred ink (lattice.wgsl's
     // `node_paint` and `plus_paint`, text.wgsl's `fs_shadow_box`) — so the
@@ -184,5 +167,5 @@ fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     // everything, on both attachments. A pool round a ring is that multiply
     // landing on the light, and it stops blooming for the same reason: the
     // second attachment is what the bright pass reads, and the shadow is in it.
-    return GlowOverOut(melded, melded);
+    return GlowOverOut(light, light);
 }

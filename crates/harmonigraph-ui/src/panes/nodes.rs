@@ -649,54 +649,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Strength")
             .show(ui)
             .on_hover_text("How much light a node lays down. 1 is the tuned amount.");
-        // Directly under the Reach, being the other half of one decision: that
-        // bar says how far the light goes and this one says where inside it the
-        // light actually is. A wide reach at 0 feather is a bigger accent, not
-        // a wash — the falloff keeps the light on the node either way — so the
-        // two are dialled together or neither does what it looks like it does.
-        //
-        // The falloff is drawn on the bar, as the Fade curve's is in Note and
-        // for the same reason: the number says nothing. "35%" is a position on
-        // a scale with no unit, where the line — the light from the node's
-        // centre at the left to where it stops at the right — is the setting
-        // itself. A copy of the shader's skirt rather than the skirt, which
-        // lives on the GPU; `glow_skirt` says how it is held to the original.
-        ValueBar::new(&mut view.glow_feather, 0.0..=1.0, "Feather")
-            .curve(harmonigraph_scene::glow_skirt)
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How evenly a node's light is spread across its reach, drawn \
-                 as the light from the node's centre out to where it stops. 0% \
-                 heaps it on the node and thins it out to nothing — an accent \
-                 on that node, however far it reaches. 100% carries it flat \
-                 out to half its reach and comes off over the rest, so \
-                 overlapping halos read as one amorphous field rather than as \
-                 a light per node. It adds light rather than moving it, so a \
-                 wash usually wants a lower Strength than the accent did.",
-            );
-        // Directly under the Feather, which is the setting that makes it
-        // matter: a flattened falloff is still near its peak halfway to a
-        // neighbour, so it is the one place a melded overlap outshines the
-        // nodes making it. Below rather than above, the reading order being
-        // how far / how spread / and then what happens where two of them meet.
-        ValueBar::new(&mut view.glow_meld, 0.0..=1.0, "Meld")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How much two nodes' light adds up where their halos overlap. \
-                 100% melds them like light, which past about a 75% Feather \
-                 makes the gap between two nodes brighter than either node and \
-                 washes a chord's middle out to white. 0% leaves an overlap \
-                 exactly as bright as the brighter node lighting it, so a flat \
-                 field stays flat. A node lighting a pixel on its own looks \
-                 the same at every setting — this moves no light, only what \
-                 happens where two lots of it meet.",
-            );
         // What colour the light comes out, between the amount of it and the
         // Shadow under it. "Color blend" and not "Spread": under this
-        // heading, beside a Reach and a Feather that are both about distance,
-        // a "spread" reads as how far the light goes, and this moves no light
+        // heading, beside a Reach that is about distance, a "spread" reads as
+        // how far the light goes, and this moves no light
         // at all. It reads as a percentage because it is a SHARE — of a whole
         // turn — and not a distance.
         ValueBar::new(&mut view.glow_blend, 0.0..=1.0, "Color blend")

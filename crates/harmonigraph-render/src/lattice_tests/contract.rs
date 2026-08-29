@@ -178,56 +178,6 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
     );
 }
 
-/// The Feather bar draws the light's falloff on itself, and the line it draws
-/// is a COPY of the shader's skirt (`harmonigraph_scene::glow_skirt`) rather
-/// than the skirt itself — the shader is the only place the light is
-/// computed, and there is nothing on the CPU to hand the bar. So the copy is
-/// held to the shader's text: the two rates the bar mixes between and the two
-/// lines that spend them. A preview that drifted from the picture would be
-/// worse than none, and nothing on screen would show the drift.
-/// One WGSL function's text, from its `fn` line to the start of the next: what
-/// pins a needle to the function that has to carry it, where the same line asked
-/// of the whole file is answered by any copy of it anywhere.
-fn wgsl_fn_body(name: &str) -> &'static str {
-    let open = format!("\nfn {name}(");
-    let at = SHADER_SRC.find(&open).unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
-    let rest = &SHADER_SRC[at + 1..];
-    &rest[..rest[1..].find("\nfn ").map_or(rest.len(), |end| end + 1)]
-}
-
-#[test]
-fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
-    // Declared at the top of the shader, so these are the whole file's to hold.
-    for needle in [
-        format!("const GLOW_FALLOFF_TIGHT: f32 = {:?};", harmonigraph_scene::GLOW_FALLOFF_TIGHT),
-        format!("const GLOW_FALLOFF_FLAT: f32 = {:?};", harmonigraph_scene::GLOW_FALLOFF_FLAT),
-    ] {
-        assert!(
-            SHADER_SRC.contains(&needle),
-            "lattice.wgsl must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors the \
-             skirt line for line to draw the Feather bar's preview, so a change to either \
-             is a change to both",
-        );
-    }
-    // Asked of the function that spends them, not of the file: the constants
-    // above are declared at the top and a needle put to the whole text is
-    // answered by the declaration itself, whatever the light does with it.
-    let shape = "glow_layer";
-    let body = wgsl_fn_body(shape);
-    for needle in [
-        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
-        "let window = 1.0 - smoothstep(span * 0.5, span, d);",
-        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
-    ] {
-        assert!(
-            body.contains(needle),
-            "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
-             the skirt line for line to draw the Feather bar's preview, so a change to \
-             either is a change to both",
-        );
-    }
-}
-
 #[test]
 fn octave_packing_matches_the_documented_layout() {
     let mut levels = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];

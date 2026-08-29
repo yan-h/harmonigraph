@@ -141,7 +141,7 @@ fn offscreen_composite_matches_direct_draw() {
     let res: &LatticeResources = resources.get().expect("prepare created resources");
     let layouts = SceneLayouts {
         uniforms: &res.bind_group_layout,
-        glow: &res.glow_layout,
+        glow: &res.filter_layout,
         shadow: &res.shadow_layout,
     };
     let (node_pipeline, plus_pipeline) =

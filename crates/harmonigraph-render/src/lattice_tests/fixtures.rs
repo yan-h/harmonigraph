@@ -200,12 +200,6 @@ pub(super) fn parity_scene() -> Scene {
         // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
-        // The accent's own falloff, which is what every glow test here that
-        // does not say otherwise is measuring.
-        glow_feather: 0.0,
-        // Melded whole, the light two overlapping halos have always made, so a
-        // test that says nothing about the Meld is measuring the screen.
-        glow_meld: 1.0,
         // The fresh Shadow and the share a lit slice's own ink takes of the
         // light, so a test that says nothing about either measures the fresh
         // picture.
@@ -871,7 +865,6 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
     // wherever it stands.
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
-    scene.glow_feather = 1.0;
     scene.glow_shadow = shadow;
     scene.glow_shadow_depth = depth;
     scene.plus_taper_start = taper_start;
@@ -946,7 +939,6 @@ pub(super) fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene 
     };
     scene.glow_reach = reach;
     scene.glow_strength = 1.5;
-    scene.glow_feather = 1.0;
     scene.glow_shadow = shadow;
     scene.glow_shadow_depth = depth;
     // The markers away: a cross casts a shadow of its own into the frame the

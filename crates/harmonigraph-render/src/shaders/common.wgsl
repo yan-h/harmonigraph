@@ -16,8 +16,8 @@
 //  - Anything that reads a UNIFORM. `Uniforms` and `Locals` are different
 //    structs at the same slot, so a function reaching for either can only live
 //    in the module that declares it; what such a function needs out of one is
-//    passed in as a parameter (`glow_light`'s `meld`, `shadow_transmittance`'s
-//    `depth`, `cell_clip`'s `size`).
+//    passed in as a parameter (`shadow_transmittance`'s `depth`, `cell_clip`'s
+//    `size`).
 //  - Anything only ONE module uses. A second home for a single caller is a file
 //    to keep in sync for nothing.
 //  - Anything that DIFFERS between the two, however close. A parameter is the
@@ -27,10 +27,8 @@
 // Nothing here may call into an including module: this text comes first and has
 // to compile against every one of them.
 
-// The finished light's two halves: the field written under a SCREEN blend, and
-// the same field written under a MAX so that an overlap is exactly as bright as
-// the brighter of the nodes making it. What a reader wants of the two is a dial
-// rather than a choice ([`glow_light`]), so both are bound and both are read.
+// The finished light: every node's halo screened together into one field
+// ([`glow_light`] is how it is read).
 //
 // Read with `textureLoad` and never a sampler: the target is created at the
 // scene's own pixel size, so it is 1:1 with the attachment being written and any
@@ -44,32 +42,21 @@
 // to compile, loudly, at pipeline creation.
 @group(1) @binding(0) var glow_tex: texture_2d<f32>;
 
-// The max-blended half, at a slot of its own rather than the shared one above:
-// this is read ALONGSIDE `glow_tex` and not instead of it, which is exactly the
-// case that trick does not cover.
-@group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
-
-// The finished light at a pixel of the glow's target: the two blends the light
-// was written under, mixed by the Meld bar.
+// The finished light at a pixel of the glow's target, premultiplied as the
+// pass wrote it.
 //
-// Every reader of the target takes it through here, because ink painting a
-// different mix from the picture it stands in is a halo drawn round every node.
-// The composite that lays the field down keeps its own copy (blit.wgsl's
-// `fs_glow_over`) and is the one exception, that pass SAMPLING the target where
-// this loads it.
+// Every reader of the target takes it through here, so that ink and the
+// picture it stands in cannot come to read the light differently. The
+// composite that lays the field down keeps its own copy (blit.wgsl's
+// `fs_glow_over`) and is the one exception, that pass SAMPLING the target
+// where this loads it.
 //
-// A mix of two premultiplied colours, so the result is premultiplied too, and
-// the max is bounded above by the screen at every texel: neither end can put
-// more light in a pixel than the screen already had.
-//
-// `coord` is taken as given and `meld` is taken already clamped. Where the pixel
-// comes from is the caller's — a scene fragment's own position (lattice.wgsl's
-// `light_coord`), a glyph's rounded one (text.wgsl's `glyph_light`) — and the
-// two hold it inside the texture on their own terms.
-fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
-    let screened = textureLoad(glow_tex, coord, 0);
-    let brightest = textureLoad(glow_max_tex, coord, 0);
-    return mix(brightest, screened, meld);
+// `coord` is taken as given. Where the pixel comes from is the caller's — a
+// scene fragment's own position (lattice.wgsl's `light_coord`), a glyph's
+// rounded one (text.wgsl's `glyph_light`) — and the two hold it inside the
+// texture on their own terms.
+fn glow_light(coord: vec2<i32>) -> vec4<f32> {
+    return textureLoad(glow_tex, coord, 0);
 }
 
 // `share` of `light`, laid over ink already premultiplied by `alpha`. Every
@@ -79,8 +66,9 @@ fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
 // several that have to agree.
 //
 // A SCREEN, where the ground under the ink takes an over, and the difference is
-// what a NEIGHBOUR's light is allowed to do. The field is melded, so the light
-// at a piece of ink carries every sheet's halo; an over (`ink * (1 - light.a)`)
+// what a NEIGHBOUR's light is allowed to do. The field is one layer, so the
+// light at a piece of ink carries every sheet's halo; an over
+// (`ink * (1 - light.a)`)
 // lets a saturated halo from behind take the ink's other channels DOWN — a
 // white name under a red one comes out red — which is ink losing its colour to
 // something it stands in front of. `w + ink * (1 - w)` per channel can only
