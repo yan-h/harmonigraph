@@ -573,11 +573,12 @@ pub(crate) struct Plan {
     bucket: f64,
     /// Slabs the GPU's copy holds, and so the most the aggregator keeps folded.
     ///
-    /// Sized off the PANE rather than off the window, which is what makes it
-    /// hold still: the widest run a window can have at this slab width is
-    /// `target_cols` of them, whatever the Span is doing inside that rung, so a
-    /// drag never resizes the buffer. Unused by the whole-song build, whose run
-    /// is its own capacity.
+    /// Sized off the PANE rather than off the window, which is what holds it
+    /// still under a SPAN drag: the widest run a window can have at this slab
+    /// width is `target_cols` of them, whatever the Span is doing inside that
+    /// rung. What holds it still under a PANE drag is [`ring_slots`] — the
+    /// pane's own pixel count moves every frame of one. Unused by the
+    /// whole-song build, whose run is its own capacity.
     capacity: usize,
     first: usize,
     pub(crate) key: RunKey,
@@ -608,7 +609,7 @@ impl Plan {
             bucket_bits: bucket.to_bits(),
             whole: view.whole,
         };
-        Plan { rows, bucket, capacity: target_cols + RING_HEADROOM, first: columns.first, key }
+        Plan { rows, bucket, capacity: ring_slots(target_cols), first: columns.first, key }
     }
 }
 
@@ -1243,6 +1244,29 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
 /// spacing at the far edge is at most one slab, plus a floor at each end); the
 /// rest is margin, and `ring_capacity`'s body leans on the whole eight.
 const RING_HEADROOM: usize = 8;
+
+/// Slots to give the ring for a pane asking for `target_cols` slabs: the count
+/// rounded UP to a power of two, plus the headroom.
+///
+/// A ladder for the same reason [`live_slab`] is one, against the other drag.
+/// The slot a key lands in is `key mod capacity`, so every change of capacity
+/// moves the whole mapping — the buffer is reallocated and every slab in it
+/// re-sent ([`GpuGrid::accept`], and `SpectrogramCallback::prepare` behind it).
+/// Taken straight off the pane, that is a fresh megabytes-sized buffer and a
+/// whole-ring upload on EVERY FRAME of a pane resize, since a horizontal drag
+/// moves the depth axis by a pixel or more per frame. On the ladder a drag
+/// crosses ten of them end to end.
+///
+/// Rounding up rather than down is what keeps the run inside the ring: it is at
+/// most `target_cols + 2` slabs (see [`ring_capacity`]), and the headroom sits
+/// past a power of two that is already at least `target_cols`.
+///
+/// The slack costs nothing the ring was not already sized for. `target_cols` is
+/// capped at [`LIVE_SLAB_CAP`], itself a power of two, so the widest ring this
+/// can ask for is the one the widest pane already asks for.
+fn ring_slots(target_cols: usize) -> usize {
+    target_cols.next_power_of_two() + RING_HEADROOM
+}
 
 /// The level the heatmap's pixels actually go through, for the crate's own
 /// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
@@ -2577,11 +2601,13 @@ mod tests {
         assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
         assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1, "a column forced a full upload");
 
-        // A narrower pane sizes the GPU's copy differently, and the slot a key
-        // lands in is `key mod capacity` — so the whole mapping moves and the
-        // next fold goes over whole. The resize alone folds nothing: the
-        // capacity is not the run's, which is why it is not in the key.
-        let narrow = PaneView { depth_len: 300.0, ..view };
+        // A pane a RUNG narrower sizes the GPU's copy differently, and the slot
+        // a key lands in is `key mod capacity` — so the whole mapping moves and
+        // the next fold goes over whole. A rung is what it takes: inside one
+        // the copy is the same size and the delta survives the resize, which is
+        // [`ring_slots`]' whole job. The resize alone folds nothing either way:
+        // the capacity is not the run's, which is why it is not in the key.
+        let narrow = PaneView { depth_len: 250.0, ..view };
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(201, 92.0));
         assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
         spectrum.push_history(92.01, &bins);
@@ -4165,6 +4191,101 @@ mod tests {
                     println!("{:>9}{line}", format!("{span:.0} semi"));
                 }
             }
+        }
+
+        /// A pane resize re-sends the whole heatmap a handful of times, not
+        /// once per frame.
+        ///
+        /// The ring's slot for a key is `key mod capacity`, so every change of
+        /// capacity moves the whole mapping: the buffer is reallocated and
+        /// every slab in it re-sent. Sized straight off the pane's pixels that
+        /// is megabytes a frame for as long as a horizontal drag lasts, since
+        /// the depth axis moves by a pixel or more per frame of one.
+        /// [`ring_slots`] is the ladder that bounds the re-sends by the RUNGS a
+        /// drag crosses instead of by the frames it lasts.
+        ///
+        /// Through the GPU rather than off [`GpuGrid::full_uploads`] alone,
+        /// because the delta path is only reachable once the callback has
+        /// acknowledged the run it is patching (see [`SentRun::dirty`]) — a
+        /// counter read without one says every frame rebuilt, whatever the
+        /// capacity did, and the reading would be of the missing
+        /// acknowledgement rather than of the ring.
+        #[test]
+        fn a_pane_resize_does_not_re_send_the_grid_every_frame() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [64, 64];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            // A Span deep enough that the ladder holds the slab width still
+            // across the whole travel below, so what the sweep varies is the
+            // ring's size and nothing else.
+            let window = 180.0;
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut clock = 0.0f64;
+            let mut n = 0usize;
+            let push = |spectrum: &mut crate::AudioSpectrum, clock: &mut f64, n: &mut usize| {
+                let mut bins = [0.02f32; SPECTRUM_BINS];
+                bins[400 + (*n * 13) % 3000] = 1.0;
+                spectrum.push_history(*clock, &bins);
+                *clock += interval;
+                *n += 1;
+            };
+            while clock < window + 5.0 {
+                push(&mut spectrum, &mut clock, &mut n);
+            }
+
+            // One frame at a pane this wide, with the columns a live stream
+            // delivers between two frames.
+            let frame = |spectrum: &mut crate::AudioSpectrum,
+                         headless: &mut SpectrogramHeadless,
+                         clock: &mut f64,
+                         n: &mut usize,
+                         depth_len: f32| {
+                for _ in 0..2 {
+                    push(spectrum, clock, n);
+                }
+                let view = PaneView {
+                    ppp: 2.0,
+                    pitch_len: 400.0,
+                    depth_len,
+                    window,
+                    scale: whole_axis(),
+                    cfg,
+                    whole: false,
+                };
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist.partition_point(|c| c.time < *clock - window).saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(*clock, |c| c.time),
+                };
+                let plan = Plan::new(&view, &columns);
+                run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let (grid, shades) = frame_data(spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let read = read_of(&view, plan.rows);
+                headless.frame(0, SIZE, run_quad(slabs, SIZE), grid, read, shades);
+            };
+
+            // Settle, so the run the drag starts from is one the GPU has
+            // acknowledged rather than the first fold of all.
+            for _ in 0..4 {
+                frame(&mut spectrum, &mut headless, &mut clock, &mut n, 100.0);
+            }
+            let was = spectrum.spectrogram[0].gpu.full_uploads();
+            // A point a frame, which is the rate a hand delivers a drag at, over
+            // travel that takes the depth axis from a sliver to past the cap.
+            const TRAVEL: u32 = 400;
+            for step in 0..TRAVEL {
+                let depth_len = 100.0 + step as f32;
+                frame(&mut spectrum, &mut headless, &mut clock, &mut n, depth_len);
+            }
+            let sent = spectrum.spectrogram[0].gpu.full_uploads() - was;
+            // Ten rungs reach from a two-slab ring to the cap and this travel
+            // crosses three of them, `live_slab`'s own rungs a few more.
+            assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");
         }
     }
 }
