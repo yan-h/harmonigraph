@@ -771,6 +771,12 @@ fn no_settings_pane_overruns_a_narrow_column() {
 /// delivered somewhere that is not us. Both gestures below are ones a person
 /// actually makes: panning the Analyzer's pitch range out past its edge, and
 /// dragging any settings bar.
+///
+/// [`Lose::Nothing`] is the case with nothing for the first two arms of
+/// `end_stranded_drag` to read: focus kept, pointer inside, and the release
+/// simply never delivered. It is the one a person meets as "the settings pane
+/// stopped scrolling and clicking back into the window does not fix it", so it
+/// is the wheel itself that has to end the drag.
 #[test]
 fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // Default dock: the Analyzer picture is the column at x ~518..720, the
@@ -780,8 +786,8 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
         ("a settings bar", Grab::Bar("Pitch range")),
     ] {
-        for lose_it in [Lose::Pointer, Lose::Focus] {
-            let moved = scroll_settings_after_lost_drag(grab, lose_it);
+        for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
+            let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
             assert!(
                 moved < -8.0,
                 "a drag on {what} that lost its release to {lose_it:?} left the settings \
@@ -791,12 +797,38 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     }
 }
 
-/// How the release goes missing: the pointer leaves the editor, or the host
-/// takes focus while the button is down.
+/// A drag the wheel had to step over says so in the Console.
+///
+/// The wheel arm fires only where the shell's own repair has already failed —
+/// the OS was asked whether the button is held and the release was still never
+/// synthesised — so it is the one arm whose firing is evidence rather than
+/// routine. Without the line the symptom repairs itself silently and the cause
+/// stays unreachable; the other two arms stay quiet, because a gesture let go
+/// outside the window ends that way every time.
+#[test]
+fn the_console_names_a_drag_the_wheel_had_to_end() {
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch range"), Lose::Nothing);
+    assert!(
+        logged.iter().any(|line| line.starts_with("wheel: a drag on")),
+        "the wheel ended a stranded drag without saying so: {logged:?}",
+    );
+    for quiet in [Lose::Pointer, Lose::Focus] {
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch range"), quiet);
+        assert!(
+            !logged.iter().any(|line| line.starts_with("wheel:")),
+            "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
+        );
+    }
+}
+
+/// How the release goes missing: the pointer leaves the editor, the host takes
+/// focus while the button is down, or nothing at all happens and the release is
+/// merely never delivered.
 #[derive(Clone, Copy, Debug)]
 enum Lose {
     Pointer,
     Focus,
+    Nothing,
 }
 
 /// Where the doomed drag takes hold: a fixed point in a picture pane, or a
@@ -809,8 +841,9 @@ enum Grab {
 }
 
 /// Press and drag at `grab`, lose the release, then wheel over the settings
-/// pane and answer how far its content moved.
-fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
+/// pane and answer how far its content moved, with whatever the Console was
+/// told along the way.
+fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
     unfold_the_readout_panes(&mut state);
     // The Analyzer settings, on the Display tab's Analyzer page.
@@ -877,6 +910,7 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
         match lose {
             Lose::Pointer => vec![egui::Event::PointerGone],
             Lose::Focus => vec![egui::Event::WindowFocused(false)],
+            Lose::Nothing => vec![],
         },
     );
 
@@ -902,7 +936,8 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
         before.iter().filter_map(|(text, pos)| after.get(text).map(|m| m.y - pos.y)).collect();
     assert!(!deltas.is_empty(), "the settings pane drew no text to measure");
     deltas.sort_by(f32::total_cmp);
-    deltas[deltas.len() / 2]
+    let moved = deltas[deltas.len() / 2];
+    (moved, state.console.lines().map(str::to_owned).collect())
 }
 
 /// A bar dragged off the window keeps the bar, and the release outside gives

@@ -54,6 +54,48 @@ fn zoom_gesture_over_lattice_zooms_the_camera() {
     assert!(after < start, "zoom-gesture wheel should zoom in ({start} -> {after})");
 }
 
+/// A wheel notch during a drag on the lattice is one gesture, not a stale drag.
+///
+/// `end_stranded_drag` reads a wheel as a hand that is not on a button, and the
+/// pointer standing on the widget being dragged is the whole of what keeps that
+/// rule off zooming while dragging the view. This is the case that says the
+/// exception is real: the notch zooms, and the drag is still following the
+/// pointer after it.
+///
+/// The drag is measured at the camera TARGET rather than at the yaw because
+/// the fresh projection is Cabinet, where a plain drag pans (orbiting a
+/// fixed-viewpoint projection is meaningless — see `lattice_pane`). Which of
+/// the two the gesture is doing is not this test's question; that it is still
+/// doing it is.
+#[test]
+fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    let ctx = h.ctx.clone();
+    // Inside the top-left leaf, which holds the Lattice tab alone.
+    let at = egui::pos2(150.0, 150.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![press(at, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at + egui::vec2(30.0, 0.0))]);
+    assert!(ctx.dragged_id().is_some(), "the press on the lattice started no drag");
+
+    let (moved_to, distance) = (state.camera.target, state.camera.distance);
+    h.frame(
+        &mut state,
+        vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert!(state.camera.distance < distance, "the wheel did not zoom the camera it was over");
+    assert!(ctx.dragged_id().is_some(), "the wheel ended the drag it was zooming");
+
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at + egui::vec2(60.0, 0.0))]);
+    assert_ne!(state.camera.target, moved_to, "the drag stopped following the pointer");
+}
+
 #[test]
 fn learn_step_writes_params_only_when_the_chord_changes() {
     let mut state = fresh();

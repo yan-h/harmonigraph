@@ -28,8 +28,10 @@
 //! re-baseline them and state what moved.
 //!
 //! **A changed golden is a stated picture change.** Re-baseline with
-//! `HARMONIGRAPH_BLESS=1 cargo test -p harmonigraph-render golden`, look at
-//! the contact sheet it names, and say in the PR body what moved and why.
+//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden`, look at
+//! the contact sheet it names, and say in the PR body what moved and why. The
+//! comparison, the bless and the sheet are [`harmonigraph_golden::Gate`]; what
+//! is here is the scenes.
 //!
 //! The frames are Metal-on-this-Mac specific. GitHub Actions is off and
 //! `ci.sh` is the only gate, so that costs nothing today; a driver or OS
@@ -40,24 +42,11 @@ use super::fixtures::*;
 use crate::*;
 use harmonigraph_core::Tuning;
 use harmonigraph_scene::Camera;
-use std::path::PathBuf;
 
 /// Wide enough that a marker's arms and the halo bridges between nodes are
 /// several pixels across, and a multiple of 64 so `readback`'s 256-byte row
 /// alignment holds.
 const GOLDEN_SIZE: [u32; 2] = [256, 256];
-
-/// How far a channel may drift before the frame counts as changed.
-///
-/// Zero: one machine, one driver, one backend, so a difference here is the
-/// shader's or the scene's and not the platform's. A tolerance would have to
-/// be wider than #453's mean of 3.3/255 to be worth having, and that is the
-/// signal rather than the noise.
-const TOLERANCE: u8 = 0;
-
-fn golden_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("golden")
-}
 
 /// One golden frame: a scene, the names standing on it, and what the pane is
 /// filled with behind it.
@@ -518,140 +507,20 @@ pub(super) fn names_overlapping_on_one_sheet() -> Shot {
 }
 
 // ---------------------------------------------------------------------------
-// The gate itself
+// Taking the shot
 // ---------------------------------------------------------------------------
 
-/// Mean and largest per-channel drift between two RGBA8 frames.
+/// Draw `shot` and hold it against the frame on record.
 ///
-/// Both are reported because they separate the two ways a picture moves: a
-/// mean near zero with a large max is a few pixels relocating (an edge, a
-/// glyph), and a small max spread over a nonzero mean is a level shifting
-/// everywhere — the #453 shape, and the one an eye does not catch.
-fn drift(expected: &[u8], actual: &[u8]) -> (f64, u8) {
-    let mut sum = 0u64;
-    let mut max = 0u8;
-    for (e, a) in expected.iter().zip(actual) {
-        let d = e.abs_diff(*a);
-        sum += u64::from(d);
-        max = max.max(d);
-    }
-    (sum as f64 / expected.len() as f64, max)
-}
-
-fn write_png(path: &std::path::Path, size: [u32; 2], rgba: &[u8]) {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("golden directory");
-    }
-    let file = std::fs::File::create(path).expect("create png");
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().expect("png header").write_image_data(rgba).expect("png data");
-}
-
-fn read_png(path: &std::path::Path) -> Option<(Vec<u8>, [u32; 2])> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader =
-        png::Decoder::new(std::io::BufReader::new(file)).read_info().expect("png header");
-    let mut buf = vec![0; reader.output_buffer_size().expect("png buffer size")];
-    let info = reader.next_frame(&mut buf).expect("png data");
-    buf.truncate(info.buffer_size());
-    Some((buf, [info.width, info.height]))
-}
-
-/// Expected, actual, and the difference at 8x, side by side in one image.
-///
-/// The amplification is the point: the drift this gate exists to catch is a
-/// handful of levels, which is invisible in a raw subtraction and obvious at
-/// 8x. Written on failure only, so the working tree stays clean while the
-/// gate is passing.
-fn write_contact_sheet(name: &str, expected: &[u8], actual: &[u8]) -> PathBuf {
-    let [w, h] = GOLDEN_SIZE;
-    let (w, h) = (w as usize, h as usize);
-    let mut sheet = vec![0u8; w * 3 * h * 4];
-    for y in 0..h {
-        for x in 0..w {
-            let src = (y * w + x) * 4;
-            for (panel, px) in [
-                (0usize, [expected[src], expected[src + 1], expected[src + 2], 255]),
-                (1, [actual[src], actual[src + 1], actual[src + 2], 255]),
-                (2, {
-                    let amp = |c: usize| {
-                        (u32::from(expected[src + c].abs_diff(actual[src + c])) * 8).min(255) as u8
-                    };
-                    [amp(0), amp(1), amp(2), 255]
-                }),
-            ] {
-                let dst = (y * w * 3 + panel * w + x) * 4;
-                sheet[dst..dst + 4].copy_from_slice(&px);
-            }
-        }
-    }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/golden-diff")
-        .join(format!("{name}.png"));
-    write_png(&path, [GOLDEN_SIZE[0] * 3, GOLDEN_SIZE[1]], &sheet);
-    path
-}
-
-/// How many distinct levels a frame has to carry to count as a picture.
-///
-/// The vacuity guard the whole set shares. A golden cannot pass for the wrong
-/// reason the way a claim test can — it asserts every pixel — but it CAN be a
-/// frame with nothing in it: a scene whose camera looks past the lattice, a
-/// name projected off the pane, a window that culled everything. Such a frame
-/// is blessed once and then agrees with itself forever, which is the failure
-/// #450's rule names in the shape a golden takes it in. Twenty is far below
-/// what any of these scenes draws and far above a flat fill plus its edge.
-const LEVELS: usize = 20;
-
+/// A machine with no usable GPU adapter draws nothing and asserts nothing —
+/// the same skip the rest of this suite takes.
 fn check(name: &str, shot: Shot) {
     let Some(mut shooter) = Shooter::new(GOLDEN_SIZE) else {
         return;
     };
     shooter.clear = shot.clear;
     let actual = shooter.shot_with(&shot.scene, shot.labels);
-    let levels: std::collections::BTreeSet<[u8; 4]> =
-        actual.chunks_exact(4).map(|px| [px[0], px[1], px[2], px[3]]).collect();
-    assert!(
-        levels.len() >= LEVELS,
-        "{name} drew {} distinct pixel values — the fixture reaches nothing",
-        levels.len(),
-    );
-    let path = golden_dir().join(format!("{name}.png"));
-
-    if std::env::var_os("HARMONIGRAPH_BLESS").is_some() {
-        let before = read_png(&path).map(|(px, _)| drift(&px, &actual));
-        write_png(&path, GOLDEN_SIZE, &actual);
-        match before {
-            Some((mean, max)) if max > 0 => {
-                eprintln!("blessed {name}: mean {mean:.3}, max {max} — say what moved in the PR")
-            }
-            Some(_) => eprintln!("blessed {name}: unchanged"),
-            None => eprintln!("blessed {name}: new frame"),
-        }
-        return;
-    }
-
-    let Some((expected, size)) = read_png(&path) else {
-        panic!(
-            "no golden frame at {}\nrun: HARMONIGRAPH_BLESS=1 cargo test -p harmonigraph-render golden",
-            path.display()
-        );
-    };
-    assert_eq!(size, GOLDEN_SIZE, "{name}: golden was written at a different size");
-
-    let (mean, max) = drift(&expected, &actual);
-    if max > TOLERANCE {
-        let sheet = write_contact_sheet(name, &expected, &actual);
-        panic!(
-            "{name} moved: mean {mean:.3}/255, max {max}/255\n\
-             expected | actual | difference at 8x: {}\n\
-             If the change is intended, re-baseline and say what moved in the PR body:\n\
-             HARMONIGRAPH_BLESS=1 cargo test -p harmonigraph-render golden",
-            sheet.display()
-        );
-    }
+    harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(name, GOLDEN_SIZE, &actual);
 }
 
 /// A node standing in its own shadow is byte-identical to the frame on record.
