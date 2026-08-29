@@ -64,11 +64,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // dock's own tab body through instead put it a rung up, reading as a
     // lighter card beside the analyzer.
     //
-    // Painted from the SAME value handed to the knockout, which is the whole
+    // Painted from the SAME value handed to the scene, which is the whole
     // reason to take it off `state` rather than off the theme: offline the
     // ground is the render layout's, not the skin's, and a fill that went to
-    // the theme for it would stand the picture on one color while its cleared
-    // discs cleared to another.
+    // the theme for it would stand the picture on one colour while telling the
+    // scene about another.
     let background = state.background;
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
@@ -80,9 +80,9 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
 /// frame to its paint callback. Both [`lattice_pane`] and the Render
 /// preview's second live copy of the lattice
 /// (`panes::render::preview_lattice`) run this — they differ only in which
-/// GPU pane id this copy claims (`surface`, see [`pane_id`]), what the
-/// sevens knockout clears to (`background`), and where the frame's GPU stats
-/// land (`stats`).
+/// GPU pane id this copy claims (`surface`, see [`pane_id`]), what ground the
+/// picture stands on (`background`), and where the frame's GPU stats land
+/// (`stats`).
 ///
 /// `response` is `None` for a non-interactive copy: showing a hover,
 /// picking, and the learn badge all answer to a pointer, and the preview
@@ -143,10 +143,10 @@ pub(crate) fn draw_lattice(
     // node's MIDI layers say. Per surface, because what this hands out is rows
     // of that surface's own ink strip.
     super::glow_fade::apply(&mut scene, state, surface, now);
-    // The ground the sevens knockout clears to. Only the shell knows what
-    // this pass is composited over -- the fill the docked pane just painted
-    // here, the render layout's own background offline -- so it is carried in
-    // by the caller rather than assumed by the scene.
+    // The ground this pass is composited over. Only the shell knows it -- the
+    // fill the docked pane just painted here, the render layout's own
+    // background offline -- so it is carried in by the caller rather than
+    // assumed by the scene.
     scene.background = background;
 
     // Picking updates the *shared* hover state, one frame behind the scene
@@ -198,7 +198,7 @@ pub(crate) fn draw_lattice(
         lattice_paint_callback(
             rect,
             &scene,
-            batch.lattice_labels(ui.painter(), rect, &scene, state),
+            batch.lattice_labels(ui.painter(), rect, state),
             state.target_format,
             pane_id(surface),
             stats,

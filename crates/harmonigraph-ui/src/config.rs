@@ -432,9 +432,8 @@ pub struct SpectrumConfig {
     /// How much of that reach the outline spends fading out, in points: 0 is a
     /// hard edge, and at or past the reach it fades over the whole of it.
     ///
-    /// Two numbers rather than one, exactly as the lattice's Shadow and its fade
-    /// are two ([`harmonigraph_scene::ViewConfig::glow_shadow_soft`]):
-    /// tying the fade to the reach makes a wider outline always a blurrier one,
+    /// Two numbers rather than one: tying the fade to the reach makes a wider
+    /// outline always a blurrier one,
     /// and how far a note stands off its background is a different question
     /// from how sharply it does. They share one CONTROL — the Analyzer section's
     /// Outline bar, a handle at each — because both are distances from the

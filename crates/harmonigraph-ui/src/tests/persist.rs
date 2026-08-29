@@ -219,9 +219,10 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
 /// edge with the most extreme one instead of a neutral one. `edge_bar` takes
 /// the fresh pair for exactly this.
 ///
-/// It is also the gesture most likely to be aimed here by habit: both controls
-/// take a six-digit number that gets captured out of a project rather than
-/// dragged, and on a `ValueBar` a double-click opens the box to type one.
+/// It is also the gesture most likely to be aimed here by habit: every one of
+/// these controls takes a six-digit number that gets captured out of a project
+/// rather than dragged, and on a `ValueBar` a double-click opens the box to
+/// type one.
 ///
 /// Driven through the real widget rather than asserted on the mapping, since
 /// what is being pinned is which of two resets the gesture reaches.
@@ -246,9 +247,9 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                 crate::panes::edge_bar(
                     ui,
                     (reach, fade),
-                    harmonigraph_scene::GLOW_SHADOW_MAX,
-                    "Shadow",
-                    (fresh.glow_shadow, fresh.glow_shadow_soft),
+                    harmonigraph_scene::PLUS_SIZE_MAX,
+                    "Arm length",
+                    (fresh.plus_arm, fresh.plus_taper),
                     |v| format!("{v:.2}"),
                 );
             },
@@ -268,15 +269,15 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     }
     assert_eq!(
         (reach, fade),
-        (fresh.glow_shadow, fresh.glow_shadow_soft),
+        (fresh.plus_arm, fresh.plus_taper),
         "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
     );
 }
 
-/// Every soft edge — the lattice's Shadow, the resting marker's arm and the taper
-/// on its ends, the roll's note outline, and the lead a held note carries over
-/// the now-line — opens on a pair its own bar can reach: a fade no wider than
-/// the reach it is measured back from.
+/// Every soft edge — the resting marker's arm and the taper on its ends, the
+/// roll's note outline, and the lead a held note carries over the now-line —
+/// opens on a pair its own bar can reach: a fade no wider than the reach it is
+/// measured back from.
 ///
 /// The picture does not care. Every one of the shaders caps the fade at the
 /// reach it is taking out, so a fade dialled past that DRAWS as a fade over the
@@ -291,11 +292,6 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     state.camera.yaw = 1.23;
     let saved = state.save_persist();
     let edited = saved
-        .replace(
-            &format!("glow_shadow_soft:{:?},", state.view.glow_shadow_soft),
-            "glow_shadow_soft:0.5,",
-        )
-        .replace(&format!("glow_shadow:{:?},", state.view.glow_shadow), "glow_shadow:0.1,")
         .replace(
             &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
             "roll_outline_fade:9.0,",
@@ -315,11 +311,6 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 
     let mut restored = fresh();
     restored.load_persist(&edited);
-    assert_eq!(
-        (restored.view.glow_shadow, restored.view.glow_shadow_soft),
-        (0.1, 0.1),
-        "the Shadow's fade opened wider than the Shadow",
-    );
     assert_eq!(
         (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
         (1.0, 1.0),
@@ -353,14 +344,14 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
 /// exists a few tests up.
 ///
-/// The resting marker's arm is a fourth such reach, and the order it is
-/// repaired in is what keeps it safe: `sanitize` finishes the arm before it
-/// clamps the taper to it, so `clamp` never sees a NaN as its `max`.
+/// The resting marker's arm is one such reach, and the order it is repaired in
+/// is what keeps it safe: `sanitize` finishes the arm before it clamps the
+/// taper to it, so `clamp` never sees a NaN as its `max`. The Shadow is a lone
+/// number rather than half of a pair and rides the same repair.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 9] = [
+    let cases: [(&str, &str, &str); 8] = [
         ("glow_shadow", "NaN", "a NaN Shadow"),
-        ("glow_shadow_soft", "NaN", "a NaN Shadow fade"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
@@ -378,7 +369,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let saved = state.save_persist();
         let was = match key {
             "glow_shadow" => state.view.glow_shadow,
-            "glow_shadow_soft" => state.view.glow_shadow_soft,
             "roll_outline" => state.spectrum_config.roll_outline,
             "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
@@ -396,7 +386,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let cfg = &restored.spectrum_config;
         for (name, v) in [
             ("glow_shadow", view.glow_shadow),
-            ("glow_shadow_soft", view.glow_shadow_soft),
             ("roll_outline", cfg.roll_outline),
             ("roll_outline_fade", cfg.roll_outline_fade),
             ("roll_lead", cfg.roll_lead),
@@ -408,8 +397,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
-            view.glow_shadow_soft <= view.glow_shadow
-                && cfg.roll_outline_fade <= cfg.roll_outline
+            cfg.roll_outline_fade <= cfg.roll_outline
                 && cfg.roll_lead_fade <= cfg.roll_lead
                 && view.plus_taper <= view.plus_arm,
             "{hint}: opened on a fade wider than its reach",

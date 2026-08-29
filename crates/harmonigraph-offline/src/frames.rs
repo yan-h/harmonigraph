@@ -372,15 +372,13 @@ mod tests {
         }
     }
 
-    /// The standoff against the OCTAVE GAP, written to `target/scratch/`: what
-    /// a node's light does between its slices as the angular padding widens.
+    /// The SHADOW against the OCTAVE GAP, written to `target/scratch/`: what a
+    /// node casts between its slices as the angular padding widens.
     ///
-    /// A probe: it asserts nothing, the verdict being a look. The share of its
-    /// light a gap keeps is measured instead, and exactly, by
-    /// harmonigraph-render's `the_standoff_follows_the_gaps_between_the_slices`.
-    /// What that number cannot say is the thing this is for — whether a node
-    /// with the field coming through it still reads as one object rather than
-    /// as a ring of unrelated marks.
+    /// A probe: it asserts nothing, the verdict being a look. A node's shadow
+    /// is a blur of its own ink, so a wide gap is a gap in the shadow too, and
+    /// what a number cannot say is whether a node with the field coming through
+    /// it still reads as one object rather than as a ring of unrelated marks.
     ///
     /// The reading conditions, which are the expensive part: the Reach up at a
     /// Strength that does NOT climb with it, since the light is screen-blended
@@ -391,16 +389,15 @@ mod tests {
     /// slices across a good part of the frame.
     ///
     /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER of
-    /// one look: sabotage `slice_gap_distance` in the shader to return `-d`,
-    /// which is the picture with no angular term in it, shoot under one tag,
-    /// restore and shoot under another.
+    /// one look: shoot under one tag, change what the node casts from, shoot
+    /// under another.
     ///
     /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_standoff_against
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_shadow_against
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_standoff_against_the_octave_gap() {
+    fn the_shadow_against_the_octave_gap() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -597,16 +594,16 @@ mod tests {
         }
     }
 
-    /// The three standoffs in one picture, written to `target/scratch/`: a
-    /// node's rings, a marker's cross and a name's type, all standing in the
-    /// same light and all held off it by the same Shadow bars.
+    /// The three shadows in one picture, written to `target/scratch/`: a
+    /// node's rings, a marker's cross and a name's type, all casting into the
+    /// same frame off the same Shadow bar.
     ///
     /// A probe: it asserts nothing, the verdict being whether the three read as
     /// one shadow, and it is kept and `#[ignore]`d for the reason the field's
     /// own probe above is — the reading conditions are the expensive part.
     ///
-    /// Those conditions: a chord HELD, because a standoff is a hole in light
-    /// and an unlit lattice has none to hold off; `NoteNames::Played`, which is
+    /// Those conditions: a chord HELD, because the light is what a shadow is
+    /// most visible on and an unlit lattice has none; `NoteNames::Played`, which is
     /// the one setting that puts names and crosses in the same frame, the
     /// played positions taking type and the rest keeping their marks; and the
     /// camera pulled back far enough that a node's shadow reaches its
@@ -660,7 +657,6 @@ mod tests {
             }
             state.camera.zoom_by(2.0);
             state.view.glow_shadow = shadow;
-            state.view.glow_shadow_soft = shadow.min(fresh.glow_shadow_soft);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -996,125 +992,9 @@ mod tests {
         }
     }
 
-    /// The Shadow curve across the whole of its bar, written to `target/scratch/`:
-    /// what each half of it does to the shade a ring stands in.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look. That the curve
-    /// moves no handle is measured exactly, by harmonigraph-render's
-    /// `the_standoff_reaches_past_the_shadow_it_is_dialled_to`. What a number
-    /// cannot say is which of these shapes is a ring standing in shade and
-    /// which is a black annulus drawn round a node — the question the bar
-    /// exists to be dragged through.
-    ///
-    /// The last pair is the low end's own cost, and the only reading here that
-    /// takes two shots to make: a fade NARROWER than its shadow has open field
-    /// where the decay begins, so the vertical an exponent under one leaves
-    /// there is a circle in the light rather than a line along the ink (see
-    /// `SHADOW_SHAPE_RIND` in lattice.wgsl). Both ends of the bar are shot at that
-    /// pairing, which is what makes the circle findable at all.
-    ///
-    /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, and
-    /// for the same reasons, plus one note off it: the shade is what is being
-    /// read, so the shots carry no labels — a name sits over the middle of a
-    /// node and takes the inner half of the shade with it.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_shadow_curve
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_shadow_curve_draws_a_picture() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
-
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut renderer) = Renderer::new(SIZE) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
-        state.set_background((24, 25, 29));
-        state.frame_params.fade_time = 0.0;
-        state.view.glow_attack = 0.0;
-        state.view.glow_release = 0.0;
-        state.view.show_labels = false;
-        state.view.show_cents = false;
-        // One note, so the shade around this node's rings is this node's own
-        // and not a neighbour's halo laid into it.
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
-
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
-        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "shadow-curve".to_owned());
-
-        let fresh = harmonigraph_scene::ViewConfig::default();
-        // (shape, shadow, fade). The bar in quarters at the fresh pairing, then
-        // its floor and its ceiling again over a fade a quarter of its width.
-        let shots: Vec<(f32, f32, f32)> = vec![
-            (0.0, fresh.glow_shadow, fresh.glow_shadow_soft),
-            (0.25, fresh.glow_shadow, fresh.glow_shadow_soft),
-            (0.5, fresh.glow_shadow, fresh.glow_shadow_soft),
-            (0.75, fresh.glow_shadow, fresh.glow_shadow_soft),
-            (1.0, fresh.glow_shadow, fresh.glow_shadow_soft),
-            (0.0, 0.48, 0.12),
-            (1.0, 0.48, 0.12),
-        ];
-        let home = state.camera;
-        for (shape, shadow, soft) in shots {
-            state.camera = home;
-            // One node across a good part of the frame: the whole of what this
-            // bar draws lies inside a shadow, and a shadow is a share of a radius.
-            state.camera.zoom_by(3.5);
-            // The light up, since the shade is a factor ON it and a dim halo
-            // has no gradient for a shape to be read out of.
-            state.view.glow_reach = 2.0;
-            state.view.glow_strength = 1.4;
-            state.view.glow_shadow = shadow;
-            state.view.glow_shadow_soft = soft;
-            state.view.glow_shadow_shape = shape;
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (pane, rect) in &placements {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!(
-                "{tag}-shape{:.0}-shadow{:.0}-fade{:.0}.png",
-                shape * 100.0,
-                shadow * 100.0,
-                soft * 100.0,
-            ));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
-        }
-    }
-
     /// **A released note letting go of its light**, written to
     /// `target/scratch/`: one frame per moment of one note's release, across
-    /// the Shadow depth and the Shadow curve.
+    /// the Shadow depth.
     ///
     /// A probe: it asserts nothing, the verdict being a look. What it is for is
     /// the one thing the stills beside it cannot show — a picture that is right
@@ -1125,12 +1005,11 @@ mod tests {
     /// fading ink, and whatever the two do to each other happens there and
     /// nowhere else.
     ///
-    /// The DEPTH and the CURVE are the pair swept because they are the two the
-    /// stretch is worst at: the depth decides how much light the ink's own
-    /// shadow is worth (`ring_shade` in lattice.wgsl), and the curve decides how
-    /// far past the ink that shadow is still worth anything (`SHADOW_STOP`). Each
-    /// is shot at its top and at the fresh setting, the fresh pair first as the
-    /// reference.
+    /// The DEPTH is what is swept, because it is what the stretch is worst at:
+    /// it decides how much of the frame a caster's ink is still worth
+    /// (`shadow_through` in lattice.wgsl), and the ink is the half that is
+    /// leaving. Shot at the fresh setting first as the reference, then at its
+    /// top.
     ///
     /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, with
     /// the two clocks left RUNNING rather than switched off, which is the whole
@@ -1169,27 +1048,20 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
-        // (tag, depth, curve). The first is the fresh pair, as the reference.
-        let shots: Vec<(&str, f32, f32)> = vec![
-            ("fresh", 0.85, 1.0),
-            ("deep", 1.0, 1.0),
-            ("rind", 1.0, 0.0),
-            ("rind85", 0.85, 0.0),
-        ];
+        // (tag, depth). The first is the fresh setting, as the reference.
+        let shots: Vec<(&str, f32)> = vec![("fresh", 0.85), ("deep", 1.0)];
         // Moments of the release, and one of the hold ahead of it as the
         // reference.
         let want: Vec<f64> =
             [-0.05, 0.1, 0.25, 0.4, 0.6, 0.9, 1.5, 2.5].iter().map(|t| OFF + t).collect();
 
-        for (tag, depth, curve) in shots {
+        for (tag, depth) in shots {
             let mut state = SharedState::new(FORMAT);
             state.set_background((24, 25, 29));
             state.view.glow_reach = 1.5;
             state.view.glow_strength = 1.0;
             state.view.glow_shadow = 0.16;
-            state.view.glow_shadow_soft = 0.16;
             state.view.glow_shadow_depth = depth;
-            state.view.glow_shadow_shape = curve;
             state.camera.zoom_by(2.0);
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
             let mut released = false;
@@ -1234,112 +1106,6 @@ mod tests {
         }
     }
 
-    /// The knockout against a wide OCTAVE GAP, written to `target/scratch/`:
-    /// what a node clears in the sectors it is drawing nothing in.
-    ///
-    /// A probe: it asserts nothing, the verdict being a look. What a number
-    /// cannot say is whether a node whose hole is cut back to its slices still
-    /// reads as one object standing in front, or as a set of unrelated marks
-    /// with the sheet behind coming through between them — which is the whole
-    /// question the slice term in `node_clearing` settles.
-    ///
-    /// The reading conditions, which are the expensive part: the sheets pulled
-    /// to a cabinet shear of 0.10, so a back node stands within half a radius
-    /// of a front one and there is an occlusion question at all — at the shear
-    /// the view ships they miss each other entirely; the names off, since the
-    /// claim is about which RING is in front; the light's own clock off, so one
-    /// frame is the whole picture; and the DAW's ground rather than the
-    /// preset's near-black.
-    ///
-    /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER
-    /// of one look: change what `node_clearing` reads, shoot under one tag,
-    /// restore and shoot under another.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture octave_gap_clearance
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn octave_gap_clearance_probe() {
-        use harmonigraph_ui::{draw_pane, Layout, SharedState};
-
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut renderer) = Renderer::new(SIZE) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let context = egui::Context::default();
-        harmonigraph_ui::theme::apply_theme(&context);
-        context.set_pixels_per_point(PPP);
-
-        let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
-        state.set_background((24, 25, 29));
-        state.frame_params.fade_time = 0.0;
-        state.view.glow_attack = 0.0;
-        state.view.glow_release = 0.0;
-        state.view.glow_strength = 0.6;
-        state.view.extent_sevens = 1;
-        state.view.show_labels = false;
-        for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
-        }
-
-        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-        let placements = layout.resolve(points);
-        let background =
-            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
-
-        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "base".to_string());
-        let fresh = harmonigraph_scene::ViewConfig::default();
-        // (tag, octave gap, Shadow) — the Shadow being what the hole is cut at, one
-        // number for the hole and the shadow laid over it.
-        let shots: Vec<(&str, f32, f32)> = vec![
-            ("a-oct05-clear", fresh.octave_gap, fresh.glow_shadow),
-            ("b-oct20-clear", 0.20, fresh.glow_shadow),
-            ("c-oct20-noclear", 0.20, 0.0),
-            ("d-oct10-clear", 0.10, fresh.glow_shadow),
-            ("e-oct025-clear", 0.025, fresh.glow_shadow),
-            ("f-oct075-clear", 0.075, fresh.glow_shadow),
-            ("g-oct125-clear", 0.125, fresh.glow_shadow),
-            ("h-oct15-clear", 0.15, fresh.glow_shadow),
-        ];
-        let home = state.camera;
-        for (shot, octave_gap, shadow) in shots {
-            state.camera = home;
-            state.camera.zoom_by(3.5);
-            state.camera.cabinet_scale = 0.10;
-            state.view.octave_gap = octave_gap;
-            state.view.glow_shadow = shadow;
-            state.view.glow_shadow_soft = shadow;
-            let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(NOW),
-                    max_texture_side: Some(renderer.max_texture_side()),
-                    ..Default::default()
-                },
-                |ui| {
-                    for (pane, rect) in &placements {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
-                    }
-                },
-            );
-            let primitives = context.tessellate(output.shapes, PPP);
-            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("octgap-{tag}-{shot}.png"));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
-        }
-    }
     /// The marker field under a tilted camera, written to `target/scratch/` —
     /// the picture the draw order is for.
     ///

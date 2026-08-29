@@ -246,17 +246,16 @@ pub const GLOW_REACH_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
-/// How far past each ring a node's clearing may be asked to stand the light
-/// off (see [`ViewConfig::glow_shadow`]), in the quad UV units the layer sizes
-/// above are in — the far end of the Glow section's Shadow bar, and with it the
-/// widest fade that bar can spend, the fade being held inside the shadow.
+/// How wide an item's shadow may be asked to be (see
+/// [`ViewConfig::glow_shadow`]), in the quad UV units the layer sizes above are
+/// in — the far end of the Glow section's Shadow bar.
 ///
 /// A whole node radius, where the two paddings above stop at [`GAP_MAX`]: a
 /// padding is room between two layers of one node and has no business being
-/// wider than a layer, but the standoff is a dip in the LIGHT, and what stops
-/// it reading as a black ring is a dip broad enough to come off at the rate
-/// the skirt does. One radius past every ring is a band wider than the whole
-/// ring stack it stands off, past which there is no more shape to soften.
+/// wider than a layer, but a shadow is a blur of an item's whole ink, and what
+/// stops it reading as a black rim is a σ broad enough to come off at the rate
+/// the skirt does. Half a radius of σ past every ring is a band wider than the
+/// whole ring stack casting it, past which there is no more shape to soften.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
 /// The two ends of the Glow section's Feather bar, as the rate the light's
@@ -267,20 +266,6 @@ pub const GLOW_SHADOW_MAX: f32 = 1.0;
 /// ([`glow_skirt`]).
 pub const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
-
-/// The two ends of the Glow section's Shadow curve bar, as the exponent the
-/// standoff's decay is taken over across its own width. Mirrored in
-/// lattice.wgsl (`SHADOW_SHAPE_RIND`/`PLAIN`) on the same terms as the pair above
-/// — the shader holds the rationale, including why the plain exponential is
-/// the bar's ceiling rather than a point inside it — and the render crate
-/// asserts the copies agree. What this copy draws is the bar's preview
-/// ([`standoff_recovery`]).
-pub const SHADOW_SHAPE_RIND: f32 = 0.25;
-pub const SHADOW_SHAPE_PLAIN: f32 = 1.0;
-
-/// How many e-folds of the standoff the Shadow's fade spends, mirrored from
-/// lattice.wgsl (`SHADOW_TAIL`), which holds the rationale.
-pub const SHADOW_TAIL: f32 = 4.0;
 
 /// `smoothstep(0, 1, x)`, as WGSL spells it.
 fn smoothstep(x: f32) -> f32 {
@@ -306,32 +291,6 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
     let rate = GLOW_FALLOFF_TIGHT + (GLOW_FALLOFF_FLAT - GLOW_FALLOFF_TIGHT) * feather;
     let window = 1.0 - smoothstep((p - 0.5) / 0.5);
     (-rate * p).exp() * window
-}
-
-/// How much of its light a ring has given back `p` of the way across the
-/// standoff's fade, 0..=1, at `shape` ([`ViewConfig::glow_shadow_shape`]): the Shadow
-/// curve bar's preview, drawn as the light coming BACK because that is the
-/// direction the fade runs in — the ring's edge at the left, the halo at the
-/// right.
-///
-/// The low end of the bar draws a curve that is nearly a step at the left,
-/// which is the shape rather than a clipped preview: an exponent under one
-/// gives the light back inside the ink and leaves the rest of the width to a
-/// haze.
-///
-/// A copy of `standoff_coverage`'s decay and the exponent `glow_shadow_shape`
-/// takes it over, on the terms [`glow_skirt`] states, and held to the shader's
-/// text the same way (`the_shadow_curve_bars_preview_is_the_ramp_the_shader_runs`).
-///
-/// It does not reach 1 at the right-hand end, and that is the shape rather than
-/// a clipped preview: nowhere in the bar's own width does the fade land on
-/// nothing (see `SHADOW_TAIL`), so it draws a curve still climbing where a ramp
-/// would have arrived. What ends the tail is a window a couple of Shadow widths further
-/// out again (`SHADOW_STOP` in lattice.wgsl), outside every point drawn here.
-pub fn standoff_recovery(shape: f32, p: f32) -> f32 {
-    let exponent =
-        SHADOW_SHAPE_RIND * (SHADOW_SHAPE_PLAIN / SHADOW_SHAPE_RIND).powf(shape.clamp(0.0, 1.0));
-    1.0 - (-SHADOW_TAIL * p.clamp(0.0, 1.0).powf(exponent)).exp()
 }
 
 /// The longest attack or release the node glow offers, in seconds (see
@@ -760,15 +719,14 @@ pub struct PlusInstance {
     /// that convention.
     pub radius: f32,
     pub color: Vec4,
-    /// The marker's opacity — its ink, its own pool of light, and the standoff
-    /// its cross writes into the light around it (`plus_standoff` in
-    /// lattice.wgsl), all three at once.
+    /// The marker's opacity — its ink and the share of the shadow its cross
+    /// casts (`plus_paint` in lattice.wgsl), both at once.
     ///
-    /// ONE number for all of them, which is the rule about a cross and its
-    /// shadow: they arrive and leave together, so a position handing itself
-    /// over to a name never shows a cross with no shadow under it nor a shadow
-    /// under no cross. The shadow a cross casts is worth exactly the cross,
-    /// which is also what lets [`derive_pluses`](derive::derive_pluses) drop a
+    /// ONE number for both, which is the rule about a cross and its shadow:
+    /// they arrive and leave together, so a position handing itself over to a
+    /// name never shows a cross with no shadow under it nor a shadow under no
+    /// cross. The shadow a cross casts is worth exactly the cross, which is
+    /// also what lets [`derive_pluses`](derive::derive_pluses) drop a
     /// fully-claimed marker outright rather than ship one that still shades.
     pub strength: f32,
 }
@@ -803,8 +761,9 @@ pub struct Scene {
     ///
     /// What the melody/bass marks stand off and what the node's billboard is
     /// sized on, so a node whose band is dialled away still wears its marks
-    /// where its picture actually ends. The clearing is bounded by this and
-    /// measured per layer instead (`node_clearing` in lattice.wgsl).
+    /// where its picture actually ends. It is also the circle a node's caster
+    /// box is projected from (`LatticeCallback::from_scene`), that box being a
+    /// bound on the ink rather than its shape.
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
@@ -915,13 +874,10 @@ pub struct Scene {
     /// lattice pane paints its own rect with, as every other picture pane
     /// does (see [`skin::well_color`]).
     ///
-    /// Only the sevens knockout reads it, and it is the difference between
-    /// a hole and a blob. The pass blends premultiplied, so a gutter with no
-    /// color of its own knocks out to BLACK — still darker than the well, so
-    /// a cleared disc sits on the picture as a darker plate instead of
-    /// disappearing into the ground wherever it crosses nothing. Handing the
-    /// ground in means the gutter is invisible over empty lattice and only
-    /// shows as a clearing where it actually crosses something.
+    /// Nothing in the lattice reads it: a shadow is a multiply on what the
+    /// frame already holds rather than a hole cut through to the pane. It is
+    /// still handed over, the uniform row it fills being a retired slot rather
+    /// than a repack.
     pub background: Vec4,
     /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
     /// [`ViewConfig::mark_thickness`]). It starts one
@@ -975,21 +931,12 @@ pub struct Scene {
     /// (see [`ViewConfig::glow_meld`]); already clamped to 0..=1. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_meld: f32,
-    /// The standoff: how far past every ring a node dims the light standing
-    /// there, in the same quad UV units (see [`ViewConfig::glow_shadow`]);
-    /// already clamped to [`GLOW_SHADOW_MAX`]. Inert while
-    /// [`glow_reach`](Self::glow_reach) is 0.
+    /// The Shadow: how wide every caster's blur is, in the same quad UV units
+    /// (see [`ViewConfig::glow_shadow`]); already clamped to
+    /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no
+    /// light in the picture.
     pub glow_shadow: f32,
-    /// How much of that shadow is spent fading the light back in, measured back
-    /// from its end in the same units (see [`ViewConfig::glow_shadow_soft`]);
-    /// already clamped to the shadow.
-    pub glow_shadow_soft: f32,
-    /// How the standoff's decay is shaped across that width (see
-    /// [`ViewConfig::glow_shadow_shape`]), 1 a plain exponential off the ring and
-    /// 0 handing the light back inside the ink; already clamped to 0..=1.
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_shadow_shape: f32,
-    /// How much of the light the standoff takes away where it stands (see
+    /// How dark a shadow lands where it is whole (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
@@ -997,22 +944,21 @@ pub struct Scene {
     ///
     /// The lit ink alone: every other piece of the lattice takes the field
     /// whole, and what a fragment's lit share is is the shader's to say
-    /// (`NodeInk::lit` in lattice.wgsl). The ground's share of that same field
-    /// is [`glow_shadow_depth`](Self::glow_shadow_depth), and the two are
-    /// independent: this reads the field RAW, so the Shadow bars move it not at
-    /// all.
+    /// (`NodeInk::lit` in lattice.wgsl). It reads the field RAW — an item's own
+    /// shadow does not darken the light it is washed with — so the Shadow bars
+    /// move it not at all.
     pub glow_wash: f32,
     /// One quad-uv length of the home sheet, as a world length
     /// (`marker_world`): what converts the marker field between the units its
     /// own draws are in and the units every glow bar is dialled in.
     ///
-    /// The markers' standoff draw needs both. Its billboard is sized in WORLD
-    /// and the arm it is sized around arrives per instance as a world length,
-    /// while the Shadow that same draw holds the light off by is quad uv, being a
-    /// node's bar — so one of the two has to be converted, and the conversion
-    /// is a property of the scene rather than of any marker. Handing it over
-    /// once is what keeps the shader from carrying a second copy of the uv rule
-    /// (see [`Scene::node_radius`], which is the same rule for a node).
+    /// A marker's own draw needs both. Its billboard is sized in WORLD and the
+    /// arm it is sized around arrives per instance as a world length, while the
+    /// Shadow that quad has to hold is quad uv, being a node's bar — so one of
+    /// the two has to be converted, and the conversion is a property of the
+    /// scene rather than of any marker. Handing it over once is what keeps the
+    /// shader from carrying a second copy of the uv rule (see
+    /// [`Scene::node_radius`], which is the same rule for a node).
     pub marker_unit: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
@@ -1108,8 +1054,8 @@ impl Scene {
         for node in &mut self.nodes {
             // The keys' own floor. `activation` and not the octave word beside
             // it, though the two carry the same envelopes: this is the level
-            // the node's disc and its clearing are drawn at, so the ring leaves
-            // exactly with the rest of the node rather than a slot at a time.
+            // the rest of the node is drawn at, so the ring leaves exactly with
+            // it rather than a slot at a time.
             node.audio_ring = fade.level(layout, node.cents).max(node.activation);
         }
     }

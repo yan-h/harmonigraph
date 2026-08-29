@@ -63,9 +63,9 @@ fn bloom_adds_light_over_the_plain_composite() {
 /// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it
 /// is drawn under. Both directions matter, and only one of them is obvious:
 /// forcing the home sheet to the bottom (so an off-sheet note could never be
-/// hidden by it) inverts the far half of the axis, and since the knockout
-/// gutter clears whatever was drawn before it, the sheet behind then takes a
-/// bite out of the home sheet in front of it.
+/// hidden by it) inverts the far half of the axis, and since a node is drawn
+/// over — and casts over — whatever came before it, the sheet behind then
+/// stands on top of the home sheet in front of it.
 #[test]
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use harmonigraph_scene::{Camera, FrameParams, Projection, ViewConfig};
@@ -108,9 +108,9 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         // World z IS the sevens axis (see lattice_to_world), so the draw
         // order must run from the most negative sheet to the most positive
         // — and it has to hold under EVERY projection, not only the face-on
-        // one. When it doesn't, the sheets interleave, the grid lands in
-        // the wrong place in the order, and the home sheet's clearings have
-        // nothing drawn before them left to clear.
+        // one. When it doesn't, the sheets interleave and every shadow in the
+        // frame is cast in the wrong order, an item multiplying only what the
+        // walk happened to put under it.
         let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
         // Several SHEETS, not several nodes. A node count passes on one
         // sheet's worth of identical depths, where every pair below holds

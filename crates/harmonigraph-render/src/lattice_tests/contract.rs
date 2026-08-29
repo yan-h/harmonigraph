@@ -5,7 +5,7 @@ use crate::*;
 
 #[test]
 fn baked_shader_validates() {
-    validate_wgsl(SHADER_SRC)
+    validate_wgsl(&with_common(SHADER_SRC))
         .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
 }
 
@@ -219,37 +219,6 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
             "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
              the skirt line for line to draw the Feather bar's preview, so a change to \
              either is a change to both",
-        );
-    }
-}
-
-/// The same contract for the Shadow curve bar, whose preview is a copy of the
-/// standoff's ramp and the exponent it is raised to
-/// (`harmonigraph_scene::standoff_recovery`).
-///
-/// The preview draws the bar's own width alone — `p` runs 0..=1, which is the
-/// fade between the Shadow's two handles — so the window the shader shuts its tail
-/// with is 1 across every point it draws and does not appear in the copy. It is
-/// pinned here all the same: the day that window moves inside the fade is the
-/// day the preview stops being the shape.
-#[test]
-fn the_shadow_curve_bars_preview_is_the_ramp_the_shader_runs() {
-    let needles = [
-        format!("const SHADOW_SHAPE_RIND: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_RIND),
-        format!("const SHADOW_SHAPE_PLAIN: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_PLAIN),
-        format!("const SHADOW_TAIL: f32 = {:?};", harmonigraph_scene::SHADOW_TAIL),
-        "return SHADOW_SHAPE_RIND * pow(SHADOW_SHAPE_PLAIN / SHADOW_SHAPE_RIND, t);".to_owned(),
-        "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
-        "return exp(-SHADOW_TAIL * pow(u, glow_shadow_shape())) * (1.0 - smoothstep(1.0, SHADOW_STOP, u));"
-            .to_owned(),
-        "const SHADOW_STOP: f32 = 2.0;".to_owned(),
-    ];
-    for needle in &needles {
-        assert!(
-            SHADER_SRC.contains(needle),
-            "lattice.wgsl must contain `{needle}`: harmonigraph_scene::standoff_recovery mirrors \
-             the standoff's ramp to draw the Shadow curve bar's preview, so a change to either is \
-             a change to both",
         );
     }
 }

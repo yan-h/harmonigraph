@@ -41,13 +41,13 @@ struct Locals {
     pixels_per_point: f32,
     /// How the light standing under a name is mixed out of the two blends it
     /// was written under — the lattice's Meld bar, the same number every other
-    /// reader of that target takes (`glow_light` in lattice.wgsl). Read by the
+    /// reader of that target takes (`glow_light` in common.wgsl). Read by the
     /// lattice's entry points alone; every other surface draws no light and
     /// leaves it at 0.
     meld: f32,
     /// How much of what stands under a name its shadow takes where that shadow
     /// is whole, 0..1 — the lattice's `glow_shadow_depth`, the same number a
-    /// ring's standoff spends. Read by [`fs_shadow_box`] alone; every other
+    /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
     /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
@@ -67,26 +67,6 @@ struct Locals {
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
 @group(0) @binding(3) var mark_atlas: texture_2d<f32>;
-
-// The lattice's light, at group 1: the same target its nodes and markers read
-// back, in the same layout (`Resources::glow_layout`), so the group the scene
-// pass already has bound serves this pass unchanged. The two textures are the
-// field under both of its blends, mixed by `locals.meld`.
-//
-// Bound by the LATTICE's glyph pipelines alone. The bindings a pipeline must
-// carry are the ones its entry point reads, so `fs_rim` and `fs_fill` — the
-// two every other surface's text draws through — take a layout with group 0 and
-// nothing else, and a pane with no light has no dummy to bind.
-@group(1) @binding(0) var glow_tex: texture_2d<f32>;
-@group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
-
-// The shadow atlas at group 2: every name's ink blurred into a cell of its own
-// (shadow.rs), which is what [`fs_shadow_box`] multiplies the frame by.
-//
-// Bound by the LATTICE's box draw alone. Every other surface's text casts no
-// shadow and names no group 2, so a pane with no atlas has no dummy to bind.
-@group(2) @binding(0) var shadow_atlas: texture_2d<f32>;
-@group(2) @binding(1) var shadow_sampler: sampler;
 
 /// The `atlas` an instance carries when it is a drawn mark rather than a
 /// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
@@ -168,12 +148,13 @@ fn vs_glyph_cell(
     @location(7) box_meta: vec4<f32>,
 ) -> VertexOut {
     var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
-    let texel = box_cell.xy + (out.position.xy - box_rect.xy) * box_meta.x;
-    out.position = vec4<f32>(
-        2.0 * texel.x / locals.shadow_atlas_size.x - 1.0,
-        1.0 - 2.0 * texel.y / locals.shadow_atlas_size.y,
-        0.0,
-        1.0,
+    let texel = cell_texel(out.position.xy, box_rect, box_cell, box_meta.x);
+    // Drawn in plain screen space, so the `w` a cell's clip position is built
+    // with is the 1 this quad already carries.
+    out.position = select(
+        no_quad(),
+        cell_clip(texel, locals.shadow_atlas_size, 1.0),
+        cell_packed(box_cell),
     );
     return out;
 }
@@ -481,33 +462,15 @@ fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
     return in.fill * cov;
 }
 
-/// The finished light at a pixel of the lattice's glow target, mixed out of the
-/// two blends it was written under — `glow_light` in lattice.wgsl, and the same
-/// mix for the same reason: ink painting a different one from the picture it
-/// stands in is a halo drawn round every name.
+/// The light at a glyph's own pixel: [`glow_light`] with the coordinate held
+/// inside the texture, and the Meld bar clamped on the way in.
 ///
-/// `coord` is clamped into the texture, which is the lattice's own rule
-/// (`light_coord`): the glow target is the scene target's size, so a fragment
-/// of this pass stands at one of its texels, and the clamp is what keeps a
-/// rounding at the last row from reading nothing.
+/// The glow target is the scene target's size, so a fragment of this pass
+/// stands at one of its texels, and the clamp is what keeps a rounding at the
+/// last row from reading nothing.
 fn glyph_light(coord: vec2<i32>) -> vec4<f32> {
     let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
-    let at = clamp(coord, vec2<i32>(0, 0), edge);
-    let screened = textureLoad(glow_tex, at, 0);
-    let brightest = textureLoad(glow_max_tex, at, 0);
-    return mix(brightest, screened, clamp(locals.meld, 0.0, 1.0));
-}
-
-/// The whole of `light`, laid over ink already premultiplied by `alpha` —
-/// `wash_over` in lattice.wgsl at a share of 1, which is the share every piece
-/// of the lattice's RESTING field takes (see `plus_paint`).
-///
-/// A SCREEN rather than an over, and that is what a neighbour's light is
-/// allowed to do: `w + ink * (1 - w)` per channel can only brighten, where an
-/// over lets a saturated halo standing behind a name take the name's other
-/// channels down with it.
-fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
-    return light * alpha + ink * (1.0 - light);
+    return glow_light(clamp(coord, vec2<i32>(0, 0), edge), clamp(locals.meld, 0.0, 1.0));
 }
 
 /// The lattice's own glyphs: [`fs_fill`]'s ink, washed by the light it stands
@@ -543,7 +506,7 @@ fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
     let ink = in.fill * cov;
     let coord = vec2<i32>(in.position.xy);
     let light = glyph_light(coord);
-    return vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb), ink.a);
+    return vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0), ink.a);
 }
 
 /// A lattice name's coverage, into its own cell of the shadow atlas
@@ -562,30 +525,6 @@ fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
 fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
 }
-
-/// How much blurred ink is a whole shadow.
-///
-/// The blur of a caster's coverage is at most 1, and only deep inside a caster
-/// far wider than σ; a stroke of type is a few pixels against a σ of several,
-/// so its blur peaks at a fraction of that and its shadow, spent as an exponent
-/// on `keep`, would land at a fraction of the depth the bar names. This is the
-/// factor that fraction is multiplied up by, and the `min(…, 1)` under it is
-/// what keeps the Shadow depth a true FLOOR: a wide caster saturates there
-/// rather than overshooting it, and the gain only deepens the thin ones.
-///
-/// One constant and not a bar, calibrated by eye on a name at the fresh view
-/// (#498, PR B): at 1 a fresh name's shadow is a faint tint beside the ring's,
-/// at 4 a hairline casts as a block. Nodes and markers join the same rule in
-/// PR C and take this number as it stands.
-const GAIN: f32 = 2.5;
-
-/// What the Shadow depth's own bar bottoms out at — `SHADOW_KEEP_FLOOR` in
-/// lattice.wgsl, spelled a second time because there is no linkage between
-/// shader modules, and pinned to it by
-/// `the_names_shadow_depth_bottoms_out_where_the_rings_does`. The depth at 1
-/// is a shadow ten stops deep rather than a hole to black, so a name's shadow
-/// and a ring's at the top of the bar are the same darkness.
-const KEEP_FLOOR: f32 = 0.0009765625;
 
 struct BoxOut {
     @builtin(position) position: vec4<f32>,
@@ -619,15 +558,6 @@ fn vs_shadow_box(
     return out;
 }
 
-/// The scene pass's two attachments: the picture, and the picture without its
-/// names (`Offscreen::nodes_view` in lib.rs). A shadow lands on BOTH — the
-/// bloom reads the second, and a node's halo has to bloom at the brightness
-/// the name left it — where a name's ink lands on the first alone.
-struct SceneOut {
-    @location(0) picture: vec4<f32>,
-    @location(1) nodes: vec4<f32>,
-}
-
 /// A name's shadow: everything already in the frame under the box, multiplied
 /// by the transmittance of the name's blurred ink.
 ///
@@ -641,25 +571,26 @@ struct SceneOut {
 /// the shadow by being there first. Drawn before the name's own glyphs, so the
 /// name's ink is the one thing its shadow never touches.
 ///
-/// `T` is `keep` raised to the blur, `keep` being what the Shadow depth leaves
-/// (`gap_shade` in lattice.wgsl spends the same depth the same way over a
-/// ring's coverage). The name's LEVEL is spent on the shadow as a SHARE:
-/// `1 - level * (1 - T)` is a caster of opacity `level` letting `1 - level` of
-/// the light straight through, which is what a name easing in as its marker
-/// eases out is. Spent inside the exponent instead, a name a tenth of the way
-/// in at the top of the depth bar would cast half its shadow (`KEEP_FLOOR` to
-/// the 0.1 is 0.5) — its shadow snapping on while its ink is barely there.
+/// `T` is `shadow_transmittance` over the blur standing at this fragment, and
+/// it is the same function a ring and a cross spend over their own cells
+/// (`shadow_through` in lattice.wgsl) — one Shadow bar, one darkness, whatever
+/// the caster. The name's LEVEL is spent there as a share, which is what a name
+/// easing in as its marker eases out casts.
 ///
 /// One bilinear tap. The cell is drawn at a fraction of the target's pixels
 /// once σ is past `SIGMA_CELL_MAX`, and the tap is what makes a blur wider
 /// than its own texels read smooth.
+///
+/// The LATTICE's box draw alone binds group 2. The bindings a pipeline must
+/// carry are the ones its entry point reads, so every other surface's text —
+/// which casts no shadow and draws through [`fs_rim`] and [`fs_fill`] — takes a
+/// layout with group 0 and nothing else, and a pane with no atlas has no dummy
+/// to bind.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
-    let keep = max(1.0 - clamp(locals.shadow_depth, 0.0, 1.0), KEEP_FLOOR);
-    let through = pow(keep, min(GAIN * clamp(blur, 0.0, 1.0), 1.0));
-    let t = 1.0 - clamp(in.level, 0.0, 1.0) * (1.0 - through);
+    let t = shadow_transmittance(blur, locals.shadow_depth, in.level);
     let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
     return SceneOut(shadow, shadow);
 }

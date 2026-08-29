@@ -212,13 +212,13 @@ fn the_meld_leaves_a_node_lighting_a_pixel_alone_untouched() {
 
 /// The Meld reaches what a NODE paints, not just the ground between nodes.
 ///
-/// A node's clearing paints the light standing at its own pixel rather than
+/// A node's ink is washed with the light standing at its own pixel rather than
 /// bare ground, reading the glow target back through `node_paint` — so it mixes
-/// the same pair the composite does, and has to mix it the same way. A clearing
-/// left on the screen while the ground around it took the max is a node sitting
-/// on a plateau with a step at its Shadow, which is a halo drawn round every
-/// node: the one failure the light being ONE field under the whole lattice
-/// exists to prevent.
+/// the same pair the composite does, and has to mix it the same way. A node's
+/// ink left on the screen while the ground around it took the max is a node
+/// sitting on a plateau with a step at its edge, which is a halo drawn round
+/// every node: the one failure the light being ONE field under the whole
+/// lattice exists to prevent.
 ///
 /// The probe is the brightest pixel of a ONE-node frame — the middle of that
 /// node, where its own light is fullest and its ink is what the pass wrote

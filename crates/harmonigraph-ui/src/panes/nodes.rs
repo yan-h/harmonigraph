@@ -10,7 +10,7 @@
 //! label rides a hovered and a remembered node as readily as a sounding one.
 
 use super::spectral::settings::ms_readout;
-use super::{edge_bar, param_bar, section};
+use super::{param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
@@ -694,7 +694,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  happens where two lots of it meet.",
             );
         // What colour the light comes out, between the amount of it and the
-        // standoff that holds it off. "Color blend" and not "Spread": under this
+        // Shadow under it. "Color blend" and not "Spread": under this
         // heading, beside a Reach and a Feather that are both about distance,
         // a "spread" reads as how far the light goes, and this moves no light
         // at all. It reads as a percentage because it is a SHARE — of a whole
@@ -712,82 +712,34 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  and never shone. 0% keeps each sector's colour a distinct arc \
                  and 100% averages the node into one tint.",
             );
-        // The standoff, beneath the light it holds off: ONE bar for how far the
-        // light is held off each ring and how much of that is spent fading it
-        // back in, on exactly the terms the Clearance bar in Note is one —
-        // solid to the inner handle, gone by the outer, the fade the distance
-        // between them. The same widget, because it is the same shape of
-        // setting: two distances from one edge, and a fill that draws the
-        // edge it sets. Two bars apiece would say the fade in a unit of its
-        // own with nothing on screen relating it to the width it is spent in,
-        // and a fade is only ever read against that width.
-        //
-        // Read out like the two gaps and the Clearance: every one of them is
-        // a share of the node's radius, so a person comparing them is
-        // comparing one unit. A tenth of a percent, as the gaps are.
-        edge_bar(
-            ui,
-            (&mut view.glow_shadow, &mut view.glow_shadow_soft),
-            GLOW_SHADOW_MAX,
-            "Shadow",
-            {
-                let fresh = ViewConfig::default();
-                (fresh.glow_shadow, fresh.glow_shadow_soft)
-            },
-            |v| format!("{:.1}%", v * 100.0),
-        )
-        .on_hover_text(
-            "How far the light is held off everything drawn in it — a node's \
-             audio ring, octave band and marks, and the cross standing at each \
-             resting position — as a share of the node's \
-             radius. Dark to the inner handle, faded back in by the outer; drag \
-             the inner to the left edge to fade the whole width, which is what \
-             keeps a wide shadow from reading as a black ring. It holds off the \
-             light wherever that light reaches, a neighbour's halo as much as \
-             the node's own, and however little the node's Clearance covers. \
-             The node's own ink is untouched at any setting — what the ink \
-             wears is the Wash bar below. Both handles at 0 lets the glow up to \
-             every edge. Double-click to restore.",
-        );
-        // The curve the fade runs on, directly under the bar that sets its
-        // width, on the Reach/Feather arrangement above: a bar saying how far
-        // something goes and a bar saying how it is spent over that distance
-        // belong together. Drawn on itself as the Feather is, and named for
-        // Note's Fade curve, which is the same kind of bar: the light coming
-        // back across the fade, from the ring's edge at the left to the halo at
-        // the right.
-        ValueBar::new(&mut view.glow_shadow_shape, 0.0..=1.0, "Shadow curve")
-            .curve(harmonigraph_scene::standoff_recovery)
-            .display(|v| format!("{:.0}%", v * 100.0))
+        // The Shadow, beneath the light it lands on: ONE width, read out like
+        // the two gaps and the Clearance, every one of them a share of the
+        // node's radius, so a person comparing them is comparing one unit. A
+        // tenth of a percent, as the gaps are.
+        ValueBar::new(&mut view.glow_shadow, 0.0..=GLOW_SHADOW_MAX, "Shadow")
+            .display(|v| format!("{:.1}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "Where inside the Shadow's fade the light is given back, drawn as \
-                 the light coming back from the ring's edge out to the halo. \
-                 100% comes off the ring at the rate the light itself comes \
-                 off everything, so the shadow and the halo read as one blur, and \
-                 it is the top because past it the shade turns over at a \
-                 radius and reads as an annulus drawn round the node. Lower \
-                 gives the light back nearer the ink and leaves the rest of \
-                 the width a haze, until the dark is a rind on the ring — with \
-                 the fade set narrower than the shadow, that handing-back is a \
-                 hard circle where the fade begins. It moves no boundary — the \
-                 Shadow's handles still say where the standoff is. Dial it with \
-                 the depth below: a tail is the faint end of the fade, so a \
-                 shallow depth loses it and a full one turns it into a void.",
+                "How wide a shadow everything in the lattice casts — a node's \
+                 audio ring, octave band and marks, the cross standing at each \
+                 resting position, and every note name — as a share of the \
+                 node's radius. Each item's shadow is a blur of its own ink, \
+                 laid over whatever is already behind it, so a thin ring casts \
+                 a fainter one than a wide band and a nearer item darkens a \
+                 farther one wherever the two overlap. Nothing darkens itself. \
+                 0% is the picture with no shadow at all. Double-click to \
+                 restore.",
             );
         ValueBar::new(&mut view.glow_shadow_depth, 0.0..=1.0, "Shadow depth")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the shadow takes away, on the ground the \
-                 node's Clearance paints. 100% clears to the bare ground — \
-                 where the shadow is solid, the ground is exactly what it is \
-                 with the glow off — and lower leaves the rings sitting in a \
-                 dimmer pool of their own light rather than in a void. 0% is \
-                 the picture with no shadow at all. It moves the ground alone: \
-                 the ink over it reads the light before the shadow takes any, \
-                 so a full depth is a lit ring standing in a pool cleared to \
-                 the bare ground.",
+                "How dark a shadow gets where it is deepest. 100% takes what is \
+                 under a solid ring to black, and lower leaves it sitting in a \
+                 dimmer pool of the light around it rather than in a void. It \
+                 is a FLOOR: a wide caster reaches it and a hairline one stops \
+                 short, which is how a shadow says how thick the ink casting it \
+                 is. 0% is the picture with no shadow at all.",
             );
         // The ink's own share of the same field, under the bar that says the
         // ground's: the pair is one question asked twice, and the answers are
