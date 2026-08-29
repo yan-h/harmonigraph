@@ -258,6 +258,15 @@ struct GridBuffer {
     key: (u64, u32, u32),
 }
 
+impl GridBuffer {
+    /// Whether this buffer is the right SHAPE for a grid of `capacity` slots
+    /// of `bins` bytes — which is all its allocation depends on, the
+    /// generation deciding only what is written into it.
+    fn fits(&self, capacity: u32, bins: u32) -> bool {
+        (self.key.1, self.key.2) == (capacity, bins)
+    }
+}
+
 /// The gradient table's GPU copy: a `levels` x 1 texture read with
 /// `textureLoad`, so the shader owns the blend and no sampler filters between
 /// two entries of a table that is already sampled per level.
@@ -289,21 +298,29 @@ const INITIAL_VERTEX_CAPACITY: usize = 64;
 
 impl SpectrogramResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let buffer_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+        let buffer_entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility,
             ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
             count: None,
         };
         let storage = wgpu::BufferBindingType::Storage { read_only: true };
+        // The grid is read from `read_level` and nothing else, so the fragment
+        // stage is the whole of its visibility. Naming the vertex stage as
+        // well would ask the adapter for `VERTEX_STORAGE`, which a downlevel
+        // backend need not have: the layout is then refused and the pipeline
+        // never builds, for a binding no vertex shader reads. Only the
+        // uniforms are wanted in both, by `vs_heatmap`'s projection.
+        let vs_fs = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        let fs = wgpu::ShaderStages::FRAGMENT;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spectrogram_bind_group_layout"),
             entries: &[
-                buffer_entry(0, wgpu::BufferBindingType::Uniform),
-                buffer_entry(1, storage),
+                buffer_entry(0, vs_fs, wgpu::BufferBindingType::Uniform),
+                buffer_entry(1, fs, storage),
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: fs,
                     ty: wgpu::BindingType::Texture {
                         // Loaded, never sampled: the resample and the blend
                         // that feed it are the shader's own.
@@ -472,14 +489,25 @@ impl CallbackTrait for SpectrogramCallback {
         let mut remade = false;
         if pane.grid.as_ref().is_none_or(|g| g.key != key) {
             let size = u64::from(self.grid.capacity) * u64::from(stride);
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spectrogram_grid"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            // Kept when the shape is unchanged, so a rebuild of the same grid
+            // is one write rather than a fresh 15.7 MB allocation. It is not
+            // the rare path the reallocation would be sized for: a Span parked
+            // on a ladder rung refolds on every frame, and each refold moves
+            // enough of the run to be uploaded whole.
+            let kept = pane.grid.take().filter(|g| g.fits(self.grid.capacity, self.grid.bins));
+            remade = kept.is_none();
+            let buffer = match kept {
+                Some(held) => held.buffer,
+                None => device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("spectrogram_grid"),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            };
             // The whole ring in one write, so the slots the run does not cover
-            // are zero rather than whatever a previous buffer left there. A
+            // are zero rather than whatever the buffer held before — which is
+            // what lets one be kept above. A
             // whole-song ring is 4096 x 3828 bytes = 15.7 MB, comfortably
             // inside wgpu's default 128 MiB storage binding, and this runs
             // only on a refold or a lost buffer.
@@ -491,7 +519,6 @@ impl CallbackTrait for SpectrogramCallback {
             }
             queue.write_buffer(&buffer, 0, &staging);
             pane.grid = Some(GridBuffer { buffer, key });
-            remade = true;
         } else {
             let buffer = &pane.grid.as_ref().expect("the branch above holds a buffer").buffer;
             let mut slab = vec![0u8; stride as usize];
