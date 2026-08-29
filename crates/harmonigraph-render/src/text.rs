@@ -49,7 +49,7 @@ use crate::{create_vertex_buffer, wgpu};
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
 /// Entry points the text shader must provide.
-#[cfg(test)]
+#[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_glyph",
     "fs_rim",
@@ -285,6 +285,14 @@ struct TextResources {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
+    /// Which reload the two pipelines above were built from
+    /// (`crate::reload::generation`). Compared exactly as `target_format` is,
+    /// and for the same reason: both say the pipelines in hand were built
+    /// against something the next frame is not drawing with. The lattice's
+    /// reload cannot reach this entry of `CallbackResources` to swap them, so
+    /// what it leaves is a count and a source.
+    #[cfg(feature = "hot-reload")]
+    generation: u64,
     /// The mirrored font atlas, and the key of what is in it.
     atlas: MirroredAtlas,
     /// And the drawn marks', which a session that never draws one leaves
@@ -444,12 +452,26 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
+/// The module every glyph pipeline is cut from.
+///
+/// Compiled once per surface and lent to each pipeline, rather than once per
+/// pipeline: the four are one text.wgsl behind one 228-line common half, and
+/// naga parses whatever it is handed every time it is handed it. The lattice
+/// side hoists its own the same way (`shader_src`).
+pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("text_shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    })
+}
+
 /// A lattice name's glyphs into their cell of the shadow atlas: coverage under
 /// a MAX blend, so a cell holds the union of its name's glyphs whatever order
 /// they arrive in (`fs_glyph_ink`). Two vertex buffers, the glyphs and — one
 /// per glyph — the box of the name each belongs to (`vs_glyph_cell`).
 pub(crate) fn create_glyph_cell_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
@@ -459,6 +481,7 @@ pub(crate) fn create_glyph_cell_pipeline(
     };
     glyph_pipeline(
         device,
+        shader,
         "fs_glyph_ink",
         &[Some(layout)],
         ("vs_glyph_cell", "fs_glyph_ink"),
@@ -486,6 +509,7 @@ pub(crate) fn create_glyph_cell_pipeline(
 /// and this draw reads none.
 pub(crate) fn create_shadow_box_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
     atlas: &wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
@@ -498,6 +522,7 @@ pub(crate) fn create_shadow_box_pipeline(
     });
     glyph_pipeline(
         device,
+        shader,
         "fs_shadow_box",
         &[Some(layout), None, Some(atlas)],
         ("vs_shadow_box", "fs_shadow_box"),
@@ -513,8 +538,14 @@ pub(crate) fn create_shadow_box_pipeline(
 /// Spelled once because the four differ in nothing else, and the fields that
 /// look like they might — the primitive topology, the vertex step mode — are
 /// properties of how this shader draws rather than of any one entry point.
+///
+/// `shader` is [`glyph_shader`]'s, handed in rather than built here: a caller
+/// builds several of these at once off one module, and a hot-reload's module is
+/// not the baked one.
+#[allow(clippy::too_many_arguments)]
 fn glyph_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     label: &str,
     groups: &[Option<&wgpu::BindGroupLayout>],
     entries: (&str, &str),
@@ -523,12 +554,6 @@ fn glyph_pipeline(
     depth: Option<wgpu::TextureFormat>,
 ) -> wgpu::RenderPipeline {
     let (vertex, fragment) = entries;
-    // The whole module: text.wgsl names the light, the wash and the shadow
-    // atlas that common.wgsl declares (`with_common`).
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("text_shader"),
-        source: wgpu::ShaderSource::Wgsl(crate::with_common(TEXT_SRC).into()),
-    });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("text_pipeline_layout"),
         bind_group_layouts: groups,
@@ -538,13 +563,13 @@ fn glyph_pipeline(
         label: Some(label),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some(vertex),
             compilation_options: Default::default(),
             buffers,
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(fragment),
             compilation_options: Default::default(),
             targets,
@@ -590,10 +615,32 @@ pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 }
 
 impl TextResources {
+    /// Whether the pipelines in hand were built for something the next frame is
+    /// not drawing: a different surface format, or — under hot-reload — a build
+    /// of the text module older than the one last published.
+    ///
+    /// Two questions with one answer because the remedy is one: these pipelines
+    /// are rebuilt from scratch either way, there being nothing in a
+    /// `RenderPipeline` to patch.
+    fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
+        #[cfg(feature = "hot-reload")]
+        if self.generation != crate::reload::generation() {
+            return true;
+        }
+        self.target_format != target_format
+    }
+
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let layout = glyph_bind_group_layout(device);
+        // Read once for the pair, and BEFORE the count below: a reload
+        // committed between the two would raise a count this build has not
+        // taken, and the rebuild it is owed would then never be asked for.
+        let shader = glyph_shader(device, &crate::text_source());
+        #[cfg(feature = "hot-reload")]
+        let generation = crate::reload::generation();
         let rim_pipeline = create_text_pipeline(
             device,
+            &shader,
             target_format,
             &layout,
             None,
@@ -603,6 +650,7 @@ impl TextResources {
         );
         let fill_pipeline = create_text_pipeline(
             device,
+            &shader,
             target_format,
             &layout,
             None,
@@ -616,6 +664,8 @@ impl TextResources {
             layout,
             sampler: glyph_sampler(device),
             target_format,
+            #[cfg(feature = "hot-reload")]
+            generation,
             atlas: MirroredAtlas::default(),
             marks: MirroredAtlas::default(),
             blank: blank_atlas(device, queue),
@@ -812,8 +862,10 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 /// stand in, and the entry points it draws through name no group 1 for a layout
 /// to have to carry. The shadow a name casts is the other half of the same
 /// picture and is a draw of its own; see [`create_shadow_box_pipeline`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
     glow: Option<&wgpu::BindGroupLayout>,
@@ -839,6 +891,7 @@ pub(crate) fn create_text_pipeline(
     }
     glyph_pipeline(
         device,
+        shader,
         entries.1,
         &[Some(layout), glow],
         entries,
@@ -859,7 +912,7 @@ impl CallbackTrait for TextCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let recreate = callback_resources
             .get::<TextResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
+            .is_none_or(|r| r.is_stale(self.target_format));
         if recreate {
             callback_resources.insert(TextResources::new(device, queue, self.target_format));
         }
@@ -983,22 +1036,68 @@ pub(crate) mod tests {
 
     #[test]
     fn baked_text_shader_validates() {
-        let src = crate::with_common(TEXT_SRC);
-        let module = naga::front::wgsl::parse_str(&src)
-            .map_err(|e| e.emit_to_string(&src))
-            .expect("text.wgsl must parse");
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .expect("text.wgsl must validate");
+        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), TEXT_ENTRY_POINTS)
+            .expect("baked text.wgsl must parse, validate, and keep its entry points");
+    }
+
+    /// The one place a plugin build's text pipelines could break is the source
+    /// they compile, so the two ways of naming it have to agree: no hot-reload
+    /// feature means `text_source` IS the baked concatenation.
+    #[test]
+    #[cfg(not(feature = "hot-reload"))]
+    fn a_build_with_no_watcher_compiles_the_baked_text_module() {
+        assert_eq!(crate::text_source(), crate::with_common(TEXT_SRC));
+    }
+
+    #[test]
+    fn every_glyph_pipeline_is_built_from_one_module() {
+        let src = crate::text_source();
         for required in TEXT_ENTRY_POINTS {
             assert!(
-                module.entry_points.iter().any(|ep| ep.name == *required),
-                "missing entry point `{required}`"
+                src.contains(&format!("fn {required}(")),
+                "the module every glyph pipeline compiles is missing `{required}`"
             );
         }
+    }
+
+    /// A format the surface is not in rebuilds, as it always has. Named here
+    /// because it is now one arm of a two-arm test and the other arm must not
+    /// be what makes this one pass.
+    #[test]
+    fn pipelines_built_for_another_format_are_stale() {
+        let _guard = crate::reload::test_lock();
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let resources = TextResources::new(&device, &queue, FORMAT);
+        assert!(!resources.is_stale(FORMAT));
+        assert!(resources.is_stale(wgpu::TextureFormat::Bgra8Unorm));
+    }
+
+    /// And a reload published after they were built, which is #510: the
+    /// lattice's reload cannot reach this entry of `CallbackResources`, so a
+    /// count is what tells the next `prepare` to rebuild. Without it an edit to
+    /// common.wgsl leaves every glyph here on the previous build's arithmetic.
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn pipelines_built_before_a_reload_are_stale() {
+        let _guard = crate::reload::test_lock();
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let resources = TextResources::new(&device, &queue, FORMAT);
+        assert!(!resources.is_stale(FORMAT), "nothing has been published since these were built");
+
+        crate::reload::publish(format!(
+            "{}\n// pipelines_built_before_a_reload_are_stale\n",
+            crate::with_common(TEXT_SRC)
+        ));
+        assert!(resources.is_stale(FORMAT), "a reload the text pipelines never hear about");
+
+        // ...and a build taken after it is current again, so the rebuild
+        // happens once rather than on every frame from here on.
+        let after = TextResources::new(&device, &queue, FORMAT);
+        assert!(!after.is_stale(FORMAT));
     }
 
     #[test]

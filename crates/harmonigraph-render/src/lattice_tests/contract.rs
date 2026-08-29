@@ -5,7 +5,7 @@ use crate::*;
 
 #[test]
 fn baked_shader_validates() {
-    validate_wgsl(&with_common(SHADER_SRC))
+    validate_wgsl("lattice.wgsl", &with_common(SHADER_SRC), LATTICE_ENTRY_POINTS)
         .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
 }
 

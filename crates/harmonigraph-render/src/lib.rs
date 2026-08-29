@@ -28,10 +28,11 @@
 //! them, and the bright pass reads that (see [`Offscreen::nodes_view`]).
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
-//! .wgsl file is watched on disk and the pipeline rebuilds on save —
-//! validated first, so a broken edit logs an error and keeps the old
-//! pipeline instead of crashing. Release plugin builds keep `include_str!`
-//! only.
+//! .wgsl files are watched on disk and every pipeline cut from them rebuilds
+//! on save — the lattice's and the names', which share common.wgsl. Both
+//! modules are validated first, and a broken edit to either logs an error and
+//! keeps the pipelines it has instead of crashing or reloading half the
+//! picture. Release plugin builds keep `include_str!` only.
 
 use std::collections::HashMap;
 
@@ -148,6 +149,96 @@ pub(crate) fn with_common(module: &str) -> String {
     module_source(COMMON_SRC, module)
 }
 
+/// How many lines of a concatenated module belong to the common half.
+///
+/// The offset every naga diagnostic carries: it counts lines in the string it
+/// was handed, and the module's own file starts after this many.
+///
+/// Counted off the PREFIX [`module_source`] builds rather than off the common
+/// half alone, which makes it right by construction instead of by three cases:
+/// the separator adds a line where common already ends in a newline and ends
+/// common's last line where it does not.
+#[cfg(any(test, feature = "hot-reload"))]
+fn common_lines(common: &str) -> usize {
+    module_source(common, "").lines().count()
+}
+
+/// The whole text module as this build should compile it: baked, or — under
+/// hot-reload, once a reload has been committed — what the watcher read off
+/// disk.
+///
+/// EVERY glyph pipeline is built from this, the lattice's three included: a
+/// name's fill, the cell its shadow is blurred from and the box that shadow is
+/// spent over are one shader drawing one name.
+pub(crate) fn text_source() -> String {
+    #[cfg(feature = "hot-reload")]
+    {
+        reload::text_source()
+    }
+    #[cfg(not(feature = "hot-reload"))]
+    {
+        with_common(text::TEXT_SRC)
+    }
+}
+
+/// What a committed reload leaves for the pipelines it cannot reach itself.
+///
+/// The reload runs inside the lattice callback, which holds one entry of
+/// `CallbackResources` and cannot reach the text callback's entry beside it —
+/// yet both are built from modules that share common.wgsl, so one edit is due
+/// to both. What crosses is the text module and a COUNT of reloads:
+/// `TextResources` compares that count exactly as it compares `target_format`,
+/// the two saying the same thing, that the pipelines in hand were built for
+/// something else.
+#[cfg(any(test, feature = "hot-reload"))]
+mod reload {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::RwLock;
+
+    static TEXT: RwLock<Option<String>> = RwLock::new(None);
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+    /// Held by every test that publishes or asks whether a build is current.
+    /// Both are process-wide, so two such tests interleaving would each read
+    /// the other's reload — and the failure would land on whichever ran second,
+    /// which is not the one that is wrong.
+    #[cfg(test)]
+    pub(crate) static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The lock, poison ignored: a test that panicked while holding it has
+    /// already failed, and taking the rest down with it hides which one.
+    #[cfg(test)]
+    pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        PUBLISH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// How many reloads have been committed; 0 for a session that has had none.
+    pub(super) fn generation() -> u64 {
+        GENERATION.load(Ordering::Acquire)
+    }
+
+    /// Hand over a reloaded text module.
+    ///
+    /// Stored BEFORE the count is raised, and the pair ordered Release/Acquire,
+    /// so a reader that sees the new count reads the new source with it. The
+    /// other order hands out a raised count over the previous source, which is
+    /// a rebuild that produces the build it was called to replace and then
+    /// reports itself done.
+    pub(super) fn publish(text: String) {
+        *TEXT.write().expect("no reader panics while holding this") = Some(text);
+        GENERATION.fetch_add(1, Ordering::Release);
+    }
+
+    /// The text module to compile now: the last one published, or the baked
+    /// halves while no reload has been committed.
+    pub(super) fn text_source() -> String {
+        TEXT.read()
+            .expect("no writer panics while holding this")
+            .clone()
+            .unwrap_or_else(|| crate::with_common(crate::text::TEXT_SRC))
+    }
+}
+
 /// What the bloom multiplies its blurred quarter by, out of whatever the bar
 /// or a saved blob hands over: below zero is off, and above the ceiling is
 /// the ceiling.
@@ -177,7 +268,7 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
 /// and the markers' one cross into the shadow atlas (`shadow.rs`).
 #[cfg(any(test, feature = "hot-reload"))]
-const REQUIRED_ENTRY_POINTS: &[&str] = &[
+const LATTICE_ENTRY_POINTS: &[&str] = &[
     "vs_main",
     "fs_main",
     "fs_main_scene",
@@ -196,44 +287,67 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "fs_plus_cell",
 ];
 
-/// Watches the two files a lattice module is made of, on disk (dev builds
+/// The two modules a reload rebuilds, each already carrying the common half
+/// it was read beside.
+#[cfg(any(test, feature = "hot-reload"))]
+struct ReloadedShaders {
+    lattice: String,
+    text: String,
+}
+
+/// Watches the three files those two modules are made of, on disk (dev builds
 /// only). The first sighting only records a baseline mtime; edits after launch
 /// trigger reloads.
 ///
-/// BOTH halves, and both are re-read from disk on a reload: an edit to
-/// common.wgsl is an edit to what a node's ink is washed and shadowed with, so
-/// leaving the baked half in place would reload a shader against arithmetic the
-/// file on disk no longer holds.
-#[cfg(feature = "hot-reload")]
+/// ALL THREE, and all three are re-read from disk on a reload. common.wgsl is
+/// the half BOTH modules are compiled against, so an edit to the wash or to
+/// `shadow_transmittance` is an edit to what a node is drawn with and to what a
+/// name is drawn with at once. Leaving any half where it was reloads a picture
+/// against arithmetic the files on disk no longer hold, and says nothing on
+/// screen about which half it kept.
+#[cfg(any(test, feature = "hot-reload"))]
 struct ShaderWatcher {
     lattice: std::path::PathBuf,
+    text: std::path::PathBuf,
     common: std::path::PathBuf,
-    /// The NEWER of the two files' mtimes: one stamp for the pair, so an edit
-    /// to either is one reload of the module they make together.
+    /// The NEWEST of the three files' mtimes: one stamp for the set, so an edit
+    /// to any of them is one reload of everything they make together.
     mtime: Option<std::time::SystemTime>,
     next_check: std::time::Instant,
 }
 
-#[cfg(feature = "hot-reload")]
+#[cfg(any(test, feature = "hot-reload"))]
 impl ShaderWatcher {
+    #[cfg(feature = "hot-reload")]
     fn new() -> Self {
-        ShaderWatcher {
-            lattice: std::path::PathBuf::from(concat!(
+        Self::watching(
+            std::path::PathBuf::from(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/shaders/lattice.wgsl"
             )),
-            common: std::path::PathBuf::from(concat!(
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shaders/text.wgsl")),
+            std::path::PathBuf::from(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/shaders/common.wgsl"
             )),
-            mtime: None,
-            next_check: std::time::Instant::now(),
-        }
+        )
     }
 
-    /// Returns the whole module — both halves, off disk — when either file
-    /// changed since the last poll.
-    fn poll(&mut self) -> Option<String> {
+    /// The three paths spelled out, which is what makes the reload testable:
+    /// every path [`new`](Self::new) takes is a source file of this crate, and
+    /// what the watcher has to be asked is what it does when one of them is
+    /// EDITED.
+    fn watching(
+        lattice: std::path::PathBuf,
+        text: std::path::PathBuf,
+        common: std::path::PathBuf,
+    ) -> Self {
+        ShaderWatcher { lattice, text, common, mtime: None, next_check: std::time::Instant::now() }
+    }
+
+    /// Returns both whole modules — every half off disk — when any of the three
+    /// files changed since the last poll.
+    fn poll(&mut self) -> Option<ReloadedShaders> {
         let now = std::time::Instant::now();
         if now < self.next_check {
             return None;
@@ -241,7 +355,7 @@ impl ShaderWatcher {
         self.next_check = now + std::time::Duration::from_millis(500);
 
         let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-        let mtime = stamp(&self.lattice)?.max(stamp(&self.common)?);
+        let mtime = stamp(&self.lattice)?.max(stamp(&self.text)?).max(stamp(&self.common)?);
         match self.mtime {
             None => {
                 self.mtime = Some(mtime); // baseline; the baked shader is current
@@ -249,16 +363,20 @@ impl ShaderWatcher {
             }
             Some(previous) if previous == mtime => None,
             Some(_) => {
-                // The stamp is committed only once BOTH halves are in hand. An
+                // The stamp is committed only once EVERY half is in hand. An
                 // editor that saves through a temp file and a rename leaves a
                 // window where the metadata is the new one and the read is not,
                 // and a stamp advanced past a failed read swallows that edit
-                // until the file is saved again — twice as reachable now that
-                // one reload reads two files.
+                // until the file is saved again — three times as reachable now
+                // that one reload reads three files.
                 let common = std::fs::read_to_string(&self.common).ok()?;
                 let lattice = std::fs::read_to_string(&self.lattice).ok()?;
+                let text = std::fs::read_to_string(&self.text).ok()?;
                 self.mtime = Some(mtime);
-                Some(module_source(&common, &lattice))
+                Some(ReloadedShaders {
+                    lattice: module_source(&common, &lattice),
+                    text: module_source(&common, &text),
+                })
             }
         }
     }
@@ -272,19 +390,34 @@ impl ShaderWatcher {
 ///
 /// `source` is a WHOLE module — what [`with_common`] or the watcher hands back,
 /// never lattice.wgsl on its own, which names functions it does not declare and
-/// would fail here for that alone.
+/// would fail here for that alone. `name` is the module's own file, and
+/// `required` the entry points it has to keep: the two modules validated here
+/// declare different ones, and a list checked against the wrong module reports
+/// every entry point in it missing.
+///
+/// A diagnostic's line number is the CONCATENATED module's, which is no line of
+/// either file. Naga weaves those numbers through a rendered snippet, so the
+/// seam is stated rather than the numbers rewritten.
 #[cfg(any(test, feature = "hot-reload"))]
-fn validate_wgsl(source: &str) -> Result<(), String> {
-    let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
+fn validate_wgsl(name: &str, source: &str, required: &[&str]) -> Result<(), String> {
+    let seam = common_lines(COMMON_SRC);
+    let banner = |body: String| {
+        format!(
+            "in {name} (lines 1-{seam} below are common.wgsl; past that, \
+             subtract {seam} for the line in {name}):\n{body}"
+        )
+    };
+    let module =
+        naga::front::wgsl::parse_str(source).map_err(|e| banner(e.emit_to_string(source)))?;
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
     .validate(&module)
-    .map_err(|e| format!("{e:?}"))?;
-    for required in REQUIRED_ENTRY_POINTS {
-        if !module.entry_points.iter().any(|ep| ep.name == *required) {
-            return Err(format!("missing entry point `{required}`"));
+    .map_err(|e| banner(format!("{e:?}")))?;
+    for entry in required {
+        if !module.entry_points.iter().any(|ep| ep.name == *entry) {
+            return Err(format!("{name} is missing entry point `{entry}`"));
         }
     }
     Ok(())
@@ -3034,10 +3167,14 @@ impl LatticeResources {
         // The label pipelines draw into the scene pass, so they are built
         // against its depth attachment as well as its format.
         let glyph_layout = text::glyph_bind_group_layout(device);
+        // Compiled once for the three pipelines below, as `shader_src` is for
+        // the lattice's.
+        let glyph_shader = text::glyph_shader(device, &text_source());
         // The light at group 1, as every other draw in the scene pass takes it:
         // a name is ink standing in it (`fs_fill_lit`).
         let glyph_fill_pipeline = text::create_text_pipeline(
             device,
+            &glyph_shader,
             target_format,
             &glyph_layout,
             Some(&glow_layout),
@@ -3048,10 +3185,12 @@ impl LatticeResources {
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
-        let glyph_cell_pipeline = text::create_glyph_cell_pipeline(device, &glyph_layout);
+        let glyph_cell_pipeline =
+            text::create_glyph_cell_pipeline(device, &glyph_shader, &glyph_layout);
         let shadow_blur_pipelines = shadow::create_blur_pipelines(device, &shadow_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
             device,
+            &glyph_shader,
             &glyph_layout,
             &shadow_layout,
             target_format,
@@ -3457,14 +3596,22 @@ impl CallbackTrait for LatticeCallback {
         let poll_ms = poll_start.elapsed().as_secs_f32() * 1000.0;
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
-        // rejected with a message; the previous pipeline keeps rendering.
+        // rejected with a message; the pipelines in hand keep rendering.
         #[cfg(feature = "hot-reload")]
-        if let Some(source) = resources.watcher.poll() {
-            match validate_wgsl(&source) {
+        if let Some(reloaded) = resources.watcher.poll() {
+            // Both modules or neither. They are compiled against one
+            // common.wgsl, so an edit in there is due to both, and committing
+            // whichever half happened to compile would leave a name's shadow on
+            // one build of `shadow_transmittance` and a node's on another —
+            // which is the split this reload exists to close, not to make.
+            let checked = validate_wgsl("lattice.wgsl", &reloaded.lattice, LATTICE_ENTRY_POINTS)
+                .and_then(|()| validate_wgsl("text.wgsl", &reloaded.text, text::TEXT_ENTRY_POINTS));
+            match checked {
                 Ok(()) => {
+                    let source = &reloaded.lattice;
                     let (pipeline, plus_pipeline) = create_pipelines(
                         device,
-                        &source,
+                        source,
                         resources.target_format,
                         SceneLayouts {
                             uniforms: &resources.bind_group_layout,
@@ -3478,14 +3625,14 @@ impl CallbackTrait for LatticeCallback {
                     // just changed, so the cell has to be rasterized by the
                     // same build that draws the node.
                     let (node_cell_pipeline, plus_cell_pipeline) =
-                        create_cell_pipelines(device, &source, &resources.bind_group_layout);
+                        create_cell_pipelines(device, source, &resources.bind_group_layout);
                     // The glow off the same source, so an edit to a node's
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
                     let glow_pipeline = create_glow_pipeline(
                         device,
-                        &source,
+                        source,
                         resources.target_format,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
@@ -3495,7 +3642,7 @@ impl CallbackTrait for LatticeCallback {
                     // layer paints is an edit to what the halo is made of.
                     let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
                         device,
-                        &source,
+                        source,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
                     );
@@ -3506,10 +3653,50 @@ impl CallbackTrait for LatticeCallback {
                     resources.glow_pipeline = glow_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
-                    eprintln!("[harmonigraph-render] shader hot-reloaded");
+
+                    // The NAMES, off the other module the same edit changed.
+                    // All three of their pipelines: the fill is the ink
+                    // standing in the light, the cell is the ink its shadow is
+                    // blurred from, and the box is where that shadow is spent —
+                    // one shader drawing one name, on the same argument the
+                    // glow's rebuild above is made on.
+                    let glyph_shader = text::glyph_shader(device, &reloaded.text);
+                    let glyph_fill_pipeline = text::create_text_pipeline(
+                        device,
+                        &glyph_shader,
+                        resources.target_format,
+                        &resources.glyph_layout,
+                        Some(&resources.glow_layout),
+                        ("vs_glyph", "fs_fill_lit"),
+                        Some(DEPTH_FORMAT),
+                        EGUI_BLEND,
+                    );
+                    let glyph_cell_pipeline = text::create_glyph_cell_pipeline(
+                        device,
+                        &glyph_shader,
+                        &resources.glyph_layout,
+                    );
+                    let shadow_box_pipeline = text::create_shadow_box_pipeline(
+                        device,
+                        &glyph_shader,
+                        &resources.glyph_layout,
+                        &resources.shadow_layout,
+                        resources.target_format,
+                        DEPTH_FORMAT,
+                    );
+                    resources.glyph_fill_pipeline = glyph_fill_pipeline;
+                    resources.glyph_cell_pipeline = glyph_cell_pipeline;
+                    resources.shadow_box_pipeline = shadow_box_pipeline;
+
+                    // And the text CALLBACK's own glyph pipelines, in an entry
+                    // of the map this one cannot reach: publishing raises the
+                    // count they watch, and the next prepare that reads it
+                    // rebuilds them against this same source.
+                    reload::publish(reloaded.text);
+                    eprintln!("[harmonigraph-render] shaders hot-reloaded");
                 }
                 Err(err) => {
-                    eprintln!("[harmonigraph-render] shader reload REJECTED, keeping old pipeline:\n{err}");
+                    eprintln!("[harmonigraph-render] shader reload REJECTED, keeping old pipelines:\n{err}");
                 }
             }
         }
