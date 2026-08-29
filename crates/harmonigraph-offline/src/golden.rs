@@ -351,10 +351,29 @@ fn the_whole_song_layout_draws_the_frame_on_record() {
 
 /// Frames per second the cost measurement renders at.
 ///
-/// Higher than [`FPS`] only to get more frames out of the same audio: the
-/// fixed cost of standing a renderer up is divided by the frame count, and 120
-/// frames put it far enough below the per-frame figure to stop mattering.
+/// Higher than [`FPS`] to get more frames out of the same audio: [`SECONDS`]
+/// at this rate is 240 of them, which puts the fixed cost of standing a
+/// renderer up far enough below the per-frame figure to stop mattering.
+///
+/// It is not free of the picture, so the DIFFERENCE columns are what to read
+/// and the absolute ones are not. A frame is fed exactly its own step of
+/// audio, so at 120 fps each carries half the samples a 60 fps frame does —
+/// half the analyzer columns to transform, and half as many to fold into the
+/// grid. That share sits in all three configurations and subtracts out; what
+/// it leaves behind is an absolute per-frame figure under what the shipping
+/// rate pays.
 const TIMING_FPS: f64 = 120.0;
+
+/// Frames dropped off the front of a render before the clock starts.
+///
+/// Every render builds its own device, so every render compiles the shaders
+/// and creates the pipelines it touches — and the heatmap's are built lazily,
+/// on the first frame that has two analyzer columns to draw rather than on
+/// frame 0. Timed from frame 1 that compile lands INSIDE the span, on the one
+/// row it can bias: neither control ever creates that pipeline, so it does not
+/// subtract out. Enough frames to cover it, and small beside the 240 a render
+/// emits.
+const WARMUP: u64 = 16;
 
 /// Fraction of the frame's height the control's pane is squeezed into.
 const SLIVER: f32 = 0.02;
@@ -392,8 +411,14 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     };
     let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
     if drawn == Drawn::Sliver {
+        // A placement's rect is `(x0, y0, x1, y1)`, so the sliver is taken from
+        // the pane's OWN top edge rather than the frame's. Floored at two
+        // pixels because `Layout::resolve` drops a pane under one pixel tall,
+        // and a layout that resolves to no panes is an error out of the
+        // renderer — a panic where a reading was asked for.
+        let floor = 2.0 / size[1] as f32;
         for placement in &mut layout.panes {
-            placement.rect.3 = SLIVER;
+            placement.rect.3 = placement.rect.1 + SLIVER.max(floor);
         }
     }
     let settings = Settings {
@@ -408,14 +433,20 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     };
     let audio = probe_audio();
     let mut replay = Replay::new(take);
-    // The clock starts at the FIRST frame and not at the call: standing a
+    // The clock starts past [`WARMUP`] frames and not at the call: standing a
     // renderer up costs a few hundred milliseconds of adapter and pipeline
     // creation, which divided over the frames is the same order as the
-    // per-frame figure being measured and does not repeat between runs.
+    // per-frame figure being measured — and the last of it is paid a few
+    // frames INTO the render rather than before it.
+    let mut seen = 0u64;
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
     match render(&mut replay, Some(&audio), &settings, |_| {
+        seen += 1;
+        if seen <= WARMUP {
+            return Ok(true);
+        }
         let now = std::time::Instant::now();
         if first.is_none() {
             first = Some(now);
@@ -429,17 +460,35 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         Err(e) if e.contains("no usable GPU adapter") => return None,
         Err(e) => panic!("{e}"),
     }
-    let span = last?.duration_since(first?).as_secs_f64() * 1000.0;
-    Some((span / frames.max(1) as f64, frames))
+    // A render that finished with nothing left to time is a broken fixture,
+    // not a missing GPU — which is what the `None` above is read as.
+    assert!(
+        frames > 0,
+        "{seen} frames rendered, under the two past the {WARMUP}-frame warm-up an interval needs"
+    );
+    let span = last.zip(first).map_or(0.0, |(l, f)| l.duration_since(f).as_secs_f64() * 1000.0);
+    Some((span / frames as f64, frames))
+}
+
+/// One size's readings: the three configurations' own medians, and the two
+/// costs, which are medians of PER-ROUND differences rather than differences
+/// of the medians above.
+struct Round {
+    /// Sliver, heatmap, curve — the frame each configuration draws, in ms.
+    columns: [f64; 3],
+    /// Median and scatter, in ms.
+    heatmap_cost: (f64, f64),
+    curve_cost: (f64, f64),
+    frames: u64,
 }
 
 /// What drawing the heatmap costs a rendered frame, end to end.
 ///
 /// The same take rendered at one size three ways — the pane's whole depth to
-/// the heatmap, the same depth to the live curve, and no pane at all — so the
-/// analyzer, the replay, egui, the encode and the readback sit in all three
-/// and difference out. The empty layout is the control: what is left over it
-/// is what drawing that pane costs through the path that ships.
+/// the heatmap, the same depth to the live curve, and the pane squeezed into a
+/// sliver — so the analyzer, the replay, egui, the encode and the readback sit
+/// in all three and difference out. [`Drawn::Sliver`] is the control: what is
+/// left over it is what drawing that pane costs through the path that ships.
 ///
 /// It has to be measured in a frame rather than around one. A microbenchmark
 /// of the draw alone cannot see it: the per-draw command overhead is larger
@@ -458,55 +507,103 @@ fn what_the_heatmap_costs_a_frame() {
     let sizes = [[256u32, 128], [256, 384], [512, 768], [1024, 1536], [2048, 1024]];
     eprintln!("\n== what one rendered frame costs, and the heatmap's share ==");
     eprintln!(
-        "{:>12}  {:>8}  {:>8}  {:>8}  {:>9}  {:>8}  {:>7}",
+        "{:>12}  {:>7}  {:>7}  {:>7}   {:>12}  {:>12}  {:>6}",
         "size", "sliver", "heatmap", "curve", "heatmap-", "curve-", "px"
     );
-    // The first render of a size pays for pipeline creation and the shader
-    // compile behind it, and the readings scatter by a few tenths of a
-    // millisecond after that — so each figure is the median of REPS renders
-    // with one thrown away in front.
+    // Readings scatter by a few tenths of a millisecond, so each figure is the
+    // median of REPS renders.
     // Interleaved, not blocked: this machine drifts by most of a millisecond
     // over a minute, and three runs of one config followed by three of another
     // turn that drift into a difference between them. One of each per round
     // puts the drift in all three equally, where the subtraction removes it.
-    const REPS: usize = 7;
-    let round = |size| -> Option<[(f64, u64); 3]> {
+    // ROTATED within the round for the same reason one scale down: a drift
+    // ACROSS the three renders of a single round is a ramp that a fixed order
+    // samples at a fixed offset per configuration, which is precisely the
+    // difference being printed. REPS is a multiple of three, so every
+    // configuration spends the same number of rounds in each position.
+    const ORDER: [Drawn; 3] = [Drawn::Sliver, Drawn::Heatmap, Drawn::Curve];
+    const REPS: usize = 9;
+    let round = |size| -> Option<Round> {
         let mut runs = [const { Vec::new() }; 3];
         let mut frames = 0;
-        let order = [Drawn::Sliver, Drawn::Heatmap, Drawn::Curve];
-        // A throwaway round in front: the first render of a size pays for the
-        // shader compile behind every pipeline it touches.
-        for &drawn in &order {
+        // A throwaway round in front, for whatever the process caches once —
+        // the driver's on-disk function cache, the first touch of the adapter.
+        // Not for pipeline creation: a render builds its own device, so every
+        // render pays that, and [`WARMUP`] is what keeps it off the clock.
+        for &drawn in &ORDER {
             frame_ms(size, drawn)?;
         }
-        for _ in 0..REPS {
-            for (slot, &drawn) in order.iter().enumerate() {
-                let (ms, n) = frame_ms(size, drawn)?;
+        for rep in 0..REPS {
+            for step in 0..ORDER.len() {
+                let slot = (rep + step) % ORDER.len();
+                let (ms, n) = frame_ms(size, ORDER[slot])?;
                 runs[slot].push(ms);
                 frames = n;
             }
         }
-        let mut out = [(0.0, 0); 3];
-        for (slot, times) in runs.iter_mut().enumerate() {
-            times.sort_by(f64::total_cmp);
-            out[slot] = (times[times.len() / 2], frames);
+        // PAIRED: each round's difference is taken first and the median is of
+        // those, never of the three columns separately. A median per column
+        // and a subtraction after it lets one polluted render move the answer
+        // — a single 1.4 ms excursion in the control's column dragged a
+        // difference from 1.19 ms to 0.31 ms with the other two columns
+        // steady, because nothing in that arrangement knows the two readings
+        // belong to the same round. Here such a round is one sample among
+        // REPS and the median steps over it. The columns are still printed,
+        // as medians of their own, for the shape of the frame they describe —
+        // the DIFFERENCE columns are the measurement.
+        let mut costs = [Vec::with_capacity(REPS), Vec::with_capacity(REPS)];
+        let [sliver, heatmap, curve] = &runs;
+        for ((base, heat), curv) in sliver.iter().zip(heatmap).zip(curve) {
+            costs[0].push(heat - base);
+            costs[1].push(curv - base);
         }
-        Some(out)
+        let mid = |times: &mut Vec<f64>| {
+            times.sort_by(f64::total_cmp);
+            times[times.len() / 2]
+        };
+        // Half the span the middle REPS-2 samples cover, printed beside each
+        // cost. It is what says whether a row may be quoted: this machine
+        // moves a whole render by a millisecond under contention, and a row
+        // whose spread is the size of its own figure is the noise, not the
+        // heatmap. It is not an error bar on a mean — nothing here is
+        // normally distributed — just the scatter the median stepped over.
+        let spread = |times: &mut Vec<f64>| {
+            times.sort_by(f64::total_cmp);
+            (times[times.len() - 2] - times[1]) / 2.0
+        };
+        let mut columns = [0.0; 3];
+        for (slot, times) in runs.iter_mut().enumerate() {
+            columns[slot] = mid(times);
+        }
+        Some(Round {
+            columns,
+            heatmap_cost: (mid(&mut costs[0]), spread(&mut costs[0])),
+            curve_cost: (mid(&mut costs[1]), spread(&mut costs[1])),
+            frames,
+        })
     };
     for size in sizes {
-        let Some([(sliver, frames), (heatmap, _), (curve, _)]) = round(size) else {
+        let Some(r) = round(size) else {
             eprintln!("no usable GPU adapter; skipping");
             return;
         };
+        let [sliver, heatmap, curve] = r.columns;
         let px = size[0] * size[1];
         eprintln!(
-            "{:>5} x {:<4}  {sliver:>8.3}  {heatmap:>8.3}  {curve:>8.3}  {:>9.3}  {:>8.3}  {:>6.2}M   ({frames} frames)",
+            "{:>5} x {:<4}  {sliver:>7.3}  {heatmap:>7.3}  {curve:>7.3}   {:>6.3} ±{:<5.3}  {:>6.3} ±{:<5.3}  {:>5.2}M  ({} frames)",
             size[0],
             size[1],
-            heatmap - sliver,
-            curve - sliver,
+            r.heatmap_cost.0,
+            r.heatmap_cost.1,
+            r.curve_cost.0,
+            r.curve_cost.1,
             px as f64 / 1.0e6,
+            r.frames,
         );
     }
-    eprintln!("(heatmap- and curve- are each pane's cost over the sliver frame)\n");
+    eprintln!(
+        "(heatmap- and curve- are each pane's cost over the sliver frame, as\n \
+         median ± the scatter the median stepped over; a row whose scatter is\n \
+         the size of its figure is this machine, not the pane)\n"
+    );
 }
