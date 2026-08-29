@@ -46,6 +46,75 @@ pub(super) const SPLIT_GRAB_HALF: f32 = 6.0;
 /// reading of [`spectrum_split`], so the band cannot end up straddling a line
 /// somewhere else. Writing the dial rather than that is what makes the drag a
 /// re-dial: it lands at the pointer, and the hold takes it from there.
+/// Which axis a depth drag committed to, once it has.
+///
+/// `Default` is egui's, asked of anything `remove_temp` can remove; the value
+/// is always written by the frame that commits before anything reads it.
+#[derive(Clone, Copy, Default)]
+struct Leg {
+    depth: bool,
+}
+
+fn lean_id(surface: usize) -> egui::Id {
+    egui::Id::new(("spectral-lean", surface))
+}
+
+/// Whether this drag is a DEPTH gesture (a zoom) rather than a pitch one (a
+/// pan).
+///
+/// A drag picks its axis on the first frame it has travelled
+/// [`DEPTH_ZOOM_LEAN`] further along one than the other, and KEEPS it until the
+/// hand lets go — the same rule every bar here follows, where `Grab::at` is
+/// asked once and held for the gesture.
+///
+/// Re-deciding each frame is what it replaces, and the reason is that the
+/// question has no stable answer late in a drag. Travel since the press has the
+/// perpendicular drift of a curving hand accumulating for as long as the drag
+/// lasts, while the along-axis travel returns toward zero if the hand comes
+/// back — so a drag out and back crosses over somewhere on the way home,
+/// at a distance that grows with both how far it went and how much the hand
+/// wandered. What that looks like is a zoom stopping dead with the mouse still
+/// moving and the cursor turning to a hand, at a value different every time.
+/// Measuring each LEG from its own start does not fix it either: the leg only
+/// restarts when the axis changes, which is the moment already too late.
+///
+/// The cost is that an L-shaped drag no longer hands over mid-gesture — turning
+/// the corner keeps the axis the first leg took, and switching means letting go
+/// and pressing again. That is what every other gesture in the app asks for,
+/// and it buys a drag that cannot change what it controls under the hand.
+///
+/// Held in egui's temp store, because the committed axis is the one thing here
+/// a frame cannot see for itself. `drag_stopped` forgets it, or the next press
+/// inherits this one's axis.
+fn lean_is_depth(
+    ui: &egui::Ui,
+    surface: usize,
+    from: egui::Pos2,
+    at: egui::Pos2,
+    axes: &Axes,
+) -> bool {
+    let id = lean_id(surface);
+    if let Some(leg) = ui.data(|d| d.get_temp::<Leg>(id)) {
+        return leg.depth;
+    }
+    let travel = at - from;
+    let (depth, pitch) = (travel.dot(axes.dir_depth()).abs(), travel.dot(axes.dir_pitch()).abs());
+    // Inside the margin the press has not said which gesture it is yet, and
+    // nothing is committed: the pan answers, as it does for a drag that never
+    // leans at all.
+    let committed = if depth > pitch + DEPTH_ZOOM_LEAN {
+        Some(true)
+    } else if pitch > depth + DEPTH_ZOOM_LEAN {
+        Some(false)
+    } else {
+        None
+    };
+    if let Some(depth) = committed {
+        ui.data_mut(|d| d.insert_temp(id, Leg { depth }));
+    }
+    committed.unwrap_or(false)
+}
+
 pub(super) fn drag_split(
     ui: &mut egui::Ui,
     axes: &Axes,
@@ -366,20 +435,15 @@ pub(super) fn drag_zoom(
     // keep accumulating off-screen and the view would sit still on the way back.
     if response.dragged() {
         let delta = response.drag_delta();
-        // Which axis this drag is on, decided from the TOTAL travel since the
-        // press: a per-frame decision would flip between the two on the jitter
-        // of a slow drag, and this way an L-shaped drag simply hands over once
-        // its second leg is the longer one. What comes back is the depth the
-        // press landed at, which then says which value the zoom writes.
+        // Which axis this drag is on — see [`lean_is_depth`]. What comes back is
+        // the depth the PRESS landed at, which then says which value the zoom
+        // writes: the region a gesture is aimed at is where it started, not
+        // wherever it has since travelled to.
         let leaning = ui
             .ctx()
             .input(|i| i.pointer.press_origin())
             .zip(response.interact_pointer_pos())
-            .filter(|&(from, at)| {
-                let total = at - from;
-                total.dot(axes.dir_depth()).abs()
-                    > total.dot(axes.dir_pitch()).abs() + DEPTH_ZOOM_LEAN
-            })
+            .filter(|&(from, at)| lean_is_depth(ui, surface, from, at, axes))
             .map(|(from, _)| axes.depth_at(from));
         // A region with no depth of its own has nothing to zoom, so the other
         // one answers for the whole pane rather than leaving a strip of it
@@ -447,6 +511,10 @@ pub(super) fn drag_zoom(
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             moved = true;
         }
+    }
+
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
     }
 
     if !moved {
