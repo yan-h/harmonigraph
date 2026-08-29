@@ -138,8 +138,13 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     // Still a whole module: what a reader gets has to be something that
     // compiles, since the next `TextResources::new` builds four pipelines
     // out of it without looking.
-    validate_wgsl("text.wgsl", &reload::text_source(), text::TEXT_ENTRY_POINTS)
-        .expect("a published module must still be one");
+    validate_wgsl(
+        "text.wgsl",
+        &reload::text_source(),
+        common_lines(COMMON_SRC),
+        text::TEXT_ENTRY_POINTS,
+    )
+    .expect("a published module must still be one");
 }
 
 /// The seam a naga diagnostic's line number has to be read against. Off by one
@@ -169,13 +174,58 @@ fn the_baked_common_half_seams_where_it_says_it_does() {
     assert_eq!(joined.lines().nth(seam), Some("MODULE_LINE_ONE"));
 }
 
+/// And the seam a REJECTION states is the one its own module was joined at.
+///
+/// The two tests above measure `common_lines` on its own; this is the pairing
+/// the reload path actually makes, and the only one that can be wrong — a
+/// module built against the common half on DISK, checked after an edit there
+/// has changed how many lines it takes. Reading the seam off `COMMON_SRC` at
+/// that point quotes the BAKED half's count over a module joined at a
+/// different line, so every diagnostic from then on points that many lines
+/// away from the error, in a file where the number is already the one thing a
+/// reader cannot check by eye.
+#[test]
+fn a_rejection_states_the_seam_its_own_module_was_joined_at() {
+    // A common half two lines longer than the baked one, which is what saving
+    // an edit to common.wgsl produces.
+    let common = format!("{COMMON_SRC}\n// one\n// two\n");
+    let seam = common_lines(&common);
+    assert!(
+        seam > common_lines(COMMON_SRC),
+        "the fixture's common half is no longer than the baked one, so a seam \
+         taken from either would pass",
+    );
+
+    let source = module_source(&common, "fn broken( {");
+    let err = validate_wgsl("lattice.wgsl", &source, seam, LATTICE_ENTRY_POINTS)
+        .expect_err("`fn broken( {` does not parse");
+
+    assert!(
+        err.contains(&format!("lines 1-{seam} below are common.wgsl")),
+        "the banner states a seam this module was not joined at: {err}",
+    );
+    // ...and the stated seam is where the module really starts, so subtracting
+    // it off a diagnostic's line lands in the file the banner names.
+    assert_eq!(
+        source.lines().nth(seam),
+        Some("fn broken( {"),
+        "line {} of the join is not the module's first",
+        seam + 1,
+    );
+}
+
 /// A module missing an entry point is named in the message. The two modules
 /// keep different lists, so a rejection has to say which one it is about — a
 /// list checked against the wrong module reports every entry point missing and
 /// reads as a broken shader rather than a broken call.
 #[test]
 fn a_rejection_names_the_module_it_is_about() {
-    let err = validate_wgsl("text.wgsl", &with_common(text::TEXT_SRC), LATTICE_ENTRY_POINTS)
-        .expect_err("text.wgsl declares none of the lattice's entry points");
+    let err = validate_wgsl(
+        "text.wgsl",
+        &with_common(text::TEXT_SRC),
+        common_lines(COMMON_SRC),
+        LATTICE_ENTRY_POINTS,
+    )
+    .expect_err("text.wgsl declares none of the lattice's entry points");
     assert!(err.contains("text.wgsl"), "{err}");
 }

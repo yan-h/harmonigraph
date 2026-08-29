@@ -303,6 +303,15 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
 struct ReloadedShaders {
     lattice: String,
     text: String,
+    /// Lines the common half takes in both modules above — the seam a naga
+    /// diagnostic's line number has to be read against.
+    ///
+    /// Carried rather than recomputed from `COMMON_SRC`, because these two
+    /// were built against the common half on DISK: once an edit there has
+    /// added or removed a line, the baked seam is wrong by that many for
+    /// every message from then on, which is the failure the banner exists to
+    /// prevent rather than to commit.
+    seam: usize,
 }
 
 /// Watches the three files those two modules are made of, on disk (dev builds
@@ -386,6 +395,7 @@ impl ShaderWatcher {
                 Some(ReloadedShaders {
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
+                    seam: common_lines(&common),
                 })
             }
         }
@@ -408,9 +418,14 @@ impl ShaderWatcher {
 /// A diagnostic's line number is the CONCATENATED module's, which is no line of
 /// either file. Naga weaves those numbers through a rendered snippet, so the
 /// seam is stated rather than the numbers rewritten.
+///
+/// `seam` is the caller's because it is a property of the common half THIS
+/// `source` was built from, and the hot-reload path's is read off disk: taking
+/// it from `COMMON_SRC` here would state the baked half's seam over a module
+/// joined to a different one, and be wrong by however many lines common.wgsl
+/// has gained or lost since the build.
 #[cfg(any(test, feature = "hot-reload"))]
-fn validate_wgsl(name: &str, source: &str, required: &[&str]) -> Result<(), String> {
-    let seam = common_lines(COMMON_SRC);
+fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Result<(), String> {
     let banner = |body: String| {
         format!(
             "in {name} (lines 1-{seam} below are common.wgsl; past that, \
@@ -3614,8 +3629,15 @@ impl CallbackTrait for LatticeCallback {
             // whichever half happened to compile would leave a name's shadow on
             // one build of `shadow_transmittance` and a node's on another —
             // which is the split this reload exists to close, not to make.
-            let checked = validate_wgsl("lattice.wgsl", &reloaded.lattice, LATTICE_ENTRY_POINTS)
-                .and_then(|()| validate_wgsl("text.wgsl", &reloaded.text, text::TEXT_ENTRY_POINTS));
+            let checked = validate_wgsl(
+                "lattice.wgsl",
+                &reloaded.lattice,
+                reloaded.seam,
+                LATTICE_ENTRY_POINTS,
+            )
+            .and_then(|()| {
+                validate_wgsl("text.wgsl", &reloaded.text, reloaded.seam, text::TEXT_ENTRY_POINTS)
+            });
             match checked {
                 Ok(()) => {
                     let source = &reloaded.lattice;

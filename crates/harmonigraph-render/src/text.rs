@@ -1085,7 +1085,8 @@ pub(crate) mod tests {
 
     #[test]
     fn baked_text_shader_validates() {
-        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), TEXT_ENTRY_POINTS)
+        let seam = crate::common_lines(crate::COMMON_SRC);
+        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, TEXT_ENTRY_POINTS)
             .expect("baked text.wgsl must parse, validate, and keep its entry points");
     }
 
