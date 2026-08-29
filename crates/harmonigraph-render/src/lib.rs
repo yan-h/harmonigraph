@@ -639,12 +639,17 @@ struct Uniforms {
     /// Indexed by a LEVEL where `pitch_lut` beside it is indexed by a pitch,
     /// which is the whole difference between the two schemes.
     spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
-    /// The analyzer's loudness at every bucket of its pitch grid, a byte
-    /// apiece, sixteen to a row (see `SPECTRUM_WORDS`). Used by the CPU-side
-    /// gate; the adjacent color copy is what the shader paints.
+    /// The analyzer's grid through the volume-color dB window, a byte per
+    /// bucket, sixteen to a row (see `SPECTRUM_WORDS`) — what a wedge of the
+    /// audio ring paints.
     ///
-    /// In the uniform buffer rather than a texture, and the two copies are
-    /// 7.6 KB together.
+    /// The one spectrum the GPU gets. The gate's copy
+    /// (`SpectralPaint::levels`, the same buckets through the analyzer's own
+    /// Level window) is answered on the CPU by `RingGate` and `RingFade` and
+    /// never needs a GPU home, so uploading it would be 3.8 KB a frame that
+    /// nothing in lattice.wgsl reads.
+    ///
+    /// In the uniform buffer rather than a texture, and 3.8 KB.
     /// What a texture would buy is a sampler's own bilinear read; what it
     /// costs is a bind-group entry on every lattice pipeline, a texture per
     /// SURFACE — the docked pane and the Render preview both draw a lattice in
@@ -654,10 +659,6 @@ struct Uniforms {
     /// second upload path beside the uniforms, which are already per pane and
     /// already carry a lookup table of their own. The interpolation is two
     /// unpacks and a mix.
-    spectrum: [[u32; 4]; SPECTRUM_WORDS],
-    /// The same buckets mapped through the volume-color dB window. The ring
-    /// shader uses these for color while `spectrum` remains the analyzer copy
-    /// used by the CPU gate.
     spectrum_color: [[u32; 4]; SPECTRUM_WORDS],
 }
 
@@ -688,7 +689,7 @@ const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
 
 // The analyzer's grid, which lattice.wgsl also declares as literals
 // (SPECTRUM_BUCKETS, BUCKETS_PER_SEMITONE, SPECTRUM_MIN_MIDI, and the length
-// of the `spectrum` array). A mismatch here is a ring reading the wrong
+// of the `spectrum_color` array). A mismatch here is a ring reading the wrong
 // buckets at the wrong pitches, which draws a plausible picture of nothing —
 // so the numbers are asserted rather than trusted to stay in step.
 const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS == 3828);
@@ -781,7 +782,7 @@ impl GpuInstance {
     };
 }
 
-/// Pack the analyzer's per-bucket levels into the rows `spectrum_level()` in
+/// Pack a grid of per-bucket levels into the rows `spectrum_color_level()` in
 /// lattice.wgsl unpacks: a byte per bucket, little-endian within each `u32`,
 /// sixteen buckets to a row.
 ///
@@ -1439,16 +1440,12 @@ impl LatticeCallback {
                 plus_shadow_cell: [0.0; 4],
                 plus_shadow_terms: [0.0; 4],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
-                // Zeroed rather than packed when the ring is off: `u.spectrum`
-                // is read only through `spectral_ring`, which draws nothing off
-                // an empty annulus, so the fresh feature-off frame skips the
-                // 3828-bucket pack — twice, docked pane and Render preview —
-                // and the struct uploads whole either way.
-                spectrum: if scene.spectral.ring_draws() {
-                    pack_spectrum(&scene.spectral.levels)
-                } else {
-                    [[0u32; 4]; SPECTRUM_WORDS]
-                },
+                // Zeroed rather than packed when the ring is off:
+                // `u.spectrum_color` is read only through `spectral_ring`,
+                // which draws nothing off an empty annulus, so the fresh
+                // feature-off frame skips the 3828-bucket pack — twice, docked
+                // pane and Render preview — and the struct uploads whole
+                // either way.
                 spectrum_color: if scene.spectral.ring_draws() {
                     pack_spectrum(&scene.spectral.color_levels)
                 } else {
