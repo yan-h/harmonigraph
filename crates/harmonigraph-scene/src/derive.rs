@@ -553,17 +553,10 @@ pub fn derive_scene(
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
         glow_meld: view.glow_meld.clamp(0.0, 1.0),
-        // The standoff on the same footing, a bar's range rather than a
-        // billboard's: it is painted inside the clearing's own quad, so an
-        // absurd shadow is a shape nothing can show rather than a quad nothing
-        // can fill.
+        // The Shadow on the same footing, a bar's range rather than a
+        // billboard's: every caster's quad is grown by it, so a number from
+        // outside the bar is a quad nothing can fill.
         glow_shadow: view.glow_shadow.clamp(0.0, crate::GLOW_SHADOW_MAX),
-        // To the axis rather than to the shadow, as `sevens_soft` above is: a
-        // fade wider than its shadow draws as one exactly as wide (`standoff_coverage`
-        // floors it at the ring's edge), and `sanitize` is where the stored
-        // pair is held to the shape the bar can show.
-        glow_shadow_soft: view.glow_shadow_soft.clamp(0.0, crate::GLOW_SHADOW_MAX),
-        glow_shadow_shape: view.glow_shadow_shape.clamp(0.0, 1.0),
         glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
@@ -738,11 +731,12 @@ pub(crate) fn derive_pluses(
     //
     // So an analyzer ring moves this by nothing, having no name to put over a
     // position. Nor does the LIGHT standing over one, and that is the same rule
-    // read on the marker's SHADOW: the standoff a cross writes into the light
-    // rides this one number with the ink (`PlusInstance::strength`), so the two
-    // fade in together as the name hands the position back. A shadow closed on
-    // the light instead is a cross arriving whole with nothing under it and a
-    // shadow easing in seconds behind it, on a clock nothing on screen explains.
+    // read on the marker's SHADOW: the share of the shadow a cross casts rides
+    // this one number with the ink (`PlusInstance::strength`), so the two fade
+    // in together as the name hands the position back. A shadow closed on the
+    // light instead is a cross arriving whole with nothing under it and a
+    // shadow easing in seconds behind it, on a clock nothing on screen
+    // explains.
     nodes
         .iter()
         .filter(|n| n.on_home)

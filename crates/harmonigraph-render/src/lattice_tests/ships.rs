@@ -42,8 +42,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The audio ring on, which has two early-outs of its own: the annulus
     // skip inside `spectral_ring`, and the idle branch's radial exception,
-    // which keeps an otherwise idle node's fragments where the ring is and out
-    // to the edge of the hole that ring clears.
+    // which keeps an otherwise idle node's fragments where the ring is.
     // Both are answers about a layer NO other fixture here draws — the ring is
     // off in `parity_scene` — so without this the two switches would be
     // compiled and never compared.
@@ -78,14 +77,12 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.nodes.push(silent);
         scene
     };
-    // A WIDER clearing than the fixture's own, which is what reaches
-    // `node_clearing`'s skip: the clearing's shape is the rings' disc unioned
-    // with one wedge per mark, and inside that disc the walk over the wedges is
-    // skipped as an answer already arrived at. At the Shadow `parity_scene` ships,
-    // a marked node's wedge stands outside the disc over most of its own
-    // sector, so the skip is compiled on both pipelines and rarely decides
-    // anything; a reach this wide swallows the strip and takes it.
-    let clearing = || {
+    // A WIDER Shadow than the fixture's own, which is what puts `paint_reach`'s
+    // skip under load: the quad grows with the blur's reach, so most of a
+    // fragment's neighbours are outside every layer the node paints and are
+    // carrying the shadow alone. At the Shadow `parity_scene` ships that ring of
+    // fragments is thin; a Shadow this wide makes it most of the quad.
+    let wide_shadow = || {
         let mut scene = parity_scene();
         scene.glow_shadow = 0.6;
         scene
@@ -99,51 +96,22 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
-    // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
-    // skip — the same one as `node_clearing`'s, over the same wedges, taken
-    // once the band has held the pixel's light off in full. The REACH is what
-    // puts it in the comparison at all, and no fixture above has one: the Shadow
-    // dials ride to the GPU only while the light does (`misc11` is zeroed at
-    // reach 0), and there is no light draw to compare without a glow target
-    // for it to write into. Both are the same switch, which is why one line
-    // buys the fixture.
-    let standing_off = || {
-        let mut scene = clearing();
+    // The LIGHT drawn at all, which is the only way `fs_glow`'s own early-out
+    // reaches the comparison: no fixture above has a reach, and there is no
+    // light draw to compare without a glow target for it to write into.
+    let lit_field = || {
+        let mut scene = wide_shadow();
         scene.glow_reach = 0.8;
-        // One node with INK and no light of its own, which is the other half of
-        // `fs_glow`'s early-out: it weighs the standoff's answer as well as the
-        // light's, and a fixture whose every node is lit decides it on the
-        // light's alone — a relaxation that dropped the standoff's term would
-        // then discard this node's band and nothing here would see it. Shipped
-        // for its ink (`paints`), it draws its own layers and stands the light
-        // off them while emitting none.
+        // One node with INK and no light of its own, which is exactly what that
+        // early-out tests: a fixture whose every node is lit never once takes
+        // the branch. Shipped for its ink (`paints`), it draws its own layers
+        // while emitting nothing.
         let mut dark = scene.nodes[0];
         dark.glow.level = 0.0;
         dark.glow.row = scene.glow_rows;
         dark.world_pos.x -= 0.9;
         scene.glow_rows += 1;
         scene.nodes.push(dark);
-        scene
-    };
-    // ...and that standoff with the ring CLOSED, which is `slice_gap_distance`'s
-    // own skip: with the slices meeting edge to edge there is no gap to walk
-    // the boundaries of, and the ring's plain radial distance has to be the
-    // answer on both pipelines. Every fixture above carries a gap, so without
-    // this the branch is compiled and never once decides anything.
-    let closed_ring = || {
-        let mut scene = standing_off();
-        scene.octave_gap = 0.0;
-        scene
-    };
-    // A marker casting a standoff at all, which is what gives `fs_plus_glow`'s
-    // early-out something to keep: every fragment inside a cross's own Shadow is
-    // one the switch must not discard. The fixtures above sit at the fresh Shadow,
-    // where the shadow is a rind on the ink and a sampling of pixels can miss
-    // it whole.
-    let marker_standoff = || {
-        let mut scene = standing_off();
-        scene.glow_shadow = 1.0;
-        scene.glow_shadow_soft = 1.0;
         scene
     };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
@@ -156,10 +124,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("shimmering", shimmering()),
         ("ringing", ringing()),
         ("folded", folded()),
-        ("clearing", clearing()),
-        ("standing off", standing_off()),
-        ("standing off a closed ring", closed_ring()),
-        ("a marker standing off past its pool", marker_standoff()),
+        ("a wide shadow", wide_shadow()),
+        ("a lit field", lit_field()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -176,18 +142,22 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
-        let layouts = SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+        let layouts = SceneLayouts {
+            uniforms: &res.bind_group_layout,
+            glow: &res.glow_layout,
+            shadow: &res.shadow_layout,
+        };
         let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
         // The light at group 1: one colour over the whole frame, bound to both
-        // pipelines, so a clearing reads the same thing back whichever is
-        // drawing and what they differ by is the early-outs alone. A constant
-        // rather than the 1x1 stand-in because `node_paint` reads its ground
-        // and its Wash OUT of this, and a transparent nothing leaves both terms
-        // at zero on either pipeline — which takes the whole of what a clearing
-        // does with the light out of the comparison. Premultiplied, as the real
-        // target is, and well under opaque so the ground still shows through it.
+        // pipelines, so the wash reads the same thing back whichever is drawing
+        // and what they differ by is the early-outs alone. A constant rather
+        // than the 1x1 stand-in because `node_paint` reads its Wash OUT of
+        // this, and a transparent nothing leaves that term at zero on either
+        // pipeline — which takes the whole of what the ink does with the light
+        // out of the comparison. Premultiplied, as the real target is, and well
+        // under opaque so the ground still shows through it.
         let light = {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("parity_light"),
@@ -216,28 +186,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
             );
             let view = texture.create_view(&Default::default());
-            // Never written, and RENDER_ATTACHMENT is what lets wgpu zero it:
-            // a coverage of zero is the light kept whole. Full size rather than
-            // 1x1 because `node_paint` clamps its read against the LIGHT's
-            // dimensions, so a smaller layer beside it would be read out of
-            // bounds.
-            let shade = device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("parity_shade"),
-                    size: wgpu::Extent3d {
-                        width: SIZE[0],
-                        height: SIZE[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: GLOW_SHADE_FORMAT,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("parity_light_bind_group"),
                 layout: &res.glow_layout,
@@ -252,26 +200,23 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     },
                     // The one texture at both of the light's slots, so the
                     // Meld mixes a colour with itself and hands back that
-                    // colour at every setting: what this fixture holds still
-                    // is the light a clearing reads, and the bar is not what
+                    // colour at every setting: what this fixture holds still is
+                    // the light the ink is washed with, and the bar is not what
                     // it is comparing.
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    // A standoff of nothing, so the light above reaches these
-                    // pipelines whole. What the standoff DOES is compared
-                    // below, in the pass that now writes it; here it would only
-                    // dim the constant this fixture is holding still.
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&shade),
                     },
                 ],
             })
         };
         let light = &light;
         let pane = res.panes.get(&11).expect("prepare created the pane");
+        let cells = pane
+            .offscreen
+            .as_ref()
+            .and_then(|o| o.shadow.as_ref())
+            .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
         let draw = |pipeline: &wgpu::RenderPipeline| {
@@ -279,7 +224,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, light, &[]);
+                // The atlas `prepare` filled above, so the shadow each node
+                // multiplies the frame by is in the comparison: the fragments
+                // outside a node's ink are exactly the ones its early-out
+                // decides, and they are the ones the shadow lives on.
+                pass.set_bind_group(2, cells, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             });
             readback(&device, &queue, &texture, SIZE)
@@ -304,33 +255,19 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         );
 
         // The LIGHT's own draw, compared the same way and for the same reason.
-        // Three of its early-outs are only reachable here: `fs_glow`'s own,
-        // which weighs the standoff's answer as well as the light's now that
-        // one fragment carries both; `glow_standoff`'s skip inside it; and
-        // `slice_gap_distance`'s. `node_paint` reaches none of them — it reads
-        // the standoff back off a texture rather than computing it — so without
-        // this the three would be compiled over that code and never once
-        // compared.
-        //
-        // The SHADE attachment is what is read back, being the one the standoff
-        // writes: a skip that dropped a band would leave the light beside it
-        // identical and show only here.
+        // `fs_glow`'s own early-out is reachable here and nowhere else — the
+        // scene pass never runs it — so without this it would be compiled and
+        // never once compared.
         let Some(glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) else {
             continue;
         };
-        let glow_draw = |src: &str,
-                         entries: (&str, &str),
-                         buffers: wgpu::VertexBufferLayout<'static>,
-                         buffer: &wgpu::Buffer,
-                         count: u32| {
+        let glow_draw = |src: &str| {
             let pipeline = create_glow_pipeline(
                 &device,
                 src,
                 format,
                 &res.bind_group_layout,
                 &res.strip_layout,
-                entries,
-                buffers,
             );
             let attachment = |label, format| {
                 device.create_texture(&wgpu::TextureDescriptor {
@@ -348,11 +285,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     view_formats: &[],
                 })
             };
-            let targets = [
-                attachment("parity_glow", format),
-                attachment("parity_glow_max", format),
-                attachment("parity_glow_shade", GLOW_SHADE_FORMAT),
-            ];
+            let targets =
+                [attachment("parity_glow", format), attachment("parity_glow_max", format)];
             let views: Vec<_> =
                 targets.iter().map(|t| t.create_view(&Default::default())).collect();
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -381,20 +315,16 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..4, 0..count);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, 0..pane.instance_count);
             }
             queue.submit([encoder.finish()]);
-            // BOTH quantities the pass writes, because a skip can drop either
-            // one alone: an early-out that went on the light's answer where it
-            // should go on both leaves the standoff's layer untouched, and one
-            // that went on the standoff's leaves the LIGHT's. The `max`-blended
-            // light is left out of the readback and not out of the comparison —
-            // one fragment emits it and the screened attachment together, so a
-            // dropped fragment shows in this one.
+            // The screened attachment alone. The `max`-blended one is left out
+            // of the readback and not out of the comparison — one fragment
+            // emits both together, so a dropped fragment shows in this one.
             //
             // `readback`'s copy with its one assumption widened: a 256-wide row
-            // is 1024 bytes of light or 512 of coverage, and both are aligned.
+            // is 1024 bytes of light, and that is aligned.
             let read = |target: &wgpu::Texture, bytes: u32| {
                 let bytes_per_row = SIZE[0] * bytes;
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -422,66 +352,27 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
                 slice.get_mapped_range().to_vec()
             };
-            (read(&targets[0], 4), read(&targets[2], 2))
+            read(&targets[0], 4)
         };
-        // BOTH draws that write the glow's three attachments. The marker's is a
-        // pipeline of its own off the same shader, with an early-out of its own
-        // (`fs_plus_glow`) weighing a standoff a node's never sees — so without
-        // this the switch is compiled on the markers and never once compared,
-        // which is the whole claim this test makes.
-        //
-        // `lights` is which of the two writes the light at all: a marker's draw
-        // is the shadow it casts and nothing else, so the guard below asking
-        // for a lit layer is the node pass's alone.
-        for (pass_name, entries, buffers, buffer, count, lights) in [
-            (
-                "node",
-                ("vs_glow", "fs_glow"),
-                GpuInstance::LAYOUT,
-                &pane.instance_buffer,
-                pane.instance_count,
-                true,
-            ),
-            (
-                "marker",
-                ("vs_plus_glow", "fs_plus_glow"),
-                GpuPlus::LAYOUT,
-                &pane.plus_buffer,
-                pane.plus_count,
-                false,
-            ),
-        ] {
-            assert!(count > 0, "the {name} scene ships no {pass_name} to compare");
-            let (light_fast, shade_fast) =
-                glow_draw(SHADER_SRC, entries, buffers.clone(), buffer, count);
-            let (light_slow, shade_slow) =
-                glow_draw(&reference_src, entries, buffers, buffer, count);
+        assert!(pane.instance_count > 0, "the {name} scene ships no node to compare");
+        let light_fast = glow_draw(SHADER_SRC);
+        let light_slow = glow_draw(&reference_src);
 
-            // Vacuous unless the pass actually wrote each of them: every fixture
-            // that reaches here carries a reach and a depth, so a layer of zeroes
-            // means the dials stopped arriving rather than that the skips are sound.
-            assert!(
-                shade_slow.iter().any(|&b| b != 0),
-                "the {name} scene's {pass_name} held no light off; \
-                 the standoff comparison is vacuous",
-            );
-            assert!(
-                !lights || light_slow.iter().any(|&b| b != 0),
-                "the {name} scene's {pass_name} lit nothing; the light comparison is vacuous",
-            );
+        // Vacuous unless the pass actually wrote it: every fixture that reaches
+        // here carries a reach, so a layer of zeroes means the dials stopped
+        // arriving rather than that the skips are sound.
+        assert!(
+            light_slow.iter().any(|&b| b != 0),
+            "the {name} scene's light pass lit nothing; the comparison is vacuous",
+        );
 
-            for (layer, fast, slow) in
-                [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
-            {
-                let differing = fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
-                assert!(
-                    differing.is_none(),
-                    "the {name} scene's {pass_name} {layer} changed when the early-outs \
-                     were enabled: byte {:?}",
-                    differing.map(|(i, (a, b))| (i, *a, *b)),
-                );
-            }
-        }
+        let differing =
+            light_fast.iter().zip(light_slow.iter()).enumerate().find(|(_, (a, b))| a != b);
+        assert!(
+            differing.is_none(),
+            "the {name} scene's light changed when the early-outs were enabled: byte {:?}",
+            differing.map(|(i, (a, b))| (i, *a, *b)),
+        );
     }
 }
 
@@ -770,9 +661,9 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 /// over the sheets behind home and under the home sheet itself.
 ///
 /// The argument for that placement is in `from_scene`: put the markers under
-/// everything and a node on a sheet behind the home one punches its clearing
-/// through them, which is a hole in the layer they are supposed to be hidden
-/// by. What makes it worth a test is the CULL — a node that paints nothing
+/// everything and a node on a sheet behind the home one is drawn over them,
+/// which is the layer they are supposed to be hidden BY standing in front of
+/// them. What makes it worth a test is the CULL — a node that paints nothing
 /// ships no instance, so any expression of the placement that counts nodes has
 /// to count the ones that ship rather than the ones the scene held, and the two
 /// part company at the first idle node.
@@ -891,8 +782,7 @@ fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
     assert_eq!(
         call.draws,
         vec![
-            // The far node: its knockout, its own cross, its ink.
-            Draw::Clearing(0),
+            // The far node: its own cross, then its ink over it.
             Draw::Pluses(0, 1),
             Draw::Nodes(0, 1),
             // Then the near position, which draws nothing but its cross — over
@@ -909,7 +799,7 @@ fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
 /// that ships something to break it with, and an idle position ships nothing —
 /// so the field a still lattice draws coalesces exactly as the single batch it
 /// replaced did. The cost is bounded by the SOUNDING nodes, which is the same
-/// number the pass already pays a knockout and an ink draw each for.
+/// number the pass already pays an ink draw each for.
 #[test]
 fn a_resting_lattice_ships_one_marker_draw() {
     let mut scene = idle_scene();

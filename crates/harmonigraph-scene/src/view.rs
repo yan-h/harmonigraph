@@ -973,9 +973,9 @@ pub struct ViewConfig {
     /// blurred plus rather than one reaching out of its crossing, and a soft
     /// rim is the feather this deliberately does not bring back.
     ///
-    /// The SHADOW under a fading end gives up as much of itself as this gives up
-    /// of the arm (`plus_standoff` in lattice.wgsl), so widening this softens
-    /// the dark around the four tips along with the ink in them.
+    /// A cross's SHADOW is a blur of the ink this fades (`fs_plus_cell` in
+    /// lattice.wgsl), so widening this softens the dark around the four tips
+    /// along with the ink in them.
     pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
@@ -1088,10 +1088,10 @@ pub struct ViewConfig {
     /// blending, so two neighbours' halos meld like light rather than summing
     /// to white and neither one's draw order is readable in the overlap. That
     /// target is one field across every sheet, laid down UNDER the lattice: the
-    /// rings, the markers and the names are all drawn over it, and a node's own
-    /// clearing paints the light standing at its pixel rather than bare ground,
-    /// so the middle of a node keeps the light its neighbours put there. The
-    /// node's own INK takes that field too, so a ring reads as a shape inside
+    /// rings, the markers and the names are all drawn over it, so the middle of
+    /// a node keeps the light its neighbours put there and every shadow in the
+    /// frame lands on it. The node's own INK takes that field too, so a ring
+    /// reads as a shape inside
     /// its light rather than a silhouette cut out of it — whole where the ink
     /// is unlit, and on [`glow_wash`](Self::glow_wash)'s share where it is a
     /// sounding slice.
@@ -1158,200 +1158,73 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_meld: f32,
-    /// The Shadow: how far past each RING a node draws it holds the picture off,
-    /// in the same quad UV units [`ring_gap`](Self::ring_gap) reads in — its far
-    /// end, where what the ring holds off is back to a fiftieth. With
-    /// [`glow_shadow_soft`](Self::glow_shadow_soft) it is ONE control, the Glow
-    /// section's Shadow bar: solid out to `shadow - soft`, all but gone by
-    /// `shadow`.
+    /// The Shadow: how wide every item's shadow is, in the same quad UV units
+    /// [`ring_gap`](Self::ring_gap) reads in. It is HALF this in σ
+    /// (`shadow::sigma_px` in harmonigraph-render), which puts a wide caster's
+    /// shadow all but out at one bar width.
     ///
-    /// TWO THINGS on one length, and that is what makes it one bar. Out from
-    /// every ring the node draws it dims the LIGHT standing there (the
-    /// standoff), and it clears everything drawn BEHIND the node down to the
-    /// ground (the knockout) — one shape (`standoff_coverage` in lattice.wgsl),
-    /// read by `glow_standoff` and by `node_clearing`. Said with two lengths the
-    /// picture could be dialled into a node floating over its own shadow, or a
-    /// hole reaching past the dark that gives it its edge; said with one it
-    /// cannot. What the two do NOT share is
-    /// [`glow_shadow_depth`](Self::glow_shadow_depth), a factor on the light alone: a
-    /// node hides what stands behind it at every depth.
+    /// ONE length for the whole picture, and that is what makes it one bar. A
+    /// node's rings, a resting cross and a name's box are each blurred at this
+    /// σ and each multiplies whatever is already in the frame under it by that
+    /// blur, in the painter's order the pass already walks — so what an item
+    /// casts is read off its own ink rather than off which draw it belongs to,
+    /// and a nearer item darkens a farther one wherever the two overlap.
     ///
-    /// ALL BUT gone by `shadow`, and the "all but" is the point: what is spent over
-    /// the fade is a DECAY rather than a ramp, so it goes on past the bar's own
-    /// handle rather than stopping at it. A ramp landing on nothing puts a
-    /// closed contour into a field whose every other length is an exponential,
-    /// and a circle is what the eye finds in a smooth field however gently the
-    /// ramp meets it — which is the dark disc with a rim on it that a strong
-    /// glow shows, its halo out there being flat enough to have no gradient of
-    /// its own for the fade's end to hide in. The tail is brought to an end a
-    /// couple of Shadow widths out all the same, where a billboard would otherwise cut
-    /// it at a square (`SHADOW_STOP`); what is left standing at the handle itself
-    /// is unmoved by that at any curve.
+    /// A blur of the INK and not of a circle around it: a node reaching a
+    /// melody mark on one octave casts from that wedge and hugs its rings
+    /// everywhere else, the empty middle its rings stand around casts nothing,
+    /// and a hairline ring casts a fainter shadow than a wide band does. Each
+    /// layer's own envelope is already in the coverage that is blurred, so a
+    /// releasing layer's shadow fades with its ink.
     ///
-    /// The KNOCKOUT is what lets the sevens layer OVERLAP the home sheet
-    /// instead of needing room of its own: a node punches its own footprint out
-    /// of whatever it crosses and sits in the hole, so a small node stays
-    /// legible over a large one at no cost in layout — the alternative being to
-    /// shrink the 5-limit sheet to open up clearance, and the 5-limit sheet is
-    /// what you came to look at. It clears to the GROUND the pass is composited
-    /// over, which the shell hands in (see
-    /// [`Scene::background`](crate::Scene::background)): with no colour of its
-    /// own a premultiplied layer knocks out to black, which is darker still than
-    /// the well the pane stands on, so the hole would announce itself as a plate
-    /// sitting on the picture rather than disappearing into the ground.
-    ///
-    /// FOOTPRINT means the INK the node draws, this far out from it, and not a
-    /// circle sized to hold it: a node reaching a melody mark on one octave
-    /// bulges over that wedge and hugs its rings everywhere else, and the empty
-    /// middle those rings stand around clears nothing at all. A circle answers
-    /// with the widest thing the node reaches in ANY direction, which on a
-    /// marked node is a gap wider than itself all the way round — so the hole
-    /// stops reading as the node's and starts reading as empty space somebody
-    /// cut out. Filled to the centre it is worse still: a node is then an
-    /// opaque disc the size of its outermost ring, and a ring passing behind
-    /// another node's middle is erased with nothing but its own shadow in the
-    /// light left to say it was there.
-    ///
-    /// Ink and not the ANNULUS the ink is drawn in, which is the same argument
-    /// taken round the turn: a ring is slices with gaps between them, and the
-    /// gaps are [`octave_gap`](Self::octave_gap) wide. Measured off the closed
-    /// annulus a node clears the whole turn whatever it is drawing, so a wide
-    /// Octave gap lays a solid band of ground over what stands behind in the
-    /// very sectors the node is empty — a dark ring cast by ink that is not
-    /// there.
+    /// It is spent on the FRAME rather than on the light alone, and the light
+    /// takes it by being under everything: the halos are composited at the
+    /// bottom of the scene pass, so a shadow lands on a neighbour's halo, on a
+    /// ring behind, and on a name, all at the depth
+    /// [`glow_shadow_depth`](Self::glow_shadow_depth) says.
     ///
     /// Without it the light is at its brightest exactly where the rings are —
     /// the falloff is measured from the node's centre, so both sides of a ring
-    /// sit near the peak — and a ring drawn over that is a flat grey
-    /// silhouette on a bright field. A ring standing in a pool that brightens
-    /// outward is what the eye reads as the ring being the source of the
-    /// light.
+    /// sit near the peak — and a ring drawn over that is a flat grey silhouette
+    /// on a bright field. A ring standing in a pool that brightens outward is
+    /// what the eye reads as the ring being the source of the light.
     ///
-    /// It is a shape in the LIGHT and not a shape on a node: the light is one
-    /// field composited under the whole lattice, and the standoff is a second
-    /// field cut into it, written in the light's own draw and read back
-    /// wherever that light reaches the picture (`fs_glow` in lattice.wgsl).
-    /// Two things follow. A node dims the light it stands in whoever laid it
-    /// down, its NEIGHBOURS' halos included, that being what the melded field
-    /// holds; and it dims that light wherever the light reaches, not only
-    /// under its own clearing — a node that clears nothing still stands its
-    /// rings off.
-    ///
-    /// On a node it is its RINGS, and a node draws nothing else: inside the
-    /// innermost ring the node stands nothing off, which is what lights the
-    /// middle of a node whose innermost ring is an annulus. Each ring
-    /// carries its own
-    /// level, so a layer that is off, refused by the stack, attacking or
-    /// releasing opens and closes its own standoff in step with the ink it
-    /// stands off. And a ring is its SLICES rather than a closed annulus, so
-    /// the light comes back between them as well as either side of them: past
-    /// an [`octave_gap`](Self::octave_gap) of twice this, a gap between two
-    /// slices is wide enough to keep all of its own light.
-    ///
-    /// A resting MARKER's cross stands the light off on this same bar, out from
-    /// the whole of every arm it draws (`plus_standoff` in lattice.wgsl). It is ink
-    /// standing in the light exactly as a ring is, so a lattice whose sounding
-    /// notes are dark-rimmed and whose resting field is not would be two
-    /// pictures laid over each other; sharing the bar is what makes it one.
-    /// RESTING, and that is what keeps the middle above lit: a note claims the
-    /// position it sounds at for as long as it lasts (`derive_pluses`), so
-    /// there is no cross inside a lit node to cut one out of its own halo.
-    ///
-    /// The ceiling is [`GLOW_SHADOW_MAX`], a whole radius where the two paddings
-    /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
-    /// rather than as a lack of light is a dip broad enough to come off at the
+    /// The ceiling is [`GLOW_SHADOW_MAX`], a whole radius where the two
+    /// paddings stop at [`GAP_MAX`]: what stops a shadow reading as a black RIM
+    /// rather than as a lack of light is a blur broad enough to come off at the
     /// rate the skirt does, and that is a width a good deal past any padding's.
-    /// Nothing in the picture bounds it short of that: it is the
-    /// emitter's own billboard that has to hold the answer, and every vertex
-    /// shader the light draws through in lattice.wgsl grows its quad by this so
-    /// that it does.
+    /// Nothing in the picture bounds it short of that — every caster's own quad
+    /// is grown by the blur's reach so that it holds the answer.
     ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
-    /// stand off, a standoff is a dark ring painted for nothing.
+    /// Independent of [`glow_reach`](Self::glow_reach): an item casts with no
+    /// light in the picture at all, onto the ground and onto whatever ink
+    /// stands behind it.
     pub glow_shadow: f32,
-    /// How much of the standoff is spent fading the light back in, measured
-    /// back from where [`glow_shadow`](Self::glow_shadow) ends, in the same quad UV
-    /// units: the shadow is solid out to `shadow - soft` and the light is given
-    /// back over the rest. The Shadow bar's low handle.
+    /// How dark a shadow lands where it is whole, 0..=1 — the factor the frame
+    /// is left with under a caster's solid middle, spent in STOPS across that
+    /// caster's own blur.
     ///
-    /// Held inside the shadow (`sanitize`) because that is the shape the bar
-    /// draws: its low handle is where the fade
-    /// starts and cannot stand below the axis. A fade the whole width of the
-    /// shadow is the bar's low handle at 0 — no solid band at all, the light
-    /// coming off a ring at one steady rate — and that is the one a wide shadow
-    /// usually wants: a solid band with a short edge, laid against a node's
-    /// own dark rings, is what the eye takes for a painted black annulus.
+    /// In stops and not in proportion, because sight answers ratios: a factor
+    /// walked evenly in VALUE spends most of what can be SEEN of it in the
+    /// first fraction of the blur's width — at 0.85, half the visible swing is
+    /// gone by a fifth of the way out — and the shadow then reads as a dark rim
+    /// hugging the ink with an edge on it however wide the Shadow is dialled.
+    /// See `shadow_through` in lattice.wgsl.
     ///
-    /// The fade sits on BOTH sides of a ring at once — the halo outside it and
-    /// the lit middle of the node inside it — because a ring is measured from
-    /// its own annulus (`annulus_distance` in lattice.wgsl) and one band
-    /// feathers both. At 0 all that is left under it is `SHADOW_SOFT_FLOOR`, a
-    /// hairline that exists so the shadow does not end in a step.
+    /// A FLOOR rather than a scale: the exponent is capped at 1, so a caster
+    /// wide against σ lands exactly here and a thin one lands short of it. 1
+    /// takes the frame under a wide caster to black; 0 is the picture with no
+    /// shadow in it at all, pixel for pixel, which is what makes this bar the
+    /// A/B on the whole feature.
     ///
-    /// Inert on the LIGHT while [`glow_reach`](Self::glow_reach) is 0; it shapes
-    /// the knockout at any reach, as [`glow_shadow`](Self::glow_shadow) does.
-    pub glow_shadow_soft: f32,
-    /// How the standoff's decay is shaped across the width
-    /// [`glow_shadow_soft`](Self::glow_shadow_soft) gives it, 0..=1: 1 is a plain
-    /// exponential, steepest where it meets the ink and shallower every step
-    /// after, and everything under it hands the light back nearer the ink, 0
-    /// handing it back inside the ink and leaving the rest of the width a
-    /// haze.
+    /// It is spent on the frame and never on the caster's own ink, which the
+    /// draw leaves unmultiplied — so an item is the one thing its own shadow
+    /// never darkens, and a ring standing in a pool cleared to the bare ground
+    /// still carries the colour of the halo around it.
     ///
-    /// The SHAPE knob to that bar's width, the way
-    /// [`glow_feather`](Self::glow_feather) is to
-    /// [`glow_reach`](Self::glow_reach)'s distance. What it does NOT reach is
-    /// a shade with an edge: the exponential is the bar's ceiling because it
-    /// is where this family stops being a decay off the ring and grows a knee
-    /// at a radius, which `SHADOW_SHAPE_RIND` in lattice.wgsl states exactly. So
-    /// the whole bar is a question of how much shade, not of what shape its
-    /// far side has.
-    ///
-    /// What the low end costs is stated in the same place: it hands the light
-    /// back vertically where the fade begins, which is a crease at a fixed
-    /// radius wherever the fade is narrower than the shadow it sits in.
-    ///
-    /// It moves no boundary: the decay spends the same amount over the same
-    /// width at every setting (see `standoff_coverage` in lattice.wgsl), so
-    /// the Shadow bar's two handles still say where the standoff is solid to and
-    /// where it is all but done. This says only how it is spent between them,
-    /// and the bar draws that curve on itself
-    /// ([`standoff_recovery`](crate::standoff_recovery)).
-    ///
-    /// It is dialled against [`glow_shadow_depth`](Self::glow_shadow_depth) rather
-    /// than alone: the tail is the shallow end of the fade, so a depth well
-    /// under 1 leaves it too faint to read at all, and a depth of 1 makes it a
-    /// broad void that eats the halo it trails into.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_shadow_shape: f32,
-    /// How much of the light the standoff takes away where it stands, 0..=1 —
-    /// the factor the light is left with under a ring, spent in STOPS across
-    /// every ring's own coverage.
-    ///
-    /// In stops and not in proportion, which is what makes the fade worth
-    /// giving a width to: sight answers ratios, so a factor walked evenly in
-    /// VALUE spends most of what can be SEEN of it in the first fraction of
-    /// that width — at 0.85, half the visible swing is gone by a fifth of the
-    /// way out — and the pool then reads as a dark ring hugging the ink with an
-    /// edge on it however wide the Shadow is dialled. See `glow_shade` in
-    /// lattice.wgsl.
-    ///
-    /// 1 is a hole: where the standoff is solid, the ground comes back bare,
-    /// exactly the frame with no glow in it, and across its fade — the hole
-    /// falls off through that same fade — to a blend of the two. Below
-    /// it the rings sit in a DIMMER POOL
-    /// of their own light instead of in a void, which is the whole difference
-    /// between a shadow that reads as shade and one that reads as ink. 0 is the
-    /// picture with no standoff at all, pixel for pixel, which is what makes
-    /// this bar the A/B on the whole feature.
-    ///
-    /// The GROUND's share of the light at a node's pixel, and that alone: the
-    /// ink over it takes the RAW field, before this factor reaches it, so a
-    /// ring can stand in a pool this has cleared to the bare ground and still
-    /// carry the colour of the halo around it.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    /// It is the atlas's second off switch: at 0 no cell is packed and every
+    /// draw multiplies by 1. Independent of
+    /// [`glow_reach`](Self::glow_reach).
     pub glow_shadow_depth: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
@@ -1375,10 +1248,9 @@ pub struct ViewConfig {
     /// it. Down from there the sounding slices come back out of the light while
     /// the grey around them stays in it.
     ///
-    /// The RAW field and not the standoff's remainder — the Shadow bars shape
-    /// the ground alone — so a lit slice reads the same whatever they are doing
-    /// around it, and turning the shadow up cannot quietly take the ink's light
-    /// with it.
+    /// The RAW field: an item's own shadow does not darken the light it is
+    /// washed with, so a lit slice reads the same whatever the Shadow bars are
+    /// doing around it.
     ///
     /// Laid over the ink as a SCREEN, so it can only ever brighten whoever laid
     /// the light down; see `node_paint` in lattice.wgsl for why an over is
@@ -1471,8 +1343,7 @@ pub struct RingStack {
     ///
     /// What the melody/bass marks stand off, and what a node's billboard is
     /// sized on, so neither has to know which of the rings inside it
-    /// happened to be the last one on. It BOUNDS the node's clearing without
-    /// shaping it: each layer's hole is measured from that layer's own radii.
+    /// happened to be the last one on.
     pub outer: f32,
     /// Where the melody/bass mark strip STARTS: a gap out from
     /// [`outer`](Self::outer), or [`inner`](Self::inner) when the stack is
@@ -2336,24 +2207,13 @@ impl ViewConfig {
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
         self.glow_meld = finite_or(self.glow_meld, fresh.glow_meld).clamp(0.0, 1.0);
-        // The standoff and its fade, one control over two numbers: the fade is
-        // measured back from the
-        // shadow's end, so one wider than the shadow is a low end off the bottom of
-        // the axis, and it draws the same as one exactly as wide either way
-        // (`standoff_coverage` floors it at the ring's edge).
+        // The Shadow, which every caster's quad is grown by: a number from
+        // outside the bar is a quad nothing can fill.
         self.glow_shadow =
             finite_or(self.glow_shadow, fresh.glow_shadow).clamp(0.0, GLOW_SHADOW_MAX);
-        self.glow_shadow_soft =
-            finite_or(self.glow_shadow_soft, fresh.glow_shadow_soft).clamp(0.0, self.glow_shadow);
-        // The shape the standoff's fade is spent in, which is a share of that
-        // fade's own WIDTH rather than a width itself — the exponent it maps
-        // to is the shader's business (`glow_shadow_shape` in lattice.wgsl), and
-        // a bar reading 0..1 is what keeps its neutral point at the middle.
-        self.glow_shadow_shape =
-            finite_or(self.glow_shadow_shape, fresh.glow_shadow_shape).clamp(0.0, 1.0);
-        // The SHARES — of the light the standoff stands in, of the light a lit
-        // slice stands in, of the light's own peak, of a whole turn — so their
-        // range is the unit interval.
+        // The SHARES — of the frame a shadow takes, of the light a lit slice
+        // stands in, of the light's own peak, of a whole turn — so their range
+        // is the unit interval.
         self.glow_shadow_depth =
             finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
@@ -2678,20 +2538,12 @@ impl Default for ViewConfig {
             // what it keeps is that this bar restyles no view until it is
             // touched. The setting that wants lowering is a wide feather.
             glow_meld: 1.0,
-            // A standoff a sixth of a radius past every ring and faded over the
-            // whole of it — the Shadow bar's low handle at 0 — so the shadow and the
+            // A sixth of a radius, so σ is a twelfth of one: the shadow and the
             // light either side of it read as one blur rather than as a cut
-            // through it: a solid band inside the shadow, however short its edge,
-            // is what the eye takes for a black annulus drawn round the node.
+            // through it, which is what a band with a short edge, laid against
+            // a node's own dark rings, does not.
             glow_shadow: 0.16,
-            glow_shadow_soft: 0.16,
-            // The plain exponential, which is the bar's ceiling: the shade
-            // comes off a ring at the rate the light itself comes off
-            // everything (`glow_layer`), so the shadow and the halo either side
-            // of it read as one blur. The bar only takes shade away from here,
-            // and a fresh view is the one with all of it.
-            glow_shadow_shape: 1.0,
-            // Most of the light off around a ring, and not all of it: a ring
+            // Most of the frame taken under a ring, and not all of it: a ring
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_shadow_depth: 0.85,

@@ -1321,9 +1321,8 @@ mod tests {
     /// rather than ending it: solid where it meets the note, gone at the reach,
     /// and monotone between.
     ///
-    /// The pair is the lattice's knockout gutter's, and two numbers rather
-    /// than one for the same reason — a fade tied to the reach makes a wider
-    /// outline always a blurrier one. So this measures the fade against a
+    /// Two numbers rather than one, because a fade tied to the reach makes a
+    /// wider outline always a blurrier one. So this measures the fade against a
     /// hard-edged outline of the SAME reach: both must end in the same place,
     /// and only one of them may be soft on the way there.
     #[test]

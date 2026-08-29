@@ -1,5 +1,5 @@
-//! The home sheet and what leaves it: off-sheet shrink and blanking, the
-//! knockout each sounding node clears behind it, and comma spelling.
+//! The home sheet and what leaves it: off-sheet shrink and blanking, the ground
+//! the scene carries, and comma spelling.
 
 use super::harness::*;
 use crate::*;
@@ -608,13 +608,11 @@ fn the_comma_takes_the_short_way_round_the_octave() {
 }
 
 #[test]
-fn the_knockout_clears_to_the_ground_not_to_black() {
-    // The gutter has no color of its own, so a premultiplied layer would
-    // knock out to BLACK — and the well the lattice pane stands on is lighter
-    // than black, which is what makes a cleared disc read as a dark plate
-    // sitting on the picture instead of a hole through it. The scene
-    // therefore carries the ground, and it must be the well the pane paints,
-    // not zero.
+fn the_scene_carries_the_ground_the_pane_stands_on_not_black() {
+    // The ground the lattice pane paints is the well, which is lighter than
+    // black; the scene carries the same colour so that a shell composing its
+    // panes differently has one number saying what the picture is composited
+    // over. Zero would be a picture standing on a ground nothing paints.
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -632,8 +630,8 @@ fn the_knockout_clears_to_the_ground_not_to_black() {
 fn ground_color_keeps_srgb_bytes_as_they_are() {
     // A straight divide by 255, NOT a gamma decode: every color the shader
     // handles is sRGB-encoded 0..1 (the offscreen target is a plain Unorm
-    // format), so decoding here would clear the gutter to a ground far
-    // darker than the pane it is supposed to disappear into.
+    // format), so decoding here would hand the scene a ground far darker than
+    // the pane it names.
     let c = crate::skin::ground_color((24, 25, 29));
     assert!((c.x - 24.0 / 255.0).abs() < 1e-6);
     assert!((c.y - 25.0 / 255.0).abs() < 1e-6);

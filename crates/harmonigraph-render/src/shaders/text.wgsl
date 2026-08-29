@@ -47,7 +47,7 @@ struct Locals {
     meld: f32,
     /// How much of what stands under a name its shadow takes where that shadow
     /// is whole, 0..1 — the lattice's `glow_shadow_depth`, the same number a
-    /// ring's standoff spends. Read by [`fs_shadow_box`] alone; every other
+    /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
     /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
@@ -169,11 +169,19 @@ fn vs_glyph_cell(
 ) -> VertexOut {
     var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
     let texel = box_cell.xy + (out.position.xy - box_rect.xy) * box_meta.x;
-    out.position = vec4<f32>(
-        2.0 * texel.x / locals.shadow_atlas_size.x - 1.0,
-        1.0 - 2.0 * texel.y / locals.shadow_atlas_size.y,
-        0.0,
-        1.0,
+    // A cell the atlas had no room for is zeroed (`fits` in shadow.rs) and so
+    // sits at the ORIGIN: filling it would paint this glyph over whatever cell
+    // IS packed there. Collapsed to a quad with no area instead.
+    let packed = box_cell.z > 0.0 && box_cell.w > 0.0;
+    out.position = select(
+        vec4<f32>(2.0, 2.0, 0.0, 1.0),
+        vec4<f32>(
+            2.0 * texel.x / locals.shadow_atlas_size.x - 1.0,
+            1.0 - 2.0 * texel.y / locals.shadow_atlas_size.y,
+            0.0,
+            1.0,
+        ),
+        packed,
     );
     return out;
 }

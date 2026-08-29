@@ -30,13 +30,6 @@
 // for each stays the length its own pass needs. An entry point that ever wanted
 // both would fail to compile, loudly, at pipeline creation.
 @group(0) @binding(2) var glow_max_tex: texture_2d<f32>;
-// The standoff cut into that light, at the composite-only uniform's slot and on
-// the same rule: `fs_composite` reads `bu` there and `fs_glow_over` reads this,
-// and no entry point wants both — this pass takes the scene uniforms at a group
-// of its own (`gu`) precisely because its group 0 is the glow target's. What it
-// holds is coverage in x; see lattice.wgsl's `glow_shade_tex`, which is the
-// same layer read from the other side.
-@group(0) @binding(3) var glow_shade_tex: texture_2d<f32>;
 // Head of the scene pass's Uniforms buffer (same binding, shorter view):
 // only misc2.w (bloom strength; 0 = off) is read here.
 struct BlitUniforms {
@@ -165,7 +158,7 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
 // TWO of them, mixed by the Meld bar: the light screened and the light taken at
 // its brightest, which is a dial between blends that could not be one blend
 // (`create_glow_pipeline`). The node pipelines mix the same pair the same way,
-// `node_paint` reading this target back for what its clearing paints.
+// `node_paint` reading this target back for the wash it lays over its ink.
 //
 // TWO attachments, because the pass it draws into carries two. The second is
 // the picture without the LABELS, which the bloom's bright pass reads — and the
@@ -184,21 +177,12 @@ fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     // A mix of two premultiplied colours is premultiplied, so what reaches the
     // pass below is the same kind of value either end of the bar hands it.
     let melded = mix(brightest, screened, clamp(gu.misc.z, 0.0, 1.0));
-    // The STANDOFF, applied here and nowhere earlier: the light's own target
-    // holds the field whole, and every reader of it takes this same multiply.
-    // The other reader is lattice.wgsl's `node_paint`, which is what a node's
-    // clearing repaints its ground from — so the two must agree exactly, on the
-    // same terms the Meld above is mixed identically in both.
-    //
-    // One factor on premultiplied light takes the colour and the coverage
-    // together: a shade of 1 leaves nothing, which is that pixel with no glow
-    // in it at all, and a shade of 0 is the light untouched.
-    //
-    // This is also where a node's dark pool stops blooming. The second
-    // attachment is what the bright pass reads, so the light reaching the
-    // threshold is the light AFTER the standoff rather than before it, and a
-    // pool cannot be filled back in by the halo of the ring standing in it.
-    let shade = clamp(textureSample(glow_shade_tex, scene_samp, in.uv).x, 0.0, 1.0);
-    let light = melded * (1.0 - shade);
-    return GlowOverOut(light, light);
+    // The field WHOLE. What darkens it is every item drawn over it — each one
+    // multiplies the frame under it by its own blurred ink (lattice.wgsl's
+    // `node_paint` and `plus_paint`, text.wgsl's `fs_shadow_box`) — so the
+    // light is laid down first and takes every shadow by being under
+    // everything, on both attachments. A pool round a ring is that multiply
+    // landing on the light, and it stops blooming for the same reason: the
+    // second attachment is what the bright pass reads, and the shadow is in it.
+    return GlowOverOut(melded, melded);
 }

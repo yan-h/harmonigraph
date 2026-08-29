@@ -150,24 +150,23 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
-    /// The ground the lattice pane paints its rect with, and so the color the
-    /// sevens knockout clears to (see
-    /// [`harmonigraph_scene::Scene::background`]). Defaults to the skin's well,
-    /// the recessed grey every picture pane paints — right for the plugin and
-    /// the standalone harness.
+    /// The ground the lattice pane paints its rect with, which it also hands
+    /// the scene (see [`harmonigraph_scene::Scene::background`]). Defaults to
+    /// the skin's well, the recessed grey every picture pane paints — right for
+    /// the plugin and the standalone harness.
     ///
     /// ONE field doing both jobs deliberately: the pane paints exactly what it
-    /// hands the knockout, so the fill and the cleared disc cannot drift into
-    /// two different grounds. Anything setting this is choosing the pane's
-    /// color, not just describing it.
+    /// hands over, so the fill and the ground the picture is composited against
+    /// cannot drift apart. Anything setting this is choosing the pane's colour,
+    /// not just describing it.
     ///
     /// A shell that composes its panes differently MUST set this: the offline
-    /// renderer clears the whole frame to its layout's own background and
-    /// draws the panes over that, so the pane's fill lands on a ground already
-    /// that color and this is what keeps the knockout with it. A knockout
-    /// clearing to the wrong ground shows up as a disc visibly lighter or
-    /// darker than the picture around it, and exported video is the one place
-    /// that is hardest to notice and most expensive to get wrong.
+    /// renderer clears the whole frame to its layout's own background and draws
+    /// the panes over that, so the pane's fill has to land on a ground already
+    /// that colour. A pane standing on the wrong one shows up as a rectangle
+    /// visibly lighter or darker than the picture around it, and exported video
+    /// is the one place that is hardest to notice and most expensive to get
+    /// wrong.
     pub background: glam::Vec4,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
@@ -1120,10 +1119,10 @@ impl SharedState {
         self.drawn.unwrap_or_else(|| self.view.reach())
     }
 
-    /// Tell the state what ground the lattice pane stands on — what it paints
-    /// and what its knockout clears to (see the `background` field). Takes
-    /// sRGB bytes, the form every shell already has its background color in,
-    /// so no shell needs glam to say it.
+    /// Tell the state what ground the lattice pane stands on — what it paints,
+    /// and what it hands the scene (see the `background` field). Takes sRGB
+    /// bytes, the form every shell already has its background color in, so no
+    /// shell needs glam to say it.
     pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
         self.background = harmonigraph_scene::skin::ground_color(rgb);
     }

@@ -8,8 +8,12 @@
 //! empty passes carry the stamps, because a stamp written straight into the
 //! encoder never signals on Metal.
 //!
+//! Two settings, because the Shadow bar's two ends cost differently: a
+//! caster's blur is `glow_shadow` node radii wide, so the top of the bar is
+//! the widest atlas cell and the largest grown quad the pass ever draws.
+//!
 //! ```text
-//! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names_costs
+//! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names
 //! ```
 
 use super::fixtures::*;
@@ -23,6 +27,23 @@ const FRAMES: usize = 120;
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_costs_this_much() {
+    time_a_frame_of_names(the_live_view(), "the live view");
+}
+
+/// The same view with the Shadow at the top of its bar.
+///
+/// The live view already carries the depth at 1.0, so the Shadow's WIDTH is
+/// the whole of the difference — and width is what sizes both the cell a
+/// caster blurs in and the quad it is multiplied back through.
+#[test]
+#[ignore = "a probe: prints a timing and asserts nothing"]
+fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
+    let mut scene = the_live_view();
+    scene.glow_shadow = harmonigraph_scene::GLOW_SHADOW_MAX;
+    time_a_frame_of_names(scene, "the top of the Shadow bar");
+}
+
+fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -41,7 +62,6 @@ fn a_frame_of_names_costs_this_much() {
     }))
     .expect("a device with timestamps");
 
-    let mut scene = the_live_view();
     // The default distance rather than the golden's close one, so the pane
     // holds a lattice's worth of nodes and names.
     scene.camera.distance = harmonigraph_scene::Camera::default().distance;
@@ -135,7 +155,7 @@ fn a_frame_of_names_costs_this_much() {
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
     for frame in 0..frames + 10 {
-        let labels = names(&scene, SIZE, runs.clone());
+        let labels = names(runs.clone());
         let cb = LatticeCallback::from_scene(
             &scene,
             labels,
@@ -187,8 +207,8 @@ fn a_frame_of_names_costs_this_much() {
     let median = samples[samples.len() / 2];
     let (lo, hi) = (samples[samples.len() / 10], samples[samples.len() * 9 / 10]);
     eprintln!(
-        "{named} names on {} lit nodes at {}x{}: prepare's encoder {median:.3} ms/frame \
-         (p10 {lo:.3}, p90 {hi:.3}, {} frames)",
+        "{what}: {named} names on {} lit nodes at {}x{}: prepare's encoder \
+         {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames)",
         scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
         SIZE[0],
         SIZE[1],
