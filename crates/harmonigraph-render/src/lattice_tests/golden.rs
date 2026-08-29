@@ -270,7 +270,7 @@ fn a_chord_at_a_wide_reach() -> Scene {
 /// would empty the frame (see [`lattice`]); zoom and pan are navigation state,
 /// outside what a capture is read for at all, and his sits at the near end of
 /// the zoom's travel where a frame this size holds one node's top half.
-fn the_live_view() -> Scene {
+pub(super) fn the_live_view() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         center_threes: 1,
         glow_shadow: 0.196_915_06,

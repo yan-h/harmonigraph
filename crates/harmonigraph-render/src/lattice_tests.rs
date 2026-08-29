@@ -20,3 +20,4 @@ mod octaves;
 mod shimmer;
 mod ships;
 mod sweep;
+mod timing;
