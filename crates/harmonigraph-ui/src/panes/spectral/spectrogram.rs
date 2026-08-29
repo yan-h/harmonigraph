@@ -4,26 +4,30 @@
 //! ribbons that made it — the same pitch axis across, the same `now`-anchored
 //! time along, so what you hear and what you played read against each other.
 //!
-//! It's a layer under the roll, not a pane. The heatmap is built into a small
-//! image — one pixel per (time slab, pitch pixel) — uploaded as a texture and
-//! sampled with bilinear filtering, so it reads as one smooth, filled image
-//! rather than a mesh of flat cells (which looked blocky) or interpolated
-//! triangles (which floated and creased). Geometry still comes from
-//! [`Axes`], so it turns and flips with the pane, and
-//! its dB intensity scale is shared with the spectrum curve via the
+//! It's a layer under the roll, not a pane. The heatmap is a handful of quads
+//! whose fragments read the aggregator's slab grid themselves (see
+//! [`harmonigraph_render::spectrogram_paint_callback`]), filtered across both
+//! axes so it reads as one smooth, filled image rather than a mesh of flat
+//! cells (which looked blocky) or interpolated triangles (which floated and
+//! creased). Geometry still comes from [`Axes`], so it turns and flips with the
+//! pane, and its dB intensity scale is shared with the spectrum curve via the
 //! volume-color mapping, so "loud" means the same color in both while their
 //! analyzer geometry remains independent.
 
 use egui::Color32;
+use harmonigraph_render::SpectrogramVertex;
 
 use super::axes::{Axes, PitchScale, TimeAxis};
-use crate::spectrogram::{bins_for, build, hold_time, u_drawn, Columns, PaneView, Plan, TexLayout};
+use crate::spectrogram::{
+    frame_data, hold_time, read_of, run_for, slab_drawn, Columns, PaneView, Plan, TexLayout,
+};
 use crate::SharedState;
 use harmonigraph_scene::Gradient;
 
 /// Order of the power mean a row takes over the run of buckets under it — how
-/// hard that read leans toward the loudest of them. See
-/// [`RowRead::Mean`](crate::spectrogram::RowRead).
+/// hard that read leans toward the loudest of them. Uploaded as
+/// [`SpectrogramRead::mean_steps`](harmonigraph_render::SpectrogramRead), which
+/// is the form the fragment shader reads it in.
 ///
 /// A plain MAX is the obvious read, and it makes the picture's NOISE FLOOR a
 /// function of the ZOOM. Zoomed out a row covers a dozen-odd buckets, and the
@@ -59,14 +63,13 @@ use harmonigraph_scene::Gradient;
 pub(crate) const ROW_MEAN_ORDER: i32 = 4;
 
 /// The power mean of order [`ROW_MEAN_ORDER`] over a run of POWERS — the curve's
-/// form of the read [`RowRead::Mean`](crate::spectrogram::RowRead) performs on
-/// the heatmap's stored dB bytes.
+/// form of the read the heatmap's fragment shader performs on stored dB bytes.
 ///
 /// Two implementations of one definition rather than one shared function,
 /// because the two callers hold their buckets differently and each form is the
-/// cheap one where it lives: the heatmap's are bytes of dB, where the mean is a
-/// table lookup and a sum, and the curve's are floats of power, where it is
-/// this. `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` is what keeps
+/// cheap one where it lives: the heatmap's are bytes of dB in a storage buffer,
+/// where the mean is a table lookup and a sum, and the curve's are floats of
+/// power, where it is this. `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` is what keeps
 /// the pair honest.
 ///
 /// Denominated against the run's own loudest, exactly as the table is, and for
@@ -81,96 +84,77 @@ pub(crate) fn power_mean(run: &[f32]) -> f32 {
     top * (sum / run.len() as f32).powf(1.0 / ROW_MEAN_ORDER as f32)
 }
 
-/// The scrolling quads over the uploaded texture, from `d_near` to `d_far`.
+/// The scrolling quads the heatmap is read through, from `d_near` to `d_far`.
 ///
-/// Pure geometry, which is what lets the UV rule below be checked at all: these
-/// are VERTEX UVs, so the scale every fragment samples at is interpolated
-/// between a quad's corners.
+/// Pure geometry, which is what lets the interpolation rule below be checked at
+/// all: these are VERTEX attributes, so the scale every fragment reads at is
+/// interpolated between a quad's corners.
 ///
-/// Map a screen depth to the texture's time axis CONTINUOUSLY, through the
-/// roll's own `now`-anchored depth<->time relation (unclamped, the inverse of
-/// `depth_of`), so `u` slides with `now` frame to frame exactly as a note ribbon
-/// at the same depth does. Pinning it to the slab endpoints instead jumps a
-/// whole slab at a time, which is both the image losing the notes it is meant to
-/// register with and a per-slab stutter. `v` maps pitch to the bin rows.
-///
-/// Slabs occupy texels `x0 .. x0 + visible` of a `tex_w`-wide texture; for a
-/// full-width build that is the whole thing and this collapses to the plain
-/// `(t - t_origin) / tex_span`.
-fn heatmap_mesh(
-    tex: egui::TextureId,
+/// Map a screen depth to the run's slab axis CONTINUOUSLY, through the roll's
+/// own `now`-anchored depth<->time relation (unclamped, the inverse of
+/// `depth_of`), so a fragment slides with `now` frame to frame exactly as a note
+/// ribbon at the same depth does. Pinning it to the slab endpoints instead jumps
+/// a whole slab at a time, which is both the picture losing the notes it is
+/// meant to register with and a per-slab stutter. `t` is the plain pitch
+/// fraction; the row geometry it maps through is the shader's.
+pub(super) fn heatmap_vertices(
     axes: &Axes,
     time: &TimeAxis,
     layout: &TexLayout,
     d_near: f32,
     d_far: f32,
-) -> egui::Mesh {
-    // Straight in time out to the newest column the texture holds, then HELD
-    // there — see [`u_drawn`], and the mesh is split at that corner so no
-    // fragment ever interpolates across it.
-    let u_at = |d: f32| u_drawn(layout, time.time_at(d));
-    let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
-    // Untinted: the texels carry the whole of the colour.
-    //
-    // A tint here is how an Opacity setting fades the heatmap so it can sit
-    // under the notes, and what that costs is the SHARED SCHEME. The spectrum
-    // curve is drawn from the same [`cell_color`] ramp against the same
-    // `loudness_db`, and it takes no tint — so a faded heatmap means equal
-    // levels stop looking equal across the two halves of one pane, which is the
-    // whole reason they share a mapping. A heatmap worth less than solid is one
-    // to turn off.
-    //
-    // What a tint does NOT cost is the ramp's dark end: `Color32` is
-    // premultiplied, so a black texel over the black bed composites to black at
-    // any alpha (`spectral_pane` lays that bed and leans on the same fact).
-    let tint = Color32::WHITE;
-    let vert = |p: f32, d: f32| egui::epaint::Vertex {
-        pos: axes.at(p, d),
-        uv: egui::pos2(u_at(d), v_at(p)),
-        color: tint,
+) -> Vec<SpectrogramVertex> {
+    // Straight in time out to the newest slab the run holds, then HELD there —
+    // see [`slab_drawn`], and the mesh is split at that corner so no fragment
+    // ever interpolates across it.
+    let vert = |p: f32, d: f32| {
+        let pos = axes.at(p, d);
+        SpectrogramVertex { pos: [pos.x, pos.y], slab: slab_drawn(layout, time.time_at(d)), t: p }
     };
 
-    // Quads over pitch [0,1] x a depth span; the GPU bilinear-samples them.
-    let mut mesh = egui::Mesh::with_texture(tex);
-    let quad = |mesh: &mut egui::Mesh, near: f32, far: f32| {
-        let i = mesh.vertices.len() as u32;
-        mesh.vertices.push(vert(0.0, far)); // far, low
-        mesh.vertices.push(vert(1.0, far)); // far, high
-        mesh.vertices.push(vert(1.0, near)); // near, high
-        mesh.vertices.push(vert(0.0, near)); // near, low
-        mesh.add_triangle(i, i + 1, i + 2);
-        mesh.add_triangle(i, i + 2, i + 3);
+    // Quads over pitch [0,1] x a depth span, as a triangle list.
+    let mut vertices = Vec::with_capacity(12);
+    let mut quad = |near: f32, far: f32| {
+        let (low_far, high_far) = (vert(0.0, far), vert(1.0, far));
+        let (high_near, low_near) = (vert(1.0, near), vert(0.0, near));
+        vertices.extend([low_far, high_far, high_near, low_far, high_near, low_near]);
     };
 
-    // Split at the corner in `u_drawn`: one quad whose UVs are straight in time
-    // (the data) and one whose UVs are CONSTANT (the sliver past the newest
-    // column — leading for the live window, trailing for the whole-song build,
-    // which is the only reason `d_hold` is clamped into the pair rather than
-    // assumed to sit inside it).
+    // Split at the corner in `slab_drawn`: one quad whose slab coordinate is
+    // straight in time (the data) and one whose coordinate is CONSTANT (the
+    // sliver past the newest slab — leading for the live window, trailing for
+    // the whole-song build, which is the only reason `d_hold` is clamped into
+    // the pair rather than assumed to sit inside it).
     //
-    // Letting one quad span the corner instead is what the vertex-UV rule
-    // forbids: a vertex sitting mid-bend rescales the whole image, and the bend
-    // crosses each slab, so it would rescale it once per slab — the jitter.
-    // Split here, the data quad's two ends are both straight in time, so it
-    // holds exactly one texel per slab forever; all that changes over a slab is
-    // how long the flat sliver is, and its colour matches the data at the seam
-    // (both sample the newest texel's centre), so the join is invisible.
+    // Letting one quad span the corner instead is what the vertex rule forbids:
+    // a vertex sitting mid-bend rescales the whole picture, and the bend crosses
+    // each slab, so it would rescale it once per slab — the jitter. Split here,
+    // the data quad's two ends are both straight in time, so it holds exactly
+    // one slab per slab forever; all that changes over a slab is how long the
+    // flat sliver is, and its colour matches the data at the seam (both read the
+    // newest slab's centre), so the join is invisible.
     let d_hold = time.depth_of(hold_time(layout)).max(d_near).min(d_far);
     if d_hold > d_near {
-        quad(&mut mesh, d_near, d_hold);
+        quad(d_near, d_hold);
     }
-    quad(&mut mesh, d_hold, d_far);
-    mesh
+    quad(d_hold, d_far);
+    vertices
 }
 
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
-/// Builds the heatmap into a `[time slab x pitch bin]` image, (re)uploads it
-/// to the surface's texture, then stretches it over the region as a
-/// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
-/// the ramp's dark end, not transparent) so the plane is a filled image rather
-/// than bright patches floating on the background.
+/// Folds the window into a run of slabs, hands that run and the scalars a row is
+/// read through to the GPU, and stretches a pair of quads over the region —
+/// smooth in both axes, and opaque so the plane is a filled image rather than
+/// bright patches floating on the background.
+///
+/// Opaque and untinted, which is a decision about the SHARED SCHEME rather than
+/// an implementation detail: an Opacity setting would fade the heatmap so it can
+/// sit under the notes, and the spectrum curve is drawn from the same
+/// [`cell_color`] ramp against the same `loudness_db` and takes no tint — so a
+/// faded heatmap means equal levels stop looking equal across the two halves of
+/// one pane. A heatmap worth less than solid is one to turn off.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -178,13 +162,14 @@ pub(crate) fn draw_spectrogram(
     state: &mut SharedState,
     split: f32,
     now: f64,
-    // Which texture slot to build into (0 the docked pane / offline render, 1
-    // the Render preview) — two live spectrograms in a frame need their own.
+    // Which surface this is (0 the docked pane / offline render, 1 the Render
+    // preview) — two live spectrograms in a frame need their own grid.
     surface: usize,
 ) {
-    // A small copy, so `state.spectrum` is then free to take mutably (its
-    // texture handle) without fighting the config reads.
+    // Small copies, so `state.spectrum` is then free to take mutably without
+    // fighting the config reads.
     let cfg = state.spectrum_config;
+    let target_format = state.target_format;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
     let time = TimeAxis::new(state, split, now);
@@ -200,21 +185,14 @@ pub(crate) fn draw_spectrogram(
         return;
     }
 
-    // What the GPU will take, on either side. The floor is against a context
-    // that reports something unusable rather than against any real device.
-    let max_side = painter.ctx().input(|i| i.max_texture_side).max(64);
-    let mut view = PaneView {
+    let view = PaneView {
         ppp: painter.ctx().pixels_per_point().max(1.0),
-        max_side,
-        max_rows: max_side,
-        max_cols: usize::MAX,
         pitch_len: axes.pitch_len(),
         depth_len: time.region_depth_len(axes),
         window: time.window(),
         scale: *scale,
         cfg,
         whole: whole.is_some(),
-        coarse: false,
     };
     let columns = match whole {
         Some(ws) => Columns {
@@ -231,76 +209,20 @@ pub(crate) fn draw_spectrogram(
             }
         }
     };
-    let mut plan = Plan::new(&view, &columns);
+    let plan = Plan::new(&view, &columns);
 
-    // While the style is moving — a pitch wheel, a Level drag, a palette bar —
-    // every frame restarts the ring, so the frame gives one axis up rather
-    // than paying a full build it is about to throw away. Which axis is
-    // [`GestureCut`](crate::spectrogram::GestureCut)'s answer, and it is the
-    // one the gesture is NOT moving. One build at full quality sharpens it
-    // once the style has held still — a frame nothing else schedules when no
-    // audio is flowing and the pointer has let go, so it is requested here.
-    // Whole-song is out: its one style change per config edit is already
-    // cached after a frame, and an offline render must never trade resolution
-    // away. The whole-song guard alone does not carry that: only a playhead
-    // render takes it, so a default export reaches this observe every frame —
-    // and stays sharp because headless input holds no pointer down and a
-    // replay moves no style input, so no change ever opens a gesture.
-    let (t, pointer_down) = painter.ctx().input(|i| (i.time, i.pointer.any_down()));
-    let cut = if view.whole {
-        None
-    } else {
-        crate::spectrogram::StyleMotion::observe(
-            &mut spectrum.spectrogram[surface].motion,
-            plan.key.style(),
-            t,
-            pointer_down,
-        )
+    // The run on the GPU when the plan's key still names it, and a fresh fold
+    // otherwise. The pitch axis, the rows and the colours are uniforms, so a
+    // zoom, a resize or a palette drag reaches neither.
+    let Some(layout) = run_for(spectrum, whole, surface, &plan, &view) else {
+        return;
     };
-    if let Some(cut) = cut {
-        painter.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
-            crate::spectrogram::STYLE_SETTLE,
-        ));
-        // Both cuts are taken against what the FULL plan settled on, so each
-        // bounds the stretch a reader sees rather than what the texture would
-        // take.
-        match cut {
-            crate::spectrogram::GestureCut::Rows => {
-                view.coarse = true;
-                view.max_rows = crate::spectrogram::gesture_rows(plan.rows);
-            }
-            crate::spectrogram::GestureCut::Slabs => {
-                view.max_cols = crate::spectrogram::gesture_slabs(plan.slabs());
-            }
-        }
-        plan = Plan::new(&view, &columns);
-    }
-
-    // Fast path: the built image is still valid — reuse the uploaded texture and
-    // its geometry; only the scrolling quad below is recomputed (with `now`).
-    let surf = &spectrum.spectrogram[surface];
-    let reused = match &surf.cache {
-        Some(c) if c.matches(&plan.key) && surf.tex.is_some() => Some(c.geometry()),
-        _ => None,
-    };
-    let layout = match reused {
-        Some(layout) => layout,
-        None => {
-            let bins = bins_for(plan.rows, scale, view.coarse);
-            match build(painter.ctx(), spectrum, whole, surface, &plan, &view, &bins) {
-                Some(layout) => layout,
-                None => return,
-            }
-        }
-    };
-
-    let Some(tex) = &spectrum.spectrogram[surface].tex else { return };
 
     // The quad only spans the depths the data actually reaches, so the drawn
     // strip GROWS from the now-line as history accumulates rather than being
     // stretched to fill the whole region. Without the far cap, clearing the
-    // spectrogram (or startup) left a handful of fresh columns ClampToEdge-
-    // smeared across everything as trails.
+    // spectrogram (or startup) leaves a handful of fresh columns smeared across
+    // everything as trails, by the clamp that holds the run's outermost slab.
     //
     // Near edge: to the split while fresh columns keep arriving, but stopping
     // at the newest data once it goes stale — most visibly when switching the
@@ -326,8 +248,23 @@ pub(crate) fn draw_spectrogram(
         (near, time.depth_of(layout.t_origin))
     };
 
-    let mesh = heatmap_mesh(tex.id(), axes, &time, &layout, d_near, d_far);
-    painter.add(egui::Shape::mesh(mesh));
+    let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
+    let Some((grid, shades)) = frame_data(spectrum, surface, &cfg) else {
+        return;
+    };
+    // The painter's own clip is what bounds the heatmap: the quads reach past
+    // the pane wherever the strip does (the whole-song build's oldest slab
+    // starts before the region), and the callback draws against the whole
+    // surface and leaves the scissor egui set from this rect alone.
+    painter.add(harmonigraph_render::spectrogram_paint_callback(
+        painter.clip_rect(),
+        vertices,
+        grid,
+        read_of(&view, plan.rows),
+        shades,
+        target_format,
+        crate::panes::lattice::pane_id(surface),
+    ));
 }
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the heatmap's

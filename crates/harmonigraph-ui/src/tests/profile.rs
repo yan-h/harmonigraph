@@ -264,7 +264,7 @@ fn profile_allocations() {
 
     let mut phase = 0.0f64;
     let mut phases = [(0usize, 0usize); 3];
-    let mut at_warmup = (0, [0; crate::spectrogram::Restart::COUNT]);
+    let mut at_warmup = (0, 0);
 
     for i in 0..(WARMUP + FRAMES) {
         let t = h.next_time();
@@ -303,12 +303,11 @@ fn profile_allocations() {
             bytes as f64 / FRAMES as f64 / 1024.0,
         );
     }
-    let (rebuilds, restarts) = state.spectrum.spectrogram_fallbacks();
-    let restarts: Vec<u32> =
-        restarts.iter().zip(at_warmup.1).map(|(end, start)| end - start).collect();
+    let (rebuilds, uploads) = state.spectrum.spectrogram_fallbacks();
     println!(
-        "spectrogram over {FRAMES} frames: {} re-aggregations, restarts {restarts:?}",
+        "spectrogram over {FRAMES} frames: {} re-aggregations, {} full uploads",
         rebuilds - at_warmup.0,
+        uploads - at_warmup.1,
     );
 }
 

@@ -136,15 +136,12 @@ with them most of what used to live here. What is left:
   seventeen, kept deliberately.
 - `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
   `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
-  reasoning that no longer holds.
-- `GESTURE_MAGNIFY` in `harmonigraph-ui`'s `spectrogram.rs`, the second
-  `HISTORICAL NOTE` and the same shape as the first: it records a value that
-  was tried and reverted, so that the revert is not quietly re-done.
+  reasoning that no longer holds — and is now the only one of its kind.
 
 There the history *is* the current constraint, and flattening it destroys
 real information. Runtime "old" and "no longer" — a previously-held voice,
-the ring's previously-written columns — describe state rather than builds,
-and are not in scope at all.
+a slab's previously-sent bytes — describe state rather than builds, and are
+not in scope at all.
 
 A comment justifying a value by what an OLD BLOB was drawn with is no longer
 in the exception; it is now the ordinary rot case, because no code reads an

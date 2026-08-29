@@ -109,23 +109,13 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
         rows.push((1, "roll", format!("{} notes", perf.roll_notes), None));
-        // What the spectrogram's two caches are NOT absorbing. Both should read
+        // What the spectrogram's two caches are NOT absorbing: a fold of the
+        // whole window, and an upload of the whole slab grid. Both should read
         // zero while a window merely scrolls; anything else is a layer that has
-        // fallen back to redrawing the whole heatmap, which costs milliseconds
-        // and looks exactly like a correct picture.
-        let (folds, rings) = perf.spec_fallbacks;
-        // Naming which reason dominated is what turns the rate into somewhere
-        // to look: the image changed, the pane changed, or the window moved
-        // where the texture could not follow.
-        //
-        // The counting crate reports the SLOT; the name belongs here, because
-        // the slots are the analyzer's own restart reasons and nothing below
-        // this crate knows what its cache gave up on.
-        let why = match perf.spec_restart_slot {
-            None => String::new(),
-            Some(slot) => format!(" ({})", crate::spectrogram::Restart::LABELS[slot]),
-        };
-        rows.push((1, "spec", format!("{folds:.0}/s refold · {rings:.0}/s ring{why}"), None));
+        // fallen back to sending the picture from scratch, which costs
+        // milliseconds and megabytes and looks exactly like a correct picture.
+        let (folds, uploads) = perf.spec_fallbacks;
+        rows.push((1, "spec", format!("{folds:.0}/s refold · {uploads:.0}/s full"), None));
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes), None),
@@ -520,8 +510,9 @@ mod tests {
     /// are the rows most exposed to this and the last to be covered: each
     /// carries TWO independently-named quantities inside one format string, so
     /// a transposition needs no second row to hide in and no type to disagree
-    /// with. Reading a refold rate as a ring rate sends the next investigation
-    /// to the aggregator when the ring cache is what stopped absorbing — and
+    /// with. Reading a refold rate as an upload rate sends the next
+    /// investigation to the aggregator when the grid's delta is what stopped
+    /// absorbing — and
     /// `spec` is the readout kept precisely because it is the one that would
     /// have caught both of the spectrogram's silent performance bugs.
     ///
@@ -578,7 +569,6 @@ mod tests {
             );
         }
         perf.spec_fallbacks = (14.0, 15.0);
-        perf.spec_restart_slot = Some(4);
         perf.rss_bytes = 490 * 1024 * 1024;
 
         let rows = overlay_rows(&perf, true);
@@ -611,10 +601,8 @@ mod tests {
             ("gpu", "20.0 ui · 30.0 3d"),
             ("verts", "5k in 7 prims"),
             ("roll", "13 notes"),
-            // The two caches, in the order the labels name them, with the
-            // dominant reason on the end where it reads as a note on the ring
-            // rate rather than as part of it.
-            ("spec", "14/s refold · 15/s ring (pane)"),
+            // The two caches, in the order the labels name them.
+            ("spec", "14/s refold · 15/s full"),
             ("memory", "490 MB"),
             ("voices", "17 held · 19 fading"),
             ("nodes", "21  ·  3.25× scale"),
@@ -678,7 +666,7 @@ mod tests {
             FrameCosts {
                 // Enough of both to lay out at their widest: the row carries
                 // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, &[150; crate::spectrogram::Restart::COUNT]),
+                spectrogram_fallbacks: (900, 900),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,

@@ -7,12 +7,11 @@
 //! zoom, a resize, a Level drag or a palette change moves uniforms and nothing
 //! else: there is no picture to remake.
 //!
-//! What the shader reproduces is `harmonigraph-ui`'s own read — see
-//! `harmonigraph_ui::spectrogram`'s `bins_for` for the row geometry,
-//! `RowRead::of` for the two arms, and `Shades` for the level mapping and the
-//! gradient table. The arithmetic lives once, in shaders/spectrogram.wgsl,
-//! each piece carrying the constraint that pins it; this crate is handed the
-//! constants as data and never learns what a bucket is.
+//! The read lives once, in shaders/spectrogram.wgsl, each piece carrying the
+//! constraint that pins it; this crate is handed the constants as data and
+//! never learns what a bucket is. `harmonigraph-ui` folds the grid and derives
+//! those constants — the row geometry's margin, the level mapping's affine —
+//! and holds nothing that reads a slab.
 //!
 //! Four taps blended in GAMMA space per fragment, which is the filtering an
 //! `Rgba8Unorm` egui texture gets — that is what makes this a port rather than
@@ -68,8 +67,8 @@ pub struct SpectrogramGrid {
     pub dirty: Vec<i64>,
 }
 
-/// The row read's scalars: everything `bins_for`, `RowRead::of` and
-/// `Shades::level` need, as uniforms.
+/// The row read's scalars: the row geometry, the two arms and the level
+/// mapping, as uniforms.
 ///
 /// The constants ride in as data because this crate does not depend on
 /// `harmonigraph-core` and must not start to.
@@ -79,7 +78,7 @@ pub struct SpectrogramRead {
     pub min_midi: f32,
     pub span: f32,
     /// How far past the visible range the edge rows reach, in pitch fraction:
-    /// `bins_for`'s `(1 / BINS_PER_SEMITONE / span).min(0.5)`.
+    /// one bucket, `(1 / BINS_PER_SEMITONE / span).min(0.5)`.
     pub margin: f32,
     /// Rows of the picture along pitch — the pane's pitch-axis device pixels.
     /// It decides both the row geometry and the pitch axis' own filtering.
@@ -806,7 +805,7 @@ mod tests {
         vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
     }
 
-    /// One row of the picture, as `bins_for` lays them out.
+    /// One row of the picture, as `row_of` lays them out.
     #[derive(Clone, Copy)]
     struct Row {
         lo_t: f32,

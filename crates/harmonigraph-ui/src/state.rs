@@ -778,13 +778,13 @@ impl SharedState {
     /// call this whenever they build one.
     ///
     /// The plugin's editor creates a brand new `Context` every time its window
-    /// opens, while this state lives on across them — so a `TextureHandle`
-    /// taken from the previous one survives into the new window looking
-    /// perfectly valid. It isn't: `set` on it reaches a context nobody is
-    /// drawing any more, and its id names a texture the new renderer never
-    /// allocated. The spectrogram simply vanished after hiding and re-showing
-    /// the window, and stayed gone, because nothing ever asked for a fresh
-    /// handle.
+    /// opens, while this state lives on across them — so anything here that
+    /// describes what a context's renderer holds survives into the new window
+    /// looking perfectly valid. The spectrogram's GPU mirror is exactly that: it
+    /// states which slabs the grid buffer holds, and a frame writes only the
+    /// slabs that have moved against it, so carried into a window whose renderer
+    /// allocated nothing it would patch two slabs of a buffer that was never
+    /// written.
     ///
     /// The label mirror is the same trap one layer along. It holds the atlas
     /// size, scale and fill ratio it last saw and the texel of every glyph
@@ -794,7 +794,7 @@ impl SharedState {
     /// atlas, paints nothing, and every haloed label stays absent: nothing else
     /// asks for a refresh, because the mirror IS what asks.
     pub fn release_context_resources(&mut self) {
-        self.spectrum.release_textures();
+        self.spectrum.release_gpu_grids();
         // Both mirrors: the lattice's names are drawn off a texture of their
         // own, and a mirror left answering for the window that closed strands
         // its renderer exactly the same way.

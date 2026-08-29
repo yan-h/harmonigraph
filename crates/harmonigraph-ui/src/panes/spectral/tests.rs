@@ -5,10 +5,7 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use super::*;
-use crate::tests::probe::{
-    events_into, frame_full, frame_into, fresh, painted_full, painted_into, press, themed,
-    themed_at,
-};
+use crate::tests::probe::{events_into, fresh, painted_full, painted_into, press, themed};
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind};
 
@@ -1635,195 +1632,56 @@ fn the_pane_paints_in_every_orientation() {
     }
 }
 
-/// The spectrogram heatmap is rebuilt and re-uploaded only when its inputs
-/// change; between the ~20 Hz FFT columns most frames just redraw the quad
-/// over the reused texture. Two frames with identical clock and history: the
-/// second finds a matching key and takes that fast path — and must draw
-/// exactly the quad the cold first frame built, since it reuses that build's
-/// geometry. A stale or mis-cached build would move the quad.
-#[test]
-fn a_cached_spectrogram_frame_matches_the_cold_build() {
-    // The textured strip's per-vertex position + uv. The spectrogram is the
-    // pane's only mesh (notes are paths, labels are text), so its geometry
-    // is what these shapes carry — however many quads it is split into.
-    fn quad(out: &egui::FullOutput) -> Vec<[f32; 4]> {
-        let mut v = Vec::new();
-        for c in &out.shapes {
-            if let egui::Shape::Mesh(m) = &c.shape {
-                assert_eq!(m.indices.len(), m.vertices.len() / 4 * 6, "quads, please");
-                v.extend(m.vertices.iter().map(|x| [x.pos.x, x.pos.y, x.uv.x, x.uv.y]));
-            }
-        }
-        v
-    }
-
-    let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.show_spectrogram = true;
-    state.spectrum_config.low_midi = 55.0;
-    state.spectrum_config.high_midi = 79.0;
-    state.spectrum_config.roll_seconds = 10.0;
-    let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
-    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
-    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 0.4;
-    for i in 0..40 {
-        state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
-    }
-
-    // ONE context across both frames, as in the live app: the cache hands
-    // back a texture handle owned by this context.
-    let ctx = themed();
-    let now = 94.0;
-    let mut frame = || frame_into(&ctx, SCREEN, WIDE, |ui| spectral_pane(ui, &mut state, now, 0));
-    let cold = quad(&frame());
-    assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
-    let hit = quad(&frame());
-    assert_eq!(cold, hit, "the cached frame drew a different quad than the cold build");
-}
-
 /// The strip reaches the now-line, but the newest column is older than that
-/// — half an analysis window, by construction — so its leading sliver has
-/// no data of its own and holds the newest column instead. Inside the live
-/// ring the texels past the newest one hold what they carried a lap ago (a
-/// column from a whole window back), so a `u` that ran on would paint that
-/// sliver with the far end of the window.
+/// — half an analysis window, by construction — so its leading sliver has no
+/// data of its own and holds the newest slab's centre instead.
 ///
-/// Where `u` stops, the mesh SPLITS: a quad spanning the corner would
-/// interpolate it across itself, and since these are vertex UVs that
-/// rescales the whole image, once per slab as the corner crosses it. So the
-/// drawn strip is a flat leading quad (one `u` on all four corners) joined
-/// to the data quad at that same `u`.
+/// Where the slab coordinate stops, the mesh SPLITS: a quad spanning the
+/// corner would interpolate it across itself, and since this is a vertex
+/// attribute that rescales the whole picture, once per slab as the corner
+/// crosses it. So the drawn strip is a flat leading quad (one coordinate on
+/// all four corners) joined to the data quad at that same coordinate.
+///
+/// On the vertex builder rather than on a frame's shapes: the heatmap is a
+/// paint callback now, and a callback carries no geometry a test can read off
+/// the shape. What a frame would add is that the pane hands these the layout it
+/// folded, which `a_second_frame_on_the_same_columns_reuses_the_run_it_sent`
+/// holds from the other side.
 #[test]
-fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
+fn the_strip_holds_its_leading_sliver_instead_of_running_past_the_run() {
     let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.roll_seconds = 2.0; // zoomed in: the sliver is widest
-    let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
-    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
-    for i in 0..100 {
-        state.spectrum.push_history(90.0 + f64::from(i) * 0.02, &bins);
-    }
-    // The now-line, an analysis window's half-lag past the newest column.
-    let now = 91.98 + 0.171;
-    let out = painted_pane(WIDE, &mut state, now);
-    let mesh = out
-        .shapes
-        .iter()
-        .find_map(|c| match &c.shape {
-            egui::Shape::Mesh(m) => Some(m.clone()),
-            _ => None,
-        })
-        .expect("the spectrogram drew no textured strip");
+    let cfg = state.spectrum_config;
+    let axes = Axes::new(WIDE, &cfg);
+    // Twenty slabs ending a slab and a half before the now-line, which is the
+    // analyzer's lag: several slabs at this Span, so the sliver is real.
+    let bucket = 0.016;
+    let layout = crate::spectrogram::TexLayout { bucket, t_origin: 90.0, tex_span: 20.0 * bucket };
+    let now = layout.t_origin + layout.tex_span + 0.171;
+    let time = super::axes::TimeAxis::new(&state, 0.35, now);
+    let vertices = super::spectrogram::heatmap_vertices(&axes, &time, &layout, 0.35, 1.0);
 
-    assert_eq!(mesh.vertices.len(), 8, "two quads, split where `u` stops");
-    let mut us: Vec<f32> = mesh.vertices.iter().map(|v| v.uv.x).collect();
-    us.sort_by(f32::total_cmp);
-    // Two values only — the corner, shared by the flat quad's four vertices
-    // and the data quad's leading two, and the far end of the data.
-    let (far, hold) = (us[0], us[7]);
+    // Two quads as a triangle list, split where the coordinate stops.
+    assert_eq!(vertices.len(), 12, "not two quads");
+    let mut slabs: Vec<f32> = vertices.iter().map(|v| v.slab).collect();
+    slabs.sort_by(f32::total_cmp);
+    let (far, hold) = (slabs[0], slabs[11]);
     assert!(far < hold, "the data quad spans no time at all");
-    assert_eq!(us.iter().filter(|u| **u == hold).count(), 6, "not one flat leading quad: {us:?}");
-    assert_eq!(us.iter().filter(|u| **u == far).count(), 2, "the data quad bends: {us:?}");
-}
-
-/// A big pane at a high density must not upload a texture the context has
-/// already said it will not take.
-///
-/// The pane draws through contexts that disagree about the limit: an editor's
-/// and the offline renderer's each report their device's 8192, and a bare
-/// `egui::Context` — every test's, this one included — reports egui's own 2048
-/// default. At 2048 the slab count alone put the image `2 * (1024 + 8)` = 2064
-/// across and `Context::load_texture` asserted on the upload, taking the frame
-/// with it. Issues #333 and #335 are that panic, reached from the profiling
-/// harness at exactly the geometry below.
-///
-/// A whole frame rather than [`Plan`](crate::spectrogram::Plan) arithmetic,
-/// because the arithmetic is only half the claim: what panicked was the
-/// UPLOAD, and only a real context holds a real limit to check against. The
-/// plan's own sweep is `no_pane_plans_an_image_past_what_the_gpu_takes`.
-#[test]
-fn a_large_pane_at_a_high_density_uploads_a_texture_the_context_takes() {
-    // The profiling harness's own picture pane, which is where this was found:
-    // one pane filling a 1000x900 point window at 2x, no dock.
-    const BODY: egui::Vec2 = egui::vec2(1000.0, 900.0);
-    let mut state = fresh();
-    state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.show_spectrogram = true;
-    // The long end of the Span, where the window holds the most slabs.
-    state.spectrum_config.roll_seconds = 180.0;
-    let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
-    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
-    for i in 0..400 {
-        state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
-    }
-    let ctx = themed_at(2.0);
-    // ONE frame, and the count is a claim: `begin_pass` takes the pending zoom
-    // factor and derives `pixels_per_point` from it within the same pass
-    // (egui's `context.rs`), so this frame is already at 2x and is the frame
-    // that builds and uploads. A second would only hit the cache — same
-    // columns, same style, same key — and would hide a first frame that had
-    // quietly drawn at 1x and reached nothing.
-    let _ = frame_full(&ctx, BODY, |ui| spectral_pane(ui, &mut state, 130.0, 0));
-    let limit = ctx.input(|i| i.max_texture_side);
-    let size = state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size();
-    assert!(
-        size[0] <= limit && size[1] <= limit,
-        "a {}x{} heatmap on a context whose limit is {limit}",
-        size[0],
-        size[1],
+    // The newest slab's CENTRE, which is the last point with two taps to blend.
+    assert!((hold - 19.5).abs() < 1e-4, "the sliver holds {hold} slabs in, not 19.5");
+    // The flat quad's six, plus the data quad's near edge.
+    assert_eq!(
+        slabs.iter().filter(|s| **s == hold).count(),
+        9,
+        "not one flat leading quad: {slabs:?}",
     );
-    // And that it got there by SATURATING the cap rather than by being a pane
-    // too small to reach it. Without this the test passes for the wrong reason
-    // the day a default moves: at `roll_fraction` 0.2 this pane plans 400
-    // slabs for an 816-texel image, clears the limit by a mile, and exercises
-    // none of the clamp it exists to hold. One quantum of slack, since the
-    // ceiling is a slab count and the pane's own rounding sits under it.
-    assert!(
-        size[0] as f32 > limit as f32 - crate::spectrogram::PANE_QUANTUM,
-        "a {} texel image is not near the {limit} ceiling — this pane no longer saturates it",
-        size[0],
-    );
-}
-
-/// The heatmap image is sized in DEVICE PIXELS, not points. It is stretched
-/// over the pane by the GPU, so sizing it in points builds it at the
-/// display's density divided by the scale factor and then upsamples — on a
-/// Retina screen, half the resolution in each axis, for a heatmap visibly
-/// softer than the pane around it. Same pane, twice the density, twice the
-/// rows.
-///
-/// (Rows and not columns: the time axis picks its slab off `live_slab`'s
-/// ladder, so how much of a density increase reaches it depends on the span.)
-#[test]
-fn the_heatmap_image_is_built_at_device_pixels() {
-    fn rows_at(ppp: f32) -> usize {
-        let mut state = fresh();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.spectrum_config.show_spectrogram = true;
-        state.spectrum_config.roll_seconds = 10.0;
-        let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
-        bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
-        for i in 0..40 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
-        }
-        let ctx = themed_at(ppp);
-        // Twice: `set_pixels_per_point` lands on the following frame.
-        for _ in 0..2 {
-            let _ = frame_into(&ctx, SCREEN, WIDE, |ui| {
-                spectral_pane(ui, &mut state, 94.0, 0);
-            });
-        }
-        state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size()[1]
-    }
-
-    let (one, two) = (rows_at(1.0), rows_at(2.0));
-    assert!(one > 2, "no heatmap rows at 1x");
-    // Exactly double, give or take the rounding of one pixel row.
-    assert!(
-        two.abs_diff(one * 2) <= 1,
-        "{one} rows at 1x but {two} at 2x — the image is being sized in points",
-    );
+    assert_eq!(slabs.iter().filter(|s| **s == far).count(), 3, "the data quad bends: {slabs:?}");
+    // And the pitch fraction is the plain one, corner to corner: the row
+    // geometry is the shader's, so nothing here may pre-apply it.
+    let mut ts: Vec<f32> = vertices.iter().map(|v| v.t).collect();
+    ts.sort_by(f32::total_cmp);
+    assert_eq!(ts, [0.0; 6].into_iter().chain([1.0; 6]).collect::<Vec<f32>>());
 }
 
 /// The now-line is painted after the roll that arrives at it.
@@ -1843,9 +1701,8 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // that holds however many other layers become callbacks and wherever in
     // the order they land. Two weaker versions of this both pass under either
     // draw order: testing the LAST callback finds the label batch, and
-    // indexing the FIRST one assumes nothing before the roll ever emits a
-    // callback, which the spectrogram would break the day it stops being a
-    // mesh.
+    // indexing the FIRST one assumes nothing before the roll emits a callback,
+    // which the spectrogram breaks — it draws through one of its own.
     let frame = |sounding: bool| {
         let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
@@ -1888,11 +1745,11 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     );
 }
 
-/// **A whole-song pane must not upload a heatmap past the context's texture
-/// limit**, however much take lies either side of the window it draws.
+/// **A whole-song pane must not fold a heatmap past the slab cap**, however
+/// much take lies either side of the window it draws.
 ///
 /// The call-site half of the spectrogram module's
-/// `a_take_longer_than_the_render_window_folds_inside_what_the_gpu_takes` —
+/// `a_take_longer_than_the_render_window_folds_inside_the_slab_cap` —
 /// that one holds the trim, this one holds the fold being GIVEN it. Named
 /// rather than linked, because rustdoc never resolves a link inside a
 /// `#[test]` and so never reports one that has gone dead.
@@ -1900,18 +1757,14 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
 /// direction, and only a frame that actually paints can say which expression
 /// is there.
 ///
-/// The frame itself is most of the test, because that is how the bug
-/// presented: `Context::load_texture` debug-asserts on an oversized upload
-/// (issues #333/#335, and #367 for this axis of it), so a pane that reaches
-/// the upload at all is the assertion. What puts real columns outside the
-/// window is `--start`/`--end` on a longer bounce —
+/// The frame itself is most of the test: the run the pane hands the GPU is
+/// what the fold produced, and a fold given the whole take instead of the
+/// window comes out several times the cap (issue #367). What puts real columns
+/// outside the window is `--start`/`--end` on a longer bounce —
 /// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the whole
 /// file whatever window was asked for, and the slab is cut for the window.
 #[test]
-fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_texture_limit() {
-    // What a bare `egui::Context` reports, which is what this harness paints
-    // through and what the assert above compares against.
-    const BARE_MAX_SIDE: usize = 2048;
+fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
     let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
     // Three minutes of columns, sampled far more sparsely than the analyzer
@@ -1934,27 +1787,14 @@ fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_texture_limit() 
         columns,
         roll: state.tracker.roll().clone(),
     });
-    let out = painted_pane(WIDE, &mut state, 61.0);
+    let _ = painted_pane(WIDE, &mut state, 61.0);
 
-    let textured = |s: &egui::epaint::ClippedShape| match &s.shape {
-        egui::Shape::Mesh(m) => m.texture_id != egui::TextureId::default(),
-        _ => false,
-    };
-    assert!(
-        out.shapes.iter().any(textured),
-        "no heatmap in the frame, so it never reached the upload this is about",
-    );
-    let widest = out
-        .textures_delta
-        .set
-        .iter()
-        .map(|(_, d)| d.image.width().max(d.image.height()))
-        .max()
-        .unwrap_or(0);
-    assert!(
-        widest <= BARE_MAX_SIDE,
-        "a {widest} texel image went to a context that takes {BARE_MAX_SIDE}",
-    );
+    let slabs = state.spectrum.spectrogram[0].gpu.run_slabs();
+    assert!(slabs > 0, "no heatmap in the frame, so it never reached the fold this is about");
+    // The cap, plus the slab each end of the window can spend by falling
+    // mid-slab.
+    let ceiling = crate::spectrogram::WHOLE_SONG_SLAB_CAP as usize + 2;
+    assert!(slabs <= ceiling, "a {slabs} slab run went to a pane the cap holds at {ceiling}",);
 }
 
 /// Whole-song mode's playhead is painted after the roll, for the same reason
