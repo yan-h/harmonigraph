@@ -72,6 +72,11 @@ pub(crate) struct SpectrogramSurface {
     /// that moved instead of the run. See
     /// [`GpuGrid`](crate::spectrogram::GpuGrid).
     pub(crate) gpu: crate::spectrogram::GpuGrid,
+    /// The slab width the previous frame drew at, which is what gives
+    /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
+    /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the
+    /// first frame, and after a surface is released.
+    pub(crate) held_bucket: Option<f64>,
 }
 
 /// One column of the spectrogram, and the age-tiered store they live in — both
