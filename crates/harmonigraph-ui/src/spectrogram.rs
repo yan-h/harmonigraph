@@ -329,12 +329,19 @@ struct SentRun {
     run: Arc<Vec<u8>>,
     /// Keys whose slot the GPU is being asked to write while this run stands.
     ///
-    /// Re-sent every frame rather than cleared once it has been handed over,
-    /// because a frame's callback is not certain to run: egui drops a callback
-    /// whose clip rect is empty, and a write dropped with it would leave a slot
-    /// holding a slab this run says it does not. Writing the same bytes again
-    /// costs a slab a frame; a slot that silently disagrees with the run is a
-    /// wrong column that no later frame repairs.
+    /// Re-sent until [`GpuGrid::uploaded`] names this run, rather than cleared
+    /// the moment it is handed over, because a frame's callback is not certain
+    /// to run: egui drops a callback whose clip rect is empty, and a write
+    /// dropped with it would leave a slot holding a slab this run says it does
+    /// not. Writing the same bytes again costs a slab a frame; a slot that
+    /// silently disagrees with the run is a wrong column that no later frame
+    /// repairs.
+    ///
+    /// The acknowledgement is what ENDS the repeat, and something has to: a
+    /// run holds for as long as the columns it was folded from do, which for a
+    /// stopped transport is unbounded, and this list is handed to every frame
+    /// drawn under it. Re-sending on evidence rather than forever costs the
+    /// dropped frame one more send and a still picture nothing at all.
     dirty: Vec<i64>,
     /// Where these slabs sit in absolute time, so a frame that folds nothing
     /// still knows where to draw them.
@@ -387,28 +394,39 @@ impl GpuGrid {
             run.len() / SPECTRUM_BINS,
         );
         self.serial += 1;
-        let acknowledged = |sent: &SentRun| {
-            self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial
+        let run_slabs = run.len() / SPECTRUM_BINS;
+        let patched = {
+            let acknowledged = |sent: &SentRun| {
+                self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial
+            };
+            self.sent
+                .as_ref()
+                // The buffer is the same one and the GPU has said so, so what
+                // it holds is known slab by slab and only the slabs that moved
+                // need writing. A different capacity is a different buffer —
+                // the slot a key lands in is `key mod capacity`, so the whole
+                // mapping moves — and a run the GPU never acknowledged is one
+                // nothing can be said about (see [`uploaded`](Self::uploaded)).
+                .filter(|sent| sent.capacity == capacity && acknowledged(sent))
+                .map(|sent| sent.moved(first_key, &run))
+                // Past half the run a delta is no longer the cheaper upload it
+                // exists to be: it writes what a rebuild writes, one scattered
+                // `write_buffer` per slab against the rebuild's single
+                // contiguous one, and it spends that as a PATCH — leaving the
+                // rebuild counter reading zero while a rebuild's traffic goes
+                // out. A refold that moves most of the run, which is a rung
+                // crossing under a Span drag or a backward transport jump,
+                // lands exactly here.
+                .filter(|moved| moved.len() * 2 <= run_slabs)
         };
-        let dirty = match &self.sent {
-            // The buffer is the same one and the GPU has said so, so what it
-            // holds is known slab by slab and only the slabs that moved need
-            // writing.
-            Some(sent) if sent.capacity == capacity && acknowledged(sent) => {
-                sent.moved(first_key, &run)
-            }
-            // A different capacity is a different buffer — the slot a key lands
-            // in is `key mod capacity`, so the whole mapping moves — no previous
-            // run at all is a context that has just been rebuilt, and a run the
-            // GPU never acknowledged is one nothing can be said about (see
-            // [`uploaded`](Self::uploaded)). All three make the copy from the
-            // run rather than patching it.
-            _ => {
-                self.generation += 1;
-                self.full_uploads += 1;
-                Vec::new()
-            }
-        };
+        // No previous run at all is a context that has just been rebuilt; it
+        // and both filters above make the copy from the run rather than
+        // patching it.
+        let dirty = patched.unwrap_or_else(|| {
+            self.generation += 1;
+            self.full_uploads += 1;
+            Vec::new()
+        });
         self.sent = Some(SentRun {
             key,
             serial: self.serial,
@@ -424,6 +442,10 @@ impl GpuGrid {
     /// been folded into it.
     fn grid(&self) -> Option<SpectrogramGrid> {
         let sent = self.sent.as_ref()?;
+        // Once the GPU has named this run, its dirty slabs are in their slots
+        // and the frames that go on drawing the same run owe it nothing — see
+        // [`SentRun::dirty`] for why the send repeats until then.
+        let written = self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial;
         Some(SpectrogramGrid {
             generation: self.generation,
             serial: sent.serial,
@@ -432,7 +454,7 @@ impl GpuGrid {
             bins: SPECTRUM_BINS as u32,
             first_key: sent.first_key,
             run: sent.run.clone(),
-            dirty: sent.dirty.clone(),
+            dirty: if written { Vec::new() } else { sent.dirty.clone() },
         })
     }
 
@@ -2643,6 +2665,102 @@ mod tests {
             (1..=entered as usize + 2).contains(&after.2),
             "an acknowledged run wrote {} slabs rather than a delta",
             after.2,
+        );
+    }
+
+    /// One surface's grid, and a run of `slabs` slabs whose every byte moves
+    /// with `seed` — so two runs made with different seeds differ in every
+    /// slab, and [`SentRun::moved`] has to name them all.
+    fn slab_run(seed: u8, slabs: usize) -> Vec<u8> {
+        (0..slabs * SPECTRUM_BINS).map(|i| seed.wrapping_mul(97).wrapping_add(i as u8)).collect()
+    }
+
+    /// A delta the GPU has acknowledged is not handed over a second time, so a
+    /// picture that sits still costs no upload traffic at all.
+    ///
+    /// The claim is about the frames that fold NOTHING. A run stands for as
+    /// long as the columns it was folded from do — for a stopped transport,
+    /// unbounded — and every frame drawn under it is handed
+    /// [`SentRun::dirty`] afresh. Without an end to the repeat, a refold that
+    /// moved a large delta is re-issued as that many writes on every frame the
+    /// pane is on screen, which no counter here reports and no picture shows.
+    /// The frame BEFORE the acknowledgement must still re-send it, which is
+    /// the other half of what is measured: that is the dropped callback the
+    /// repeat exists for.
+    #[test]
+    fn an_acknowledged_delta_is_not_handed_over_twice() {
+        let bucket = 0.016;
+        let (capacity, slabs) = (64, 32);
+        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
+        let mut gpu = GpuGrid::default();
+
+        // The opening upload, acknowledged, so what follows is measured as a
+        // delta rather than as a context with nothing said about it.
+        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
+        acknowledge(&gpu);
+
+        // One slab's bytes move: a delta of exactly one key, well under the
+        // share of the run that would be uploaded whole instead.
+        let mut moved = slab_run(0, slabs);
+        moved[0] ^= 0xff;
+        gpu.accept(run_key(0, 101, 1.01, bucket), 0, capacity, moved, layout);
+        assert_eq!(gpu.grid().expect("a run").dirty, vec![0], "the moved slab went unsent");
+        assert_eq!(
+            gpu.grid().expect("a run").dirty,
+            vec![0],
+            "an unacknowledged delta was dropped on the frame that had to repeat it",
+        );
+
+        acknowledge(&gpu);
+        assert!(
+            gpu.grid().expect("a run").dirty.is_empty(),
+            "a delta the GPU acknowledged was handed over again",
+        );
+        assert_eq!(gpu.full_uploads(), 1, "the still picture rebuilt the grid");
+    }
+
+    /// A delta naming most of the run is taken as the rebuild it already is.
+    ///
+    /// Both sides of the threshold are the claim. Above it the delta writes
+    /// what a rebuild writes — one scattered `write_buffer` per slab against
+    /// one contiguous write — while reporting as a patch, so the rebuild
+    /// counter reads zero through the traffic of a rebuild. Below it the delta
+    /// has to survive: a patch turned into a rebuild is a buffer's worth of
+    /// upload bought for a slab's worth of change.
+    #[test]
+    fn a_refold_that_moves_most_of_the_run_is_uploaded_whole() {
+        let bucket = 0.016;
+        let (capacity, slabs) = (64, 32);
+        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
+        let mut gpu = GpuGrid::default();
+
+        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
+        acknowledge(&gpu);
+        assert_eq!(
+            gpu.full_uploads(),
+            1,
+            "the opening run was patched into a buffer with no bytes"
+        );
+
+        // A backward jump of the transport: the run lands on keys whose slots
+        // hold a different lap, so every slab of it has moved.
+        gpu.accept(run_key(0, 100, 2.0, bucket), 500, capacity, slab_run(1, slabs), layout);
+        assert_eq!(gpu.full_uploads(), 2, "a run that moved whole was patched slab by slab");
+        assert!(gpu.grid().expect("a run").dirty.is_empty(), "a rebuild sent a delta beside it");
+
+        // And half of it moving is still a patch, which is what stops the
+        // clause above from swallowing the steady state.
+        acknowledge(&gpu);
+        let mut half = slab_run(1, slabs);
+        for j in 0..slabs / 2 {
+            half[j * SPECTRUM_BINS] ^= 0xff;
+        }
+        gpu.accept(run_key(0, 101, 2.01, bucket), 500, capacity, half, layout);
+        assert_eq!(gpu.full_uploads(), 2, "half a run moving was uploaded whole");
+        assert_eq!(
+            gpu.grid().expect("a run").dirty.len(),
+            slabs / 2,
+            "the moved half was not sent as a delta",
         );
     }
 
