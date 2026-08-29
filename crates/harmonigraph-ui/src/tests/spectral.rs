@@ -334,3 +334,72 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
         spectrum(&h, &state),
     );
 }
+
+/// A zoom drag keeps zooming when the hand curves and comes back — it does not
+/// turn into a pan under the pointer.
+///
+/// The axis a depth drag is on is picked once and held (`lean_is_depth`).
+/// Re-deciding it each frame from the travel since the press is what this
+/// guards: the perpendicular drift of a curving hand only accumulates, while
+/// the along-axis travel comes back toward zero as the hand returns, so a drag
+/// out and back crosses over somewhere on the way home. What the user sees is
+/// the Span stopping dead with the mouse still moving and the cursor turning
+/// from the resize arrows to a hand, at a value set by whatever the hand
+/// drifted rather than by anything on screen.
+///
+/// The drift here is 30 points over 200 — a hand, not a wobble — and the
+/// return is what makes it bite: on the way out the travel leans along depth
+/// the whole way, and only on the way back does the drift catch it up.
+#[test]
+fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
+    use harmonigraph_core::spectrum::SPECTRUM_BINS;
+    let mut state = fresh();
+    let mut h = DockHarness::at(egui::vec2(1600.0, 900.0));
+    h.settle(&mut state);
+    let mut n = 0usize;
+    let opened = h.next_time();
+    let mut t = opened - 400.0;
+    while t < opened {
+        let mut bins = [0.02f32; SPECTRUM_BINS];
+        bins[400 + (n * 13) % 3000] = 1.0;
+        state.spectrum.push_history(t, &bins);
+        t += crate::AudioSpectrum::FFT_INTERVAL;
+        n += 1;
+    }
+    h.settle(&mut state);
+
+    // The far region, where a depth drag zooms the Span: the default
+    // orientation runs time along the width with the spectrum on the near side.
+    let pane = pane_body(&state, &crate::panes::Tab::Spectral).expect("the pane is visible");
+    let from = egui::pos2(pane.right() - 40.0, pane.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(from)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+
+    let opened_at = state.spectrum_config.roll_seconds;
+    let mut path: Vec<(f32, f32)> = (0..200).map(|i| (i as f32, i as f32 * 0.15)).collect();
+    path.extend((0..200).rev().map(|i| (i as f32, 30.0 - (200 - i) as f32 * 0.02)));
+    let (mut turned, mut furthest) = (None, opened_at);
+    for (step, &(dx, dy)) in path.iter().enumerate() {
+        let at = from + egui::vec2(dx, dy);
+        let (out, _) = h.frame_timed(&mut state, vec![egui::Event::PointerMoved(at)]);
+        let span = state.spectrum_config.roll_seconds;
+        furthest = furthest.min(span);
+        // Past the margin the gesture has committed, and from there the cursor
+        // is the promise that it still has hold of the Span.
+        if step > 20 && out.platform_output.cursor_icon != egui::CursorIcon::ResizeHorizontal {
+            turned.get_or_insert((step, dx, dy, span));
+        }
+    }
+    assert!(furthest < opened_at * 0.5, "the drag never zoomed: {opened_at} -> {furthest} s",);
+    assert_eq!(
+        turned, None,
+        "the zoom became a pan mid-drag (step, dx, dy, span); it started at {opened_at} s",
+    );
+    // And the return puts the Span back, which a gesture that let go partway
+    // cannot do.
+    let back = state.spectrum_config.roll_seconds;
+    assert!(
+        (back - opened_at).abs() < opened_at * 0.2,
+        "the drag came home to {back} s from {opened_at} s",
+    );
+}
