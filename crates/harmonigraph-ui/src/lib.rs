@@ -69,7 +69,6 @@ pub use harmonigraph_take::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
-pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
 pub(crate) use state::default_dock;
 pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 
@@ -393,18 +392,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the HUD. Interactive path only — the offline renderer never reaches
     // root_ui, so nothing here touches a recorded frame.
-    //
-    // The fallback counts are BORROWED by the costs — how many restart reasons
-    // there are is this crate's business and not the model's — so the array
-    // they are read out of has to outlive the call.
-    let fallbacks = state.spectrum.spectrogram_fallbacks();
     state.instruments.perf.record(
         FrameCosts::assemble(
             state.instruments.timings,
             cpu_ms,
             &state.instruments.lattice_stats,
             state.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            (fallbacks.0, &fallbacks.1),
+            state.spectrum.spectrogram_fallbacks(),
         ),
         now,
         Workload {

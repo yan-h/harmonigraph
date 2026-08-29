@@ -56,67 +56,22 @@ pub struct AudioSpectrum {
     pub(crate) spectrogram: [SpectrogramSurface; 2],
 }
 
-/// One drawing surface's heatmap: the uploaded texture, and the three caches
-/// that describe it.
+/// One drawing surface's heatmap: the slab grid it folds, and the statement of
+/// what the GPU holds of it.
 ///
-/// They are held together because they describe ONE texture between them and
-/// can only be trusted as a set — the cache validates the texture, the ring
-/// records which slabs its columns hold, and either one kept without it is a
-/// statement about pixels that no longer exist. As four parallel arrays they
-/// were four chances to update three.
-///
-/// Runtime-only, never persisted, and each rebuilds itself from
-/// [`AudioSpectrum::history`] when dropped, so `None` is always a safe state.
+/// Runtime-only, never persisted, and each half rebuilds itself from
+/// [`AudioSpectrum::history`] when dropped, so a default is always a safe
+/// state.
 #[derive(Default)]
 pub(crate) struct SpectrogramSurface {
-    /// The heatmap's pixels, sampled with bilinear filtering so it reads as a
-    /// smooth image rather than a mesh of interpolated triangles. Created
-    /// lazily on first draw.
-    pub(crate) tex: Option<egui::TextureHandle>,
-    /// Validates [`Self::tex`]: while the key still matches, the whole build
-    /// (aggregate -> colour -> upload) is skipped and only the scrolling quad
-    /// is redrawn. See [`SpectrogramKey`].
-    pub(crate) cache: Option<SpectrogramCache>,
     /// Live-only incremental aggregator: keeps the slab grid across frames so a
     /// rebuild folds only new columns instead of rescanning the whole window.
     /// See `spectrogram::SpectrogramAgg`.
     pub(crate) agg: Option<crate::spectrogram::SpectrogramAgg>,
-    /// Which slabs [`Self::tex`]'s columns currently hold, so a new one can be
-    /// written on its own instead of repainting the whole heatmap. `None`
-    /// whenever the texture was built the full-width way, which now means only
-    /// the offline whole-song render.
-    pub(crate) ring: Option<crate::spectrogram::SpectrogramRing>,
-    /// Times the ring has been restarted — re-blanked and every column
-    /// repainted — by [`Restart`](crate::spectrogram::Restart) reason.
-    /// Kept HERE rather than on the ring, which does not survive its own
-    /// restart. Read out by the performance overlay beside the aggregator's
-    /// rebuild count; see
-    /// [`SpectrogramAgg::rebuilds`](crate::spectrogram::SpectrogramAgg::rebuilds).
-    pub(crate) restarts: [u32; crate::spectrogram::Restart::COUNT],
-    /// Whether the style is mid-gesture, which is when the image is built
-    /// short and stretched — see
-    /// [`StyleMotion`](crate::spectrogram::StyleMotion). Like the aggregator,
-    /// it describes the style stream rather than the texture, so it survives
-    /// [`release_texture`](Self::release_texture).
-    pub(crate) motion: Option<crate::spectrogram::StyleMotion>,
-}
-
-impl SpectrogramSurface {
-    /// Drop everything that describes the CURRENT context's texture, so the
-    /// next draw uploads a fresh one.
-    ///
-    /// Three of the four go, and which three is the whole point of naming this:
-    /// the cache validates the released texture, and the ring records which
-    /// slabs its columns held — kept across a context change, the ring would
-    /// write one fresh column into a brand new texture and call the other
-    /// thousands valid, a heatmap of uninitialized memory. The aggregator is
-    /// derived from the STORE rather than from the texture, so it survives; it
-    /// is the one piece a new context does not invalidate.
-    pub(crate) fn release_texture(&mut self) {
-        self.tex = None;
-        self.cache = None;
-        self.ring = None;
-    }
+    /// What the GPU's copy of that grid holds, so a frame can send the slabs
+    /// that moved instead of the run. See
+    /// [`GpuGrid`](crate::spectrogram::GpuGrid).
+    pub(crate) gpu: crate::spectrogram::GpuGrid,
 }
 
 /// One column of the spectrogram, and the age-tiered store they live in — both
@@ -124,80 +79,6 @@ impl SpectrogramSurface {
 /// [`harmonigraph_core::spectrogram`] for why a column is bytes of dB rather than
 /// floats of power, and why old ones are merged.
 pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
-
-/// The inputs the built spectrogram image depends on. Equal keys mean the
-/// uploaded texture is still valid, so `draw_spectrogram` skips the rebuild
-/// (aggregate -> smooth -> color -> texture upload) and only redraws the quad,
-/// which scrolls with `now` every frame regardless. The FFT refreshes at
-/// ~20 Hz while the pane redraws at frame rate, so most frames hit.
-///
-/// Staleness-safe by construction — every way the image can change moves a
-/// field: a fresh column moves `newest_bits` (even in a saturated ring, where
-/// the count holds), the oldest column scrolling out of the window moves
-/// `first`, a resize/zoom moves the layout fields, and a palette or Level
-/// window change moves the colour fields. Floats compare by bit pattern so
-/// equality is exact and free of NaN quirks.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct SpectrogramKey {
-    /// Everything that decides a column's PIXELS, shared with the ring — which
-    /// asks the same question about the same columns, one scroll at a time. See
-    /// [`ColumnStyle`](crate::spectrogram::ColumnStyle).
-    pub(crate) style: crate::spectrogram::ColumnStyle,
-    /// ...and which columns are in the WINDOW, which is what a scroll changes
-    /// and the ring survives.
-    pub(crate) first: usize,
-    pub(crate) cols_len: usize,
-    pub(crate) newest_bits: u64,
-    pub(crate) whole: bool,
-}
-
-/// A validated spectrogram build: its [`SpectrogramKey`] plus the scalars the
-/// quad needs, so a cache hit can place the already-uploaded texture without
-/// re-running the pixel pipeline. The texture itself stays in
-/// [`SpectrogramSurface::tex`].
-pub(crate) struct SpectrogramCache {
-    pub(crate) key: SpectrogramKey,
-    /// Where the build put its slabs in the texture, kept exactly as it
-    /// computed them — a hit hands this straight back to the quad.
-    pub(crate) layout: crate::spectrogram::TexLayout,
-}
-
-impl SpectrogramKey {
-    /// Pack the image's inputs into a key: the style every column shares, plus
-    /// which columns this build drew. `newest` is stored as a bit pattern so
-    /// equality is exact.
-    pub(crate) fn new(
-        style: crate::spectrogram::ColumnStyle,
-        first: usize,
-        cols_len: usize,
-        newest: f64,
-        whole: bool,
-    ) -> Self {
-        SpectrogramKey { style, first, cols_len, newest_bits: newest.to_bits(), whole }
-    }
-
-    /// What the ring compares — the part of this key a scroll leaves alone.
-    pub(crate) fn style(&self) -> &crate::spectrogram::ColumnStyle {
-        &self.style
-    }
-}
-
-impl SpectrogramCache {
-    pub(crate) fn new(key: SpectrogramKey, layout: crate::spectrogram::TexLayout) -> Self {
-        SpectrogramCache { key, layout }
-    }
-
-    /// Whether a freshly computed key matches this cached build's — i.e. the
-    /// uploaded texture is still the right one to draw.
-    pub(crate) fn matches(&self, key: &SpectrogramKey) -> bool {
-        &self.key == key
-    }
-
-    /// The scalars the scrolling quad needs.
-    pub(crate) fn geometry(&self) -> crate::spectrogram::TexLayout {
-        self.layout
-    }
-}
 
 /// The whole take's spectrogram, precomputed for the offline renderer's
 /// playhead mode: every column of the full audio, laid out statically along
@@ -343,13 +224,12 @@ impl WholeSong {
     /// trim and the slab cannot drift; two expressions of one window is what
     /// this takes an argument to avoid.
     ///
-    /// Trimmed to that window EXACTLY, with no margin either side, and the
-    /// tightness is what `spectrogram::slab_ceiling`'s slabs in hand are
-    /// counted against. Nothing drawn is lost by it: the pane maps take time to
-    /// depth through `TimeAxis::frac`, so a column outside
-    /// `[start, start + window]` has no depth on screen, and the quad samples
-    /// the texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
-    /// dropping texels off the ends moves none of the ones that remain.
+    /// Trimmed to that window EXACTLY, with no margin either side, so the fold
+    /// spends slabs only on time a pixel shows. Nothing drawn is lost by it: the
+    /// pane maps take time to depth through `TimeAxis::frac`, so a column
+    /// outside `[start, start + window]` has no depth on screen, and the mesh
+    /// places a slab by ABSOLUTE time (`slab_drawn` over `t_origin`/`tex_span`),
+    /// so dropping slabs off the ends moves none of the ones that remain.
     pub fn drawn_columns(&self, window: f64) -> impl Iterator<Item = &SpectrogramColumn> {
         let (from, to) = (self.start, self.start + window);
         self.columns.iter().filter(move |c| c.time >= from && c.time <= to)
@@ -409,12 +289,16 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
 }
 
 impl AudioSpectrum {
-    /// Forget the spectrogram textures, so the next draw uploads fresh ones
-    /// into whatever context is current. See
+    /// Forget what the GPU holds of the spectrogram grids, so the next draw
+    /// uploads them whole into whatever context is current. See
     /// [`SharedState::release_context_resources`](crate::SharedState::release_context_resources).
-    pub(crate) fn release_textures(&mut self) {
+    ///
+    /// The aggregators survive: they are derived from the STORE rather than
+    /// from anything the GPU allocated, and are the one piece a new context does
+    /// not invalidate.
+    pub(crate) fn release_gpu_grids(&mut self) {
         for surface in &mut self.spectrogram {
-            surface.release_texture();
+            surface.gpu.release();
         }
     }
 
@@ -422,10 +306,9 @@ impl AudioSpectrum {
     /// samples rather than on the shell clock — see
     /// [`push_samples`](Self::push_samples).
     ///
-    /// The heatmap does not repaint itself for every column (see
-    /// `write_ring`), so the cost of a column is O(pitch pixels) rather than
-    /// O(pitch pixels x slabs) and the rate buys smoothness at the newest
-    /// edge almost for free. It costs no REACH either: the store coarsens
+    /// A column costs the slab it lands in and nothing else (see
+    /// `spectrogram::GpuGrid`), so the rate buys smoothness at the newest edge
+    /// almost for free. It costs no REACH either: the store coarsens
     /// with age (see [`SpectrumHistory`]), so the rate sets the resolution of
     /// the recent stretch and barely touches how far back the heatmap goes.
     ///
@@ -621,22 +504,16 @@ impl AudioSpectrum {
     }
 
     /// Fallbacks taken across both surfaces since the plugin was opened: full
-    /// re-aggregations of the window, and ring restarts.
+    /// re-aggregations of the window, and full uploads of the grid.
     ///
     /// Both are CORRECT and both are expensive, which is the whole problem —
     /// they draw the right picture at many times the cost, so nothing on screen
     /// distinguishes a working cache from one that has quietly stopped. The
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
-    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, [u32; crate::spectrogram::Restart::COUNT]) {
-        self.spectrogram.iter().fold(
-            (0, [0; crate::spectrogram::Restart::COUNT]),
-            |(rebuilds, mut restarts), s| {
-                for (total, surface) in restarts.iter_mut().zip(s.restarts) {
-                    *total += surface;
-                }
-                (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), restarts)
-            },
-        )
+    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
+        self.spectrogram.iter().fold((0, 0), |(rebuilds, uploads), s| {
+            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), uploads + s.gpu.full_uploads())
+        })
     }
 
     /// Forget the spectrogram history (paired with clearing the roll).

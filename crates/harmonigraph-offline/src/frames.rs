@@ -90,21 +90,15 @@ impl Renderer {
     /// The widest texture this device will take, on either side.
     ///
     /// The context has to be TOLD this — `RawInput::max_texture_side` left
-    /// `None` makes egui report its own 2048 default, and the spectrogram
-    /// reads that limit for both axes of the heatmap
-    /// (`harmonigraph_ui::spectrogram::Plan`): rows are clamped to it directly
-    /// and slabs through `slab_ceiling`. Left unfilled, a 4K export plans
-    /// against a quarter of the area this device takes, and nothing on screen
-    /// or in stderr says so — issue #368. The editor has no such gap: the
-    /// vendored egui-baseview passes its renderer's limit in, off this same
-    /// wgpu call.
+    /// `None` makes egui report its own 2048 default, and egui grows its font
+    /// atlas only up to whatever it is told: a render whose labels need more
+    /// glyph area than that simply loses them, with nothing on screen or in
+    /// stderr saying so (issue #368). The editor has no such gap: the vendored
+    /// egui-baseview passes its renderer's limit in, off this same wgpu call.
     ///
-    /// The DEVICE's number rather than a lower one chosen here, because the
-    /// caps that decide what a spectrogram should spend already exist a layer
-    /// up (`LIVE_SLAB_CAP`, `WHOLE_SONG_SLAB_CAP`, and the pane's own pixel
-    /// count) and are the ones meant to bind. A second, quieter cap in this
-    /// crate would make an offline frame differ from the editor's for a reason
-    /// no pane could report.
+    /// The DEVICE's number rather than a lower one chosen here. A second,
+    /// quieter cap in this crate would make an offline frame differ from the
+    /// editor's for a reason no pane could report.
     pub fn max_texture_side(&self) -> usize {
         self.device.limits().max_texture_dimension_2d as usize
     }

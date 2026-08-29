@@ -4,6 +4,11 @@
 //! `roll`, `text`, and the lattice suite — duplicating this per suite is
 //! how the sequence quietly drifts right in one of them and wrong in
 //! another, rather than being one thing to get right.
+//!
+//! Compiled into the library rather than the test build, because
+//! [`crate::SpectrogramHeadless`] hands the same round trip to a dependent
+//! crate: a parity test in `harmonigraph-ui` measures the shipping draw path
+//! only if it goes through this one.
 
 use crate::wgpu;
 

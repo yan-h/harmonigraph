@@ -18,12 +18,13 @@ egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 naga = { workspace = true, optional = true }
+# Blocks on wgpu's async adapter/device setup in `SpectrogramHeadless`,
+# which is a library entry point rather than a test helper.
+pollster = "0.4"
 
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
 naga = { workspace = true }
-# Blocks on wgpu's async adapter/device setup in the pipeline-build test.
-pollster = "0.4"
 # The offscreen-vs-direct parity test builds a Scene literal, whose
 # NodeInstance carries a LatticePos.
 harmonigraph-core = { path = "../harmonigraph-core" }

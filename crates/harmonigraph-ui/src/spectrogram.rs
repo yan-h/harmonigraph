@@ -1,19 +1,26 @@
-//! The spectrogram heatmap's texture-ring/cache machinery: the slab grid an
-//! incoming column folds into, the ring that tracks which slabs an uploaded
-//! texture's columns hold, and the colour pipeline that turns a slab of
-//! stored dB bytes into pixels.
-//! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram) is
-//! the pane above it: the mesh built over this module's texture, the draw
-//! call, and the cell colour the spectrum curve shares with it.
+//! The spectrogram heatmap's data path: the slab grid an incoming column folds
+//! into, and the GPU's copy of that grid the fragment shader reads.
 //!
-//! This is the drawing-vs-cache cut, not a time/pitch split — the pane side
-//! is geometry and a draw call regardless of how the image was built, and
-//! everything here is reachable with no `egui::Context` in sight (see the
-//! test module).
+//! The grid travels as DATA rather than as a picture — `capacity` slots of one
+//! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
+//! palette change moves uniforms and never comes here. What a frame owes the
+//! GPU is the run of slabs it draws and the few whose bytes have moved since
+//! the last one; the read that turns those bytes into pixels lives in
+//! [`harmonigraph_render`]'s shader.
+//! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram) is the
+//! pane above it: the geometry the run is drawn over, the draw call, and the
+//! cell colour the spectrum curve shares with it.
+//!
+//! This is the data-vs-drawing cut, not a time/pitch split — the pane side is
+//! geometry and a draw call regardless of how the grid was folded, and
+//! everything here is reachable with no `egui::Context` in sight (see the test
+//! module).
 
-use egui::Color32;
-use harmonigraph_core::spectrogram::{db_of, BucketDb};
+use std::sync::Arc;
+
+use harmonigraph_core::spectrogram::{db_of, BucketDb, DB_STEP};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
+use harmonigraph_render::{SpectrogramGrid, SpectrogramRead, SpectrogramShades};
 
 use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
 use crate::SpectrumConfig;
@@ -37,9 +44,7 @@ use harmonigraph_scene::Gradient;
 ///
 /// It is a CEILING on the count, not the count itself: [`live_slab`] picks the
 /// finest rung of its ladder that fits a window inside this many slabs, so the
-/// image holds between half of them and all of them. Nor is it the only
-/// ceiling — [`slab_ceiling`] cuts under it on a device whose textures are too
-/// small to hold this many slabs written twice.
+/// image holds between half of them and all of them.
 pub(crate) const LIVE_SLAB_CAP: f32 = 1024.0;
 /// The same for the offline whole-song build, which spans an entire take rather
 /// than a scrolling window and so wants more of them.
@@ -50,7 +55,7 @@ pub(crate) const WHOLE_SONG_SLAB_CAP: f32 = 4096.0;
 /// each other and leave slabs empty.
 pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// Never subdivide finer than the data arrives. A shorter bucket leaves empty
-/// buckets between columns, and the texture's linear time axis assumes
+/// buckets between columns, and the grid's linear time axis assumes
 /// evenly-spaced slabs — gaps there stretch the edge columns into flat streaks.
 /// Derived from the FFT rate rather than restated, because the two must move
 /// together and a stale copy of this number is exactly the bug that shows up as
@@ -61,373 +66,15 @@ pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// no longer floors it.
 pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
 
-/// Slabs a build can plan for before the image they go into passes `max_side`,
-/// the widest texture the GPU will take — the bound the rows get from
-/// [`PaneView::max_rows`], on the axis that reaches it FIRST.
-///
-/// It reaches it first because the two axes spend texels at different rates,
-/// and the LIVE path spends two: its ring writes every slab twice so that any
-/// run is contiguous whatever the scroll (see [`SpectrogramRing`]), and carries
-/// [`RING_HEADROOM`] slabs past the pane's own count, so its texture is
-/// `2 * (slabs + RING_HEADROOM)` across — over the limit at half the pane
-/// width a row count needs to reach it. The whole-song build owns its texture
-/// outright and spends one texel a slab, plus two slabs in hand: the fold keys
-/// columns by absolute `floor(t / bucket)`, so a stretch of time worth `n`
-/// slabs touches `n + 1` of them whenever the boundaries fall mid-slab, and the
-/// second covers the rounding in `bucket` itself (see the arm below).
-///
-/// It bounds the IMAGE on both paths, which is only true while the whole-song
-/// fold is trimmed to the window it was sized for —
-/// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) is what keeps
-/// the count taken from `window` and the count the fold emits the same number.
-///
-/// It is the DEVICE's limit that binds here, never the pane's, and which
-/// devices it fires on is the whole of what it costs. At the 8192 wgpu's own
-/// default limit gives — what an editor reports, egui-baseview passing it
-/// through, and what the offline renderer reports off its own device — it sits
-/// far above both [slab](LIVE_SLAB_CAP) [caps](WHOLE_SONG_SLAB_CAP) and can
-/// never bite. At the 2048 an egui context defaults to when nothing tells it
-/// otherwise — a fixture that builds a bare one, which is most of them —
-/// [`LIVE_SLAB_CAP`] alone puts the texture at `2 * (1024 + 8)` = 2064 and the
-/// upload panics. So this trades
-/// time resolution for a texture that fits, on exactly the builds whose
-/// alternative is the crash.
-fn slab_ceiling(max_side: usize, whole: bool) -> usize {
-    let ceiling = if whole {
-        // TWO slabs in hand rather than the one the boundary costs. The fold
-        // walks [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns),
-        // which spans at most `window`, so its keys cover
-        // `floor(window / bucket) + 1` of them at worst — and that quotient is
-        // `target_cols` only up to the rounding of `bucket = window /
-        // target_cols`, which can leave it a hair above the count and cost one
-        // more key. A slab is the cheapest thing here to spend on making the
-        // bound provable instead of exact-arithmetic-dependent.
-        max_side.saturating_sub(2)
-    } else {
-        // [`RING_HEADROOM`] for the ring's own slabs, and two more for
-        // [`ring_capacity`]'s floor — it takes `visible + 2` when the run
-        // reaches the capacity, so a ceiling that spends the whole limit here
-        // hands the GPU four texels more than it will take. Cheaper to leave
-        // the two unspent than to rest the bound on the run never getting
-        // there.
-        (max_side / 2).saturating_sub(RING_HEADROOM + 2)
-    };
-    // Two, which is [`Plan::new`]'s own floor and the width [`build`] refuses
-    // under — a limit small enough to reach it leaves no picture either way.
-    ceiling.max(2)
-}
-
-/// Device pixels the pane's size is rounded UP to before anything is derived
-/// from it.
-///
-/// The same argument as [`live_slab`]'s ladder, for the other axis. A pane's
-/// height decides how many rows the image has, and its width decides how many
-/// slabs and how wide the ring is — so taken to the pixel, every pixel of a
-/// resize drag is a different image AND a different texture, and the drag pays
-/// a full re-fold and a full repaint on every frame of itself. Measured on the
-/// overlay's fallback row, a resize sat at the frame rate: one of each, per
-/// frame, for as long as the drag lasted.
-///
-/// Rounded UP, so the image is never coarser than the pane it is stretched
-/// over — the quantum costs a little oversampling and no detail, which is the
-/// same trade [`PaneView`] makes by sizing in pixels rather than points. Sixty
-/// four turns a 600-pixel drag into ten re-layouts instead of six hundred, and
-/// leaves the image at most 9% taller than a 700-pixel pane needs.
-pub(crate) const PANE_QUANTUM: f32 = 64.0;
-
-/// A pane measurement in device pixels, rounded up to [`PANE_QUANTUM`].
-fn quantized(pixels: f32) -> f32 {
-    (pixels / PANE_QUANTUM).ceil() * PANE_QUANTUM
-}
-
-/// Rows the live image FLOORS at while its style is moving — a wheel or drag
-/// rewriting the pitch range, or the Level window on every frame of itself.
-/// Each of those frames restarts the ring, and a restart's compose is
-/// rows x slabs, so the rows are the SMALLER of the two things a gesture
-/// trades away; the larger is the wide rows' read, which goes from the power
-/// mean to a plain max ([`RowRead::Max`]). See [`GESTURE_MAGNIFY`] for what
-/// each is worth.
-///
-/// Four quanta of [`PANE_QUANTUM`], so a pane short enough to build this many
-/// rows anyway loses no height at all — it still takes the coarse READ, which
-/// is the part of the trade its zoomed-out frames need.
-pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
-
-/// Most a gesture image is MAGNIFIED over the pane it is stretched across:
-/// the short image is sampled up to the pane's own height, so this is how far
-/// the picture is allowed to soften while a gesture runs.
-///
-/// A bound on the magnification rather than a row count, because the
-/// magnification is what a reader sees. A flat [`GESTURE_ROWS`] cap is a 5.5x
-/// stretch on the full-height 2x pane it was measured against and none at all
-/// on a short one, so the same constant means a different picture per pane —
-/// and at 5.5x a partial reads as a band several pixels deep rather than a
-/// line, which is a picture the pitch axis cannot be judged from during the
-/// very gesture that is judging it.
-///
-/// Two costs little ZOOMED OUT, where the rows are the cheap half of the
-/// trade: measured over a 1024-slab window on a 1408-row pane, a restart
-/// zoomed out COMPOSES in 16.0 ms at full rows and the settled read, 6.9 ms
-/// once the read alone goes coarse, 3.8 ms at half rows with it, and 1.7 ms
-/// at [`GESTURE_ROWS`]. The read swap is the 2.3x there, and the row cap past
-/// half buys the last 2 ms. `timing_parts` is that table.
-///
-/// Zoomed IN the split reverses, and that is the half this constant is set
-/// on. Each row is narrower than a bucket there, so the read is a
-/// [`RowRead::Lerp`] whichever way the flag reads and the compose is rows x
-/// slabs: on the same pane at a twelve-semitone zoom the read swap buys 1.09x
-/// (11.77 -> 10.83 ms) while the row cap buys 2.3x (10.83 -> 4.63 ms). A
-/// pitch zoom ENDS zoomed in, so the rows are what holds a drag's later
-/// frames inside a frame.
-///
-/// HISTORICAL NOTE: this was set to 1 — full rows, the read as the whole
-/// trade — and reverted, on the one measurement here that came off a real
-/// surface rather than the harness. At 1 a pitch drag on a full-height pane
-/// ran the UI frame at 5-10 ms, which matches the zoomed-in compose figures
-/// above and so also answers what the upload below is worth: the rows
-/// dominate it, not the megabytes. Do not raise this on the zoomed-out table
-/// alone; that is the reasoning the revert came out of.
-///
-/// It is a table of COMPOSE, and the upload is the term it does not carry:
-/// `timing_parts` ends at [`restart_pixels`], which returns the pixels rather
-/// than uploading them, so the figures above stop where the GPU begins. The
-/// rows are on that side too — a full-width gesture frame's image goes from
-/// 2.1 MB at [`GESTURE_ROWS`] to 5.8 MB here, re-uploaded on every frame of a
-/// drag — and no harness in the tree can time it, since it takes a real
-/// surface.
-const GESTURE_MAGNIFY: usize = 2;
-
-/// The rows a gesture frame builds for a pane that would settle at `rows`.
-pub(crate) fn gesture_rows(rows: usize) -> usize {
-    // Never MORE than the pane asked for: the floor is a floor for a tall
-    // pane, not a promise to oversample a short one.
-    (rows / GESTURE_MAGNIFY).max(GESTURE_ROWS).min(rows)
-}
-
-/// How far a gesture divides the SLABS when the pitch axis is the one moving —
-/// the time axis standing in for the row cut, so the pitch read stays exactly
-/// what it settles to.
-///
-/// Four because that is where the two costs meet. Measured over a 1024-slab
-/// window on a 1408-row pane, zoomed out (`timing_slabs`), a restart at full
-/// rows and the settled mean costs 16.84 ms at the full slab count, 8.61 ms at
-/// half and **4.18 ms at a quarter** — against the 4.25 ms the row cut pays for
-/// the same frame. So a quarter buys the pitch axis back for nothing, and a
-/// half would cost twice a frame's share. It also halves the UPLOAD, 3.0 MB
-/// against 5.8, on the term [`GESTURE_MAGNIFY`] can only reason about.
-///
-/// What it costs is the time axis: four times fewer slabs stretched over the
-/// same depth, so the picture goes blocky along time for as long as the gesture
-/// runs. That is the axis a pitch gesture is holding still, which is the whole
-/// argument for spending it.
-///
-/// It also costs two aggregator refolds per gesture, one at each end, because
-/// [`SpectrogramAgg`] keys its grid on the slab width and a changed width
-/// cannot carry forward. Bounded and small — 2.5 ms at a 120 s window, 1.0 ms
-/// at 12 s (`timing_refold`) — and paid at the boundaries rather than per
-/// frame, since the width holds still for the length of the gesture.
-const GESTURE_SLAB_CUT: usize = 4;
-
-/// Slabs a gesture frame floors at, one [`PANE_QUANTUM`]: below a quantum the
-/// time axis stops being a picture, and a pane this shallow composes cheaply at
-/// its own width anyway.
-const GESTURE_SLABS: usize = PANE_QUANTUM as usize;
-
-/// The slabs a gesture frame builds for a pane that would settle at `slabs`.
-pub(crate) fn gesture_slabs(slabs: usize) -> usize {
-    // Never MORE than the pane asked for, exactly as [`gesture_rows`].
-    (slabs / GESTURE_SLAB_CUT).max(GESTURE_SLABS).min(slabs)
-}
-
-/// Which axis a gesture spends, chosen by the axis it is MOVING.
-///
-/// A gesture frame has to give something up, and the only reading that costs
-/// nothing is the one on the axis nobody is looking at. Both arms come out
-/// within noise of each other on the compose (`timing_slabs`), so this is a
-/// choice about the picture rather than about the frame rate.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum GestureCut {
-    /// Rows down to [`gesture_rows`], wide rows reading [`RowRead::Max`]. The
-    /// time axis is untouched, which is what a Span drag needs.
-    Rows,
-    /// Slabs down to [`gesture_slabs`], the pitch axis left at the rows and the
-    /// read it settles to. What a pitch drag needs, and what keeps its frames
-    /// from sitting several dB over the picture they settle into.
-    Slabs,
-}
-
-impl GestureCut {
-    /// The cut for a gesture opened by a change to `driver`.
-    fn of(driver: Option<Restart>) -> GestureCut {
-        match driver {
-            // The pitch range moving IS the gesture, so the pitch axis is what
-            // a reader is judging while it runs.
-            Some(Restart::Pitch) => GestureCut::Slabs,
-            // A Level or palette drag moves neither axis, and it is a judgement
-            // about BRIGHTNESS — which the row cut moves by up to 3.3 dB of a
-            // 60 dB ramp zoomed out, on a picture being dialled by eye. The
-            // slab cut leaves that reading alone at the same cost.
-            Some(Restart::Colour) => GestureCut::Slabs,
-            // A Span drag moves the time axis; a resize moves the rows. Each
-            // spends the axis it is not moving, which for both is the pitch
-            // side — and there the row cut is also the cheaper arm.
-            _ => GestureCut::Rows,
-        }
-    }
-}
-
-/// Seconds the full-resolution style must hold still before the image is
-/// rebuilt at full height. Short enough that letting go of a zoom reads as
-/// the picture snapping into focus; long enough that a wheel's notches, which
-/// arrive as separate frames tens of milliseconds apart, stay inside one
-/// gesture instead of paying a full-height rebuild between every pair.
-pub(crate) const STYLE_SETTLE: f64 = 0.2;
-
-/// The full-resolution [`ColumnStyle`] a surface last built toward, when it
-/// last CHANGED, and whether a gesture is open — what decides whether a frame
-/// sits inside a style gesture and should build coarse.
-///
-/// Fed the style of the FULL plan, never the degraded one: the degraded
-/// plan's rows differ from the full plan's by construction, so watching what
-/// was built would read as a style that never stops moving.
-pub(crate) struct StyleMotion {
-    style: ColumnStyle,
-    changed_at: f64,
-    /// Whether a gesture is OPEN — see [`observe`]. Only a style CHANGE ever
-    /// sets it, so no pointer-down alone can degrade the picture.
-    ///
-    /// [`observe`]: StyleMotion::observe
-    moving: bool,
-    /// Whether the press that is down now is the one that was down at the last
-    /// style CHANGE — the press DRIVING the gesture, as against any other
-    /// button held somewhere in the editor.
-    ///
-    /// Set from the pointer at each change and cleared the moment the pointer
-    /// comes up, so it can only stay true across a continuous hold that was
-    /// already down when the style last moved. `any_down` cannot tell the two
-    /// apart on its own, and the difference is the whole reason a Span drag
-    /// may carry a gesture across a ladder rung while a grab on the
-    /// performance overlay may not.
-    held: bool,
-    /// Which axis the OPEN gesture spends, from the change that last moved the
-    /// style. Held across the frames that change nothing so the cut — and with
-    /// it the ring's width — stays put for the length of a gesture: a cut
-    /// re-decided per frame would resize the ring per frame, which is the cost
-    /// the gesture path exists to avoid.
-    cut: GestureCut,
-}
-
-impl StyleMotion {
-    /// Observe this frame's full-resolution style at time `t` (egui's input
-    /// clock), with `pointer_down` saying whether any pointer button is held:
-    /// `None` if the frame is settled, or which axis it should spend
-    /// ([`GestureCut`]) if it sits inside a gesture.
-    ///
-    /// A gesture opens on a style CHANGE — never on the pointer alone — and
-    /// it opens on the first change the pointer is holding: a drag's first
-    /// frame is already mid-gesture, so it builds coarse rather than paying a
-    /// full-height restart it is about to throw away. A change with the
-    /// pointer UP is a wheel notch or a click, and there the only evidence
-    /// the next frame will change the style again is that the LAST one did —
-    /// so it opens a gesture only when it lands within [`STYLE_SETTLE`] of
-    /// the previous change, which keeps an isolated click sharp throughout
-    /// (degrading around a lone change saves nothing: the settled build it
-    /// would defer is the same build, still owed a settle later, with a
-    /// coarse restart now added in front of it).
-    ///
-    /// The gesture then stays open while the DRIVING press stays down, however
-    /// long the style holds still — not just for `STYLE_SETTLE` past the last
-    /// change. The Span drag is why: the slab ladder holds the width across a
-    /// rung, so a drag changes the style only at crossings a couple of tenths
-    /// of a second apart, and a settle window alone would close the gesture
-    /// and pay a full-quality build between every pair. Otherwise the settle
-    /// window is what closes it, so letting go reads as the picture snapping
-    /// into focus.
-    ///
-    /// The driving press is the one that was down at the last CHANGE and has
-    /// not come up since, not merely a button down somewhere. `pointer_down`
-    /// reports any button anywhere in the editor, and the editor is full of
-    /// long holds that move no style: the performance overlay's plate is an
-    /// `Area` over the whole rect, the Spiral pans, the dock has dividers, the
-    /// roll has notes to drag. Reading one of those as evidence the gesture is
-    /// still running holds the picture coarse for as long as a button happens
-    /// to be down, with no bound on it at all.
-    ///
-    /// First sight of a surface is a fresh pane, not a gesture, so it builds
-    /// at full height straight away — and a pointer already down over it
-    /// changes nothing until a change arrives.
-    pub(crate) fn observe(
-        slot: &mut Option<StyleMotion>,
-        style: &ColumnStyle,
-        t: f64,
-        pointer_down: bool,
-    ) -> Option<GestureCut> {
-        match slot {
-            // A clock reading EARLIER than the stamp is a new egui context —
-            // the editor window creates one per open and its input clock
-            // starts at zero, while this slot lives on `SharedState`, which
-            // does not. The stamp is from a clock that no longer exists, so
-            // answering from it would hold the settle window shut until the
-            // new clock catches the old reading: minutes of coarse picture
-            // for reopening the editor. Re-stamp as settled instead — a
-            // reopen is first sight on this clock, not a gesture.
-            Some(m) if t < m.changed_at => {
-                m.style = style.clone();
-                m.changed_at = t - STYLE_SETTLE;
-                m.moving = false;
-                m.held = false;
-                None
-            }
-            // Holding still: the gesture runs on while the pointer is down —
-            // a Span drag between rungs — or for the settle window past the
-            // last change, so a wheel's notches stay inside one. Written
-            // BACK, not just read: a gesture that has closed stays closed,
-            // so a later pointer-down that changes nothing — a divider, a
-            // note dragged in the roll — cannot reopen it off the stale
-            // flag. A style that was never moving stays sharp however
-            // recently it changed.
-            Some(m) if m.style == *style => {
-                // The hold has to be the SAME hold: cleared the moment the
-                // pointer comes up, so a press that begins after this frame
-                // reaches the arm with the latch already down and carries
-                // nothing.
-                m.held = m.held && pointer_down;
-                m.moving = m.moving && (m.held || t - m.changed_at < STYLE_SETTLE);
-                m.moving.then_some(m.cut)
-            }
-            Some(m) => {
-                // Read off the OLD style before it is overwritten: which field
-                // moved is the whole input to the choice.
-                m.cut = GestureCut::of(m.style.differs(style));
-                m.moving = pointer_down || t - m.changed_at < STYLE_SETTLE;
-                m.held = pointer_down;
-                m.style = style.clone();
-                m.changed_at = t;
-                m.moving.then_some(m.cut)
-            }
-            None => {
-                *slot = Some(StyleMotion {
-                    style: style.clone(),
-                    changed_at: t - STYLE_SETTLE,
-                    moving: false,
-                    held: false,
-                    cut: GestureCut::Rows,
-                });
-                None
-            }
-        }
-    }
-}
-
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
 /// but not a phase (columns land on a sample counter, slabs on absolute time),
 /// so at one column per slab a boundary falling mid-interval leaves some slabs
-/// empty, and the texture's uniform time axis then stretches the columns either
-/// side of an empty slab into a flat streak. At two, a phase offset costs a slab
-/// one of its columns and never both. It is [`COLUMNS_PER_SLAB`]'s job, done by
-/// the ladder instead of by a margin.
+/// empty, and the uniform time axis then stretches the columns either side of an
+/// empty slab into a flat streak. At two, a phase offset costs a slab one of its
+/// columns and never both. It is [`COLUMNS_PER_SLAB`]'s job, done by the ladder
+/// instead of by a margin.
 const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 
 /// The slab width a LIVE window is cut into: the analysis interval, doubled
@@ -439,9 +86,9 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 ///
 /// **The grid holds still.** A slab width taken straight from the window moves
 /// on every frame of a Span drag, and a moved slab width re-lays the
-/// aggregator's grid and re-blanks the ring's texture — the entire per-frame
-/// rebuild, for as long as the drag lasts. On the ladder it moves only when the
-/// Span crosses a doubling.
+/// aggregator's grid and re-uploads every slab — the entire per-frame rebuild,
+/// for as long as the drag lasts. On the ladder it moves only when the Span
+/// crosses a doubling.
 ///
 /// **The store is structurally fine enough to fill it.** A column of age `a`
 /// sits in a tier spaced at most `a / LIVE_SLAB_CAP`, and a window that reaches
@@ -452,7 +99,7 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// apart, kept true by a test. On one shared ladder they round to the same rung.
 ///
 /// The cost is resolution that steps rather than tracks: within a rung a wider
-/// pane buys nothing, so the image can hold half the slabs the depth axis has
+/// pane buys nothing, so the picture can hold half the slabs the depth axis has
 /// pixels. What that gives up depends on the Span, and the two ends differ in
 /// kind. At a close-up — a 12 s window cuts into 16 ms slabs — the slab is well
 /// under the 171 ms analysis window, so the stepping loses detail the FFT never
@@ -489,31 +136,18 @@ pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
 /// and genuinely was silence as far as the analyzer is concerned.
 const JITTER_SLABS: i64 = 1;
 
-/// One row of the heatmap image: how it reads the source buckets, its center
-/// MIDI pitch, and that pitch's fraction `t` up the pitch axis.
+/// Stored steps the power mean falls per halving of the summed weight — the
+/// byte-form of `(10 / ROW_MEAN_ORDER) * log10(..)`, with `log10` reached
+/// through `log2` and the dB then divided by the store's own step.
 ///
-/// A row is a PIXEL of the pitch axis, not a bucket. Zoomed out, a row reads the
-/// whole run of buckets that falls in it: the axis holds thousands of buckets and
-/// the pane a few hundred pixels, so one row per bucket would build an image far
-/// taller than the screen (and, at 32 buckets per semitone, taller than the GPU
-/// will allocate) only for the sampler to throw the detail away. Zoomed in,
-/// several rows share one bucket — that is the resolution the analyzer has — and
-/// they read it INTERPOLATED rather than repeated. See [`RowRead`].
-pub(crate) struct Bin {
-    read: RowRead,
-    midi: f32,
-    t: f32,
-}
-
-/// Stored steps the mean falls per halving of the summed weight — the byte-form
-/// of `(10 / ROW_MEAN_ORDER) * log10(..)`, with `log10` reached through `log2`
-/// and the dB then divided by the store's own step.
+/// Uploaded as [`SpectrogramRead::mean_steps`], which is the only thing that
+/// reads it: the mean itself is a fragment's work.
 const ROW_MEAN_STEPS: f32 = 10.0
     / (crate::panes::spectral::spectrogram::ROW_MEAN_ORDER as f32
         * harmonigraph_core::spectrogram::DB_STEP
         * std::f32::consts::LOG2_10);
 
-/// The weight a bucket carries in [`RowRead::Mean`], indexed by how many stored
+/// The weight a bucket carries in the power mean, indexed by how many stored
 /// steps BELOW the loudest bucket of its row it sits.
 ///
 /// Relative to the row's own loudest rather than absolute, which is what keeps
@@ -521,285 +155,31 @@ const ROW_MEAN_STEPS: f32 = 10.0
 /// the stored dB range and flushes to zero in an `f32`, where relative weights
 /// run from exactly 1 downward and their sum can never fall below 1.
 ///
-/// A `LazyLock` and not a plain `static` because `powf` is not const-evaluable,
-/// and that costs something the type does not advertise: indexing it carries an
-/// atomic load of the lock's state. So nothing indexes it by name inside a read
-/// — it is derefed ONCE per build, onto [`Shades::weight`], and handed to
-/// [`RowRead::of`] as a plain `&[f32; 256]`, which is worth 1.3-2.8 ms of a
-/// settled compose depending on the Span, on byte-identical pixels.
-static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
-    std::array::from_fn(|j| {
+/// Behind an `Arc` because it is a uniform now — every frame hands the same
+/// allocation to [`SpectrogramRead::weight`], so the table is built once for the
+/// process and a frame's share of it is a refcount.
+static ROW_WEIGHT: std::sync::LazyLock<Arc<[f32; 256]>> = std::sync::LazyLock::new(|| {
+    Arc::new(std::array::from_fn(|j| {
         let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
         10f32.powf(-0.1 * crate::panes::spectral::spectrogram::ROW_MEAN_ORDER as f32 * db)
-    })
+    }))
 });
 
-/// How one row reads the buckets under it.
+/// Where the visible slabs sit in absolute time — everything the mesh's slab
+/// coordinate needs.
 ///
-/// Two readings, chosen by which of the row and the bucket grid is finer: a
-/// power mean where the row is WIDER than what it reads (see
-/// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)),
-/// and a lerp where it is narrower — the grid is being
-/// asked for more than it holds, so read between its points instead of repeating
-/// them.
-///
-/// Interpolating and not REPEATING in the narrow case, which is the visible
-/// difference: at a three-semitone zoom a bucket is seven rows tall, and
-/// bilinear filtering cannot smooth a run of identical texels, so a repeated
-/// read draws the pitch axis as plateaus with a step between them rather than as
-/// a ridge.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum RowRead {
-    /// A power mean over `from..to` (always at least one bucket wide).
-    Mean { from: usize, to: usize },
-    /// A plain MAX over the same run — the read a COARSE image's wide rows
-    /// take (see [`bins_for`]). One branchless pass, against the mean's two
-    /// passes, weight table and logarithm; zoomed out the runs jointly cover
-    /// the whole spectrum whatever the row count, so this is what keeps a
-    /// gesture frame's compose flat in the buckets. What it costs is the
-    /// floor: a max of N draws sits above their typical value by an amount
-    /// that grows with N, which is exactly the zoom-dependence
-    /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
-    /// exists to remove — tolerable for the frames of a gesture, never in a
-    /// settled image.
-    Max { from: usize, to: usize },
-    /// Between `lo` and the bucket above it, `f` of the way up.
-    Lerp { lo: usize, f: f32 },
-}
-
-impl RowRead {
-    /// This row's value from one stored run of buckets — a raw column, or a
-    /// slab the grid has MAXed columns into — in the dB the buckets hold, which
-    /// is also the domain the ramp reads, so interpolating in it is
-    /// interpolating exactly what will be drawn. `db` is a whole spectrum,
-    /// [`SPECTRUM_BINS`] long.
-    ///
-    /// `weight` is [`ROW_WEIGHT`], taken as a parameter rather than reached by
-    /// name, and that is load-bearing: naming the `LazyLock` here puts an atomic
-    /// load of the lock's state inside the read, and the caller derefs it once
-    /// per BUILD instead, off [`Shades::weight`]. Measured on the compose, it is
-    /// worth 1.3-2.8 ms of a settled build across the Span range, on
-    /// byte-identical pixels (`timing_zoom_costs`, four runs each side).
-    ///
-    /// **What the saving is NOT is one atomic per read.** It barely scales with
-    /// how many rows index the table: zoomed IN, where 1022 of 1408 rows are
-    /// `Lerp` and provably never reach it, the compose drops 1.9 ms against the
-    /// 2.2 ms it drops zoomed out with every row a `Mean`. A `Lerp` executes no
-    /// check at all, so the gap cannot be the check running. What is left is an
-    /// effect on the compose loop as a whole rather than on the arm that reads
-    /// the table, and its exact shape is unpinned. `timing_mean_log`'s `global`
-    /// arm does put a number on the index in isolation, and it is deliberately
-    /// not quoted here: it is a copy-vs-copy ratio below the 1.25x that bench's
-    /// own doc calls code layout, so it cannot carry an argument the compose is
-    /// already making. Reason about this as "keep the global out of the loop",
-    /// never as a per-read cost you can count.
-    fn of(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
-        match self {
-            RowRead::Mean { from, to } => {
-                let run = &db[from..to];
-                let top = run.iter().copied().max().unwrap_or(0);
-                // One bucket IS its own mean. [`bins_for`] cannot produce a
-                // one-bucket run — a row narrower than a bucket is a
-                // [`RowRead::Lerp`] instead — so this is the degenerate case
-                // answered rather than a case the pane reaches, and it is here
-                // so that a hand-built read in a test means what it says.
-                if run.len() < 2 {
-                    return top;
-                }
-                // Denominated against `top` (hence the subtraction, never
-                // negative), so the sum runs from 1 up to the run's length and
-                // the answer can only come DOWN from the loudest bucket.
-                let sum: f32 = run.iter().map(|&v| weight[usize::from(top - v)]).sum();
-                let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
-                // A float cast saturates, so a run long enough to fall more than
-                // 255 steps lands on 0 rather than wrapping.
-                top.saturating_sub(steps.round() as u8)
-            }
-            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
-            RowRead::Lerp { lo, f } => {
-                let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
-                (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
-            }
-        }
-    }
-}
-
-/// Where the visible slabs sit in the uploaded texture, and what pitch range
-/// its rows cover — everything the quad's `u`/`v` need.
-///
-/// One shape for both builds. A full-width build parks the visible slabs at
-/// `x0 = 0` in a texture exactly `tex_w = w` wide, where the mapping collapses
-/// to the plain `(t - t_origin) / tex_span`; the ring parks them at a rotating
-/// offset inside a wider texture. Keeping one formula means the scrolling quad
-/// has no idea which built it.
-#[derive(Clone, Copy)]
+/// One shape for both builds: the live window's run and the whole-song fold's
+/// differ in how they were folded and in nothing the geometry can see.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TexLayout {
-    /// Seconds one slab spans — one texel of the time axis. Carried here
-    /// because every mapping below reads it alongside the rest: a texel's width
-    /// is part of describing where the slabs sit, not a separate fact about
-    /// them.
+    /// Seconds one slab spans. Carried here because every mapping below reads it
+    /// alongside the rest: a slab's width is part of describing where the slabs
+    /// sit, not a separate fact about them.
     pub(crate) bucket: f64,
     /// Absolute time at the left edge of the first visible slab.
     pub(crate) t_origin: f64,
     /// Seconds the visible slabs span.
     pub(crate) tex_span: f64,
-    /// Pitch-axis fraction of the first and last row.
-    pub(crate) t0: f32,
-    pub(crate) tn: f32,
-    /// Texel x of the first visible slab, and the texture's full width.
-    pub(crate) x0: f32,
-    pub(crate) tex_w: f32,
-}
-
-/// Why a ring could not be carried forward.
-///
-/// Worth telling apart, and reported separately by the performance overlay,
-/// because each says something different about what to go and look at: a style
-/// is the image changing, a capacity is the PANE changing, and a gap is the
-/// window having moved somewhere the texture cannot reach from. Twice now the
-/// question "which of these is it?" has been the whole diagnosis, answered by
-/// instrumenting rather than by reasoning about it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Restart {
-    /// The image's shape: its rows (the pane's pitch side), or the width of a
-    /// slab (its time side, through the Span).
-    Rows,
-    Slab,
-    /// The pitch range the rows read, or the dB window, tilt and ramp that
-    /// colour them.
-    Pitch,
-    Colour,
-    /// The ring's own size, which is the pane's time side.
-    Pane,
-    /// The run does not connect to what is painted — the window jumped, or
-    /// history was cleared.
-    Gap,
-}
-
-impl Restart {
-    /// Where each is counted, and what the overlay calls it. Named to the FIELD
-    /// rather than to the layer, because "the style changed" only narrows it to
-    /// six things and the whole value of the readout is not having to narrow it
-    /// by argument.
-    pub(crate) const LABELS: [&'static str; Self::COUNT] =
-        ["rows", "slab", "pitch", "colour", "pane", "gap"];
-    pub(crate) const COUNT: usize = 6;
-
-    fn slot(self) -> usize {
-        match self {
-            Restart::Rows => 0,
-            Restart::Slab => 1,
-            Restart::Pitch => 2,
-            Restart::Colour => 3,
-            Restart::Pane => 4,
-            Restart::Gap => 5,
-        }
-    }
-}
-
-/// Which slabs the uploaded texture's columns currently hold.
-///
-/// The heatmap's columns are indexed by SLAB KEY — `floor(time / bucket)`, a
-/// function of absolute time alone (see [`SlabGrid::fold`]) — so a column keeps
-/// its identity as the window scrolls past it. That is what lets a new column
-/// be written on its own: everything older is already correct where it sits,
-/// and only the newest slab (still accumulating its MAX) plus any slab that
-/// just appeared need repainting.
-///
-/// **Every column is written twice**, `capacity` texels apart in a texture
-/// `2 * capacity` wide. A ring read as a ring wraps, and a wrapped run needs
-/// two quads with a seam between them that bilinear filtering then blends
-/// across. Written twice, any run of at most `capacity` slabs is contiguous
-/// somewhere in the texture, so the existing single quad still works and the
-/// seam cannot be sampled. The cost is a second `set_partial` of one column —
-/// still O(rows), against O(rows × slabs) for the repaint it replaces.
-pub(crate) struct SpectrogramRing {
-    /// Slabs held; the texture is twice this wide.
-    capacity: usize,
-    /// Everything that decides a pixel's colour, or which buckets a row reads.
-    /// A change to any of it invalidates every column at once.
-    style: ColumnStyle,
-    /// Newest slab key written, and the oldest still valid.
-    written_through: i64,
-    oldest_valid: i64,
-}
-
-/// Everything that decides a column's pixels: how tall the image is, how wide a
-/// slab is, which buckets a row reads, and how a bucket is coloured. A change to
-/// any of it invalidates every column at once.
-///
-/// It is the part of [`crate::SpectrogramKey`] that outlives a SCROLL —
-/// the key is this plus which columns are in the window — and the ring compares
-/// exactly this to decide whether it can carry its texture forward. One
-/// definition for both, because they are one question asked at two
-/// granularities, and as two hand-kept lists in two files they were one list to
-/// forget: a pixel-affecting input added to the key alone leaves the ring
-/// carrying forward columns painted under the old setting, which is a WRONG
-/// picture rather than a slow one. `the_key_is_sensitive_to_every_input` covers
-/// both because there is only one to cover.
-///
-/// The converse costs frames rather than correctness, and so is the one that
-/// went unnoticed: an input that decides NOTHING about a column must stay out,
-/// or every change to it throws away a texture that was still good. See
-/// [`ColumnColor`] for what that cost looked like.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ColumnStyle {
-    rows: usize,
-    /// Whether the wide rows read [`RowRead::Max`] rather than the power mean
-    /// — a COARSE image, built mid-gesture. The two reads draw different
-    /// floors from the same buckets, so a coarse column carried into a
-    /// settled frame would leave texels sitting a few dB high; in the style,
-    /// the settle is a restart like any other.
-    coarse: bool,
-    bucket_bits: u64,
-    scale_min_bits: u32,
-    scale_span_bits: u32,
-    color: ColumnColor,
-}
-
-/// How a bucket becomes a colour: the dB window it is read against and the ramp
-/// the result lands on. Exactly the fields [`fill_column_into`] reaches —
-/// `cell_color`'s ramp, and the volume-color dB window and tilt it reads — and
-/// nothing else.
-///
-/// It is spelled out field by field rather than holding a whole
-/// [`SpectrumConfig`] because the config is also where the pane keeps what it
-/// is LOOKING at, and that moves continuously: `roll_seconds` on every frame of
-/// a Span drag, `roll_fraction` on every frame of a divider drag — neither of
-/// which changes a texel. Keying the ring on the whole config made every one of
-/// those a full re-blank and repaint, which is precisely the per-frame rebuild
-/// [`live_slab`]'s ladder was built to end; the ladder held `bucket` still and
-/// the config moved anyway. `dragging_the_span_carries_the_ring_forward` is
-/// that drag.
-///
-/// The cost of listing fields is that a new colour input has to be added here
-/// too, and forgetting leaves a WRONG picture rather than a slow one — so
-/// `the_key_is_sensitive_to_every_input` walks every field in both directions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ColumnColor {
-    /// SANITIZED, which is what makes six floats safe to compare: `sanitized`
-    /// leaves every one of them finite, so no field is a NaN that would answer
-    /// "differs" against itself and restart the ring every frame — and two
-    /// gradients drawing one picture are one key, exactly as they are one entry
-    /// of the color table.
-    ramp: Gradient,
-    // Bit patterns, for the same exactness the outer struct's floats get: the
-    // dB window used by the volume-color ramp, and the tilt applied
-    // inside it.
-    floor_bits: u32,
-    ceiling_bits: u32,
-    tilt_bits: u32,
-}
-
-impl ColumnColor {
-    fn new(cfg: &SpectrumConfig) -> ColumnColor {
-        ColumnColor {
-            ramp: what_decides_a_texel(cfg.spectrogram_gradient.sanitized()),
-            floor_bits: cfg.volume_floor_db.to_bits(),
-            ceiling_bits: cfg.volume_ceiling_db.to_bits(),
-            tilt_bits: cfg.tilt.to_bits(),
-        }
-    }
 }
 
 /// A gradient reduced to the knobs that actually decide a texel — the cases
@@ -822,7 +202,8 @@ impl ColumnColor {
 /// bars that fix them. Every preset opens with silence at `L*` 0 and
 /// `Spread::snapped` rounds to whole units, so the second is landed on exactly
 /// and in one gesture rather than by luck.
-/// `the_key_is_sensitive_to_every_input` holds both directions of both.
+/// `the_lut_key_folds_two_gradients_that_draw_one_picture` holds both
+/// directions of both.
 ///
 /// **Here and not in [`Gradient::sanitized`]**, which is the tempting place and
 /// the wrong one. Sanitize's answer is what the BARS read back and write, so
@@ -846,128 +227,281 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
     }
 }
 
-impl ColumnStyle {
-    /// Which field of this differs from `other`, or `None` if none does — the
-    /// first found, since one is enough to say where to look.
-    fn differs(&self, other: &ColumnStyle) -> Option<Restart> {
-        if self.rows != other.rows || self.coarse != other.coarse {
-            Some(Restart::Rows)
-        } else if self.bucket_bits != other.bucket_bits {
-            Some(Restart::Slab)
-        } else if self.scale_min_bits != other.scale_min_bits
-            || self.scale_span_bits != other.scale_span_bits
-        {
-            Some(Restart::Pitch)
-        } else if self.color != other.color {
-            Some(Restart::Colour)
-        } else {
-            None
-        }
-    }
+/// Levels the ramp is sampled at, and so entries in the table the shader reads.
+///
+/// A table indexed by level cannot be exact for every row at once — a row's
+/// offset is continuous, so its levels fall between samples wherever they like,
+/// and no sample count stops one landing on the wrong side of a channel's
+/// rounding boundary. What a count buys is how FAR wrong: the ramp's segments
+/// span at most 255 levels of an 8-bit channel, so 1024 samples per segment put
+/// every texel within an eighth of a level of the mapping's own value, and the
+/// only texels that then differ are those whose true value sat within that
+/// eighth of a boundary. Swept across every ramp, dB window and tilt, that is
+/// 1.25% of texels differing, always by exactly one level of one channel.
+///
+/// That is the same order as the store's OWN quantization, which moves a colour
+/// by about a level at the default window (half a dB step of a 60 dB range,
+/// across a 255-level ramp) and was settled by eye against a sixteen-bit store
+/// — see `quantizing_a_bucket_does_not_move_its_colour`, which is the same
+/// judgement made one layer down. Exactness would need a table per ROW, which is
+/// several megabytes of texture per pane and slower than the read it serves.
+pub(crate) const SHADES: usize = 4096;
 
-    pub(crate) fn new(
-        rows: usize,
-        coarse: bool,
-        bucket: f64,
-        scale_min: f32,
-        scale_span: f32,
-        cfg: &SpectrumConfig,
-    ) -> ColumnStyle {
-        // Floats as bit patterns, so equality is exact and free of NaN quirks.
-        ColumnStyle {
-            rows,
-            coarse,
-            bucket_bits: bucket.to_bits(),
-            scale_min_bits: scale_min.to_bits(),
-            scale_span_bits: scale_span.to_bits(),
-            color: ColumnColor::new(cfg),
+/// The gradient's table as the shader reads it, and the gradient it stands for.
+struct ShadeLut {
+    /// The FOLDED gradient (see [`what_decides_a_texel`]) the entries were built
+    /// for. Two gradients that fold together draw one picture, so one table
+    /// serves both; the entries themselves come off the gradient as dialled.
+    gradient: Gradient,
+    /// Bumped on every rebuild, which is what the GPU copy is keyed on.
+    generation: u64,
+    lut: Arc<Vec<[u8; 4]>>,
+}
+
+/// The GPU's copy of the slab grid, as the CPU last described it, plus the
+/// gradient table beside it.
+///
+/// One per drawing surface. It holds no GPU object of its own — the buffers
+/// live in the render crate, keyed by pane — only the statement of what those
+/// buffers contain, which is what lets a frame send a delta instead of a grid.
+#[derive(Default)]
+pub(crate) struct GpuGrid {
+    /// A new value makes the next frame's copy a full upload of the whole run.
+    /// Bumped whenever nothing can be said about what the GPU holds: a first
+    /// frame, a fresh context ([`GpuGrid::release`]), a capacity change.
+    generation: u64,
+    /// Handovers made on this surface; the next [`accept`](Self::accept) takes
+    /// the one after. It names a RUN, where
+    /// [`generation`](Self::generation) names a buffer.
+    serial: u64,
+    /// The serial the render crate last finished a `prepare` for — the
+    /// acknowledgement that the run it names really is in the buffer.
+    ///
+    /// A callback is not certain to run: egui drops one whose clip rect is
+    /// empty. One dropped frame is covered by re-sending
+    /// [`SentRun::dirty`](SentRun::dirty), but a run that ADVANCES while
+    /// callbacks are being dropped is not — each frame's delta would be
+    /// computed against a run the GPU never received, and a slab that entered
+    /// the run during that stretch keeps `key - capacity` in its slot forever,
+    /// since the byte comparison sees it as already held. An unacknowledged
+    /// run is therefore treated as no run at all.
+    ///
+    /// egui's multi-pass layout is not that case and must not be read as one:
+    /// `request_discard` runs the UI twice and throws the first pass's shapes
+    /// away, but the second pass is a key HIT, so nothing is accepted between
+    /// them and this still names the run being drawn.
+    uploaded: Arc<std::sync::atomic::AtomicU64>,
+    /// The run last handed to a callback, and which of its keys the GPU is being
+    /// asked to write.
+    ///
+    /// The invariant the delta rests on: **every key in this run has its bytes
+    /// in its slot on the GPU.** A full upload establishes it — the render crate
+    /// writes every slab of the run whenever [`generation`](Self::generation)
+    /// moves — and the dirty writes maintain it, so a refold, a rung crossing, a
+    /// gap and a backward jump all fall out of the byte comparison in
+    /// [`SentRun::moved`] rather than each needing a reason of its own.
+    /// `the_gpu_grid_equals_a_full_upload_after_any_sequence` is what holds it.
+    sent: Option<SentRun>,
+    lut: Option<ShadeLut>,
+    /// Times this surface has handed the grid over to be rebuilt rather than
+    /// patched — a rate the performance overlay reads beside the aggregator's
+    /// refolds, for the reason the refolds are counted: a full upload is CORRECT
+    /// and costs megabytes, so a delta that has quietly stopped working draws
+    /// the right picture and says nothing.
+    full_uploads: u32,
+}
+
+/// One run of slabs as it was handed to the GPU.
+struct SentRun {
+    /// Which columns it was folded from — a match means this run is still the
+    /// picture, and nothing is folded at all.
+    key: RunKey,
+    /// This run's own handover number, which the GPU echoes back through
+    /// [`GpuGrid::uploaded`] once it has written it.
+    serial: u64,
+    /// The oldest visible slab's key; the run is contiguous from there.
+    first_key: i64,
+    /// Slots the GPU buffer holds. The run must fit inside it, so a key's slot
+    /// (`key mod capacity`) names one slab at a time.
+    capacity: usize,
+    /// Slab-major stored dB, [`SPECTRUM_BINS`] to a slab — the aggregator's own
+    /// bytes, shared with the callback rather than copied into it.
+    run: Arc<Vec<u8>>,
+    /// Keys whose slot the GPU is being asked to write while this run stands.
+    ///
+    /// Re-sent until [`GpuGrid::uploaded`] names this run, rather than cleared
+    /// the moment it is handed over, because a frame's callback is not certain
+    /// to run: egui drops a callback whose clip rect is empty, and a write
+    /// dropped with it would leave a slot holding a slab this run says it does
+    /// not. Writing the same bytes again costs a slab a frame; a slot that
+    /// silently disagrees with the run is a wrong column that no later frame
+    /// repairs.
+    ///
+    /// The acknowledgement is what ENDS the repeat, and something has to: a
+    /// run holds for as long as the columns it was folded from do, which for a
+    /// stopped transport is unbounded, and this list is handed to every frame
+    /// drawn under it. Re-sending on evidence rather than forever costs the
+    /// dropped frame one more send and a still picture nothing at all.
+    dirty: Vec<i64>,
+    /// Where these slabs sit in absolute time, so a frame that folds nothing
+    /// still knows where to draw them.
+    layout: TexLayout,
+}
+
+impl SentRun {
+    /// The keys of `run` whose bytes are not already in their slot: the ones
+    /// outside this run's key range, and the ones whose bytes have moved.
+    ///
+    /// A key ENTERING the run is outside the range and so named by construction
+    /// — its slot may still hold `key - capacity`, a whole lap back — which is
+    /// what makes a byte comparison a complete answer rather than a fast path
+    /// needing a list of exceptions beside it.
+    fn moved(&self, first_key: i64, run: &[u8]) -> Vec<i64> {
+        let held = self.run.len() / SPECTRUM_BINS;
+        fn slab(bytes: &[u8], j: usize) -> &[u8] {
+            &bytes[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
         }
+        (0..run.len() / SPECTRUM_BINS)
+            .filter(|&j| {
+                let at = first_key + j as i64 - self.first_key;
+                !(0..held as i64).contains(&at) || slab(&self.run, at as usize) != slab(run, j)
+            })
+            .map(|j| first_key + j as i64)
+            .collect()
     }
 }
 
-impl SpectrogramRing {
-    /// Texel x of a slab key. The `+ capacity` twin is written by the caller.
-    fn x_of(&self, key: i64) -> usize {
-        key.rem_euclid(self.capacity as i64) as usize
+impl GpuGrid {
+    /// The layout of the run already on the GPU, if it was folded from these
+    /// columns — the frame then draws it without touching the store.
+    fn hit(&self, key: &RunKey) -> Option<TexLayout> {
+        self.sent.as_ref().filter(|sent| sent.key == *key).map(|sent| sent.layout)
     }
 
-    /// Whether this ring can be carried forward for the run
-    /// `first_key..=last_key`: it has to describe THIS texture, in this style,
-    /// and the run has to connect to what is already painted.
-    ///
-    /// The window grows at the near end as columns arrive and at the FAR end
-    /// when the Span is zoomed out, and both are served by painting what is
-    /// missing rather than starting over — the slabs a widening window reveals
-    /// are in the view already, since the aggregator keeps what this ring can
-    /// hold. Without that, a restart resets the painted range to the window's
-    /// own, the next frame of the gesture reaches past it again, and the drag
-    /// restarts the texture on every frame of itself.
-    ///
-    /// Answering NO is always safe and never cheap — it re-blanks the texture
-    /// and repaints every column — so this is the predicate the ring's whole
-    /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
-    /// holds it to yes for every Span the pane offers.
-    fn carries(
-        &self,
-        capacity: usize,
-        style: &ColumnStyle,
+    /// Take a freshly folded run as the one to draw, working out what the GPU
+    /// has to be told about it.
+    fn accept(
+        &mut self,
+        key: RunKey,
         first_key: i64,
-        last_key: i64,
-    ) -> Option<Restart> {
-        if let Some(field) = self.style.differs(style) {
-            // The image itself changed, so every column is wrong at once.
-            return Some(field);
-        }
-        if self.capacity != capacity {
-            // A different capacity is a different texture: the slab a texel
-            // stands for is `key mod capacity`, so the whole mapping moves.
-            return Some(Restart::Pane);
-        }
-        // The run has to CONNECT to what is painted at both ends. A run starting
-        // past `written_through + 1`, or ending before `oldest_valid - 1`,
-        // leaves never-written texels inside itself, and painting at the edges
-        // cannot reach them. It also has to fit in a lap with its far guard, or
-        // painting the far end would overwrite the near one.
-        let connects = first_key <= self.written_through + 1
-            && last_key >= self.oldest_valid - 1
-            && last_key - first_key + 2 <= capacity as i64;
-        (!connects).then_some(Restart::Gap)
+        capacity: usize,
+        run: Vec<u8>,
+        layout: TexLayout,
+    ) {
+        debug_assert!(
+            run.len() / SPECTRUM_BINS <= capacity,
+            "a run of {} slabs puts two keys in one of {capacity} slots",
+            run.len() / SPECTRUM_BINS,
+        );
+        self.serial += 1;
+        let run_slabs = run.len() / SPECTRUM_BINS;
+        let patched = {
+            let acknowledged = |sent: &SentRun| {
+                self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial
+            };
+            self.sent
+                .as_ref()
+                // The buffer is the same one and the GPU has said so, so what
+                // it holds is known slab by slab and only the slabs that moved
+                // need writing. A different capacity is a different buffer —
+                // the slot a key lands in is `key mod capacity`, so the whole
+                // mapping moves — and a run the GPU never acknowledged is one
+                // nothing can be said about (see [`uploaded`](Self::uploaded)).
+                .filter(|sent| sent.capacity == capacity && acknowledged(sent))
+                .map(|sent| sent.moved(first_key, &run))
+                // Past half the run a delta is no longer the cheaper upload it
+                // exists to be: it writes what a rebuild writes, one scattered
+                // `write_buffer` per slab against the rebuild's single
+                // contiguous one, and it spends that as a PATCH — leaving the
+                // rebuild counter reading zero while a rebuild's traffic goes
+                // out. A refold that moves most of the run, which is a rung
+                // crossing under a Span drag or a backward transport jump,
+                // lands exactly here.
+                .filter(|moved| moved.len() * 2 <= run_slabs)
+        };
+        // No previous run at all is a context that has just been rebuilt; it
+        // and both filters above make the copy from the run rather than
+        // patching it.
+        let dirty = patched.unwrap_or_else(|| {
+            self.generation += 1;
+            self.full_uploads += 1;
+            Vec::new()
+        });
+        self.sent = Some(SentRun {
+            key,
+            serial: self.serial,
+            first_key,
+            capacity,
+            run: Arc::new(run),
+            dirty,
+            layout,
+        });
     }
 
-    /// A ring with nothing written yet, for a run starting at `first_key` — so
-    /// its caller paints every visible slab rather than trusting a column that
-    /// was never uploaded.
-    fn restarted(capacity: usize, style: ColumnStyle, first_key: i64) -> SpectrogramRing {
-        SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
+    /// The grid a frame hands to the callback, or `None` before anything has
+    /// been folded into it.
+    fn grid(&self) -> Option<SpectrogramGrid> {
+        let sent = self.sent.as_ref()?;
+        // Once the GPU has named this run, its dirty slabs are in their slots
+        // and the frames that go on drawing the same run owe it nothing — see
+        // [`SentRun::dirty`] for why the send repeats until then.
+        let written = self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial;
+        Some(SpectrogramGrid {
+            generation: self.generation,
+            serial: sent.serial,
+            uploaded: self.uploaded.clone(),
+            capacity: sent.capacity as u32,
+            bins: SPECTRUM_BINS as u32,
+            first_key: sent.first_key,
+            run: sent.run.clone(),
+            dirty: if written { Vec::new() } else { sent.dirty.clone() },
+        })
     }
 
-    /// Record the run `first_key..=last_key` as painted, widening what this ring
-    /// holds at whichever end it reached past.
+    /// The gradient table a frame hands to the callback, built here on the
+    /// first sight of a gradient that draws a different picture.
     ///
-    /// Anything older than a full lap has been overwritten by it; the far guard
-    /// sits one before the run, so it is the oldest texel in use.
+    /// Only the gradient decides an entry: the dB window and the tilt reach a
+    /// texel through the level it is looked up at, which is a uniform.
+    fn shades(&mut self, cfg: &SpectrumConfig) -> SpectrogramShades {
+        let gradient = what_decides_a_texel(cfg.spectrogram_gradient.sanitized());
+        if self.lut.as_ref().is_none_or(|held| held.gradient != gradient) {
+            let generation = self.lut.as_ref().map_or(0, |held| held.generation) + 1;
+            let lut = (0..SHADES)
+                .map(|i| {
+                    crate::panes::spectral::spectrogram::cell_color(
+                        cfg.spectrogram_gradient,
+                        (i as f32 + 0.5) / SHADES as f32,
+                    )
+                    .to_array()
+                })
+                .collect();
+            self.lut = Some(ShadeLut { gradient, generation, lut: Arc::new(lut) });
+        }
+        let held = self.lut.as_ref().expect("built above when the fold moved");
+        SpectrogramShades { generation: held.generation, lut: held.lut.clone() }
+    }
+
+    /// Full uploads taken since this surface was opened — see the field.
+    pub(crate) fn full_uploads(&self) -> u32 {
+        self.full_uploads
+    }
+
+    /// Slabs in the run the GPU holds, or 0 before anything has been folded.
+    #[cfg(test)]
+    pub(crate) fn run_slabs(&self) -> usize {
+        self.sent.as_ref().map_or(0, |sent| sent.run.len() / SPECTRUM_BINS)
+    }
+
+    /// Forget what the GPU holds, so the next frame uploads the whole run.
     ///
-    /// The floor is `first_key` and NOT the oldest run ever painted, because
-    /// the guard destroys exactly that slack. [`write_ring`] duplicates the
-    /// run's oldest column into the texel of `first_key - 1`, so that key stops
-    /// being its own, and a window that scrolls a slab at a time walks the
-    /// guard forward one key per frame — remembering a band below `first_key`
-    /// would be remembering the keys it has just walked over.
-    ///
-    /// A widen still costs only the slabs it reveals: `back` runs from the new
-    /// `first_key` up to this floor, one past the key the previous frame's
-    /// guard overwrote.
-    ///
-    /// It is a floor and not the exact truth. When `first_key` jumps several
-    /// keys at once — a dropped frame, a fast narrowing — only the last of
-    /// them was guarded, and the ones before it are forgotten though they were
-    /// still their own. That costs a repaint of a few columns and never a wrong
-    /// pixel, and two endpoints cannot say otherwise: one guard punches a hole
-    /// in the middle of the painted range, so the valid set stops being an
-    /// interval and this is the tightest interval inside it.
-    fn wrote(&mut self, first_key: i64, last_key: i64) {
-        self.written_through = self.written_through.max(last_key);
-        self.oldest_valid = first_key.max(last_key - self.capacity as i64 + 2);
+    /// The generation is what carries that to the callback: it keys the copy, so
+    /// a bump is the rebuild. The run goes with it because the delta is computed
+    /// against it, and a run kept across a context change would have the next
+    /// frame patch two slabs of a buffer that was never written.
+    pub(crate) fn release(&mut self) {
+        self.generation += 1;
+        self.sent = None;
     }
 }
 
@@ -975,40 +509,15 @@ impl SpectrogramRing {
 /// inputs, the half that has nothing to do with the store.
 ///
 /// Sized in PIXELS, not points:
-/// [`Axes`](crate::panes::spectral::axes::Axes) is laid out in egui points and this
-/// image is stretched over that rect by the GPU, so sizing it in points builds
-/// it at the display's density divided by the scale factor and then upsamples —
-/// half the resolution in each axis on a 2x screen, for a heatmap softer than
-/// the pane it sits in. The label glyphs oversample by the same factor for the
-/// same reason (see `text::draw_glyphs`).
+/// [`Axes`](crate::panes::spectral::axes::Axes) is laid out in egui points and the
+/// picture is stretched over that rect by the GPU, so sizing it in points reads
+/// it at the display's density divided by the scale factor — half the resolution
+/// in each axis on a 2x screen, for a heatmap softer than the pane it sits in.
+/// The label glyphs oversample by the same factor for the same reason (see
+/// `text::draw_glyphs`).
 pub(crate) struct PaneView {
     /// Physical pixels per egui point.
     pub(crate) ppp: f32,
-    /// The largest image the GPU will take, on EITHER side — what holds the
-    /// rows down directly and the slabs through [`slab_ceiling`].
-    ///
-    /// Read off the context rather than assumed, because not every context this
-    /// pane draws through carries the same answer: an editor and the offline
-    /// renderer each report their own device's limit (8192 on wgpu's default
-    /// limits), while a bare `egui::Context` — every test's — reports egui's
-    /// own 2048 default whatever its GPU could take.
-    pub(crate) max_side: usize,
-    /// The tallest image THIS build makes: [`max_side`](Self::max_side), or the
-    /// cut a gesture takes ([`gesture_rows`]).
-    ///
-    /// Separate from the device's limit because the gesture's cut is a bound on
-    /// the PICTURE and not on the hardware — folded into one field it would
-    /// shrink the slab count too, resizing the ring on every frame of a gesture,
-    /// which is the cost the gesture path exists to avoid.
-    pub(crate) max_rows: usize,
-    /// The widest image THIS build makes, in slabs: `usize::MAX` where nothing
-    /// binds, or the cut a gesture takes on the time axis
-    /// ([`gesture_slabs`]).
-    ///
-    /// The mirror of [`max_rows`](Self::max_rows) and separate for the same
-    /// reason — it bounds the PICTURE, not the device, whose own limit reaches
-    /// the slabs through [`slab_ceiling`].
-    pub(crate) max_cols: usize,
     /// Points across the pitch axis, and across the FAR region of the depth
     /// axis — which the heatmap does not own: the roll's ribbons draw over the
     /// same region on the same time axis, and it is the spectrum CURVE that has
@@ -1021,10 +530,6 @@ pub(crate) struct PaneView {
     pub(crate) cfg: SpectrumConfig,
     /// The whole-song (offline playhead) layout rather than the live window.
     pub(crate) whole: bool,
-    /// Build the COARSE image a moving style gets: wide rows read
-    /// [`RowRead::Max`], and the caller has already cut `max_rows` to
-    /// [`gesture_rows`]. See [`StyleMotion`].
-    pub(crate) coarse: bool,
 }
 
 /// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
@@ -1033,7 +538,7 @@ pub(crate) struct PaneView {
 /// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) — so `start`
 /// reaches the key through nothing at all, and `span` only through `bucket`,
 /// which is many-to-one wherever [`MIN_BUCKET`] binds. Two windows on one
-/// column set can therefore mint the same key for different images.
+/// column set can therefore mint the same key for different runs.
 ///
 /// What makes that safe rather than the stale-key bug it looks like is that a
 /// [`WholeSong`](crate::WholeSong) is built once per render, before the frame
@@ -1041,7 +546,7 @@ pub(crate) struct PaneView {
 /// constants for the life of every key minted from them. It is safe by that
 /// fact and not by the key, which is why the fact is written down: a
 /// `WholeSong` that changed window mid-render would draw the previous
-/// window's texture at the previous window's geometry, and no assertion here
+/// window's grid at the previous window's geometry, and no assertion here
 /// would see it.
 pub(crate) struct Columns {
     /// The oldest in-window column; it advances as the window scrolls one off
@@ -1053,64 +558,69 @@ pub(crate) struct Columns {
     pub(crate) newest: f64,
 }
 
-/// What this frame's heatmap needs built: the image's shape, and the key that
-/// says whether the uploaded one already IS it.
+/// Which columns a run was folded from, and how. Equal keys mean the run on the
+/// GPU is still the one to draw, so the frame folds nothing and re-sends what it
+/// holds.
+///
+/// Staleness-safe by construction — every way the RUN can change moves a field:
+/// a fresh column moves `newest_bits` (even in a saturated store, where the
+/// count holds), the oldest column scrolling out of the window moves `first`,
+/// and the Span crossing a ladder rung moves `bucket_bits`. Floats compare by
+/// bit pattern so equality is exact and free of NaN quirks.
+///
+/// What is deliberately NOT here is everything that decides how the run is READ
+/// — the rows, the pitch range, the dB window, the gradient. Those are uniforms
+/// now, so a zoom or a palette drag draws the same bytes a different way, and a
+/// key that watched them would re-fold the store on every frame of a gesture
+/// that cannot move a slab. The buffer's `capacity` is out for the same reason:
+/// it sizes the GPU's copy, not the fold, and a change to it is answered where
+/// the copy is made ([`GpuGrid::accept`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RunKey {
+    first: usize,
+    cols_len: usize,
+    newest_bits: u64,
+    bucket_bits: u64,
+    whole: bool,
+}
+
+/// What this frame's heatmap needs folded, and the key that says whether the
+/// grid on the GPU already IS it.
 ///
 /// Pure, and deliberately so. Every cliff this pipeline has fallen off has been
 /// in this arithmetic — a slab against the analyzer's lag, a window against the
-/// store's finest tier — and deciding it apart from the build means it can be
-/// checked without a GPU, a texture or a frame. See
+/// store's finest tier — and deciding it apart from the fold means it can be
+/// checked without a GPU, a store or a frame. See
 /// `no_cache_layer_falls_back_as_the_window_scrolls`.
 pub(crate) struct Plan {
-    /// One row per pixel of the pitch axis, never taller than the GPU takes.
+    /// The picture's pitch-axis resolution in device pixels, which is what the
+    /// shader reads its rows at. It bounds nothing on the GPU — the grid is
+    /// bucket-space data — so the pane's own pixels are the whole of it.
     pub(crate) rows: usize,
     /// A time slab's width, in seconds.
     bucket: f64,
-    /// Slabs the ring holds, and so the most the aggregator keeps folded.
+    /// Slabs the GPU's copy holds, and so the most the aggregator keeps folded.
     ///
     /// Sized off the PANE rather than off the window, which is what makes it
     /// hold still: the widest run a window can have at this slab width is
     /// `target_cols` of them, whatever the Span is doing inside that rung, so a
-    /// drag never resizes the texture. Unused by the whole-song build, which
-    /// owns its texture outright.
+    /// drag never resizes the buffer. Unused by the whole-song build, whose run
+    /// is its own capacity.
     capacity: usize,
     first: usize,
-    pub(crate) key: crate::SpectrogramKey,
+    pub(crate) key: RunKey,
 }
 
 impl Plan {
-    /// Slabs the pane asked for, before [`RING_HEADROOM`] — the time-axis twin
-    /// of [`rows`](Self::rows), and what [`gesture_slabs`] cuts.
-    pub(crate) fn slabs(&self) -> usize {
-        self.capacity - RING_HEADROOM
-    }
-
     pub(crate) fn new(view: &PaneView, columns: &Columns) -> Plan {
-        // The offline build's pane cannot resize mid-render, so it has nothing
-        // to hold still and takes its size to the pixel; the live one rounds up
-        // to a quantum so a resize drag re-lays the grid a handful of times
-        // instead of once a frame. See [`PANE_QUANTUM`].
-        let pitch_px = view.pitch_len * view.ppp;
-        let depth_px = view.depth_len * view.ppp;
-        let (pitch_px, depth_px) = if view.whole {
-            (pitch_px.round(), depth_px.round())
-        } else {
-            (quantized(pitch_px), quantized(depth_px))
-        };
-        let rows = (pitch_px as usize).clamp(2, view.max_rows);
-        // One image column per output depth pixel; whole-song spans an entire
-        // take, so it needs a higher cap than the live window. Under the
-        // DEVICE's ceiling either way — the only one of the two that can cost
-        // the picture anything a wider pane would have bought, and the only one
-        // whose absence is a panic rather than a soft slab (see
-        // [`slab_ceiling`]).
+        // One row per device pixel of the pitch axis, and one slab per pixel of
+        // the depth axis, under the cap the slab count takes.
+        let rows = ((view.pitch_len * view.ppp).round() as usize).max(2);
+        let depth_px = (view.depth_len * view.ppp).round();
+        // Whole-song spans an entire take, so it needs a higher cap than the
+        // live window.
         let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
-        let col_cap = col_cap.min(slab_ceiling(view.max_side, view.whole) as f32);
-        // The gesture's cut applies AFTER the device and pane caps, so it can
-        // only ever take slabs away — never hand back more than either allows.
-        // `min` then `max`, never `clamp`, which panics when a caller's cut
-        // lands under the floor.
-        let target_cols = (depth_px.clamp(2.0, col_cap) as usize).min(view.max_cols).max(2);
+        let target_cols = depth_px.clamp(2.0, col_cap) as usize;
         let bucket = if view.whole {
             // The offline build draws its own fixed column set rather than the
             // live store's, so it shares no ladder with it and has nothing to
@@ -1119,109 +629,88 @@ impl Plan {
         } else {
             live_slab(view.window, target_cols)
         };
-        // The heatmap's pixels are a pure function of these; if none has moved
-        // since the uploaded texture was built, building it again is dead work.
-        let style = ColumnStyle::new(
-            rows,
-            view.coarse,
-            bucket,
-            view.scale.min_midi,
-            view.scale.span,
-            &view.cfg,
-        );
-        let key = crate::SpectrogramKey::new(
-            style,
-            columns.first,
-            columns.len,
-            columns.newest,
-            view.whole,
-        );
+        let key = RunKey {
+            first: columns.first,
+            cols_len: columns.len,
+            newest_bits: columns.newest.to_bits(),
+            bucket_bits: bucket.to_bits(),
+            whole: view.whole,
+        };
         Plan { rows, bucket, capacity: target_cols + RING_HEADROOM, first: columns.first, key }
     }
 }
 
-/// The image's rows for a plan of `rows` over `scale`.
+/// How far past the visible range the edge rows reach, as a fraction of it: one
+/// bucket, so the filtering carries the range cleanly to the picture's own
+/// edges, and never more than half the range on top of it.
 ///
-/// A row's pitch span maps back to the source buckets under it, read by a power
-/// mean or by interpolation depending on which is finer — see [`RowRead`]. A
-/// bucket of slack on each side lets the filtering carry the visible range
-/// cleanly to its edges.
-///
-/// `coarse` swaps the wide rows' power mean for a plain [`RowRead::Max`] —
-/// the LARGER half of what a moving style trades away, beside the row cut
-/// ([`gesture_rows`]), and the half that matters zoomed out, where the mean's
-/// cost is in the buckets rather than the rows. It must match the
-/// [`Plan`] the image is built for: the two reads draw different pictures, so
-/// the flag lives in [`ColumnStyle`] and a coarse-painted column can never be
-/// carried into a settled frame.
-pub(crate) fn bins_for(rows: usize, scale: &PitchScale, coarse: bool) -> Vec<Bin> {
-    let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
-    let margin = (bin_semis / scale.span).min(0.5);
-    let bucket_of = |t: f32| {
-        let midi = scale.min_midi + t * scale.span;
-        (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
-            .clamp(0, SPECTRUM_BINS as isize - 1) as usize
-    };
-    (0..rows)
-        .map(|r| {
-            // The row's own slice of the visible pitch range, widened by the
-            // margin so the edge rows reach past the range like the buckets did.
-            let span = 1.0 + 2.0 * margin;
-            let t0 = -margin + span * r as f32 / rows as f32;
-            let t1 = -margin + span * (r + 1) as f32 / rows as f32;
-            let (idx, last) = (bucket_of(t0), bucket_of(t1));
-            let t = 0.5 * (t0 + t1);
-            let midi = scale.min_midi + t * scale.span;
-            let read = if last > idx {
-                let (from, to) = (idx, (last + 1).min(SPECTRUM_BINS));
-                if coarse {
-                    RowRead::Max { from, to }
-                } else {
-                    RowRead::Mean { from, to }
-                }
-            } else {
-                // Narrower than a bucket: read between the two whose centers
-                // straddle this row's center. A bucket's center sits half a
-                // bucket above where `bucket_of` divides them, which is the 0.5.
-                let x = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
-                let lo = (x.floor() as isize).clamp(0, SPECTRUM_BINS as isize - 2) as usize;
-                RowRead::Lerp { lo, f: (x - lo as f32).clamp(0.0, 1.0) }
-            };
-            Bin { read, midi, t }
-        })
-        .collect()
+/// The row geometry it belongs to is the shader's; this is the one term of it
+/// that needs the analyzer's constants and the pane's zoom in the same place.
+fn pitch_margin(span: f32) -> f32 {
+    (1.0 / BINS_PER_SEMITONE as f32 / span).min(0.5)
 }
 
-/// Build the image a [`Plan`] describes into the surface's texture, and record
-/// the build in its cache. Returns where the visible slabs sit in the texture,
-/// or `None` if the plan came out too small to draw.
+/// The level mapping in the form the shader carries it:
+/// `(level0, per stored step, per MIDI)`, before its 0..1 clamp.
 ///
-/// The only step here that touches the GPU — everything it needs decided was
-/// decided in [`Plan::new`].
+/// Read off [`spectrogram_level_raw`] at three points rather than written out
+/// again from its algebra — it is affine in the dB and in the pitch, so this is
+/// the mapping itself whatever it is written as, and the dB window, the tilt and
+/// their pivot stay the pane's business.
+fn level_affine(cfg: &SpectrumConfig) -> (f32, f32, f32) {
+    let db0 = db_of(0);
+    let level0 = spectrogram_level_raw(cfg, db0, 0.0);
+    (
+        level0,
+        spectrogram_level_raw(cfg, db0 + DB_STEP, 0.0) - level0,
+        spectrogram_level_raw(cfg, db0, 1.0) - level0,
+    )
+}
+
+/// The scalars a fragment reads the grid through — the row geometry, the level
+/// mapping and the mean's weights, for a picture `rows` pixels up the pitch
+/// axis.
+pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
+    let (level0, level_per_step, level_per_midi) = level_affine(&view.cfg);
+    SpectrogramRead {
+        min_midi: view.scale.min_midi,
+        span: view.scale.span,
+        margin: pitch_margin(view.scale.span),
+        rows: rows as u32,
+        spectrum_min_midi: SPECTRUM_MIN_MIDI,
+        bins_per_semitone: BINS_PER_SEMITONE as f32,
+        level0,
+        level_per_step,
+        level_per_midi,
+        mean_steps: ROW_MEAN_STEPS,
+        weight: ROW_WEIGHT.clone(),
+    }
+}
+
+/// Fold the run a [`Plan`] describes and hand it to the surface's GPU mirror.
+/// Returns where the visible slabs sit in time, or `None` if the fold came out
+/// too short to draw.
 pub(crate) fn build(
-    ctx: &egui::Context,
     spectrum: &mut crate::AudioSpectrum,
     whole: Option<&crate::WholeSong>,
     surface: usize,
     plan: &Plan,
     view: &PaneView,
-    bins: &[Bin],
 ) -> Option<TexLayout> {
-    let (bucket, cfg) = (plan.bucket, view.cfg);
+    let bucket = plan.bucket;
     // Aggregate the in-window columns into one slab per depth pixel by a FIXED
     // time grid, MAX within each slab (which keeps a short note's peak and pins
     // it against the scroll — see `aggregate_slabs`). Slabs stay in BUCKET
-    // space here: the rows read them below, at compose time, so the fold is
-    // blind to the pitch axis and a zoom or pan of it re-reads this grid
-    // instead of re-walking the store.
+    // space: the rows read them in the fragment shader, so the fold is blind to
+    // the pitch axis and a zoom or pan of it re-reads this grid instead of
+    // re-walking the store.
     let (centers, power) = match whole {
-        // Offline whole-song: a fixed column set, already cached after the first
-        // frame — a plain batch aggregate, over the columns the depth axis can
-        // draw rather than every column the take holds. That trim is what bounds
-        // the IMAGE (see [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)):
+        // Offline whole-song: a fixed column set, folded once per render — a
+        // plain batch aggregate, over the columns the depth axis can draw rather
+        // than every column the take holds. That trim is what bounds the RUN
+        // (see [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)):
         // `bucket` is cut for the window, so folding a longer take's whole
-        // column set would spend texels on time no pixel shows and hand the GPU
-        // an image several times over its limit.
+        // column set would spend slabs on time no pixel shows.
         Some(ws) => aggregate_slabs(ws.drawn_columns(view.window), bucket),
         // Live: fold only the new column(s) into the kept slab grid instead of
         // rescanning the whole window every rebuild. `history` and the
@@ -1232,51 +721,54 @@ pub(crate) fn build(
             agg.window(hist, plan.first, bucket, plan.capacity)
         }
     };
-    let (w, h) = (centers.len(), bins.len());
+    let w = centers.len();
     if w < 2 {
         return None;
     }
-    // The image covers absolute time `[t_origin, t_origin + w*bucket]` — the
-    // oldest slab's start to the newest slab's end. Its texel centers sit at the
-    // slab centers, so `u = (t - t_origin) / span` places time exactly.
+    // The run covers absolute time `[t_origin, t_origin + w*bucket]` — the
+    // oldest slab's start to the newest slab's end. Slab centres sit half a slab
+    // inside each, so a time places itself at `(t - t_origin) / bucket` slabs.
     let t_origin = centers[0] - 0.5 * bucket;
     let tex_span = w as f64 * bucket;
-    let (t0, tn) = (bins[0].t, bins[h - 1].t);
-    if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
+    if tex_span < 1e-9 {
         return None;
     }
     let first_key = (centers[0] / bucket).floor() as i64;
-
-    // The offline whole-song build keeps the full-width path: its column set is
-    // fixed and already cached after the first frame, so there is nothing for a
-    // ring to save.
-    let layout = if whole.is_none() {
-        // The key's own style, not a second copy of it: the ring is asking the
-        // same question about the same columns.
-        let style = plan.key.style().clone();
-        let capacity = ring_capacity(plan.capacity, w);
-        write_ring(ctx, spectrum, surface, style, capacity, &cfg, bins, &power, first_key, w);
-        let ring = spectrum.spectrogram[surface].ring.as_ref();
-        let x0 = ring.map_or(0.0, |r| r.x_of(first_key) as f32);
-        let tex_w = ring.map_or(w as f32, |r| (r.capacity * 2) as f32);
-        TexLayout { bucket, t_origin, tex_span, t0, tn, x0, tex_w }
-    } else {
-        // The full-width build owns the whole texture, so any ring bookkeeping
-        // describing it is now a lie about which slabs its columns hold.
-        spectrum.spectrogram[surface].ring = None;
-        // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
-        let pixels = fill_pixels(&cfg, w, bins, &power);
-        let image = egui::ColorImage::new([w, h], pixels);
-        let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-        match &mut spectrum.spectrogram[surface].tex {
-            Some(handle) => handle.set(image, opts),
-            slot => *slot = Some(ctx.load_texture("spectrogram", image, opts)),
-        }
-        TexLayout { bucket, t_origin, tex_span, t0, tn, x0: 0.0, tex_w: w as f32 }
-    };
-    spectrum.spectrogram[surface].cache =
-        Some(crate::SpectrogramCache::new(plan.key.clone(), layout));
+    // The whole-song run is its own capacity: it is folded once for the render
+    // and never scrolls, so there is no lap for a key to come round on.
+    let capacity = if view.whole { w } else { ring_capacity(plan.capacity, w) };
+    let layout = TexLayout { bucket, t_origin, tex_span };
+    spectrum.spectrogram[surface].gpu.accept(plan.key.clone(), first_key, capacity, power, layout);
     Some(layout)
+}
+
+/// The run this frame draws, and where it sits in time: the one already on the
+/// GPU when the plan's key still names it, and a fresh fold otherwise.
+pub(crate) fn run_for(
+    spectrum: &mut crate::AudioSpectrum,
+    whole: Option<&crate::WholeSong>,
+    surface: usize,
+    plan: &Plan,
+    view: &PaneView,
+) -> Option<TexLayout> {
+    match spectrum.spectrogram[surface].gpu.hit(&plan.key) {
+        Some(layout) => Some(layout),
+        None => build(spectrum, whole, surface, plan, view),
+    }
+}
+
+/// The grid and the gradient table this frame's callback carries.
+///
+/// `None` before anything has been folded into the surface, which is the same
+/// frame [`run_for`] answers `None` on.
+pub(crate) fn frame_data(
+    spectrum: &mut crate::AudioSpectrum,
+    surface: usize,
+    cfg: &SpectrumConfig,
+) -> Option<(SpectrogramGrid, SpectrogramShades)> {
+    let gpu = &mut spectrum.spectrogram[surface].gpu;
+    let grid = gpu.grid()?;
+    Some((grid, gpu.shades(cfg)))
 }
 
 /// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
@@ -1284,20 +776,20 @@ pub(crate) fn build(
 /// slab's center time and a flat slab-major grid of whole spectra
 /// (`slabs * SPECTRUM_BINS`).
 ///
-/// The slabs stay in BUCKET space — the display rows read them at compose time
-/// ([`fill_column_into`]), not here. That order is what makes the grid a thing
-/// worth keeping: it depends on nothing but the slab width, so the pitch axis
-/// can zoom, pan or change its row count and the fold is untouched. The two
-/// axes still aggregate DIFFERENTLY, and the asymmetry is still the point.
+/// The slabs stay in BUCKET space — the display rows read them in the fragment
+/// shader, not here. That order is what makes the grid a thing worth keeping: it
+/// depends on nothing but the slab width, so the pitch axis can zoom, pan or
+/// change its row count and the fold is untouched. The two axes still aggregate
+/// DIFFERENTLY, and the asymmetry is still the point.
 /// Time takes a plain max, because a spectrogram cell answers "was there
 /// anything here" and averaging a brief loud column with the silence either
 /// side answers "not much" — a slab spans a few columns of a heavily
 /// OVERLAPPED stream (95% at the live rate, and 84% even where
 /// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
 /// so the max is over near-copies of one measurement rather than over a
-/// distribution. Pitch takes a power mean instead ([`RowRead`]), because a row
-/// zoomed out spans a dozen INDEPENDENT buckets, and the max of a dozen samples
-/// of a noise floor is a function of how many were drawn.
+/// distribution. Pitch takes a power mean instead, because a row zoomed out
+/// spans a dozen INDEPENDENT buckets, and the max of a dozen samples of a noise
+/// floor is a function of how many were drawn.
 ///
 /// Maxing the buckets FIRST and reading the rows from the result is not the
 /// same picture as reading each column and maxing the answers — a mean over a
@@ -1310,7 +802,7 @@ pub(crate) fn build(
 ///
 /// The slab a column lands in is `floor(time / bucket)` — a function of
 /// absolute time alone, so it doesn't move as columns scroll off the far end
-/// of the ring. That, plus MAX (rather than dropping samples), is what stops a
+/// of the run. That, plus MAX (rather than dropping samples), is what stops a
 /// short, bright note from flickering: its peak is kept and stays in one
 /// slowly-scrolling slab instead of blinking in and out with the sampling.
 fn aggregate_slabs<'a>(
@@ -1324,7 +816,7 @@ fn aggregate_slabs<'a>(
     (grid.centers, grid.power)
 }
 
-/// The growing slab grid the spectrogram image is built from: `centers[i]` is
+/// The growing slab grid the spectrogram is read out of: `centers[i]` is
 /// slab `i`'s center time and `power` is the flat slab-major
 /// `[slab][source bucket]` MAX grid (`slab * SPECTRUM_BINS + bucket`).
 /// [`fold`](SlabGrid::fold) is the single per-column step both
@@ -1332,8 +824,8 @@ fn aggregate_slabs<'a>(
 /// (incremental, live) drive — so the two can never disagree.
 ///
 /// A slab is a whole SPECTRUM, not a column of display rows. The rows read the
-/// grid at compose time, so nothing here knows the pitch scale or the row
-/// count — which is what lets a pitch gesture re-read a grid that is already
+/// grid in the fragment shader, so nothing here knows the pitch scale or the
+/// row count — which is what lets a pitch drag re-read a grid that is already
 /// folded instead of re-walking the store on every frame of itself.
 ///
 /// Held in the same dB bytes the columns are stored in: MAX is order-preserving
@@ -1366,10 +858,10 @@ impl SlabGrid {
         let forward = match self.cur_key {
             Some(k) if k == key => true,
             // A slab with no columns in it STILL gets a row, so the grid stays
-            // one row per slab of elapsed time. The texture's time axis is
-            // uniform — `u_at` maps time linearly across `w * bucket` — so
-            // skipping an empty slab makes the rows either side of it
-            // neighbouring texels, and the quad then stretches that pair over
+            // one row per slab of elapsed time. The time axis is uniform —
+            // `slab_at` maps time linearly across `w * bucket` — so skipping an
+            // empty slab makes the rows either side of it neighbouring slabs,
+            // and the quad then stretches that pair over
             // the whole silent stretch: one flat color as wide as the silence.
             // Analysis stalls do happen (switching the FFT window empties the
             // ring for a window's worth of samples), and that band was the
@@ -1418,14 +910,14 @@ impl SlabGrid {
 
 /// Live-only incremental spectrogram aggregation. `aggregate_slabs` re-scans
 /// EVERY in-window column on each ~20 Hz rebuild — O(columns-in-window), which
-/// grows with the roll Span and is the residual creep the texture cache didn't
+/// grows with the roll Span and is the residual creep the run key didn't
 /// remove. This keeps the slab grid across frames instead: a rebuild folds only
 /// the newly-arrived column(s) and drops the scrolled-out front, so its cost is
 /// O(new columns), independent of how much history has accumulated.
 ///
 /// The grid's one layout input is the slab width. The pitch axis — its range,
-/// its row count, which buckets a row reads — is applied downstream, at
-/// compose time, so a pitch zoom or pan re-reads a grid that is already folded
+/// its row count, which buckets a row reads — is applied downstream, in the
+/// fragment shader, so a pitch zoom or pan re-reads a grid that is already folded
 /// and never comes here. That is not incidental: a pitch drag moves its scale
 /// on every frame of itself, and a fold that applied the rows would re-walk
 /// the whole retention on each of those frames — 46 ms at a 12 s Span on a
@@ -1504,7 +996,7 @@ impl SpectrogramAgg {
     /// column would leave the grid flush with the window, and a Span being
     /// ZOOMED OUT asks for something older on the very next frame — which
     /// rebuilds, flush again, and asks again. That cascade is self-sustaining:
-    /// once a widening gesture trips it, every frame of it rebuilds, however
+    /// once a widening drag trips it, every frame of it rebuilds, however
     /// long the aggregator had been running before. It reads on the overlay as a
     /// refold rate pinned at the frame rate for the length of the drag.
     fn rebuild(
@@ -1587,15 +1079,15 @@ impl SpectrogramAgg {
     /// slab must not count, and the grid MAXed one in while it was still in
     /// window. It is a handful of columns, so still O(1) per frame.
     ///
-    /// The grid keeps what the RING keeps — `keep` slabs, sized off the pane —
+    /// The grid keeps what the GPU's COPY keeps — `keep` slabs, sized off the pane —
     /// rather than only what the window currently shows, and everything before
     /// the window's first slab is sliced off here rather than dropped. Two
     /// things need that slack.
     ///
     /// A Span GROWING reaches back to slabs it did not want a frame ago. Trimmed
     /// flush to the window, every frame of a widening drag would ask for a slab
-    /// just discarded and rebuild; holding what the texture can hold means the
-    /// whole rung is already folded.
+    /// just discarded and rebuild; holding what the GPU's copy can hold means
+    /// the whole rung is already folded.
     ///
     /// And the window's first column is not fixed in time: once it ages past the
     /// finest tier it is replaced by a merged column standing at its pair's
@@ -1631,7 +1123,7 @@ impl SpectrogramAgg {
         };
         let front = (front_center / bucket).floor() as i64;
 
-        // Drop what has fallen out of the ring's reach. Centers run one per slab
+        // Drop what has fallen out of the copy's reach. Centers run one per slab
         // with no gaps (`fold` gives an empty slab its row too), so a slab key
         // indexes the grid directly and the count IS the reach.
         let last = self.grid.centers.len().saturating_sub(1);
@@ -1673,21 +1165,21 @@ impl SpectrogramAgg {
     }
 }
 
-/// Texture `u` for an absolute time.
+/// The slab coordinate of an absolute time: slabs from the first visible slab's
+/// LEFT EDGE, which is what a vertex carries to the shader.
 ///
-/// A straight line in `t`, with no clamping, and it must stay that way: these
-/// are vertex UVs, so the scale every fragment samples at is interpolated
+/// A straight line in `t`, with no clamping, and it must stay that way: this is
+/// a vertex attribute, so the scale every fragment reads at is interpolated
 /// between the quad's corners. Bending or pinning either end changes the whole
-/// image's scale, and doing it for only part of each slab — which is what
-/// clamping to the edge texel does, since `now` crosses the last texel center
-/// mid-slab — makes the heatmap twitch once per slab.
-fn u_of(layout: &TexLayout, t: f64) -> f32 {
-    let slabs = ((t - layout.t_origin) / layout.bucket) as f32;
-    (layout.x0 + slabs) / layout.tex_w
+/// picture's scale, and doing it for only part of each slab — which is what
+/// clamping to the newest slab does, since `now` crosses its centre mid-slab —
+/// makes the heatmap twitch once per slab.
+fn slab_at(layout: &TexLayout, t: f64) -> f32 {
+    ((t - layout.t_origin) / layout.bucket) as f32
 }
 
-/// The newest time the texture has data for: the CENTRE of its last slab's
-/// texel, which is the last point `u` may reach.
+/// The newest time the run has data for: the CENTRE of its last slab, which is
+/// the last point the slab coordinate may reach.
 ///
 /// The strip is drawn out to the now-line, but the newest column is always
 /// older than that — it is stamped at the middle of the window it measured, so
@@ -1699,35 +1191,31 @@ pub(crate) fn hold_time(layout: &TexLayout) -> f64 {
     layout.t_origin + layout.tex_span - 0.5 * layout.bucket
 }
 
-/// Texture `u` for a time on the DRAWN strip: [`u_of`] out to
+/// The slab coordinate for a time on the DRAWN strip: [`slab_at`] out to
 /// [`hold_time`], and pinned there past it.
 ///
-/// A full-width build gets ClampToEdge for this — its last texel IS the texture
-/// edge — but a ring's last texel has a neighbour, holding whatever that texel
-/// carried a lap ago, which is a column from a whole window back. The strip's
-/// leading sliver would then be a stale copy of the far end of the window: dark
-/// while something is playing, bright after it stopped. A guard column just
-/// outside the run covers a texel of that and no more, and the overrun here is
-/// the analyzer's lag, which is several texels once the window is short enough
-/// for slabs to sit on [`live_slab`]'s lowest rung — so the sliver is filled by
-/// pinning `u`, and the guard is left to the far end, which really does overrun
-/// by only half a texel.
+/// The shader clamps its taps into the run, which covers half a slab at the far
+/// end — the strip stops at the oldest slab's leading edge, half a slab before
+/// its centre. The NEWEST end overruns by the analyzer's lag instead, which is
+/// several slabs once the window is short enough to sit on [`live_slab`]'s
+/// lowest rung, and a clamp there would hold only part of each slab. So the
+/// sliver is filled by pinning the coordinate.
 ///
 /// Pinning is safe HERE, at a corner the mesh is split on, and nowhere else:
 /// see the split in
 /// [`draw_spectrogram`](crate::panes::spectral::spectrogram::draw_spectrogram) for
 /// why a bend inside a quad is not.
-pub(crate) fn u_drawn(layout: &TexLayout, t: f64) -> f32 {
-    u_of(layout, t.min(hold_time(layout)))
+pub(crate) fn slab_drawn(layout: &TexLayout, t: f64) -> f32 {
+    slab_at(layout, t.min(hold_time(layout)))
 }
 
-/// Slabs the ring holds: what the [`Plan`] sized off the pane, floored by the
-/// run it is actually being asked to show.
+/// Slabs the GPU's copy holds: what the [`Plan`] sized off the pane, floored by
+/// the run it is actually being asked to show.
 ///
 /// Sized off the PANE, not off the window and not off how much history has
 /// arrived: a capacity that tracked either would change as they moved, and
-/// every change reallocates the texture and repaints every column — rebuilding
-/// the very thing the ring caches. At a fixed slab width the pane's own column
+/// every change reallocates the buffer and re-uploads every slab — rebuilding
+/// the very thing the delta saves. At a fixed slab width the pane's own column
 /// count is the widest run any Span can produce, so this holds still across a
 /// whole Span drag and only moves when the pane does.
 ///
@@ -1739,406 +1227,42 @@ pub(crate) fn u_drawn(layout: &TexLayout, t: f64) -> f32 {
 /// this was `(window / bucket).ceil() + 2`, a long Span — where a slab is WIDER
 /// than the analyzer's lag, so the run reaches the far end instead of stopping
 /// short of it — flipped between two capacities seventeen times a second, and
-/// each flip cost a full-texture reallocation and a repaint of every column.
+/// each flip cost a full reallocation and a re-upload of every slab.
 fn ring_capacity(planned: usize, visible: usize) -> usize {
-    // The max is the correctness floor — the run must fit, with the far end's
-    // guard column outside it. It never binds: a window at this slab width is
-    // at most `target_cols` slabs and the run overruns it by two, against the
-    // headroom's eight. That it never binds is the point, and what
-    // `no_cache_layer_falls_back_as_the_window_scrolls` holds it to.
+    // The max is the correctness floor: the run must fit, or two of its keys
+    // share a slot and one of them draws the other's slab. It never binds — a
+    // window at this slab width is at most `target_cols` slabs and the run
+    // overruns it by two, against the headroom's eight — and that it never binds
+    // is what `no_cache_layer_falls_back_as_the_window_scrolls` holds it to.
     planned.max(visible + 2)
 }
 
-/// Slabs of headroom [`ring_capacity`] holds past the PANE's own column count
-/// — `target_cols`, which is what the capacity is now sized off, so it holds
-/// still across a Span drag. Four covers the breathing described there (a
-/// column's spacing at the far edge is at most one slab, plus a floor at each
-/// end); the rest is margin, and `ring_capacity`'s body leans on the whole
-/// eight. Each costs TWO texel columns, since every column is written twice
-/// (see [`SpectrogramRing`]) — so a full-width pane's texture is
-/// `2 * (1024 + 8)` = 2064 texels across wherever the GPU is large enough to
-/// hold it — and that doubling is why [`slab_ceiling`] holds the live slab
-/// count under HALF of what the GPU takes rather than under all of it. Under a
-/// ceiling that bites, the cap is the ceiling's and this width follows it down.
+/// Slabs of headroom [`ring_capacity`] holds past the PANE's own column count —
+/// `target_cols`, which is what the capacity is sized off, so it holds still
+/// across a Span drag. Four covers the breathing described there (a column's
+/// spacing at the far edge is at most one slab, plus a floor at each end); the
+/// rest is margin, and `ring_capacity`'s body leans on the whole eight.
 const RING_HEADROOM: usize = 8;
-
-/// Compose a whole ring texture: every column of the run at its own texel and
-/// at its twin, the guard column outside the oldest end, and black everywhere
-/// the run does not reach.
-///
-/// Split out from [`write_ring`] to be testable — the texture it goes into is
-/// opaque once uploaded, so the placement is only checkable here, and getting
-/// it wrong scrambles the picture rather than failing anything.
-fn restart_pixels(
-    ring: &SpectrogramRing,
-    tex_w: usize,
-    h: usize,
-    first_key: i64,
-    last_key: i64,
-    mut column: impl FnMut(usize, &mut Vec<Color32>),
-) -> Vec<Color32> {
-    let mut pixels = vec![Color32::BLACK; tex_w * h];
-    // Columns are built into a TILE and transposed into the texture a block at
-    // a time, because the texture's rows are what a column crosses: a texel and
-    // the one under it are `tex_w` apart, so writing a column straight down is
-    // one cache miss per texel, and at a full-width pane that is 1.4 million of
-    // them in the frame a restart lands on. Measured, the scatter outweighed all
-    // the colour arithmetic it was carrying. A tile's worth of columns share
-    // each line instead.
-    let mut tile: Vec<Color32> = Vec::new();
-    // A tile's texels, resolved once per column and not once per texel:
-    // [`SpectrogramRing::x_of`] is a `rem_euclid` by a capacity the compiler
-    // cannot see, so leaving it in the row loop is a division per pixel.
-    let mut xs: Vec<usize> = Vec::with_capacity(TRANSPOSE_TILE);
-    let mut scratch = Vec::with_capacity(h);
-    // From one before the run: that key is the guard, which duplicates the
-    // oldest slab, so it reads the same column as `first_key`.
-    let keys: Vec<i64> = (first_key - 1..=last_key).collect();
-    for block in keys.chunks(TRANSPOSE_TILE) {
-        tile.clear();
-        xs.clear();
-        for &key in block {
-            column((key.max(first_key) - first_key) as usize, &mut scratch);
-            scratch.resize(h, Color32::BLACK);
-            tile.extend_from_slice(&scratch);
-            xs.push(ring.x_of(key));
-        }
-        // ROW outer, so the texels a row receives are written in one run —
-        // contiguous keys land on contiguous texels. The tile is read down a
-        // column instead, and each of its cache lines then serves the next
-        // sixteen rows rather than being evicted before they ask for it.
-        for row in 0..h {
-            let base = row * tex_w;
-            for (c, &x) in xs.iter().enumerate() {
-                pixels[base + x] = tile[c * h + row];
-            }
-        }
-    }
-    // Every column's twin, `capacity` texels along. Both halves start black and
-    // every write above is mirrored here, so the second half IS the first —
-    // including the columns the run never reached, which are black in both. One
-    // contiguous copy per row, against a second scattered write per texel.
-    //
-    // The halves being equal is what makes that a copy rather than a second
-    // pass, so the texture has to be exactly two laps wide; anything else and
-    // the twin is somewhere this does not put it.
-    debug_assert_eq!(tex_w, ring.capacity * 2, "the ring's texture is two laps wide");
-    for row in 0..h {
-        let base = row * tex_w;
-        let (lo, hi) = pixels[base..base + tex_w].split_at_mut(ring.capacity);
-        hi.copy_from_slice(lo);
-    }
-    pixels
-}
-
-/// Columns transposed into the texture at once — see [`restart_pixels`]. Sized
-/// so a tile's row spans one cache line of texels (16 x 4 bytes) while the
-/// columns it reads from stay within a line each for sixteen rows running.
-const TRANSPOSE_TILE: usize = 16;
-
-/// Bring the ring's texture up to date for the visible slabs, allocating or
-/// restarting it when it cannot be carried forward.
-///
-/// Only two columns can ever be stale: the newest slab, which is still
-/// accumulating its MAX as columns fold in, and any slab that appeared since
-/// the last call. Everything older already sits at the right texel with the
-/// right pixels — that is the whole point of keying columns by absolute time.
-#[allow(clippy::too_many_arguments)]
-fn write_ring(
-    ctx: &egui::Context,
-    spectrum: &mut crate::AudioSpectrum,
-    surface: usize,
-    style: ColumnStyle,
-    capacity: usize,
-    cfg: &SpectrumConfig,
-    bins: &[Bin],
-    power: &[BucketDb],
-    first_key: i64,
-    visible: usize,
-) {
-    let h = bins.len();
-    let tex_w = capacity * 2;
-    let last_key = first_key + visible as i64 - 1;
-    let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-    let shades = Shades::new(cfg, bins);
-    let mut scratch = Vec::with_capacity(h);
-
-    // A ring with no texture under it describes nothing, whatever its
-    // bookkeeping says — and there is no more specific reason to report than
-    // that it has to be built at all.
-    let restart = match (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex) {
-        (Some(ring), Some(_)) => ring.carries(capacity, &style, first_key, last_key),
-        _ => Some(Restart::Rows),
-    };
-
-    if let Some(why) = restart {
-        // Counted for the same reason the aggregator counts its rebuilds: a
-        // restart re-blanks the texture and repaints every column, and nothing
-        // about the picture says it happened.
-        spectrum.spectrogram[surface].restarts[why.slot()] += 1;
-        // Every column at once, as ONE upload.
-        //
-        // A restart repaints the whole run, and a column at a time is two
-        // uploads per column — each its own texture delta, each carrying a
-        // texel of payload and a call's worth of overhead. At a full-width
-        // pane that is some two thousand of them in a single frame, which
-        // measured 7-10ms: the whole of what makes a window resize stutter,
-        // since every step of a drag changes the pane and restarts the ring.
-        // Composed here instead, it is one upload of the same pixels.
-        //
-        // Black behind them for the same reason a fresh texture was blanked:
-        // a column never written has to read as silence rather than as
-        // whatever the allocation held.
-        let fresh = SpectrogramRing::restarted(capacity, style, first_key);
-        let pixels = restart_pixels(&fresh, tex_w, h, first_key, last_key, |i, out| {
-            fill_column_into(&shades, bins, slab_of(power, i), out)
-        });
-        let image = egui::ColorImage::new([tex_w, h], pixels);
-        match &mut spectrum.spectrogram[surface].tex {
-            Some(handle) => handle.set(image, opts),
-            slot => *slot = Some(ctx.load_texture("spectrogram", image, opts)),
-        }
-        let mut ring = fresh;
-        ring.wrote(first_key, last_key);
-        spectrum.spectrogram[surface].ring = Some(ring);
-        return;
-    }
-
-    let (Some(ring), Some(tex)) =
-        (&mut spectrum.spectrogram[surface].ring, &mut spectrum.spectrogram[surface].tex)
-    else {
-        return;
-    };
-
-    // Paint what the run has and the texture does not, at either end. Forward
-    // starts AT the last column written rather than past it: that slab was
-    // uploaded mid-accumulation and may have gained energy since. Backward is
-    // the slabs a zoomed-out window has just revealed — none on an ordinary
-    // frame, a handful on the frames of a widening gesture.
-    //
-    // A handful is the whole point of the column-at-a-time writes that follow:
-    // this is the steady state, where one or two columns are stale and
-    // uploading the other thousand would be the waste. The restart above is
-    // the other case, and it is the one that has to go wide.
-    let back = first_key..ring.oldest_valid.min(last_key + 1);
-    let forward = ring.written_through.max(first_key)..=last_key;
-    for key in back.chain(forward) {
-        let i = (key - first_key) as usize;
-        fill_column_into(&shades, bins, slab_of(power, i), &mut scratch);
-        let image = egui::ColorImage::new([1, h], scratch.clone());
-        let x = ring.x_of(key);
-        tex.set_partial([x, 0], image.clone(), opts);
-        // The twin, `capacity` texels along, is what keeps any run of at most
-        // `capacity` slabs contiguous — see [`SpectrogramRing`].
-        tex.set_partial([x + capacity, 0], image, opts);
-    }
-
-    // Duplicate the oldest column just outside the run. The quad reaches half a
-    // texel past that end — it stops at the oldest slab's leading EDGE, half a
-    // slab before its centre — and a sampler set to ClampToEdge only clamps at
-    // the TEXTURE edge, which inside a ring is somewhere else entirely, so
-    // without this the far sliver would blend in a column from a whole window
-    // ago. Half a texel is all it overruns, so one column covers it.
-    //
-    // The newest end needs no such column: it overruns by the analyzer's lag,
-    // far more than a guard or two would cover, and is filled by pinning `u`
-    // instead (see [`u_drawn`]) — which leaves nothing past the last slab's
-    // centre ever sampled.
-    {
-        fill_column_into(&shades, bins, slab_of(power, 0), &mut scratch);
-        let image = egui::ColorImage::new([1, h], scratch.clone());
-        let x = ring.x_of(first_key - 1);
-        tex.set_partial([x, 0], image.clone(), opts);
-        tex.set_partial([x + capacity, 0], image, opts);
-    }
-
-    ring.wrote(first_key, last_key);
-}
-
-/// The stored-byte -> pixel colour map for one build, with the per-pixel work
-/// lifted out of the pixel loop.
-///
-/// A texel's colour is `cell_color(ramp, bin_level(cfg, byte, midi))`, and
-/// evaluated cell by cell that is where a repaint's time goes: at a full-width
-/// pane (1400 rows x 1024 slabs) the pair measured 11.0 ms, of which the ramp
-/// alone was 6.4 ms — a restart being the frame a pitch pan, a colour change or
-/// a resize step costs. Both halves collapse:
-///
-/// - [`spectrogram_level_raw`] is AFFINE in dB and a stored byte is a linear dB grid, so
-///   a row's whole mapping is `row0 + step * byte` — two constants per row, and
-///   `step` is shared by all of them.
-/// - The ramp is then a function of one scalar, so it is sampled once into
-///   [`SHADES`] entries and indexed.
-///
-/// The table is built per build (a few microseconds against the repaint it
-/// serves) rather than cached, because everything it depends on — the ramp, the
-/// dB window, the tilt — is already what [`ColumnStyle`] restarts the ring for.
-///
-/// [`ROW_WEIGHT`] rides along, and it is worth saying why it is here rather than
-/// where it belongs: that table decides the READ and not the colour, so on
-/// meaning alone it wants to travel beside `bins`. What puts it here is that
-/// this is the one per-build value both callers of [`RowRead::of`] already hold,
-/// and once per build is the whole point of hoisting it. The alternative is a
-/// fifth parameter threaded through every call of [`fill_column_into`] to arrive
-/// at the same place; that reads truer and costs eight call sites, and
-/// [`fill_pixels`] would still need its own hoist because it reaches `of`
-/// directly.
-struct Shades {
-    /// [`cell_color`](crate::panes::spectral::spectrogram::cell_color) at the centre
-    /// of each of [`SHADES`] equal level slices.
-    lut: Vec<Color32>,
-    /// Level per stored dB step, shared by every row.
-    step: f32,
-    /// Level at a stored `0`, per row — the tilt is the only thing that varies.
-    row0: Vec<f32>,
-    /// [`ROW_WEIGHT`] with its `LazyLock` resolved, so a read indexes an array
-    /// and not a lock — see [`RowRead::of`] for what the difference costs.
-    weight: &'static [f32; 256],
-}
-
-/// Levels the ramp is sampled at.
-///
-/// A table indexed by level cannot be exact for every row at once — a row's
-/// offset is continuous, so its levels fall between samples wherever they like,
-/// and no sample count stops one landing on the wrong side of a channel's
-/// rounding boundary. What a count buys is how FAR wrong: the ramp's segments
-/// span at most 255 levels of an 8-bit channel, so 1024 samples per segment put
-/// every texel within an eighth of a level of the mapping's own value, and the
-/// only texels that then differ are those whose true value sat within that
-/// eighth of a boundary. Swept across every ramp, dB window and tilt,
-/// `the_shade_table_matches_the_mapping_it_replaces` measures 1.25% of texels
-/// differing, always by exactly one level of one channel.
-///
-/// That is the same order as the store's OWN quantization, which moves a colour
-/// by about a level at the default window (half a dB step of a 60 dB range,
-/// across a 255-level ramp) and was settled by eye against a sixteen-bit store
-/// — see `quantizing_a_bucket_does_not_move_its_colour`, which is the same
-/// judgement made one layer down. Exactness would need a table per ROW, which is
-/// 1.4 MB re-read per column and slower than the arithmetic it replaces.
-pub(crate) const SHADES: usize = 4096;
-
-impl Shades {
-    fn new(cfg: &SpectrumConfig, bins: &[Bin]) -> Shades {
-        let db0 = db_of(0);
-        Shades {
-            lut: (0..SHADES)
-                .map(|i| {
-                    crate::panes::spectral::spectrogram::cell_color(
-                        cfg.spectrogram_gradient,
-                        (i as f32 + 0.5) / SHADES as f32,
-                    )
-                })
-                .collect(),
-            // From the mapping itself at two adjacent stored values, rather than
-            // from a second copy of its algebra: the slope is `spectrogram_level_raw`'s
-            // own, whatever it is written as. Any row will do — it does not
-            // depend on pitch.
-            step: spectrogram_level_raw(cfg, db0 + harmonigraph_core::spectrogram::DB_STEP, 0.0)
-                - spectrogram_level_raw(cfg, db0, 0.0),
-            row0: bins.iter().map(|b| spectrogram_level_raw(cfg, db0, b.midi)).collect(),
-            weight: &ROW_WEIGHT,
-        }
-    }
-
-    /// The 0..1 color row `r` reads a stored byte at —
-    /// [`spectrogram_level_db`](crate::panes::spectral::axes::spectrogram_level_db)'s
-    /// answer for that byte, reached by the affine form and carrying its clamp.
-    fn level(&self, r: usize, bucket: BucketDb) -> f32 {
-        (self.row0[r] + self.step * bucket as f32).clamp(0.0, 1.0)
-    }
-
-    /// Row `r`'s colour for a stored byte.
-    fn at(&self, r: usize, bucket: BucketDb) -> Color32 {
-        let i = (self.level(r, bucket) * SHADES as f32) as usize;
-        self.lut[i.min(SHADES - 1)]
-    }
-}
-
-/// Slab `i`'s spectrum inside a flat slab-major grid — the slice every
-/// composer hands to [`fill_column_into`].
-fn slab_of(power: &[BucketDb], i: usize) -> &[BucketDb] {
-    &power[i * SPECTRUM_BINS..(i + 1) * SPECTRUM_BINS]
-}
-
-/// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
-/// [`fill_pixels`] would put in that column, for a build that writes columns
-/// one at a time. `slab` is the slab's whole spectrum; each row reads its own
-/// run of it here, at compose time, which is the step that knows the pitch
-/// axis. This is where a repaint's per-texel cost now lives, and it is the
-/// cost a restyle pays INSTEAD of re-walking the store.
-///
-/// Into a caller-owned buffer: a restart paints a thousand columns, and a fresh
-/// `Vec` each was a thousand allocations of a few kilobytes inside one frame.
-fn fill_column_into(shades: &Shades, bins: &[Bin], slab: &[BucketDb], out: &mut Vec<Color32>) {
-    let weight = shades.weight;
-    out.clear();
-    out.extend(bins.iter().enumerate().map(|(r, b)| shades.at(r, b.read.of(slab, weight))));
-}
-
-/// One cell's 0..1 volume-color level from its stored byte, evaluated directly — the
-/// REFERENCE [`Shades`] is a table of, and only reachable from tests.
-///
-/// Deliberately unguarded. A shortcut here — answering anything under -90 dB
-/// as flat silence without consulting the mapping — is tempting on the grounds
-/// that it "would land at 0 anyway" and that it saves a `log10` for the many
-/// empty buckets of a typical spectrum. Neither half holds: the dB window
-/// drags down to -120 dB, which makes -90 dB a perfectly visible tenth of the
-/// way up the ramp, and the columns are dB already, so there is no `log10` to
-/// skip. What such a shortcut actually does is cut the ramp off at -90 dB —
-/// the faintest colour dropping straight to black, with the whole quiet end of
-/// a wide window missing behind the cliff. The table inherits that: it samples
-/// the ramp across the whole of `0..1` rather than from some floor up.
-#[cfg(test)]
-fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    crate::panes::spectral::axes::spectrogram_level_db(cfg, db_of(bucket), midi)
-}
 
 /// The level the heatmap's pixels actually go through, for the crate's own
 /// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
 /// curve against. It is the color mapping, not the analyzer's height mapping.
 ///
-/// Through [`Shades`], not through [`bin_level`], and that is the whole point of
-/// the function: the bridge has to be what the SHIPPING path computes, or it
-/// stops being able to fail. `bin_level` is now the table's reference rather
-/// than the heatmap's mapping, so a bridge pointed at it would be comparing the
-/// curve to a function no pixel is drawn from.
+/// Through the affine the SHADER is handed rather than through
+/// [`spectrogram_level_db`](crate::panes::spectral::axes::spectrogram_level_db)
+/// directly, which is the whole point of the function: the bridge has to be what
+/// the shipping path computes, or it stops being able to fail.
 #[cfg(test)]
 pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    let bins = [Bin { read: RowRead::Mean { from: 0, to: 1 }, midi, t: 0.0 }];
-    Shades::new(cfg, &bins).level(0, bucket)
-}
-
-/// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
-/// with `y = 0` the lowest bin. `power` is the flat `w * SPECTRUM_BINS` grid
-/// from [`aggregate_slabs`], each slab a whole spectrum its rows read here.
-/// Opaque throughout — silence is the ramp's dark end, so the plane is filled
-/// rather than see-through.
-fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb]) -> Vec<Color32> {
-    let h = bins.len();
-    let shades = Shades::new(cfg, bins);
-    let weight = shades.weight;
-    let mut pixels = vec![Color32::BLACK; w * h];
-    // A slab of `power` is one column of the image, so this is a transpose, and
-    // taken a whole column at a time it misses cache on every texel — the same
-    // cost [`restart_pixels`] tiles away, and for the same reason. A tile of
-    // slabs writes each row in one contiguous run, while the slabs it reads
-    // advance down their own columns.
-    for x0 in (0..w).step_by(TRANSPOSE_TILE) {
-        let x1 = (x0 + TRANSPOSE_TILE).min(w);
-        for (y, bin) in bins.iter().enumerate() {
-            let base = y * w;
-            for x in x0..x1 {
-                pixels[base + x] = shades.at(y, bin.read.of(slab_of(power, x), weight));
-            }
-        }
-    }
-    pixels
+    let (level0, per_step, per_midi) = level_affine(cfg);
+    (level0 + per_step * f32::from(bucket) + per_midi * midi).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::panes::spectral::DEPTH_ZOOM_PER_DRAG_POINT;
+    use egui::Color32;
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
     /// Slabs an aggregator is told to keep, where the test is about the values
@@ -2147,42 +1271,19 @@ mod tests {
     /// test below pass the real, pane-sized retention instead.
     const KEEP: usize = 1 << 20;
 
-    /// The texture side an EDITOR reports — wgpu's own default limit, which
-    /// egui-baseview passes through from the device. Above every slab cap this
-    /// pane has, so a fixture carrying it is asking about the pane's own
-    /// arithmetic with the device's ceiling deliberately out of the way.
-    ///
-    /// Not what a bare `egui::Context` reports, which is why it is named:
-    /// egui's own default is [`BARE_MAX_SIDE`], and the gap between the two is
-    /// where a texture this pane plans can fit one context and not the other.
-    const EDITOR_MAX_SIDE: usize = 8192;
-
-    /// The texture side a context reports when NOTHING tells it otherwise —
-    /// egui's `InputState` default, and what a fixture that builds a bare
-    /// context runs at.
-    ///
-    /// No renderer reports it: both shells fill `RawInput::max_texture_side` in
-    /// from their device. It is the SMALLEST limit the arithmetic has to
-    /// survive all the same, and a suite that only ever asks at 8192 stops
-    /// asking the question [`slab_ceiling`] exists to answer — the ceiling
-    /// cannot bite above the slab caps, so a fixture at a real device's limit
-    /// measures the caps and nothing else.
-    const BARE_MAX_SIDE: usize = 2048;
-
-    /// The pitch range the ring sweeps hold fixed while they move time.
+    /// The pitch range the scroll sweeps hold fixed while they move time.
     const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
 
-    /// The style the pane would build for a window of `span` seconds.
-    ///
-    /// `cfg.roll_seconds` moves WITH the span, because in the pane they are the
-    /// same number — `TimeAxis::new` reads the window straight out of the
-    /// config. A fixture that leaves it at its default makes them independent,
-    /// and then a style keyed on the config looks stable across a Span drag
-    /// when in the pane it is being rewritten every frame. That is exactly how
-    /// the drag bug survived a test named after the drag.
-    fn style_for(rows: usize, bucket: f64, span: f64, scale: &PitchScale) -> ColumnStyle {
-        let cfg = SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() };
-        ColumnStyle::new(rows, false, bucket, scale.min_midi, scale.span, &cfg)
+    /// The key a live frame mints for a window starting at column `first` of a
+    /// store holding `len`, whose newest column is stamped `newest`.
+    fn run_key(first: usize, len: usize, newest: f64, bucket: f64) -> RunKey {
+        RunKey {
+            first,
+            cols_len: len,
+            newest_bits: newest.to_bits(),
+            bucket_bits: bucket.to_bits(),
+            whole: false,
+        }
     }
 
     /// A column at `time` with the given (bin, power) energy, rest silent.
@@ -2198,103 +1299,6 @@ mod tests {
     /// so what the aggregation tests below assert against.
     fn q(power: f32) -> BucketDb {
         harmonigraph_core::spectrogram::quantize(power)
-    }
-
-    /// The curve and the heatmap read one run of buckets the same way.
-    ///
-    /// They hold their buckets differently — the curve as floats of power, the
-    /// heatmap as bytes of dB — so the mean is written twice, and two forms of
-    /// one definition drift. What that costs is visible rather than subtle: a
-    /// pixel of the curve and a row of the heatmap cover the SAME buckets, and
-    /// the pane draws both from one gradient through one loudness mapping
-    /// precisely so equal levels read equal, so a disagreement puts a ridge and
-    /// the curve above it at different heights on one tone.
-    ///
-    /// The tolerance is the store's own, not a fudge: the heatmap's side rounds
-    /// to [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) twice over, once
-    /// quantizing each bucket and once re-encoding the mean.
-    #[test]
-    fn the_curve_and_the_heatmap_read_a_run_of_buckets_alike() {
-        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
-        let mut next = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (seed >> 11) as f64 / (1u64 << 53) as f64
-        };
-        let step = harmonigraph_core::spectrogram::DB_STEP;
-        for run_len in [2usize, 3, 5, 10, 32] {
-            for _ in 0..200 {
-                // Spread across 90 dB, which is where two forms of one mean have
-                // the most room to disagree — a flat run agrees trivially.
-                let powers: Vec<f32> =
-                    (0..run_len).map(|_| 10f64.powf(-9.0 * next()) as f32).collect();
-                let mut column = [0.0f32; SPECTRUM_BINS];
-                column[..run_len].copy_from_slice(&powers);
-                let col = crate::SpectrogramColumn::from_power(0.0, &column);
-
-                let curve = 10.0
-                    * crate::panes::spectral::spectrogram::power_mean(&powers).max(1e-30).log10();
-                let read = RowRead::Mean { from: 0, to: run_len };
-                let heat = db_of(read.of(&col.db[..], &ROW_WEIGHT));
-                assert!(
-                    (curve - heat).abs() <= 2.0 * step,
-                    "a run of {run_len}: curve {curve:.3} dB, heatmap {heat:.3} dB",
-                );
-            }
-        }
-    }
-
-    /// The picture's noise floor SETTLES as the pitch axis zooms out, instead of
-    /// climbing with the number of buckets a row happens to span.
-    ///
-    /// Read by MAX, a row asks "how large was the largest of N draws", whose
-    /// answer grows like the log of N and so has no limit: the floor between the
-    /// partials reads brighter the further out the zoom, which is a statement
-    /// about the layout rather than about the sound. Measured over the run
-    /// widths a row actually takes, 8 buckets to 64, a MAX lifts the floor
-    /// 2.7 dB where the power mean lifts it 1.0 — and past 64 the one keeps
-    /// going where the other has arrived. See
-    /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER).
-    ///
-    /// The comparison starts at 8 rather than at 1 because the step from ONE
-    /// bucket to several is inherent and belongs to neither rule: one bucket
-    /// reads a SAMPLE of the distribution, and any number of them reads a
-    /// STATISTIC of it, which sits higher — 4.5 dB by the time the run is eight
-    /// buckets long, on this floor. That step is paid once, on the way off a
-    /// single bucket, and does not grow. What is at issue here is only the part
-    /// that keeps climbing.
-    ///
-    /// The second assertion is what gives the first its teeth: it fails if the
-    /// noise is too flat, or the runs too short, for either rule to be tested.
-    #[test]
-    fn the_noise_floor_settles_as_the_pitch_axis_zooms_out() {
-        // Exponentially distributed power around -60 dB: the distribution a
-        // noise floor's buckets have, and the one whose maximum keeps growing.
-        let mut seed = 0x2545_F491_4F6C_DD1Du64;
-        let mut power = [0.0f32; SPECTRUM_BINS];
-        for p in power.iter_mut() {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let u = ((seed >> 11) as f64 / (1u64 << 53) as f64).clamp(1e-12, 1.0);
-            *p = (-u.ln() * 1e-6) as f32;
-        }
-        let column = crate::SpectrogramColumn::from_power(0.0, &power);
-        let floor = |run: usize, by_max: bool| {
-            let n = SPECTRUM_BINS / run;
-            (0..n)
-                .map(|r| {
-                    let (i, j) = (r * run, r * run + run);
-                    db_of(if by_max {
-                        column.db[i..j].iter().copied().max().unwrap()
-                    } else {
-                        RowRead::Mean { from: i, to: j }.of(&column.db[..], &ROW_WEIGHT)
-                    })
-                })
-                .sum::<f32>()
-                / n as f32
-        };
-        let climb = floor(64, false) - floor(8, false);
-        assert!(climb < 1.5, "the floor climbed {climb:.2} dB across a three-octave zoom");
-        let by_max = floor(64, true) - floor(8, true);
-        assert!(by_max > 2.2, "a plain MAX climbed only {by_max:.2} dB, so this proves nothing");
     }
 
     #[test]
@@ -2377,32 +1381,6 @@ mod tests {
         assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
     }
 
-    #[test]
-    fn fill_pixels_places_energy_at_the_right_slab_and_bin() {
-        // Two slabs, three bins. Put a loud value in the bucket only bin y=2
-        // reads, in slab x=1, and check it lands at pixel [y*w + x] and nowhere
-        // else is bright.
-        let cfg = SpectrumConfig::default();
-        let w = 2;
-        let bins = [
-            Bin { read: RowRead::Mean { from: 10, to: 11 }, midi: 40.0, t: 0.1 },
-            Bin { read: RowRead::Mean { from: 11, to: 12 }, midi: 41.0, t: 0.2 },
-            Bin { read: RowRead::Mean { from: 12, to: 13 }, midi: 42.0, t: 0.3 },
-        ];
-        let mut power = vec![0; w * SPECTRUM_BINS]; // slab-major [slab][bucket]
-        power[SPECTRUM_BINS + 12] = q(1.0); // slab 1, bucket 12: bin 2's read
-        let px = fill_pixels(&cfg, w, &bins, &power);
-        let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
-        let loud = px[2 * w + 1]; // y=2, x=1
-        assert!(lum(loud) > 0, "the loud cell should carry color");
-        // Every other pixel is silence -> the ramp's dark end.
-        for (i, &c) in px.iter().enumerate() {
-            if i != 2 * w + 1 {
-                assert_eq!(lum(c), 0, "pixel {i} should be dark, got {c:?}");
-            }
-        }
-    }
-
     /// Storing a bucket as a byte of dB is a memory decision, and it is only
     /// allowed to be one: the colour a cell ends up must be the colour the
     /// power itself would have produced, to within half the grid step it was
@@ -2420,7 +1398,7 @@ mod tests {
             for midi in [20.0f32, 60.0, 100.0, 130.0] {
                 for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
                     let exact = loudness_db(&cfg, power_db(power), midi);
-                    let stored = bin_level(&cfg, q(power), midi);
+                    let stored = bin_level_for_test(&cfg, q(power), midi);
                     assert!(
                         (stored - exact).abs() <= tolerance,
                         "power {power} at MIDI {midi} (tilt {tilt}): \
@@ -2432,7 +1410,7 @@ mod tests {
         // And silence stays exactly silent rather than creeping up off the
         // quantizer's floor, whatever the dB window is set to.
         cfg.floor_db = -120.0;
-        assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "an empty bucket must read as silence");
+        assert_eq!(bin_level_for_test(&cfg, 0, 60.0), 0.0, "an empty bucket must read as silence");
     }
 
     /// The quiet end of the ramp must FADE to black, not fall off a cliff into
@@ -2454,8 +1432,8 @@ mod tests {
             // more.
             let step = harmonigraph_core::spectrogram::DB_STEP / (cfg.volume_ceiling_db - floor);
             for bucket in 0..BucketDb::MAX {
-                let here = bin_level(&cfg, bucket, 60.0);
-                let next = bin_level(&cfg, bucket + 1, 60.0);
+                let here = bin_level_for_test(&cfg, bucket, 60.0);
+                let next = bin_level_for_test(&cfg, bucket + 1, 60.0);
                 assert!(
                     next - here <= step * 1.001 && next >= here,
                     "floor {floor}: byte {bucket} ({here}) -> {next} jumps by {}, \
@@ -2465,7 +1443,11 @@ mod tests {
             }
             // And the bottom byte is black at every window, so silence still
             // recedes into the region's bed rather than glowing.
-            assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "floor {floor}: silence must be black");
+            assert_eq!(
+                bin_level_for_test(&cfg, 0, 60.0),
+                0.0,
+                "floor {floor}: silence must be black"
+            );
         }
     }
 
@@ -2873,47 +1855,36 @@ mod tests {
     /// The layout arithmetic every rebuild rides on, decided without a frame.
     ///
     /// This is where the pipeline's cliffs live — a slab against the analyzer's
-    /// lag, a slab against the column rate, an image against what the GPU will
-    /// allocate — and until [`Plan`] was split out of the draw it could only be
-    /// exercised through an `egui::Context` with a real texture, which is to say
-    /// not at all. Each assertion below is a bug this pane has actually had.
+    /// lag, a slab against the column rate, a slab count against the cap the
+    /// store is sized for — and with [`Plan`] split out of the draw it is
+    /// exercised without an `egui::Context` at all. Each assertion below is a
+    /// bug this pane has actually had.
     #[test]
     fn the_plan_decides_the_layout_without_a_frame() {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let view = |ppp: f32, pitch_len: f32, depth_len: f32, window: f64, whole: bool| PaneView {
             ppp,
-            max_side: EDITOR_MAX_SIDE,
-            max_rows: EDITOR_MAX_SIDE,
-            max_cols: usize::MAX,
             pitch_len,
             depth_len,
             window,
             scale,
             cfg: SpectrumConfig::default(),
             whole,
-            coarse: false,
         };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
         let plan = |v: &PaneView| Plan::new(v, &columns);
 
-        // Rows are PIXELS, not points: on a 2x screen the image is built at the
-        // density it will be drawn at, rather than upsampled from half of it.
-        // Rounded up to a quantum, so never coarser than the pane and never
-        // more than a quantum finer — see [`PANE_QUANTUM`].
+        // Rows are PIXELS, not points: on a 2x screen the picture is read at
+        // the density it will be drawn at, rather than upsampled from half of
+        // it — and to the pixel, since a row costs a fragment's arithmetic and
+        // no memory at all.
         let rows_at =
             |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
         for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.0, 517.0), (2.0, 517.0)] {
-            let rows = rows_at(ppp, pitch);
-            let want = pitch * ppp;
-            assert!(rows >= want, "{rows} rows is coarser than {want} pixels");
-            assert!(rows < want + PANE_QUANTUM, "{rows} rows for {want} pixels wastes an image");
+            assert_eq!(rows_at(ppp, pitch), (pitch * ppp).round(), "rows are the pane's pixels");
         }
-        // Twice the density really is twice the image, quantum aside.
-        assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.2);
-        // And never a taller image than the GPU will take.
-        let mut small = view(2.0, 4000.0, 800.0, 12.0, false);
-        small.max_rows = BARE_MAX_SIDE;
-        assert_eq!(plan(&small).rows, BARE_MAX_SIDE, "an image taller than the GPU allocates");
+        // Twice the density really is twice the picture.
+        assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.01);
 
         // A slab is never finer than the columns arrive, whatever the pane's
         // width asks for: a shorter one leaves empty slabs between columns, and
@@ -2954,167 +1925,49 @@ mod tests {
         let wide = plan(&view(1.0, 300.0, 900.0, 30.0, false));
         assert!(wide.bucket < narrow.bucket, "a wider pane should resolve time more finely");
 
-        // The key travels with the plan, so a cache hit means THIS layout.
+        // The key travels with the plan, and names the FOLD: a density change
+        // that moves no slab boundary re-reads the run it already has, while one
+        // that crosses a ladder rung does not.
         let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0, false)).key;
-        let at_2x = plan(&view(2.0, 300.0, 800.0, 12.0, false)).key;
         assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0, false)).key);
-        assert_ne!(at_1x, at_2x, "a density change must not hit the cache");
-    }
-
-    /// **Neither side of the planned image may pass what the GPU will take**,
-    /// on any pane, at any density, through either build.
-    ///
-    /// The rows carry the bound directly; the SLABS need their own, and reach
-    /// the limit FIRST — the live ring writes every column twice, so a slab
-    /// costs two texel columns and the width crosses at half the pane pixels a
-    /// row count needs. At the 2048 a bare `egui::Context` reports,
-    /// [`LIVE_SLAB_CAP`] alone put a full-width pane's texture at
-    /// `2 * (1024 + 8)` = 2064 and `Context::load_texture` asserted on the
-    /// upload: issues #333 and #335, one arithmetic bug seen from two
-    /// directions.
-    ///
-    /// Swept rather than pinned at the one geometry that panicked, because the
-    /// bound has to hold for whatever pane, density and Span a layout hands the
-    /// pane, and a single case cannot tell a fix from a coincidence. The widths
-    /// deliberately run far past any real pane: the ceiling is only reachable
-    /// with the caps saturated, so a sweep that stays inside them is a sweep
-    /// that never tests it.
-    #[test]
-    fn no_pane_plans_an_image_past_what_the_gpu_takes() {
-        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
-        let plan_for =
-            |max_side: usize, whole: bool, ppp: f32, pitch: f32, depth: f32, win: f64| {
-                Plan::new(
-                    &PaneView {
-                        ppp,
-                        max_side,
-                        max_rows: max_side,
-                        max_cols: usize::MAX,
-                        pitch_len: pitch,
-                        depth_len: depth,
-                        window: win,
-                        scale,
-                        cfg: SpectrumConfig {
-                            roll_seconds: win as f32,
-                            ..SpectrumConfig::default()
-                        },
-                        whole,
-                        coarse: false,
-                    },
-                    &columns,
-                )
-            };
-        // The texture each build actually uploads, derived the way `build`
-        // derives it rather than restated. The slabs the fold emits are
-        // `floor(span / bucket) + 1`, since the slab keys are absolute and both
-        // ends fall mid-slab; the whole-song build spends one texel on each,
-        // and the live one hands that count to [`ring_capacity`] and writes the
-        // answer TWICE across (`build`'s `tex_w`).
-        //
-        // Through the real [`ring_capacity`] on purpose: it GROWS to fit a run
-        // longer than the plan expected, so a window that put more slabs on
-        // screen than `target_cols` would widen the texture past the ceiling
-        // with the plan's own arithmetic still looking correct.
-        //
-        // The whole-song arm is WEAKER than the live one, and knowing which is
-        // which matters: `bucket` is `window / target_cols` floored at
-        // [`MIN_BUCKET`], so this expression is `target_cols + 1` by
-        // construction and the arm pins the ceiling's off-by-one and nothing
-        // else. It cannot see the real whole-song width, which comes from
-        // folding [`WholeSong`](crate::WholeSong)'s own columns rather than
-        // from `window` — see [`slab_ceiling`].
-        let tex_width = |p: &Plan, whole: bool, win: f64| {
-            let visible = (win / p.bucket).floor() as usize + 1;
-            if whole {
-                visible
-            } else {
-                2 * ring_capacity(p.capacity, visible)
-            }
-        };
-
-        for max_side in [BARE_MAX_SIDE, EDITOR_MAX_SIDE, 4096] {
-            for whole in [false, true] {
-                for ppp in [1.0f32, 2.0, 3.0] {
-                    for depth in [200.0f32, 800.0, 2000.0, 8000.0] {
-                        for win in [1.0f64, 12.0, 600.0] {
-                            let p = plan_for(max_side, whole, ppp, 4000.0, depth, win);
-                            let w = tex_width(&p, whole, win);
-                            assert!(
-                                w <= max_side,
-                                "{}: a {depth} pt pane at {ppp}x over {win} s plans a {w} texel \
-                                 image, past the {max_side} the GPU takes",
-                                if whole { "whole-song" } else { "live" },
-                            );
-                            assert!(
-                                p.rows <= max_side,
-                                "{} rows is taller than the {max_side} the GPU takes",
-                                p.rows,
-                            );
-                            // And with the ring SATURATED, which is where
-                            // [`ring_capacity`] stops returning the plan's own
-                            // number and starts returning `visible + 2`. The
-                            // run is not supposed to reach the capacity, but a
-                            // bound that holds only while it does not is a
-                            // bound resting on a separate test's invariant.
-                            if !whole {
-                                let full = 2 * ring_capacity(p.capacity, p.capacity);
-                                assert!(
-                                    full <= max_side,
-                                    "a saturated ring is {full} texels across, past {max_side}",
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // And it costs the EDITOR nothing: the device's ceiling only binds
-        // where it sits under the pane's own caps, so at a real limit the plan
-        // is the one the caps alone would have made. Without this the bug could
-        // be "fixed" by clamping everything to 2048 and softening every
-        // spectrogram in the plugin to pay for a bare context's default.
-        let wide = plan_for(EDITOR_MAX_SIDE, false, 2.0, 4000.0, 8000.0, 12.0);
         assert_eq!(
-            wide.capacity,
-            LIVE_SLAB_CAP as usize + RING_HEADROOM,
-            "the device ceiling cut a pane the device could hold",
+            at_1x,
+            plan(&view(1.0, 900.0, 800.0, 12.0, false)).key,
+            "a taller pane reads the same slabs and must not refold",
         );
-        let take = plan_for(EDITOR_MAX_SIDE, true, 2.0, 4000.0, 8000.0, 600.0);
-        assert!(
-            600.0 / take.bucket > LIVE_SLAB_CAP as f64,
-            "the whole-song build lost its higher cap to a ceiling above it",
+        assert_ne!(
+            at_1x,
+            plan(&view(1.0, 300.0, 200.0, 12.0, false)).key,
+            "a quarter of the depth pixels crosses a rung, which is a different fold",
         );
     }
 
-    /// **A take longer than the render's window must not widen the whole-song
-    /// image past what the GPU takes.**
+    /// **A take longer than the render's window must not fold past the slab
+    /// cap.**
     ///
-    /// The sweep above cannot see this: it derives the whole-song width from
-    /// `window / bucket`, and the two numbers part company exactly here.
-    /// `bucket` is cut for the WINDOW ([`Plan::new`]) while the image's width
+    /// The sweep above cannot see this: it derives the whole-song slab count
+    /// from `window / bucket`, and the two numbers part company exactly here.
+    /// `bucket` is cut for the WINDOW ([`Plan::new`]) while the run's length
     /// comes from the columns the fold walks, and
     /// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the
     /// whole `samples` buffer whatever `--start`/`--end` asked for — so a short
     /// window on a long bounce arrives with columns spanning the file. Ten
-    /// seconds of a three-minute take folded to some 14 000 texels against a
-    /// 2048 limit: the `load_texture` assert of #333/#335, reached from the
-    /// axis #366 left open (issue #367).
+    /// seconds of a three-minute take folds to some 14 000 slabs, which is a
+    /// grid several times the size of the picture that shows it, on time no
+    /// pixel reaches (issue #367).
     ///
-    /// FOLDED rather than counted. The width is a property of
+    /// FOLDED rather than counted. The length is a property of
     /// [`SlabGrid::fold`]'s absolute keying — an empty slab still takes a row,
-    /// so the row count follows the columns' EXTENT and not their number — and
-    /// an arithmetic restatement of that is a restatement of the thing under
-    /// test. It is also what lets the fixture be sparse: columns half a second
-    /// apart reach the same 14 000 texels as the analyzer's own rate for a
-    /// sixtieth of the memory.
+    /// so the count follows the columns' EXTENT and not their number — and an
+    /// arithmetic restatement of that is a restatement of the thing under test.
+    /// It is also what lets the fixture be sparse: columns half a second apart
+    /// reach the same 14 000 slabs as the analyzer's own rate for a sixtieth of
+    /// the memory.
     ///
-    /// The window starts are deliberately off the slab grid, since a window
-    /// whose ends both fall mid-slab is what spends the slabs
-    /// [`slab_ceiling`] holds back.
+    /// The window starts are deliberately off the slab grid: a window whose ends
+    /// both fall mid-slab is the case that spends a slab at each end.
     #[test]
-    fn a_take_longer_than_the_render_window_folds_inside_what_the_gpu_takes() {
+    fn a_take_longer_than_the_render_window_folds_inside_the_slab_cap() {
         const TAKE: f64 = 180.0;
         let columns: Vec<_> = (0..=360).map(|i| col(i as f64 * 0.5, &[(1000, 1.0)])).collect();
         let mut ws = crate::WholeSong {
@@ -3123,42 +1976,39 @@ mod tests {
             columns,
             roll: harmonigraph_core::NoteRoll::default(),
         };
-        let plan_for = |max_side: usize, ppp: f32, depth: f32, span: f64| {
+        let plan_for = |ppp: f32, depth: f32, span: f64| {
             Plan::new(
                 &PaneView {
                     ppp,
-                    max_side,
-                    max_rows: max_side,
-                    max_cols: usize::MAX,
                     pitch_len: 1000.0,
                     depth_len: depth,
                     window: span,
                     scale: SWEEP_SCALE,
                     cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
                     whole: true,
-                    coarse: false,
                 },
                 &Columns { first: 0, len: 361, newest: TAKE },
             )
         };
 
-        for max_side in [BARE_MAX_SIDE, EDITOR_MAX_SIDE] {
-            for ppp in [1.0f32, 2.0, 3.0] {
-                for depth in [800.0f32, 2000.0, 8000.0] {
-                    for span in [2.5f64, 10.0, 47.0, TAKE] {
-                        for offset in [0.0f64, 0.331, 60.017] {
-                            ws.start = offset.min(TAKE - span);
-                            ws.span = span;
-                            let p = plan_for(max_side, ppp, depth, span);
-                            let (centers, _) = aggregate_slabs(ws.drawn_columns(span), p.bucket);
-                            assert!(
-                                centers.len() <= max_side,
-                                "a {span} s window at {} of a {TAKE} s take folds to {} texels, \
-                                 past the {max_side} the GPU takes",
-                                ws.start,
-                                centers.len(),
-                            );
-                        }
+        // The cap, plus the slab each end of the window can spend by falling
+        // mid-slab.
+        let ceiling = WHOLE_SONG_SLAB_CAP as usize + 2;
+        for ppp in [1.0f32, 2.0, 3.0] {
+            for depth in [800.0f32, 2000.0, 8000.0] {
+                for span in [2.5f64, 10.0, 47.0, TAKE] {
+                    for offset in [0.0f64, 0.331, 60.017] {
+                        ws.start = offset.min(TAKE - span);
+                        ws.span = span;
+                        let p = plan_for(ppp, depth, span);
+                        let (centers, _) = aggregate_slabs(ws.drawn_columns(span), p.bucket);
+                        assert!(
+                            centers.len() <= ceiling,
+                            "a {span} s window at {} of a {TAKE} s take folds to {} slabs, \
+                             past the {ceiling} the cap allows",
+                            ws.start,
+                            centers.len(),
+                        );
                     }
                 }
             }
@@ -3168,12 +2018,12 @@ mod tests {
         // reading the trim rather than a take that happened to fit.
         ws.start = 60.0;
         ws.span = 10.0;
-        let p = plan_for(BARE_MAX_SIDE, 2.0, 800.0, 10.0);
+        let p = plan_for(2.0, 800.0, 10.0);
         let (all, all_power) = aggregate_slabs(ws.columns.iter(), p.bucket);
         assert!(
-            all.len() > BARE_MAX_SIDE,
-            "the fixture no longer reproduces #367: the whole take folds to {} texels, \
-             inside the {BARE_MAX_SIDE} limit",
+            all.len() > ceiling,
+            "the fixture no longer reproduces #367: the whole take folds to {} slabs, \
+             inside the {ceiling} the cap allows",
             all.len(),
         );
 
@@ -3246,28 +2096,22 @@ mod tests {
         let window = ws.span.max(FLOOR);
         let view = PaneView {
             ppp: 2.0,
-            max_side: BARE_MAX_SIDE,
-            max_rows: BARE_MAX_SIDE,
-            max_cols: usize::MAX,
             pitch_len: 500.0,
             depth_len: 300.0,
             window,
             scale: SWEEP_SCALE,
             cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
             whole: true,
-            coarse: false,
         };
         let columns_in = Columns { first: 0, len: ws.columns.len(), newest: 60.2 };
         let plan = Plan::new(&view, &columns_in);
-        let bins = bins_for(plan.rows, &SWEEP_SCALE, false);
         let mut spectrum = crate::AudioSpectrum::default();
-        let ctx = egui::Context::default();
-        let layout = build(&ctx, &mut spectrum, Some(&ws), 0, &plan, &view, &bins)
-            .expect("a whole-song build over columns this dense");
+        let layout = build(&mut spectrum, Some(&ws), 0, &plan, &view)
+            .expect("a whole-song fold over columns this dense");
 
-        // The last column the axis puts inside the region. The image has to
-        // reach it: `depth_of` maps both through the same `frac`, so a texture
-        // ending short of it leaves the rest of the region bare.
+        // The last column the axis puts inside the region. The run has to reach
+        // it: `depth_of` maps both through the same `frac`, so a run ending
+        // short of it leaves the rest of the region bare.
         let last_on_screen = ws
             .columns
             .iter()
@@ -3278,7 +2122,7 @@ mod tests {
         let reach = layout.t_origin + layout.tex_span;
         assert!(
             reach >= last_on_screen,
-            "the image reaches {reach}, short of the column at {last_on_screen} that the \
+            "the run reaches {reach}, short of the column at {last_on_screen} that the \
              region still draws — {:.0}% of the depth region is bare",
             100.0 * (start + window - reach) / window,
         );
@@ -3302,16 +2146,16 @@ mod tests {
     ///   aggregator's window holds merged columns; and
     /// - a SLAB against the analyzer's LAG (half an analysis window), which
     ///   decides whether the visible run reaches the far end of the window and
-    ///   so whether the ring's capacity tracks it.
+    ///   so whether the buffer's capacity tracks it.
     ///
     /// The second moves with the FFT window AND with the pane's width, since a
     /// slab is `Span / depth pixels` — a narrow pane crosses it at a much
     /// shorter Span than a wide one. So the sweep is taken per (window, pane)
     /// pair, either side of that pair's own crossing.
     ///
-    /// The texture cache above these two is deliberately not counted: its key
-    /// holds the newest column's time, so it is MEANT to miss once per column.
-    /// It is the two layers under it that must turn a miss into O(one column).
+    /// The run key above these two is deliberately not counted: it holds the
+    /// newest column's time, so it is MEANT to miss once per column. It is the
+    /// two layers under it that must turn a miss into O(one slab).
     #[test]
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
@@ -3348,8 +2192,8 @@ mod tests {
 
                     let mut agg = SpectrogramAgg::new();
                     let mut history = crate::SpectrumHistory::default();
-                    let mut ring: Option<SpectrogramRing> = None;
-                    let (mut restarts, mut caps) = (0u32, std::collections::BTreeSet::new());
+                    let mut gpu = GpuGrid::default();
+                    let (mut caps, mut widest) = (std::collections::BTreeSet::new(), 0usize);
 
                     // Long enough to fill the window and then scroll a while
                     // inside it, which is where the run starts breathing.
@@ -3363,833 +2207,62 @@ mod tests {
                         // Exactly what `draw_spectrogram` asks for each frame.
                         let first =
                             history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                        let (centers, _) = agg.window(&history, first, bucket, planned);
+                        let (centers, power) = agg.window(&history, first, bucket, planned);
                         let visible = centers.len();
                         let first_key = (centers[0] / bucket).floor() as i64;
-                        let last_key = first_key + visible as i64 - 1;
                         let capacity = ring_capacity(planned, visible);
-                        let style = style_for(2, bucket, span, &SWEEP_SCALE);
-
-                        // And exactly what `write_ring` then decides.
-                        if ring.as_ref().is_none_or(|r| {
-                            r.carries(capacity, &style, first_key, last_key).is_some()
-                        }) {
-                            restarts += 1;
-                            ring = Some(SpectrogramRing::restarted(
-                                capacity,
-                                style.clone(),
-                                first_key,
-                            ));
-                            caps.insert(capacity);
+                        caps.insert(capacity);
+                        let layout = TexLayout {
+                            bucket,
+                            t_origin: centers[0] - 0.5 * bucket,
+                            tex_span: visible as f64 * bucket,
+                        };
+                        gpu.accept(
+                            run_key(first, history.len(), t, bucket),
+                            first_key,
+                            capacity,
+                            power,
+                            layout,
+                        );
+                        // Every frame here draws, so the next one's delta is
+                        // measured against a buffer that has the run — see
+                        // [`GpuGrid::uploaded`].
+                        acknowledge(&gpu);
+                        // Past the frames that fill the window, where the run is
+                        // still growing at both ends.
+                        if t > span + 1.0 {
+                            let dirty = gpu.sent.as_ref().expect("just accepted").dirty.len();
+                            widest = widest.max(dirty);
                         }
-                        ring.as_mut().expect("just restarted").wrote(first_key, last_key);
                     }
 
                     // One of each to get started, and none after: from then on a
-                    // frame folds one column and writes one texel column.
+                    // frame folds one column and writes a slab or two.
                     assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
-                    assert_eq!(restarts, 1, "the ring is reallocated ({caps:?} slabs): {at}");
+                    assert_eq!(
+                        gpu.full_uploads(),
+                        1,
+                        "the grid is uploaded whole ({caps:?} slabs): {at}",
+                    );
+                    // The window's first slab (repruned as columns leave it),
+                    // the newest (still accumulating), and whichever one has
+                    // just appeared.
+                    assert!(widest <= 3, "a scrolling frame wrote {widest} slabs: {at}");
                 }
             }
-        }
-    }
-
-    /// A gesture must cost a re-layout at its BOUNDARIES, not one per frame.
-    ///
-    /// Both caches used to reset their own slack whenever they rebuilt: the
-    /// aggregator re-folded flush with the window, and the ring's painted range
-    /// restarted flush with it too. A Span being ZOOMED OUT then asks for
-    /// something older on the very next frame — which rebuilds, sits flush, and
-    /// is asked again. Self-sustaining: once a widening gesture trips it, every
-    /// frame of the drag rebuilds, however long the caches had been running
-    /// before, and the overlay reads both counters pinned at the frame rate.
-    ///
-    /// Now a rebuild refills the retention behind the window, and the ring
-    /// paints the revealed slabs rather than starting over — so a zoom costs a
-    /// re-layout only where the slab width actually changes, at a rung. A
-    /// PITCH zoom does not reach the aggregator at all — the grid is in bucket
-    /// space, and the pitch axis is applied at compose time — which
-    /// `a_pitch_gesture_never_reaches_the_aggregator` below holds on its own.
-    #[test]
-    fn a_gesture_costs_a_layout_at_its_boundaries_not_a_frame() {
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let lag = 0.5 * 8192.0 / 48000.0;
-        let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
-        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let rows = 64;
-
-        // A gesture: what Span it asks for on its `n`th frame, and the
-        // re-layouts it is allowed over the whole run.
-        type Gesture<'a> = (&'a str, u32, &'a dyn Fn(u32) -> f64);
-        // Held still; zoomed out across four rungs; zoomed in inside one. The
-        // gesture starts as soon as the window is full, so neither cache has
-        // scrolled itself any slack — which is the case that cascaded.
-        let gestures: [Gesture; 3] = [
-            ("held still", 1, &|_| 30.0),
-            ("zoomed out across rungs", 5, &|i| 20.0 * 1.004f64.powi(i as i32)),
-            ("zoomed in inside a rung", 1, &|i| 30.0 - 5.0 * (i as f64 / 200.0)),
-        ];
-
-        for (name, allowed, gesture) in gestures {
-            let mut agg = SpectrogramAgg::new();
-            let mut history = crate::SpectrumHistory::default();
-            let mut ring: Option<SpectrogramRing> = None;
-            let (mut restarts, mut frames) = (0u32, 0u32);
-            let settle = 70.0;
-            for i in 0..(((settle + 2.0) / interval) as usize) {
-                let t = i as f64 * interval;
-                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-                let now = t + lag;
-                if now < settle {
-                    continue;
-                }
-                let span = gesture(frames);
-                frames += 1;
-
-                let bucket = live_slab(span, cols);
-                let style = style_for(rows, bucket, span, &scale);
-                let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                let (centers, _) = agg.window(&history, first, bucket, planned);
-                let first_key = (centers[0] / bucket).floor() as i64;
-                let last_key = first_key + centers.len() as i64 - 1;
-                let capacity = ring_capacity(planned, centers.len());
-                if ring
-                    .as_ref()
-                    .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
-                {
-                    restarts += 1;
-                    ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
-                }
-                ring.as_mut().expect("just restarted").wrote(first_key, last_key);
-            }
-            assert!(frames > 200, "{name}: the gesture never ran ({frames} frames)");
-            assert!(
-                agg.rebuilds() <= allowed,
-                "{name}: {} re-folds over {frames} frames, not {allowed}",
-                agg.rebuilds(),
-            );
-            assert!(
-                restarts <= allowed,
-                "{name}: {restarts} ring restarts over {frames} frames, not {allowed}",
-            );
-        }
-    }
-
-    /// The coarse read, which the settled suite never takes and every wide
-    /// texel of every gesture frame goes through: `bins_for` swaps the wide
-    /// rows' power mean for a MAX over the same run and leaves the narrow
-    /// rows' lerp alone, and the max arm answers the loudest bucket of its
-    /// run.
-    #[test]
-    fn a_coarse_bin_reads_the_max_of_its_run() {
-        let mut db = [0 as BucketDb; SPECTRUM_BINS];
-        db[5] = 40;
-        db[6] = 200;
-        db[7] = 120;
-        let weight: &[f32; 256] = &ROW_WEIGHT;
-        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db, weight), 200);
-        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db, weight), 0, "an empty run is silence");
-
-        // A zoomed-out scale, so rows are wider than buckets: each coarse row
-        // covers exactly the run its settled twin takes the mean over.
-        let wide = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let (settled, coarse) = (bins_for(64, &wide, false), bins_for(64, &wide, true));
-        let mut wide_rows = 0;
-        for (s, c) in settled.iter().zip(&coarse) {
-            match (s.read, c.read) {
-                (RowRead::Mean { from: a, to: b }, RowRead::Max { from: x, to: y }) => {
-                    assert_eq!((a, b), (x, y), "the coarse read covers the same run");
-                    wide_rows += 1;
-                }
-                (a, b) => assert!(a == b, "a narrow row keeps its lerp either way"),
-            }
-        }
-        assert!(wide_rows > 0, "a zoomed-out scale must produce wide rows");
-    }
-
-    /// The gesture detector with the pointer UP — the wheel's case: a RUN of
-    /// style changes opens a gesture, the gesture holds for [`STYLE_SETTLE`]
-    /// past the last change, and first sight of a surface is a fresh pane
-    /// rather than a gesture — so an opened editor draws sharp straight away,
-    /// and only an actually-moving bar trades quality for rate. Only the
-    /// closing clock-restart check runs the pointer both ways: the guard
-    /// answers settled regardless.
-    #[test]
-    fn the_style_settles_after_holding_still() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
-        let c = ColumnStyle::new(100, false, 0.1, 42.0, 48.0, &cfg);
-        let mut slot = None;
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
-            "first sight is not a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 10.1, false).is_none(),
-            "one change is not a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15, false).is_some(),
-            "a second one right after opens it",
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, false).is_some(),
-            "and it holds while the settle has not passed",
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, false).is_none(),
-            "held still past the settle, the image sharpens",
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 20.0, false).is_none(),
-            "quiet frames stay settled"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 21.0, false).is_none(),
-            "and the next lone change is sharp",
-        );
-
-        // A fresh egui context restarts the input clock at zero while the slot
-        // lives on (the editor window recreates its context per open; `motion`
-        // sits on SharedState, which does not). A stamp from the old clock then
-        // reads as the future, and `t - changed_at` goes negative — which
-        // without the restart guard counts as inside the settle window until
-        // the NEW clock catches the old stamp: minutes of coarse picture for
-        // reopening the editor.
-        let mut slot = Some(StyleMotion {
-            style: a.clone(),
-            changed_at: 600.0,
-            moving: true,
-            held: true,
-            cut: GestureCut::Rows,
-        });
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 0.5, false).is_none(),
-            "a restarted clock reads as settled, not as ten minutes of gesture",
-        );
-        // And the slot is re-stamped onto the new clock: a drag a moment later
-        // still opens a gesture, on its second frame as any other drag does.
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 0.6, false).is_none(),
-            "the new clock's first change"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 0.62, false).is_some(),
-            "and its second opens a gesture"
-        );
-
-        // The pointer does not change the reopen: a button already held while
-        // the editor comes back is first sight on this clock, not a gesture.
-        let mut slot = Some(StyleMotion {
-            style: a.clone(),
-            changed_at: 600.0,
-            moving: true,
-            held: true,
-            cut: GestureCut::Rows,
-        });
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 0.5, true).is_none(),
-            "a restarted clock reads as settled with the pointer down too",
-        );
-    }
-
-    /// A gesture is a style being DRIVEN — changes arriving, or the pointer
-    /// holding one — so the frames of a drag are coarse while an isolated
-    /// pointer-up change — a wheel notch on its own, a palette clicked — is
-    /// not. Degrading around a lone change buys nothing: the full-quality
-    /// build it defers is still owed a settle later, with a coarse restart
-    /// added in front of it.
-    #[test]
-    fn a_lone_style_change_is_not_a_gesture() {
-        let cfg = SpectrumConfig::default();
-        let styles: Vec<ColumnStyle> = (0..8)
-            .map(|i| ColumnStyle::new(100, false, 0.1, 40.0 + i as f32, 48.0, &cfg))
-            .collect();
-        let mut slot = None;
-
-        // A change every second, none with the pointer held: each is alone,
-        // and none costs the picture its rows.
-        for (i, style) in styles.iter().enumerate() {
-            assert!(
-                StyleMotion::observe(&mut slot, style, 100.0 + i as f64, false).is_none(),
-                "a change a second after the last one is not a gesture",
-            );
-        }
-
-        // And the frames AFTER a lone change, which are the ones a settle
-        // window would catch: the same style, held still, inside
-        // `STYLE_SETTLE` of a change that was never a gesture. Answering
-        // these from the settle alone — without asking whether anything was
-        // moving — is a dozen coarse frames and a full-height rebuild behind
-        // them for every palette click.
-        // Every 60 Hz frame strictly inside the settle: the twelfth lands ON
-        // it, which is the boundary the settle's own test already holds.
-        let (last, next) = (&styles[7], &styles[0]);
-        for frame in 1..=11 {
-            let t = 107.0 + f64::from(frame) / 60.0;
-            assert!(t - 107.0 < STYLE_SETTLE, "the sweep stays inside the settle");
-            assert!(
-                StyleMotion::observe(&mut slot, last, t, false).is_none(),
-                "frame {frame} after a lone change is still settled",
-            );
-        }
-        // A second change this soon after the FIRST one would have opened a
-        // gesture; this far past it, the next lone change is sharp too.
-        assert!(
-            StyleMotion::observe(&mut slot, next, 108.0, false).is_none(),
-            "and the next lone change is too",
-        );
-        // The same changes at a frame's spacing ARE a drag, from the second on.
-        let mut slot = None;
-        for (i, style) in styles.iter().enumerate() {
-            let gesture =
-                StyleMotion::observe(&mut slot, style, 200.0 + i as f64 / 60.0, false).is_some();
-            assert_eq!(gesture, i > 1, "frame {i} of a continuous drag");
-        }
-    }
-
-    /// A drag's first frame is already a gesture: the first change the
-    /// pointer is holding builds coarse straight away, instead of paying a
-    /// full-height restart it is about to throw away. (A change with the
-    /// pointer UP — the wheel, a click — still needs a second one, which the
-    /// settle tests hold.)
-    #[test]
-    fn a_drags_first_frame_is_already_a_gesture() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
-        let mut slot = None;
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
-            "first sight is not a gesture"
-        );
-        // A long quiet, then a press whose first frame moves the style.
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 60.0, true).is_some(),
-            "one change with the pointer down opens the gesture",
-        );
-    }
-
-    /// The gesture survives the gap between ladder rungs — the test that pins
-    /// the fix. The slab ladder holds the width across a rung
-    /// (`dragging_the_span_carries_the_ring_forward`), so a Span drag changes
-    /// the style only at crossings, and at trackpad speed those arrive about
-    /// 0.39 s apart — outside `STYLE_SETTLE`. The held frames between them
-    /// are what run on almost every frame of the drag, and the pointer is
-    /// what carries the gesture across; with the bare settle in the HELD arm
-    /// the picture would rebuild at full quality before every crossing, which
-    /// is the intermittent hitch this rule exists to end.
-    #[test]
-    fn the_gesture_survives_the_gap_between_rungs() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
-        let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
-        let mut slot = None;
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
-            "first sight is not a gesture"
-        );
-        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(), "the drag's first rung");
-        // 0.38 s of held style at 60 Hz, pointer down throughout — well past
-        // the settle window from frame 13 on.
-        for frame in 1..=23 {
-            let t = 20.0 + f64::from(frame) / 60.0;
-            assert!(
-                StyleMotion::observe(&mut slot, &b, t, true).is_some(),
-                "frame {frame} between rungs is still the gesture",
-            );
-        }
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 20.39, true).is_some(),
-            "and the next rung still is"
-        );
-    }
-
-    /// A gesture the WHEEL opened is not held open by a press that arrives
-    /// after it.
-    ///
-    /// The pointer carries a gesture across the gap between ladder rungs
-    /// because it is the pointer DRIVING that gesture. A button pressed on
-    /// something else entirely drives nothing, and `any_down` is any button
-    /// anywhere in the editor — the performance overlay's plate, which is an
-    /// `Area` over the whole editor rect, the Spiral's pan, a dock divider, a
-    /// note dragged in the roll. Only the last of those existed when the
-    /// pointer term was written.
-    ///
-    /// The latch already refuses to REOPEN off an unrelated press
-    /// (`a_pointer_down_that_changes_nothing_is_not_a_gesture`); this is the
-    /// other side of it, where the press arrives while a gesture is open and
-    /// extends it with no bound but the button. The picture that buys is the
-    /// heatmap held at half its rows with wide rows read as a max rather than
-    /// the order-4 power mean — a visibly softer pitch axis over a noise floor
-    /// several dB high — for as long as the hold lasts.
-    #[test]
-    fn a_press_that_arrives_after_a_wheel_gesture_does_not_hold_it_open() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
-        let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
-        let mut slot = None;
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
-            "first sight is not a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 10.1, false).is_none(),
-            "one notch is not a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15, false).is_some(),
-            "a second notch inside the settle window opens one",
-        );
-        // The button goes down after the wheel stopped, on something that
-        // moves no style. Still inside the settle window, so the gesture is
-        // legitimately open here and the press is not what is holding it.
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, true).is_some(),
-            "the settle window has not run out yet",
-        );
-        // Past the window with the button still held: nothing is driving the
-        // style, so the gesture is over however long the hold goes on.
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, true).is_none(),
-            "a press that opened nothing carried the gesture past its settle",
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &c, 30.0, true).is_none(),
-            "and went on carrying it for as long as the button was down",
-        );
-    }
-
-    /// Release settles: with the pointer up, the settle window past the last
-    /// change is what closes the gesture, so letting go reads as the picture
-    /// snapping into focus.
-    #[test]
-    fn releasing_the_pointer_settles_the_gesture() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
-        let mut slot = None;
-        assert!(
-            StyleMotion::observe(&mut slot, &a, 10.0, false).is_none(),
-            "first sight is not a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(),
-            "a drag opens a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 20.1, false).is_some(),
-            "released inside the settle, it runs on to the window",
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false).is_none(),
-            "held still past the settle with the pointer up, the image sharpens",
-        );
-    }
-
-    /// A pointer-down that changes nothing about the picture never opens a
-    /// gesture: only a style CHANGE ever sets the latch, so a divider drag or
-    /// a note dragged in the roll reaches the HELD arm latched shut. And a
-    /// gesture that has CLOSED writes the latch back down, so a later
-    /// unrelated press cannot reopen it off the stale flag.
-    #[test]
-    fn a_pointer_down_that_changes_nothing_is_not_a_gesture() {
-        let cfg = SpectrumConfig::default();
-        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
-        let mut slot = None;
-        // Fresh slot: press and hold over an unchanging picture.
-        for frame in 0..30 {
-            let t = 10.0 + f64::from(frame) / 60.0;
-            assert!(
-                StyleMotion::observe(&mut slot, &a, t, true).is_none(),
-                "frame {frame} of a drag that moves no style is settled",
-            );
-        }
-        // A real gesture, opened by a change and settled by release...
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 20.0, true).is_some(),
-            "a drag opens a gesture"
-        );
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false).is_none(),
-            "and release settles it",
-        );
-        // ...stays settled under a later press that changes nothing.
-        assert!(
-            StyleMotion::observe(&mut slot, &b, 30.0, true).is_none(),
-            "a later unrelated press does not reopen the settled gesture",
-        );
-    }
-
-    /// The gesture image is a bounded MAGNIFICATION of the pane, not a fixed
-    /// height: a tall pane keeps half its rows rather than the eleventh of
-    /// them a flat cap would leave it, and a pane already shorter than the
-    /// floor loses nothing at all.
-    ///
-    /// The bound is asserted UNCONDITIONALLY, which is the whole of what this
-    /// test is for. Written as `stretch <= GESTURE_MAGNIFY || rows >=
-    /// GESTURE_ROWS` it passes against the flat cap it replaces, since the
-    /// floor satisfies the right-hand side at every pane the cap bites on —
-    /// so the sweep would say nothing and the one worked example below it
-    /// would be carrying the property alone.
-    #[test]
-    fn a_gesture_image_is_never_more_than_a_bounded_stretch() {
-        // Even, as `Plan::new` guarantees: a live pane is a multiple of
-        // `PANE_QUANTUM` and the clamp's floor is 2, so the halving is exact
-        // and the bound holds with no rounding slack to hide in.
-        for pane in [2usize, 100, GESTURE_ROWS, 700, 1408, 4096] {
-            let rows = gesture_rows(pane);
-            assert_eq!(pane % 2, 0, "{pane}: the fixture must be a pane the plan can produce");
-            assert!(rows <= pane, "{pane}: a gesture never builds MORE rows than the pane");
-            assert!(
-                rows * GESTURE_MAGNIFY >= pane,
-                "{pane}: {rows} rows is a {}x stretch, past {GESTURE_MAGNIFY}x",
-                pane as f32 / rows as f32,
-            );
-            assert!(rows >= pane.min(GESTURE_ROWS), "{pane}: {rows} is under the floor");
-        }
-        assert_eq!(gesture_rows(1408), 704, "a full-height 2x pane keeps half its rows");
-        assert_eq!(gesture_rows(GESTURE_ROWS), GESTURE_ROWS, "a floor-height pane loses none");
-    }
-
-    /// A pitch gesture — the range zoomed or panned a frame at a time — must
-    /// repaint the image WITHOUT re-walking the store: the ring restarts, since
-    /// the pixels really are all different, while the aggregator's grid, which
-    /// is in bucket space, is carried untouched. That split is what holds the
-    /// gesture's cost to a compose. With the rows folded in, every frame of it
-    /// would re-fold the whole retention — 46 ms at a 12 s Span on a
-    /// full-height 2x pane, measured — and only the rebuild counter can see the
-    /// difference, since the refold draws the same picture.
-    ///
-    /// Per FRAME, which is the whole of the claim. `GestureCut::Slabs` moves
-    /// the slab width once at each END of a pitch gesture and the grid is keyed
-    /// on that width, so one pays exactly two refolds however long it runs;
-    /// `timing_refold` is what those two cost.
-    ///
-    /// Driven at a 12 s Span rather than at the three-minute one a fresh view
-    /// opens on, and that is the fixture being cheap rather than being stale:
-    /// what it counts is aggregator rebuilds across a gesture, which the span
-    /// does not change. The loop runs `(span + 5) / FFT_INTERVAL` frames, so
-    /// three minutes would drive it 23,000 times rather than 2,100 — a slower
-    /// test making the same count.
-    #[test]
-    fn a_pitch_gesture_never_reaches_the_aggregator() {
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
-        let span = 12.0;
-        let bucket = live_slab(span, cols);
-
-        let mut history = crate::SpectrumHistory::default();
-        let mut agg = SpectrogramAgg::new();
-        let mut ring: Option<SpectrogramRing> = None;
-        let mut restarts = 0u32;
-        let frames = ((span + 5.0) / interval) as usize;
-        for i in 0..frames {
-            let t = i as f64 * interval;
-            history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-            // The zoom: the range closes in a little further each frame,
-            // exactly as the wheel delivers it.
-            let scale = PitchScale {
-                min_midi: 40.0 + 0.01 * i as f32,
-                max_midi: 88.0,
-                span: 48.0 - 0.01 * i as f32,
-            };
-            let first = history.partition_point(|c| c.time < t - span).saturating_sub(1);
-            let (centers, _) = agg.window(&history, first, bucket, planned);
-            let style = style_for(64, bucket, span, &scale);
-            let first_key = (centers[0] / bucket).floor() as i64;
-            let last_key = first_key + centers.len() as i64 - 1;
-            let capacity = ring_capacity(planned, centers.len());
-            if ring
-                .as_ref()
-                .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
-            {
-                restarts += 1;
-                ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
-            }
-            ring.as_mut().expect("just restarted").wrote(first_key, last_key);
-        }
-        assert_eq!(restarts, frames as u32, "a moved pitch range must repaint");
-        assert_eq!(agg.rebuilds(), 1, "a pitch gesture re-walked the store");
-    }
-
-    /// Resizing the pane must not re-lay the grid on every PIXEL of the drag.
-    ///
-    /// The pane's height decides the image's rows and its width decides the
-    /// slabs and the ring's width, so taken to the pixel every frame of a resize
-    /// is a different image and a different texture — a full re-fold and a full
-    /// repaint each, for as long as the drag lasts. On the overlay's fallback
-    /// row that showed up as both counters sitting at the frame rate: the drag
-    /// was not merely dropping frames, it was spending each one rebuilding.
-    ///
-    /// Vertical moves both (rows change the image AND which buckets a row
-    /// reads); horizontal moves the ring alone, since [`live_slab`] holds the
-    /// slab width across a rung. Both are counted here.
-    #[test]
-    fn resizing_the_pane_holds_the_grid_between_quanta() {
-        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let view = |pitch_len: f32, depth_len: f32| PaneView {
-            ppp: 2.0,
-            max_side: EDITOR_MAX_SIDE,
-            max_rows: EDITOR_MAX_SIDE,
-            max_cols: usize::MAX,
-            pitch_len,
-            depth_len,
-            window: 30.0,
-            scale,
-            cfg: SpectrumConfig::default(),
-            whole: false,
-            coarse: false,
-        };
-        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
-        // What a re-layout is, from each cache's point of view: the aggregator
-        // re-folds when the style changes (rows or slab width), and the ring
-        // restarts when the style OR its capacity does.
-        let layouts = |sizes: &dyn Fn(f32) -> PaneView, from: i32, to: i32| {
-            let (mut styles, mut rings) =
-                (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
-            for px in from..=to {
-                let plan = Plan::new(&sizes(px as f32), &columns);
-                styles.insert(format!("{:?}", plan.key.style()));
-                rings.insert((format!("{:?}", plan.key.style()), plan.capacity));
-            }
-            (styles.len(), rings.len())
-        };
-
-        // A 600-point drag at 2x is 1200 device pixels: without a quantum every
-        // one of them is its own layout.
-        let dragged = 600;
-        let quanta = (dragged as f32 * 2.0 / PANE_QUANTUM).ceil() as usize + 1;
-
-        let (folds, rings) = layouts(&|h| view(h, 800.0), 300, 300 + dragged);
-        assert!(folds <= quanta, "a vertical drag re-folds {folds} times, not {quanta}");
-        assert!(rings <= quanta, "a vertical drag restarts the ring {rings} times");
-
-        let (folds, rings) = layouts(&|w| view(400.0, w), 300, 300 + dragged);
-        assert!(rings <= quanta, "a horizontal drag restarts the ring {rings} times");
-        // And the ladder means width barely touches the aggregator at all: only
-        // a rung crossing re-folds, which a whole drag does a handful of times.
-        assert!(folds <= 8, "a horizontal drag re-folds {folds} times, not a handful");
-    }
-
-    /// The two-step plan a [`GestureCut::Rows`] frame is built through, which
-    /// `draw_spectrogram` runs and no other test reaches: the FULL plan
-    /// decides the rows, [`gesture_rows`] cuts them, and the second plan
-    /// builds the short image.
-    ///
-    /// It has to land on the same rows on every frame of the gesture. The cut
-    /// is taken against the full plan each frame precisely so that it cannot
-    /// compound — fed its own previous answer it walks 704 -> 352 -> 256 down
-    /// to the floor over the frames of one drag, softening the picture the
-    /// longer the drag runs and restarting the ring on every frame of the way
-    /// down, which is the cost the gesture path exists to avoid.
-    #[test]
-    fn every_frame_of_a_gesture_plans_the_same_short_image() {
-        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
-        // A pane under the floor, one between, and the full-height 2x pane —
-        // as points, which is what a pane is measured in.
-        for pitch_len in [120.0f32, 350.0, 704.0] {
-            let mut planned = std::collections::BTreeSet::new();
-            // Ten frames of a Span drag, which is the gesture that spends its
-            // rows: the window moves every frame, the pane and the scale do
-            // not.
-            for frame in 0..10 {
-                let view = |coarse: bool, max_rows: usize| PaneView {
-                    ppp: 2.0,
-                    max_side: EDITOR_MAX_SIDE,
-                    max_rows,
-                    max_cols: usize::MAX,
-                    pitch_len,
-                    depth_len: 800.0,
-                    window: 30.0 + frame as f64 * 4.0,
-                    scale: PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 },
-                    cfg: SpectrumConfig::default(),
-                    whole: false,
-                    coarse,
-                };
-                // Exactly the pair of calls `draw_spectrogram` makes.
-                let full = Plan::new(&view(false, EDITOR_MAX_SIDE), &columns);
-                let short = Plan::new(&view(true, gesture_rows(full.rows)), &columns);
-
-                assert_eq!(short.rows, gesture_rows(full.rows), "the cut reached the plan");
-                assert!(
-                    short.rows * GESTURE_MAGNIFY >= full.rows,
-                    "{pitch_len} pt: {} rows under {} is past the bound",
-                    short.rows,
-                    full.rows,
-                );
-                assert!(short.rows >= full.rows.min(GESTURE_ROWS), "under the floor");
-                // The READ half of the degradation reached the second plan
-                // too. The row assertions above cannot see it, and on a pane
-                // the cut does not bite they all hold with the flag lost —
-                // which would carry a settled texture through a gesture frame.
-                assert_eq!(
-                    full.key.style().differs(short.key.style()),
-                    Some(Restart::Rows),
-                    "{pitch_len} pt: the coarse read did not reach the plan",
-                );
-                planned.insert((full.rows, short.rows));
-            }
-            assert_eq!(
-                planned.len(),
-                1,
-                "{pitch_len} pt: the row count moved during the gesture: {planned:?}",
-            );
-        }
-        // And the floor case is a real one at these sizes rather than an
-        // argument: a 120 pt pane at 2x loses no rows at all.
-        let short = Plan::new(
-            &PaneView {
-                ppp: 2.0,
-                max_side: EDITOR_MAX_SIDE,
-                max_rows: EDITOR_MAX_SIDE,
-                max_cols: usize::MAX,
-                pitch_len: 120.0,
-                depth_len: 800.0,
-                window: 30.0,
-                scale: PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 },
-                cfg: SpectrumConfig::default(),
-                whole: false,
-                coarse: false,
-            },
-            &columns,
-        );
-        assert_eq!(gesture_rows(short.rows), short.rows, "a pane under the floor keeps its rows");
-    }
-
-    /// The mirror two-step, for [`GestureCut::Slabs`]: a pitch gesture spends
-    /// the time axis, so the pitch side of the style — its rows AND its read —
-    /// has to reach the second plan untouched and the slab width has to be the
-    /// only thing that moved.
-    ///
-    /// That is the whole claim. A difference anywhere on the pitch side is the
-    /// several-dB step between a gesture frame and the picture it settles into,
-    /// which is what this cut exists to remove.
-    #[test]
-    fn a_pitch_gesture_holds_its_rows_and_cuts_its_slabs() {
-        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
-        let mut planned = std::collections::BTreeSet::new();
-        // Ten frames of a pitch drag: the scale moves every frame, the pane and
-        // the window do not.
-        for frame in 0..10 {
-            let (min_midi, span) = (40.0 + frame as f32 * 0.5, 48.0 - frame as f32 * 0.9);
-            let view = |max_cols: usize| PaneView {
-                ppp: 2.0,
-                max_side: EDITOR_MAX_SIDE,
-                max_rows: EDITOR_MAX_SIDE,
-                max_cols,
-                pitch_len: 704.0,
-                depth_len: 800.0,
-                window: 30.0,
-                scale: PitchScale { min_midi, max_midi: min_midi + span, span },
-                cfg: SpectrumConfig::default(),
-                whole: false,
-                coarse: false,
-            };
-            // Exactly the pair of calls `draw_spectrogram` makes for this cut.
-            let full = Plan::new(&view(usize::MAX), &columns);
-            let short = Plan::new(&view(gesture_slabs(full.slabs())), &columns);
-
-            // The fixture has to be wide enough that the cut bites at all: a
-            // pane under the floor would pass every assertion below with the
-            // cut doing nothing.
-            assert!(short.slabs() < full.slabs(), "the pane is too narrow to reach the cut");
-            assert_eq!(short.rows, full.rows, "the rows came through the cut");
-            assert_eq!(short.slabs(), gesture_slabs(full.slabs()), "the cut reached the plan");
-            assert!(
-                short.slabs() * GESTURE_SLAB_CUT >= full.slabs(),
-                "{} slabs under {} is past the bound",
-                short.slabs(),
-                full.slabs(),
-            );
-            assert!(short.slabs() >= full.slabs().min(GESTURE_SLABS), "under the floor");
-            assert_eq!(
-                full.key.style().differs(short.key.style()),
-                Some(Restart::Slab),
-                "the cut moved something other than the slab width",
-            );
-            planned.insert((full.slabs(), short.slabs()));
-        }
-        assert_eq!(planned.len(), 1, "the slab count moved during the gesture: {planned:?}");
-    }
-
-    /// Which axis a gesture spends is decided by the one it is MOVING, and the
-    /// answer stands for the length of the gesture.
-    ///
-    /// The holding is the half that costs something to get wrong: a cut
-    /// re-decided on a frame that moves nothing would resize the ring under a
-    /// drag that has merely paused, which is the per-frame relayout the whole
-    /// gesture path exists to avoid.
-    #[test]
-    fn a_gesture_spends_the_axis_it_is_not_moving() {
-        let cfg = SpectrumConfig::default();
-        let dimmer = SpectrumConfig { volume_floor_db: cfg.volume_floor_db - 6.0, ..cfg };
-        let base = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
-        // One field moved per case, the [`Restart`] that names it, and the cut
-        // it is expected to buy.
-        let cases = [
-            (
-                "a pitch wheel",
-                ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg),
-                Restart::Pitch,
-                GestureCut::Slabs,
-            ),
-            (
-                "a Span rung",
-                ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg),
-                Restart::Slab,
-                GestureCut::Rows,
-            ),
-            (
-                "a resize",
-                ColumnStyle::new(120, false, 0.1, 40.0, 48.0, &cfg),
-                Restart::Rows,
-                GestureCut::Rows,
-            ),
-            (
-                "a Level drag",
-                ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &dimmer),
-                Restart::Colour,
-                GestureCut::Slabs,
-            ),
-        ];
-        for (name, moved, restart, cut) in cases {
-            // The fixture moves the field it claims to: without this every case
-            // below could be naming the same change.
-            assert_eq!(base.differs(&moved), Some(restart), "{name}: moved the wrong field");
-            let mut slot = None;
-            assert!(
-                StyleMotion::observe(&mut slot, &base, 10.0, true).is_none(),
-                "{name}: first sight is not a gesture",
-            );
-            assert_eq!(
-                StyleMotion::observe(&mut slot, &moved, 10.02, true),
-                Some(cut),
-                "{name}: spent the wrong axis",
-            );
-            assert_eq!(
-                StyleMotion::observe(&mut slot, &moved, 10.04, true),
-                Some(cut),
-                "{name}: a paused drag re-decided its cut",
-            );
         }
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
     ///
     /// This is what [`live_slab`]'s ladder is for. A slab width taken straight
-    /// from the window moves whenever the window does, and a moved slab width is
-    /// a different grid AND a different texture — so a drag used to pay the full
-    /// rebuild, every frame, for as long as it lasted. On the ladder the width
-    /// holds across a whole rung, the ring is sized off the pane so it holds too,
-    /// and the aggregator keeps what the ring keeps so a WIDENING Span finds its
-    /// slabs already folded rather than asking for ones just trimmed.
+    /// from the window moves whenever the window does, and a moved slab width
+    /// re-lays the whole grid — so a drag would pay the full refold and a full
+    /// upload, every frame, for as long as it lasted. On the ladder the width
+    /// holds across a whole rung, the capacity is sized off the pane so it holds
+    /// too, and the aggregator keeps what the GPU's copy keeps so a WIDENING
+    /// Span finds its slabs already folded rather than asking for ones just
+    /// trimmed.
     ///
     /// Swept in both directions: widening is the harder one, since it reaches
     /// back to slabs the window did not want a frame ago.
@@ -4208,13 +2281,9 @@ mod tests {
 
         let mut agg = SpectrogramAgg::new();
         let mut history = crate::SpectrumHistory::default();
-        let mut ring: Option<SpectrogramRing> = None;
-        let (mut restarts, mut widths) = (0u32, std::collections::BTreeSet::new());
-        // Which reason, if it does — a Span drag must not restyle at all now
-        // that the style holds only what reaches a texel, so anything but the
-        // opening build is a real bug and this says which.
-        let mut reasons: std::collections::BTreeSet<&'static str> =
-            std::collections::BTreeSet::new();
+        let mut gpu = GpuGrid::default();
+        let mut widths = std::collections::BTreeSet::new();
+        let mut caps = std::collections::BTreeSet::new();
 
         // Fill past the widest Span in the sweep, so every frame of it is asking
         // for a window the store can actually cover.
@@ -4240,20 +2309,25 @@ mod tests {
             };
 
             let bucket = live_slab(span, cols);
-            let style = style_for(2, bucket, span, &SWEEP_SCALE);
             widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-            let (centers, _) = agg.window(&history, first, bucket, planned);
+            let (centers, power) = agg.window(&history, first, bucket, planned);
             let first_key = (centers[0] / bucket).floor() as i64;
-            let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
-            let why = ring.as_ref().map(|r| r.carries(capacity, &style, first_key, last_key));
-            if why.is_none_or(|w| w.is_some()) {
-                restarts += 1;
-                reasons.extend(why.flatten().map(|w| Restart::LABELS[w.slot()]));
-                ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
-            }
-            ring.as_mut().expect("just restarted").wrote(first_key, last_key);
+            caps.insert(capacity);
+            let layout = TexLayout {
+                bucket,
+                t_origin: centers[0] - 0.5 * bucket,
+                tex_span: centers.len() as f64 * bucket,
+            };
+            gpu.accept(
+                run_key(first, history.len(), t, bucket),
+                first_key,
+                capacity,
+                power,
+                layout,
+            );
+            acknowledge(&gpu);
         }
 
         assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -4266,11 +2340,10 @@ mod tests {
             (widths.first(), widths.last()),
         );
         assert_eq!(agg.rebuilds, 1, "the drag rescanned the window");
-        // The opening build and nothing else. A reason here names the field
-        // that moved, which since the style holds only what reaches a texel is
-        // a real bug rather than a cost.
-        assert!(reasons.is_empty(), "the drag restarted the ring: {reasons:?}");
-        assert_eq!(restarts, 1, "the drag reallocated the ring");
+        // The opening upload and nothing else: the capacity is the pane's, so a
+        // Span that moves inside its rung moves no slab into a different slot.
+        assert_eq!(caps.len(), 1, "the drag resized the buffer: {caps:?} slabs");
+        assert_eq!(gpu.full_uploads(), 1, "the drag re-uploaded the whole grid");
     }
 
     /// A Span drag CROSSING ladder rungs refolds once per rung, not once per
@@ -4283,10 +2356,10 @@ mod tests {
     /// discards the grid and refolds the retention out of history
     /// ([`SpectrogramAgg::rebuild`]).
     ///
-    /// The COUNT is the claim here, because the cost of one is already known:
-    /// `timing_zoom_costs` measures a refold at 0.5-3 ms across the whole Span
-    /// range, which fits inside a 144 Hz frame beside a gesture's coarse
-    /// compose — once. What would not fit is the cascade the slack in
+    /// The COUNT is the claim here, because the cost of one is small and known:
+    /// a refold is an elementwise byte max per column, half a millisecond to
+    /// three across the whole Span range, which fits inside a 144 Hz frame —
+    /// once. What would not fit is the cascade the slack in
     /// [`SpectrogramAgg::rebuild`] exists to prevent, where a widening drag
     /// rebuilds flush to its window and is asked for something older on the
     /// very next frame. That costs the same 0.5-3 ms EVERY frame for the
@@ -4381,8 +2454,9 @@ mod tests {
     ///
     /// Both caches then miss together, which is what makes it expensive rather
     /// than merely frequent: `bucket` is the aggregator's one layout input AND a
-    /// [`ColumnStyle`] field, so every frame pays a full refold and a full
-    /// recompose — the cascade the test above shows a travelling drag avoids.
+    /// [`RunKey`] field, so every frame pays a full refold and rewrites every
+    /// slab it folded — the cascade the test above shows a travelling drag
+    /// avoids.
     ///
     /// Asserted as the cost it is rather than as a bug, since nothing here fixes
     /// it. What would is hysteresis in [`live_slab`] — holding the current rung
@@ -4435,161 +2509,333 @@ mod tests {
         );
     }
 
-    /// The same drag as above, with the Span read from where the pane reads it.
+    /// A frame that folds nothing re-sends the run it already holds, and a
+    /// frame that folds writes only the slabs whose bytes moved.
     ///
-    /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] sweeps a span
-    /// past a style built once from a default config, so in that fixture the
-    /// two are independent. In the pane they are one number: the window IS
-    /// `cfg.roll_seconds` (`TimeAxis::new`), and the drag writes
-    /// `cfg.roll_seconds` on every frame it delivers. So anything the style
-    /// keeps from `cfg` moves on every frame of the drag, and the ladder's
-    /// whole promise — the grid holds still, so the texture is carried forward
-    /// — is void however still `bucket` holds.
-    ///
-    /// Two frames is the whole test: the drag's cost is per frame, so a single
-    /// step inside one rung either carries or does not.
+    /// This is the whole of what replaced the texture: the picture is a
+    /// statement about which slabs are in which slots, so the cheap frame is
+    /// the one that repeats it and the expensive one is the full upload. Both
+    /// halves are invisible from the picture — a frame that re-uploaded
+    /// everything, and a frame that patched nothing when it should have, draw
+    /// the same heatmap — so they are counted rather than looked at.
     #[test]
-    fn dragging_the_span_carries_the_ring_forward() {
-        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
-        let columns = Columns { first: 3, len: 400, newest: 12.0 };
-        let plan_at = |span: f32| {
-            // The Span as the pane holds it: the window IS this field.
-            let cfg = SpectrumConfig { roll_seconds: span, ..Default::default() };
-            Plan::new(
-                &PaneView {
-                    ppp: 2.0,
-                    max_side: EDITOR_MAX_SIDE,
-                    max_rows: EDITOR_MAX_SIDE,
-                    max_cols: usize::MAX,
-                    pitch_len: 300.0,
-                    depth_len: 800.0,
-                    window: span as f64,
-                    scale,
-                    cfg,
-                    whole: false,
-                    coarse: false,
-                },
-                &columns,
-            )
+    fn a_second_frame_on_the_same_columns_reuses_the_run_it_sent() {
+        let mut spectrum = crate::AudioSpectrum::default();
+        let mut bins = [0.0f32; SPECTRUM_BINS];
+        bins[1000] = 0.8;
+        for i in 0..200 {
+            spectrum.push_history(90.0 + f64::from(i) * 0.01, &bins);
+        }
+        let view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 600.0,
+            window: 1.5,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
+            whole: false,
         };
-        // One drag-delta apart, well inside a rung — the ladder is what makes
-        // that a claim about the style alone rather than about the slab width.
-        let (a, b) = (plan_at(12.0), plan_at(12.043));
-        assert_eq!(a.bucket, b.bucket, "the sweep crossed a rung; pick a smaller step");
-        assert_eq!(a.capacity, b.capacity, "the pane did not move, so neither may the ring");
-        assert_eq!(
-            a.key.style(),
-            b.key.style(),
-            "one frame of a Span drag re-blanks the whole texture and repaints every column",
+        let columns = |len: usize, newest: f64| Columns { first: 0, len, newest };
+        let fold = |spectrum: &mut crate::AudioSpectrum, view: &PaneView, cols: &Columns| {
+            let plan = Plan::new(view, cols);
+            let layout = run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
+            let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("a run was accepted");
+            let held = (layout, sent.run.clone(), sent.dirty.clone());
+            // The frame drew, which is what entitles the next one to a delta.
+            acknowledge(&spectrum.spectrogram[0].gpu);
+            held
+        };
+
+        let cols = columns(200, 91.99);
+        let (cold, run, dirty) = fold(&mut spectrum, &view, &cols);
+        assert!(dirty.is_empty(), "the first fold patched a buffer that was never written");
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1);
+
+        // Same columns: the key hits, so nothing is folded and the same
+        // allocation goes back to the GPU.
+        let (hit, again, _) = fold(&mut spectrum, &view, &cols);
+        assert_eq!(cold, hit, "the reused run drew at different geometry");
+        assert!(Arc::ptr_eq(&run, &again), "a hit refolded the store");
+
+        // A fresh column: the key misses, and what the GPU is told is the one
+        // slab that moved — the newest, still accumulating its max.
+        spectrum.push_history(92.0, &bins);
+        let (_, _, dirty) = fold(&mut spectrum, &view, &columns(201, 92.0));
+        assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1, "a column forced a full upload");
+
+        // A narrower pane sizes the GPU's copy differently, and the slot a key
+        // lands in is `key mod capacity` — so the whole mapping moves and the
+        // next fold goes over whole. The resize alone folds nothing: the
+        // capacity is not the run's, which is why it is not in the key.
+        let narrow = PaneView { depth_len: 300.0, ..view };
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(201, 92.0));
+        assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
+        spectrum.push_history(92.01, &bins);
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
+        assert!(dirty.is_empty(), "a new slot mapping was patched rather than uploaded");
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 2);
+
+        // And a released context is a full upload rather than a patch of a
+        // buffer nothing wrote.
+        spectrum.spectrogram[0].gpu.release();
+        let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
+        assert!(dirty.is_empty(), "a fresh context was sent a delta");
+        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 3);
+    }
+
+    /// The acknowledgement the render crate's `prepare` makes at the end of a
+    /// frame that wrote — see [`GpuGrid::uploaded`], and
+    /// `a_delta_upload_draws_what_a_full_upload_draws` for the store itself.
+    /// Playing it by hand is what lets a CPU test run a frame that reached the
+    /// GPU beside one that did not.
+    fn acknowledge(gpu: &GpuGrid) {
+        let grid = gpu.grid().expect("a run to acknowledge");
+        grid.uploaded.store(grid.serial, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A run the GPU never acknowledged is uploaded whole, not patched.
+    ///
+    /// [`GpuGrid::accept`] moves `sent` forward on every frame, and a frame's
+    /// callback is not certain to run — egui drops one whose clip rect is
+    /// empty. Re-sending [`SentRun::dirty`] covers ONE dropped frame; it does
+    /// not cover a run that ADVANCES across several, where each delta is
+    /// measured against a run the GPU never received. A slab that entered the
+    /// run during that stretch then keeps `key - capacity` in its slot for
+    /// good: the byte comparison sees it as already held, so no later frame
+    /// repairs it, and the column is a lap old with nothing on the CPU able to
+    /// see it.
+    #[test]
+    fn a_run_the_gpu_never_saw_is_uploaded_whole() {
+        let view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 600.0,
+            window: 1.5,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
+            whole: false,
+        };
+        // A fresh surface, filled past the window, and the columns that carry
+        // it one slab further on. Replayed twice, so the two runs differ only
+        // in whether the first frame reached the GPU.
+        let sequence = |acknowledged: bool| {
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut bins = [0.0f32; SPECTRUM_BINS];
+            bins[1000] = 0.8;
+            let mut time = 90.0;
+            for _ in 0..200 {
+                spectrum.push_history(time, &bins);
+                time += 0.01;
+            }
+            let fold = |spectrum: &mut crate::AudioSpectrum, newest: f64, len: usize| {
+                let plan = Plan::new(&view, &Columns { first: 0, len, newest });
+                run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("accepted");
+                (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
+            };
+            let before = fold(&mut spectrum, time - 0.01, 200);
+            if acknowledged {
+                acknowledge(&spectrum.spectrogram[0].gpu);
+            }
+            // Four columns at 10 ms carry the window past a 16 ms slab
+            // boundary, so the second run holds a key the first did not.
+            for _ in 0..4 {
+                spectrum.push_history(time, &bins);
+                time += 0.01;
+            }
+            let after = fold(&mut spectrum, time - 0.01, 204);
+            (before, after, spectrum.spectrogram[0].gpu.full_uploads())
+        };
+
+        let (before, after, uploads) = sequence(false);
+        let entered = (after.0 + after.1 as i64) - (before.0 + before.1 as i64);
+        assert!(entered > 0, "the window never advanced, so no key entered the run to be missed",);
+        assert_eq!(after.2, 0, "a run the GPU never saw was patched with a delta");
+        assert_eq!(uploads, 2, "an unacknowledged run was treated as one the GPU holds");
+
+        // And the same frames with the acknowledgement in between: the delta
+        // path stands, and it has exactly the entering slab and the two the
+        // window is still accumulating to write.
+        let (_, after, uploads) = sequence(true);
+        assert_eq!(uploads, 1, "an acknowledged run was uploaded whole");
+        // The slabs that entered, the window's first (repruned as columns
+        // leave it) and the newest (still accumulating) — a delta, not a run.
+        assert!(
+            (1..=entered as usize + 2).contains(&after.2),
+            "an acknowledged run wrote {} slabs rather than a delta",
+            after.2,
         );
     }
 
-    /// The cache reuses the uploaded texture only while its key matches, and
-    /// the RING carries its columns forward only while the key's style matches,
-    /// so both must move for every input the pixels depend on — otherwise a
-    /// change leaves a stale image on screen, or worse, a texture whose newest
-    /// column was painted under the new setting and whose other thousand were
-    /// not.
+    /// One surface's grid, and a run of `slabs` slabs whose every byte moves
+    /// with `seed` — so two runs made with different seeds differ in every
+    /// slab, and [`SentRun::moved`] has to name them all.
+    fn slab_run(seed: u8, slabs: usize) -> Vec<u8> {
+        (0..slabs * SPECTRUM_BINS).map(|i| seed.wrapping_mul(97).wrapping_add(i as u8)).collect()
+    }
+
+    /// A delta the GPU has acknowledged is not handed over a second time, so a
+    /// picture that sits still costs no upload traffic at all.
     ///
-    /// Those used to be two hand-kept lists in two files with a test on one of
-    /// them. They are one list now, so this covers both.
+    /// The claim is about the frames that fold NOTHING. A run stands for as
+    /// long as the columns it was folded from do — for a stopped transport,
+    /// unbounded — and every frame drawn under it is handed
+    /// [`SentRun::dirty`] afresh. Without an end to the repeat, a refold that
+    /// moved a large delta is re-issued as that many writes on every frame the
+    /// pane is on screen, which no counter here reports and no picture shows.
+    /// The frame BEFORE the acknowledgement must still re-send it, which is
+    /// the other half of what is measured: that is the dropped callback the
+    /// repeat exists for.
     #[test]
-    fn the_key_is_sensitive_to_every_input() {
+    fn an_acknowledged_delta_is_not_handed_over_twice() {
+        let bucket = 0.016;
+        let (capacity, slabs) = (64, 32);
+        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
+        let mut gpu = GpuGrid::default();
+
+        // The opening upload, acknowledged, so what follows is measured as a
+        // delta rather than as a context with nothing said about it.
+        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
+        acknowledge(&gpu);
+
+        // One slab's bytes move: a delta of exactly one key, well under the
+        // share of the run that would be uploaded whole instead.
+        let mut moved = slab_run(0, slabs);
+        moved[0] ^= 0xff;
+        gpu.accept(run_key(0, 101, 1.01, bucket), 0, capacity, moved, layout);
+        assert_eq!(gpu.grid().expect("a run").dirty, vec![0], "the moved slab went unsent");
+        assert_eq!(
+            gpu.grid().expect("a run").dirty,
+            vec![0],
+            "an unacknowledged delta was dropped on the frame that had to repeat it",
+        );
+
+        acknowledge(&gpu);
+        assert!(
+            gpu.grid().expect("a run").dirty.is_empty(),
+            "a delta the GPU acknowledged was handed over again",
+        );
+        assert_eq!(gpu.full_uploads(), 1, "the still picture rebuilt the grid");
+    }
+
+    /// A delta naming most of the run is taken as the rebuild it already is.
+    ///
+    /// Both sides of the threshold are the claim. Above it the delta writes
+    /// what a rebuild writes — one scattered `write_buffer` per slab against
+    /// one contiguous write — while reporting as a patch, so the rebuild
+    /// counter reads zero through the traffic of a rebuild. Below it the delta
+    /// has to survive: a patch turned into a rebuild is a buffer's worth of
+    /// upload bought for a slab's worth of change.
+    #[test]
+    fn a_refold_that_moves_most_of_the_run_is_uploaded_whole() {
+        let bucket = 0.016;
+        let (capacity, slabs) = (64, 32);
+        let layout = TexLayout { bucket, t_origin: 0.0, tex_span: slabs as f64 * bucket };
+        let mut gpu = GpuGrid::default();
+
+        gpu.accept(run_key(0, 100, 1.0, bucket), 0, capacity, slab_run(0, slabs), layout);
+        acknowledge(&gpu);
+        assert_eq!(
+            gpu.full_uploads(),
+            1,
+            "the opening run was patched into a buffer with no bytes"
+        );
+
+        // A backward jump of the transport: the run lands on keys whose slots
+        // hold a different lap, so every slab of it has moved.
+        gpu.accept(run_key(0, 100, 2.0, bucket), 500, capacity, slab_run(1, slabs), layout);
+        assert_eq!(gpu.full_uploads(), 2, "a run that moved whole was patched slab by slab");
+        assert!(gpu.grid().expect("a run").dirty.is_empty(), "a rebuild sent a delta beside it");
+
+        // And half of it moving is still a patch, which is what stops the
+        // clause above from swallowing the steady state.
+        acknowledge(&gpu);
+        let mut half = slab_run(1, slabs);
+        for j in 0..slabs / 2 {
+            half[j * SPECTRUM_BINS] ^= 0xff;
+        }
+        gpu.accept(run_key(0, 101, 2.01, bucket), 500, capacity, half, layout);
+        assert_eq!(gpu.full_uploads(), 2, "half a run moving was uploaded whole");
+        assert_eq!(
+            gpu.grid().expect("a run").dirty.len(),
+            slabs / 2,
+            "the moved half was not sent as a delta",
+        );
+    }
+
+    /// The gradient table is keyed on what decides a texel of it, so two
+    /// gradients that draw one picture share a table and every other change
+    /// builds a new one.
+    ///
+    /// Both directions matter and they fail differently. A knob the key misses
+    /// leaves the OLD table on the GPU under a gradient that no longer draws it
+    /// — a wrong picture, which no frame counter reports. A knob the key watches
+    /// that decides nothing rebuilds and re-uploads 4096 entries on every frame
+    /// of the drag that moves it, which is the cost
+    /// [`what_decides_a_texel`] exists to remove.
+    ///
+    /// The folded pairs are checked as PICTURES and not just as keys: the fold
+    /// claims two gradients draw the same table, so the tables themselves are
+    /// compared. A fold that were merely a key equality would serve one
+    /// gradient's colours under another's settings.
+    #[test]
+    fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
         let cfg = SpectrumConfig::default();
-        let style = |rows, bucket, min, span, cfg: &SpectrumConfig| {
-            ColumnStyle::new(rows, false, bucket, min, span, cfg)
+        let mut gpu = GpuGrid::default();
+        // A table built for `c` alone, so a folded pair can be compared as
+        // pixels rather than as keys.
+        let table = |c: &SpectrumConfig| {
+            let mut fresh = GpuGrid::default();
+            fresh.shades(c).lut
         };
-        let base_style = || style(100, 0.1, 40.0, 48.0, &cfg);
-        let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
-        // Same inputs -> equal: this is the hit that skips the rebuild.
-        assert_eq!(base(), base());
-        assert_eq!(*base().style(), base_style());
-
-        // Every field of the STYLE recolours or re-reads every column, so the
-        // ring cannot carry a texture across a change to any of them — asked
-        // through `differs` as well as through the derived equality, because
-        // `differs` is a hand-kept match inside the shared struct: a clause
-        // deleted there fails no equality assertion, and the ring's carry
-        // decision is the one that reads it.
-        let styled = |s: ColumnStyle| {
-            assert_ne!(s, base_style(), "the ring would carry a stale texture forward");
-            assert!(
-                base_style().differs(&s).is_some(),
-                "carries() would keep a texture this change invalidates",
-            );
-            assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
+        // Whether the table `c` is served is a NEW one: the generation moves
+        // only where the fold does, whatever order these are asked in.
+        let mut rebuilds = |c: &SpectrumConfig| {
+            let before = gpu.shades(&cfg).generation;
+            gpu.shades(c).generation != before
         };
-        styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
 
-        // The coarse read: a gesture image's wide rows are a max, not the
-        // mean, so its floor sits high — the settle must repaint, not carry.
-        // On a pane short enough that the gesture never caps its rows, this
-        // flag is the ONLY field the settle moves, so it is additionally
-        // pinned to the reason `differs` files it under.
-        let coarse = ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg);
-        assert_eq!(base_style().differs(&coarse), Some(Restart::Rows));
-        styled(coarse);
-        styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
-        styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
-        styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
-
-        // Every colour input, one at a time: the palette, either end of the
-        // color window, or the tilt recolours every pixel without moving a
-        // column. Spelled out one by one because
-        // [`ColumnColor`] is a list kept
-        // by hand, and a field left off it is a WRONG picture — which, unlike a
-        // slow one, no frame counter reports.
-        let recoloured = |edit: fn(&mut SpectrumConfig)| {
+        // Every knob of the gradient recolours every texel without moving a
+        // slab, so each has to move the key on its own.
+        let edited = |edit: fn(&mut Gradient)| {
             let mut c = cfg;
-            edit(&mut c);
-            styled(style(100, 0.1, 40.0, 48.0, &c));
+            edit(&mut c.spectrogram_gradient);
+            c
         };
-        recoloured(|c| c.volume_floor_db -= 6.0);
-        recoloured(|c| c.volume_ceiling_db -= 6.0);
-        recoloured(|c| c.tilt += 1.0);
-        // The palette, which is six numbers rather than one name. Each is
-        // swept on its own: they compare structurally, so this cannot catch a
-        // field left off a hand-kept list the way the block above can — what it
-        // catches is a knob whose value the key normalizes away, which
-        // `ColumnColor::new` is one line from doing (it sanitizes, and a
-        // sanitize that clamped harder than the type does would silently pin a
-        // whole stretch of a bar to one picture).
-        recoloured(|c| c.spectrogram_gradient.hue_start += 10.0);
-        recoloured(|c| c.spectrogram_gradient.hue_span -= 10.0);
-        recoloured(|c| c.spectrogram_gradient.lightness -= 5.0);
-        recoloured(|c| c.spectrogram_gradient.lightness_ramp -= 5.0);
-        recoloured(|c| c.spectrogram_gradient.chroma -= 0.1);
-        recoloured(|c| c.spectrogram_gradient.chroma_ramp += 0.1);
+        for edit in [
+            (|g: &mut Gradient| g.hue_start += 10.0) as fn(&mut Gradient),
+            |g: &mut Gradient| g.hue_span -= 10.0,
+            |g: &mut Gradient| g.lightness -= 5.0,
+            |g: &mut Gradient| g.lightness_ramp -= 5.0,
+            |g: &mut Gradient| g.chroma -= 0.1,
+            |g: &mut Gradient| g.chroma_ramp += 0.1,
+        ] {
+            let moved = edited(edit);
+            assert!(rebuilds(&moved), "a gradient knob left the old table on the GPU");
+            assert_ne!(table(&moved), table(&cfg), "the knob was expected to move a texel");
+        }
 
-        // The converse, which is what the ring is FOR. A config field that
-        // reaches no texel has to leave the style ALONE, or every frame of the
-        // drag that moves it re-blanks the texture and repaints every column.
-        // Both below are continuous drags, and the first is the one the ladder
-        // in [`live_slab`] was written to make free.
-        let carried = |edit: fn(&mut SpectrumConfig)| {
-            let mut c = cfg;
-            edit(&mut c);
-            assert_eq!(
-                style(100, 0.1, 40.0, 48.0, &c),
-                base_style(),
-                "a drag on this would re-blank the whole texture on every frame",
-            );
-        };
-        carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
-        carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
-        carried(|c| c.floor_db -= 6.0); // analyzer geometry
-        carried(|c| c.ceiling_db -= 6.0);
+        // And the level window does NOT: the dB floor, the ceiling and the tilt
+        // reach a texel through the LEVEL it is looked up at, which is a
+        // uniform, so a Level drag moves no entry of the table.
+        for edit in [
+            (|c: &mut SpectrumConfig| c.volume_floor_db -= 6.0) as fn(&mut SpectrumConfig),
+            |c: &mut SpectrumConfig| c.volume_ceiling_db -= 6.0,
+            |c: &mut SpectrumConfig| c.tilt += 1.0,
+            |c: &mut SpectrumConfig| c.roll_seconds *= 1.01,
+            |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
+        ] {
+            let mut moved = cfg;
+            edit(&mut moved);
+            assert!(!rebuilds(&moved), "a drag on this rebuilds the table on every frame");
+        }
 
-        // And the hue pair at NO CHROMA, which is the Mono preset and the one
-        // place a gradient knob decides nothing. `chroma_at` is 0 at every
-        // level, so the absolute chroma is 0 whatever the hue, and Oklab's `a`
-        // and `b` are `c * cos(h)` and `c * sin(h)` — identically 0. Every texel
-        // is the same grey at every angle.
-        //
-        // Which makes the spectrum bar's track a control that redraws the whole
-        // heatmap per frame while changing not one byte of it, and the track is
-        // a DRAG. That is the shape [`ColumnStyle`] names as the cost that went
-        // unnoticed, reached here through the one gradient that has no hue.
+        // The hue pair at NO CHROMA, which is the Mono preset and the one place
+        // a gradient knob decides nothing. `chroma_at` is 0 at every level, so
+        // the absolute chroma is 0 whatever the hue, and Oklab's `a` and `b` are
+        // `c * cos(h)` and `c * sin(h)` — identically 0. Every texel is the same
+        // grey at every angle, and the spectrum bar's track is a DRAG.
         let mono = crate::SpectrogramPreset::Mono.gradient();
         let toneless = SpectrumConfig { spectrogram_gradient: mono, ..cfg };
         for turned in [30.0f32, 180.0, 359.0] {
@@ -4597,25 +2843,27 @@ mod tests {
             c.spectrogram_gradient.hue_start = (mono.hue_start + turned).rem_euclid(360.0);
             c.spectrogram_gradient.hue_span = turned;
             assert_eq!(
-                style(100, 0.1, 40.0, 48.0, &c),
-                style(100, 0.1, 40.0, 48.0, &toneless),
-                "a hue turned {turned} degrees at no chroma re-blanks a texture that \
-                 was still good",
+                what_decides_a_texel(c.spectrogram_gradient.sanitized()),
+                what_decides_a_texel(toneless.spectrogram_gradient.sanitized()),
+                "a hue turned {turned} degrees at no chroma rebuilds a table that was \
+                 still good",
             );
+            assert_eq!(table(&c), table(&toneless), "...and it really does draw the same table");
         }
-        // And the same fact reached along the OTHER axis: a Brightness pair
-        // closed on either end of the `L*` axis. `HUE_FLOOR` is 0 at both 0 and
-        // 100, so `chroma_of` answers 0 for every fraction and every hue, and
+
+        // The same fact along the OTHER axis: a Brightness pair closed on either
+        // end of the `L*` axis. `HUE_FLOOR` is 0 at both 0 and 100, so
+        // `chroma_of` answers 0 for every fraction and every hue, and
         // `oklab_srgb` is black (white at 100) whichever way the arc runs — the
-        // whole heatmap is one colour, and neither the hue pair nor the chroma
+        // whole picture is one colour, and neither the hue pair nor the chroma
         // pair decides a texel of it.
         //
         // Reachable in one gesture and landed on exactly, not by luck:
         // `Spread::snapped` rounds both handles to whole `L*`, and every preset
         // already opens with silence at 0, so closing the pair down to the wall
         // is where a reader ends up. Reaching for the hue track or the Chroma
-        // bar to get back OUT is then a drag that re-blanks the ring every frame
-        // while changing not one byte.
+        // bar to get back OUT is then a drag rebuilding the table every frame
+        // while changing not one entry.
         for l in [0.0f32, 100.0] {
             let flat = SpectrumConfig {
                 spectrogram_gradient: Gradient {
@@ -4629,7 +2877,8 @@ mod tests {
                 ..cfg
             };
             for edit in [
-                |g: &mut Gradient| g.hue_start = (g.hue_start + 90.0).rem_euclid(360.0),
+                (|g: &mut Gradient| g.hue_start = (g.hue_start + 90.0).rem_euclid(360.0))
+                    as fn(&mut Gradient),
                 |g: &mut Gradient| g.hue_span = -300.0,
                 |g: &mut Gradient| g.chroma = 0.9,
                 |g: &mut Gradient| g.chroma_ramp = 0.2,
@@ -4637,28 +2886,23 @@ mod tests {
                 let mut moved = flat;
                 edit(&mut moved.spectrogram_gradient);
                 assert_eq!(
-                    style(100, 0.1, 40.0, 48.0, &moved),
-                    style(100, 0.1, 40.0, 48.0, &flat),
+                    what_decides_a_texel(moved.spectrogram_gradient.sanitized()),
+                    what_decides_a_texel(flat.spectrogram_gradient.sanitized()),
                     "at a Brightness pair closed on L* {l} the picture is one colour, and a \
-                     drag on the hue or the chroma re-blanks the whole texture every frame",
+                     drag on the hue or the chroma rebuilds the table every frame",
                 );
+                assert_eq!(table(&moved), table(&flat), "...and the table really is the same");
             }
         }
-        // The converse, so the normalisation cannot be a blanket "ignore the
-        // hues": a picture WITH chroma still watches them.
+
+        // The converses, so neither fold can be a blanket "ignore the hues": a
+        // picture WITH chroma watches them, and so does a brightness pair closed
+        // anywhere BETWEEN the ends, which still draws a colour.
         let mut coloured = toneless;
         coloured.spectrogram_gradient.chroma = 0.5;
         let mut turned = coloured;
         turned.spectrogram_gradient.hue_start += 40.0;
-        assert_ne!(
-            style(100, 0.1, 40.0, 48.0, &turned),
-            style(100, 0.1, 40.0, 48.0, &coloured),
-            "the ring would carry a stale texture forward",
-        );
-        // And the converse of the fold above: a brightness pair closed anywhere
-        // BETWEEN the ends still draws a colour, so the hues decide a texel
-        // there and the key has to watch them. Without this the fold could be a
-        // blanket "ignore a flat ramp".
+        assert_ne!(table(&turned), table(&coloured), "a coloured ramp must watch its hues");
         let mid = SpectrumConfig {
             spectrogram_gradient: Gradient {
                 lightness: 50.0,
@@ -4673,388 +2917,226 @@ mod tests {
         let mut mid_turned = mid;
         mid_turned.spectrogram_gradient.hue_start += 90.0;
         assert_ne!(
-            style(100, 0.1, 40.0, 48.0, &mid_turned),
-            style(100, 0.1, 40.0, 48.0, &mid),
-            "the ring would carry a stale texture forward",
+            what_decides_a_texel(mid_turned.spectrogram_gradient.sanitized()),
+            what_decides_a_texel(mid.spectrogram_gradient.sanitized()),
+            "a flat ramp between the ends still draws a colour",
         );
-
-        // And every field that says WHICH columns were drawn. These move as the
-        // window scrolls, which the ring is built to survive — so they must move
-        // the key without moving the style.
-        let windowed = |k: crate::SpectrogramKey| {
-            assert_ne!(k, base(), "a scrolled window would reuse the built image");
-            assert_eq!(*k.style(), base_style(), "a scroll must not restyle the ring");
-        };
-        windowed(crate::SpectrogramKey::new(base_style(), 4, 200, 5.0, false)); // scrolled
-        windowed(crate::SpectrogramKey::new(base_style(), 3, 201, 5.0, false)); // count
-        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 6.0, false)); // fresh column
-        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, true)); // whole-song
     }
 
-    /// A column written on its own must be pixel-for-pixel what the
-    /// whole-image build would have put in that column. If these two ever
-    /// disagree, the live heatmap and an offline render of the same audio stop
-    /// looking alike, since which one runs is exactly what tells them apart.
+    /// The affine and the table the UI hands the shader stand in for the
+    /// mapping they replaced, byte for byte.
+    ///
+    /// The shader is given three scalars and a table of [`SHADES`] colours in
+    /// place of `spectrogram_level_db` and `cell_color`; if the pair parts
+    /// company with the mapping, the heatmap draws a colour the curve beside it
+    /// never would, at every level rather than at one. A table indexed by level
+    /// cannot be exact for every row at once (see [`SHADES`]), so the claim is
+    /// one level of one channel — and the RATE as well as the size, because a
+    /// row read out of the CLAMPED mapping is flat and every texel of it would
+    /// still be "within one level" of black.
+    ///
+    /// CPU, because both halves are pure functions of the config: `level_affine`
+    /// is what [`read_of`] uploads and [`GpuGrid::shades`] is the table beside
+    /// it. What the SHADER makes of the pair is
+    /// `gpu::the_curve_and_the_heatmap_read_a_run_of_buckets_alike`'s.
     #[test]
-    fn one_column_matches_the_whole_image_build() {
-        let cfg = SpectrumConfig::default();
-        let bins = [
-            Bin { read: RowRead::Mean { from: 0, to: 1 }, midi: 40.0, t: 0.0 },
-            Bin { read: RowRead::Mean { from: 1, to: 2 }, midi: 52.0, t: 0.5 },
-            Bin { read: RowRead::Lerp { lo: 1, f: 0.25 }, midi: 64.0, t: 1.0 },
-        ];
-        // Two slabs, each a whole spectrum with its first buckets lit.
-        let w = 2;
-        let mut power = vec![0; w * SPECTRUM_BINS];
-        for (slab, levels) in [[1e-3f32, 0.0, 1e-6], [4e-2, 1e-5, 0.0]].iter().enumerate() {
-            for (b, &p) in levels.iter().enumerate() {
-                power[slab * SPECTRUM_BINS + b] = q(p);
-            }
-        }
-
-        let whole = fill_pixels(&cfg, w, &bins, &power);
-        let shades = Shades::new(&cfg, &bins);
-        let mut column = Vec::new();
-        for slab in 0..w {
-            fill_column_into(&shades, &bins, slab_of(&power, slab), &mut column);
-            for (y, pixel) in column.iter().enumerate() {
-                assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
-            }
-        }
-    }
-
-    /// The composed picture is drawn through [`ROW_WEIGHT`], and a wide row
-    /// comes out BELOW the loudest bucket it covers.
-    ///
-    /// [`Shades`] carries the table so the read takes it as a parameter, which
-    /// puts the picture's weighting behind a field that one line sets and
-    /// nothing else observes. Every other test that composes a weighted `Mean`
-    /// compares one `Shades` against itself — `fill_column_into` against
-    /// `fill_pixels`, or against an `expect` built from the same value — so all
-    /// of them agree with each other whatever that field holds. Pointing it at
-    /// a flat table restyles every settled zoomed-out pixel in the editor and
-    /// in every export, and leaves the suite green.
-    ///
-    /// Both halves are the assertion. Against the read reached independently,
-    /// so the field has to be [`ROW_WEIGHT`] and not merely some table; and
-    /// strictly below the run's max, so a table that flattens is caught even by
-    /// a reader who changes what the first half compares against. A flat table
-    /// is exactly the degenerate case: every weight 1 makes the sum the run's
-    /// length, the log2 zero, and the power mean collapse to the plain
-    /// [`RowRead::Max`] the pitch axis exists not to draw.
-    #[test]
-    fn the_composed_column_is_weighted_by_row_weight() {
-        let cfg = SpectrumConfig::default();
-        // One row over a run wide enough to weight, reading a slab whose
-        // buckets SPREAD — a uniform run has the same mean under any table.
-        let bins = [Bin { read: RowRead::Mean { from: 0, to: 8 }, midi: 60.0, t: 0.0 }];
-        let mut slab = vec![0 as BucketDb; SPECTRUM_BINS];
-        for (b, v) in slab[0..8].iter_mut().enumerate() {
-            *v = (40 + b * 20) as BucketDb;
-        }
-        let top = slab[0..8].iter().copied().max().expect("a populated run");
-
-        let shades = Shades::new(&cfg, &bins);
-        let mut column = Vec::new();
-        fill_column_into(&shades, &bins, &slab, &mut column);
-
-        let read = RowRead::Mean { from: 0, to: 8 }.of(&slab, &ROW_WEIGHT);
-        assert_eq!(column[0], shades.at(0, read), "the compose reads through `ROW_WEIGHT`");
-        assert!(read < top, "a weighted mean of a spread run sits below its max: {read} vs {top}",);
-    }
-
-    /// Every texel the window reads holds ITS OWN slab's column — asserted
-    /// against the uploaded texture, not against the ring's account of it.
-    ///
-    /// [`write_ring`] duplicates the run's oldest column into the texel of
-    /// `first_key - 1`, to fill the half texel the quad overruns at the far
-    /// edge, so that one texel deliberately holds a slab that is not its own.
-    /// A window scrolling a slab at a time walks that guard forward a key per
-    /// frame, and the whole band below `first_key` ends up holding its
-    /// neighbour's column. What keeps the band off the screen is
-    /// [`SpectrogramRing::wrote`] floating its floor up to `first_key`, so a
-    /// widen reaching back into it lands inside `back` and is repainted rather
-    /// than trusted.
-    ///
-    /// Bookkeeping cannot see any of that. An assertion on `oldest_valid`
-    /// restates the arithmetic the floor is written in, and passes just as
-    /// happily when the repaint it authorises is deleted — which is how both a
-    /// gutted `back` range and a deleted guard once left the whole suite
-    /// green. This drives the real [`write_ring`], drains egui's texture
-    /// deltas into a model of the texture, and compares each texel against the
-    /// column its slab should have, so it fails on the WRONG PICTURE rather
-    /// than on a changed expression, and survives a refactor of how `back` is
-    /// computed.
-    ///
-    /// Neither of the branches that met here owns the bug this pins. While the
-    /// ring's style still held the whole `SpectrumConfig` it held
-    /// `roll_seconds`, so every frame of a Span drag restarted the ring and
-    /// wiped the guarded band before anything could sample it — the
-    /// carry-forward was unreachable for the one gesture that reaches
-    /// backwards. Narrowing the style is what made a widen carry, and so made
-    /// the band reachable.
-    ///
-    /// The run starts below zero and crosses it, so `x_of`'s `rem_euclid` is
-    /// in play on negative keys.
-    #[test]
-    fn every_texel_the_window_reads_holds_its_own_slab() {
-        let ctx = egui::Context::default();
-        let mut spectrum = crate::AudioSpectrum::default();
-        let scale = SWEEP_SCALE;
-        let bins = bins_for(4, &scale, false);
-        let h = bins.len();
-        let cfg = SpectrumConfig::default();
-        let bucket = 0.05;
-        let style = style_for(h, bucket, 12.0, &scale);
-        let capacity = 32usize;
-        let tex_w = capacity * 2;
-
-        // A distinct, reproducible slab spectrum per key, so a texel holding
-        // its NEIGHBOUR is a value mismatch rather than a shape one.
-        let power_of = |key: i64| -> Vec<BucketDb> {
-            (0..SPECTRUM_BINS)
-                .map(|b| ((key * 13 + b as i64 * 29).rem_euclid(200) + 30) as BucketDb)
-                .collect()
-        };
-        let shades = Shades::new(&cfg, &bins);
-        let expect = |key: i64| {
-            let mut out = Vec::new();
-            fill_column_into(&shades, &bins, &power_of(key), &mut out);
-            out
-        };
-
-        // A model of the uploaded texture, kept in step by draining egui's
-        // texture deltas after every call — `set_partial` is the only thing
-        // that says where a column actually landed.
-        let mut model = vec![Color32::TRANSPARENT; tex_w * h];
-        let drain = |model: &mut Vec<Color32>| {
-            let delta = ctx.tex_manager().write().take_delta();
-            for (_, d) in delta.set {
-                let egui::epaint::image::ImageData::Color(img) = d.image;
-                let w = img.size[0];
-                let [px, py] = d.pos.unwrap_or([0, 0]);
-                for (i, c) in img.pixels.iter().enumerate() {
-                    model[(py + i / w) * tex_w + px + i % w] = *c;
+    fn the_shade_table_matches_the_mapping_it_replaces() {
+        use crate::panes::spectral::axes::spectrogram_level_db;
+        let cell_color = crate::panes::spectral::spectrogram::cell_color;
+        let (mut worst, mut differing, mut total) = (0i32, 0u64, 0u64);
+        for ramp in crate::SpectrogramPreset::ALL.map(|p| p.gradient()) {
+            // Including a window narrower than the guard allows, so the table
+            // inherits the same collapse `spectrogram_window` protects against.
+            for &(floor, ceiling) in &[(-60.0, 0.0), (-120.0, 6.0), (-30.0, -20.0), (-10.0, -10.0)]
+            {
+                for tilt in [0.0, 3.0, -3.0, 6.0] {
+                    let cfg = SpectrumConfig {
+                        spectrogram_gradient: ramp,
+                        volume_floor_db: floor,
+                        volume_ceiling_db: ceiling,
+                        tilt,
+                        ..SpectrumConfig::default()
+                    };
+                    let lut = GpuGrid::default().shades(&cfg).lut;
+                    // A row per octave across the spectrum's whole reach, so
+                    // the tilt is sampled where it is largest as well as at the
+                    // pivot.
+                    for i in 0..12 {
+                        let midi = SPECTRUM_MIN_MIDI + i as f32 * 12.0;
+                        for byte in 0..=BucketDb::MAX {
+                            let want =
+                                cell_color(ramp, spectrogram_level_db(&cfg, db_of(byte), midi));
+                            // The index the shader takes: the affine it is
+                            // handed, truncated into the table.
+                            let level = bin_level_for_test(&cfg, byte, midi);
+                            let got = lut[((level * SHADES as f32) as usize).min(SHADES - 1)];
+                            total += 1;
+                            let d = [
+                                (i32::from(got[0]) - i32::from(want.r())).abs(),
+                                (i32::from(got[1]) - i32::from(want.g())).abs(),
+                                (i32::from(got[2]) - i32::from(want.b())).abs(),
+                            ]
+                            .into_iter()
+                            .max()
+                            .expect("three channels");
+                            differing += u64::from(d > 0);
+                            assert!(
+                                d <= 1,
+                                "{ramp:?} floor {floor} ceiling {ceiling} tilt {tilt}: midi \
+                                 {midi} byte {byte} moved a channel by {d} levels ({got:?} \
+                                 against {want:?})",
+                            );
+                            worst = worst.max(d);
+                        }
+                    }
                 }
             }
-        };
-
-        let run = |spectrum: &mut crate::AudioSpectrum, first: i64, last: i64| {
-            let n = (last - first + 1) as usize;
-            let mut power = Vec::with_capacity(n * SPECTRUM_BINS);
-            for key in first..=last {
-                power.extend(power_of(key));
-            }
-            write_ring(&ctx, spectrum, 0, style.clone(), capacity, &cfg, &bins, &power, first, n);
-        };
-
-        // Start below zero and cross it, so the wrap is in play on negatives.
-        let (k0, visible) = (-3i64, 12i64);
-        run(&mut spectrum, k0, k0 + visible - 1);
-        drain(&mut model);
-
-        // Scroll a slab at a time, as `now` advancing does. Each frame the
-        // guard overwrites the texel of the key just left behind.
-        for n in 1..=6 {
-            run(&mut spectrum, k0 + n, k0 + n + visible - 1);
-            drain(&mut model);
         }
-
-        // Widen inside the same rung: the far edge reaches back into the band
-        // the guard has walked over, and `back` is what has to repaint it.
-        let (first, last) = (k0 + 1, k0 + 6 + visible - 1);
-        run(&mut spectrum, first, last);
-        drain(&mut model);
-
-        let ring = spectrum.spectrogram[0].ring.as_ref().expect("a ring");
-        for key in first..=last {
-            let x = ring.x_of(key);
-            let got: Vec<Color32> = (0..h).map(|y| model[y * tex_w + x]).collect();
-            assert_eq!(
-                got,
-                expect(key),
-                "texel {x} should hold slab {key}; it holds {}",
-                (first - 4..=last + 4)
-                    .find(|&k| (0..h).map(|y| model[y * tex_w + x]).eq(expect(k)))
-                    .map_or("no slab in range".to_string(), |k| format!("slab {k}")),
-            );
-        }
-
-        // The far guard is the ONE texel meant to hold another slab's column:
-        // `first - 1` carries a duplicate of `first`, which is what fills the
-        // half texel the quad overruns past the oldest slab's leading edge.
-        let x = ring.x_of(first - 1);
-        let got: Vec<Color32> = (0..h).map(|y| model[y * tex_w + x]).collect();
-        assert_eq!(
-            got,
-            expect(first),
-            "the far guard at texel {x} does not duplicate slab {first}"
+        assert!(
+            differing * 20 < total,
+            "{differing} of {total} texels differ (worst {worst} level) — the table is meant \
+             to stand in for the mapping, not to approximate it",
         );
     }
 
-    /// Columns are placed by absolute slab key, and every one is written twice
-    /// so a run never straddles the wrap. Any `capacity` consecutive keys must
-    /// therefore land on `capacity` consecutive texels somewhere in the
-    /// double-width texture.
+    /// The run key names WHICH COLUMNS were folded, and nothing about how they
+    /// are read.
+    ///
+    /// Both directions again. A field that decides the run and is missing here
+    /// draws a stale run — the picture stops at a column that has already
+    /// scrolled past. A field that decides nothing about the run re-folds the
+    /// store on every frame of the drag that moves it, and every one of those
+    /// is now a drag that moves a uniform: the zoom, the row count and the
+    /// palette all read the same bytes a different way.
     #[test]
-    fn a_full_window_is_contiguous_wherever_it_starts() {
-        let capacity = 8;
-        let ring = SpectrogramRing {
-            capacity,
-            style: ColumnStyle {
-                rows: 3,
-                coarse: false,
-                bucket_bits: 0.1f64.to_bits(),
-                scale_min_bits: 40.0f32.to_bits(),
-                scale_span_bits: 48.0f32.to_bits(),
-                color: ColumnColor::new(&SpectrumConfig::default()),
-            },
-            written_through: 0,
-            oldest_valid: 0,
+    fn the_run_key_names_the_fold_and_not_the_read() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let base_view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 800.0,
+            window: 12.0,
+            scale,
+            cfg: SpectrumConfig::default(),
+            whole: false,
         };
-        // Start the run at every phase of the ring, including ones that wrap.
-        for first in -3i64..20 {
-            let x0 = ring.x_of(first);
-            for step in 0..capacity as i64 {
-                let key = first + step;
-                // The twin at `+ capacity` is what makes this hold across the
-                // wrap; without it `x_of` alone would jump back to 0.
-                let placed = ring.x_of(key);
-                let contiguous = x0 + step as usize;
-                assert!(
-                    placed == contiguous || placed + capacity == contiguous,
-                    "key {key} at texel {placed} is not {contiguous} (run from {first})",
-                );
-                assert!(contiguous < capacity * 2, "run ran off the texture");
-            }
-        }
-    }
+        let columns = Columns { first: 3, len: 200, newest: 5.0 };
+        let key = |v: &PaneView, c: &Columns| Plan::new(v, c).key;
+        let base = key(&base_view, &columns);
+        assert_eq!(base, key(&base_view, &columns), "the same fold must hit");
 
-    /// Negative slab keys happen: the shell clock starts at zero and the
-    /// window reaches back before it. A plain `%` would hand back a negative
-    /// texel and panic on the upload.
-    #[test]
-    fn slab_keys_before_zero_still_land_inside_the_texture() {
-        let ring = SpectrogramRing {
-            capacity: 8,
-            style: ColumnStyle {
-                rows: 3,
-                coarse: false,
-                bucket_bits: 0.1f64.to_bits(),
-                scale_min_bits: 40.0f32.to_bits(),
-                scale_span_bits: 48.0f32.to_bits(),
-                color: ColumnColor::new(&SpectrumConfig::default()),
-            },
-            written_through: 0,
-            oldest_valid: 0,
+        // Which columns are in the window, and where the newest one sits: each
+        // moves as the window scrolls, and the run moves with it.
+        for moved in [
+            Columns { first: 4, ..columns },
+            Columns { len: 201, ..columns },
+            Columns { newest: 6.0, ..columns },
+        ] {
+            assert_ne!(base, key(&base_view, &moved), "a scrolled window reuses the old run");
+        }
+        // The slab width, through the ladder, and the build path.
+        assert_ne!(base, key(&PaneView { depth_len: 200.0, ..base_view }, &columns));
+        assert_ne!(base, key(&PaneView { whole: true, ..base_view }, &columns));
+
+        // And everything that is a UNIFORM: the rows, the pitch range and every
+        // colour input read the run rather than deciding it, so none of them may
+        // refold a thing.
+        let read_only = |v: PaneView| {
+            assert_eq!(base, key(&v, &columns), "a uniform change refolded the store");
         };
-        for key in -20i64..0 {
-            assert!(ring.x_of(key) < 8, "key {key} fell outside the ring");
+        read_only(PaneView { pitch_len: 900.0, ..base_view });
+        read_only(PaneView { ppp: 1.0, pitch_len: 600.0, ..base_view });
+        read_only(PaneView {
+            scale: PitchScale { min_midi: 60.0, max_midi: 84.0, span: 24.0 },
+            ..base_view
+        });
+        for edit in [
+            (|c: &mut SpectrumConfig| c.volume_floor_db -= 6.0) as fn(&mut SpectrumConfig),
+            |c: &mut SpectrumConfig| c.volume_ceiling_db -= 6.0,
+            |c: &mut SpectrumConfig| c.tilt += 1.0,
+            |c: &mut SpectrumConfig| c.spectrogram_gradient.hue_start += 40.0,
+            |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
+        ] {
+            let mut cfg = base_view.cfg;
+            edit(&mut cfg);
+            read_only(PaneView { cfg, ..base_view });
         }
     }
 
     /// The strip is drawn out to the now-line, but the newest column is always
-    /// older than that — half an analysis window, by construction. Inside a
-    /// ring the texels past the newest one are not empty: they hold what they
-    /// carried a lap ago, which is a column from a whole window back, so a `u`
-    /// allowed to run on paints the leading sliver with the far end of the
-    /// window (dark while a note sounds, bright once it stops). Nothing past
-    /// the newest slab's CENTRE may be sampled.
+    /// older than that — half an analysis window, by construction. The shader
+    /// clamps a tap into the run, so a coordinate allowed to run on holds the
+    /// newest slab's colour across the whole sliver rather than reading a slab
+    /// that does not exist — but only the coordinate says where the newest slab
+    /// IS, and it must stop at that slab's CENTRE, which is where the run's own
+    /// filtering stops having two taps to blend.
     #[test]
-    fn the_leading_sliver_holds_the_newest_column_instead_of_reading_round_the_ring() {
+    fn the_leading_sliver_holds_the_newest_slabs_centre() {
         // A live window at the settings that make the sliver widest: a short
         // span, so slabs sit on the ladder's lowest rung and the analyzer's lag
         // spans several of them.
         let bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
         let window = 2.0;
         let visible = (window / bucket) as usize; // 62 slabs
-        let capacity = visible + 2;
-        let layout = TexLayout {
-            bucket,
-            t_origin: 400.0,
-            tex_span: visible as f64 * bucket,
-            t0: 0.0,
-            tn: 1.0,
-            // Parked mid-ring, as it is for all but one lap in `capacity`.
-            x0: 17.0,
-            tex_w: (capacity * 2) as f32,
-        };
+        let layout = TexLayout { bucket, t_origin: 400.0, tex_span: visible as f64 * bucket };
         // The now-line: the newest column lags by half a Precise window, and
         // its slab has to finish before the next one starts.
         let now = layout.t_origin + layout.tex_span + 0.171;
-        let texel = |u: f32| u * layout.tex_w - layout.x0; // texels into the run
 
-        // What the run holds: `visible` columns, a guard column before them,
-        // and past their newest a whole window of other laps' columns.
-        let newest = texel(u_drawn(&layout, now));
+        let newest = slab_drawn(&layout, now);
         assert!(
             newest <= visible as f32 - 0.5 + 1e-4,
-            "the sliver sampled {newest} texels in, past the newest column at {}",
+            "the sliver reached {newest} slabs in, past the newest slab's centre at {}",
             visible as f32 - 0.5,
         );
-        // And it is the newest column it holds, not something short of it.
-        assert!(newest >= visible as f32 - 0.5 - 1e-4, "held short of the newest column");
-        // Worth pinning for, because an unheld mapping runs well past anything
-        // a guard column or two could cover.
-        let unheld = texel(u_of(&layout, now));
-        assert!(unheld > visible as f32 + 4.0, "expected a multi-texel overrun, got {unheld}");
+        // And it is the newest slab it holds, not something short of it.
+        assert!(newest >= visible as f32 - 0.5 - 1e-4, "held short of the newest slab");
+        // Worth pinning for, because an unheld mapping runs several slabs past
+        // the run rather than a fraction of one.
+        let unheld = slab_at(&layout, now);
+        assert!(unheld > visible as f32 + 4.0, "expected a multi-slab overrun, got {unheld}");
     }
 
     /// Everything BEFORE the hold is untouched by it: the drawn mapping is the
-    /// plain one over the data, so the image still tracks the notes texel for
-    /// texel, and the hold is a corner rather than a bend that creeps inward.
+    /// plain one over the data, so the picture still tracks the notes slab for
+    /// slab, and the hold is a corner rather than a bend that creeps inward.
     #[test]
     fn holding_the_sliver_leaves_the_data_mapping_alone() {
         let bucket = 0.05;
-        let layout = TexLayout {
-            bucket,
-            t_origin: 10.0,
-            tex_span: 20.0 * bucket,
-            t0: 0.0,
-            tn: 1.0,
-            x0: 3.0,
-            tex_w: 44.0,
-        };
+        let layout = TexLayout { bucket, t_origin: 10.0, tex_span: 20.0 * bucket };
         let hold = hold_time(&layout);
         assert!((hold - (layout.t_origin + layout.tex_span - 0.5 * bucket)).abs() < 1e-9);
         let mut t = layout.t_origin - 2.0 * bucket;
         while t <= hold {
-            assert_eq!(u_drawn(&layout, t), u_of(&layout, t), "bent at {t}");
+            assert_eq!(slab_drawn(&layout, t), slab_at(&layout, t), "bent at {t}");
             t += bucket / 8.0;
         }
         // Past it, pinned — however far past, and however long the analyzer
         // stalls for.
-        let pinned = u_of(&layout, hold);
+        let pinned = slab_at(&layout, hold);
         for t in [hold + 1e-6, hold + bucket, hold + 10.0] {
-            assert_eq!(u_drawn(&layout, t), pinned, "ran on at {t}");
+            assert_eq!(slab_drawn(&layout, t), pinned, "ran on at {t}");
         }
     }
 
-    /// The time -> texture mapping has to be a straight line, including across
-    /// the slab boundary the newest column sits on. Clamping it to the edge
-    /// texel pins it for part of every slab and lets it slide for the rest, and
-    /// since these are VERTEX UVs that rescales the whole image once per slab —
-    /// visible as the heatmap jittering. Which is why the one place `u` does
-    /// stop ([`u_drawn`]) is a corner the mesh is SPLIT on, leaving no quad to
-    /// interpolate across it and the data quad straight from end to end.
+    /// The time -> slab mapping has to be a straight line, including across the
+    /// slab boundary the newest column sits on. Clamping it to the run's end
+    /// pins it for part of every slab and lets it slide for the rest, and since
+    /// this is a VERTEX attribute that rescales the whole picture once per slab
+    /// — visible as the heatmap jittering. Which is why the one place the
+    /// coordinate does stop ([`slab_drawn`]) is a corner the mesh is SPLIT on,
+    /// leaving no quad to interpolate across it and the data quad straight from
+    /// end to end.
     #[test]
-    fn the_time_to_texture_mapping_is_a_straight_line() {
+    fn the_time_to_slab_mapping_is_a_straight_line() {
         let bucket = 0.08;
-        let layout = TexLayout {
-            bucket,
-            t_origin: 100.0,
-            tex_span: 8.0 * bucket,
-            t0: 0.0,
-            tn: 1.0,
-            // A run parked mid-ring, as it is for all but one lap in eight.
-            x0: 5.0,
-            tex_w: 16.0,
-        };
+        let layout = TexLayout { bucket, t_origin: 100.0, tex_span: 8.0 * bucket };
         let step = bucket / 4.0;
-        let at = |i: i32| u_of(&layout, layout.t_origin + i as f64 * step);
+        let at = |i: i32| slab_at(&layout, layout.t_origin + i as f64 * step);
 
-        // Equal steps in time, equal steps in u — everywhere, including past
-        // BOTH ends of the run where the quad reaches for its slivers.
+        // Equal steps in time, equal steps in the coordinate — everywhere,
+        // including past BOTH ends of the run where the quad reaches for its
+        // slivers.
         let expected = at(1) - at(0);
         assert!(expected > 0.0, "u must advance with time");
         for i in -4..40 {
@@ -5066,983 +3148,982 @@ mod tests {
         }
     }
 
-    /// A restart paints every column of the run at its own texel AND at its
-    /// twin, duplicates the oldest as the guard outside the run, and leaves
-    /// black wherever the run does not reach.
+    /// The heatmap as the GPU draws it: the claims whose subject is the picture
+    /// rather than the bookkeeping under it.
     ///
-    /// The picture is only checkable here: once the pixels are in a texture
-    /// they are opaque, so a misplaced column shows up as a scrambled
-    /// spectrogram after every window resize rather than as a failure.
-    #[test]
-    fn a_restart_paints_every_column_and_its_twin() {
-        const CAPACITY: usize = 6;
-        const H: usize = 2;
-        let tex_w = CAPACITY * 2;
-        let style = style_for(H, 0.05, 1.0, &SWEEP_SCALE);
-        let ring = SpectrogramRing::restarted(CAPACITY, style, 10);
-        // One flat colour per column, so where each lands is readable.
-        let shade = |i: usize| Color32::from_gray(10 * (i as u8 + 1));
-        let pixels = restart_pixels(&ring, tex_w, H, 10, 12, |i, out| {
-            out.clear();
-            out.extend(std::iter::repeat_n(shade(i), H));
-        });
+    /// Every test here returns early where the machine has no GPU adapter, which is
+    /// what [`SpectrogramHeadless::new`] answers `None` for.
+    mod gpu {
+        use super::*;
+        use crate::panes::spectral::axes::spectrogram_level_db;
+        use crate::panes::spectral::spectrogram::power_mean;
+        use harmonigraph_render::{SpectrogramHeadless, SpectrogramVertex};
 
-        for (i, key) in (10..=12).enumerate() {
-            let x = ring.x_of(key);
-            for row in 0..H {
-                assert_eq!(pixels[row * tex_w + x], shade(i), "column {key} at {x}");
-                assert_eq!(pixels[row * tex_w + x + CAPACITY], shade(i), "column {key}'s twin",);
-            }
-        }
-        // The guard duplicates the oldest slab, one texel before the run.
-        let guard = ring.x_of(9);
-        assert_eq!(pixels[guard], shade(0), "the guard column");
-        assert_eq!(pixels[guard + CAPACITY], shade(0), "and its twin");
-        // Everything the run does not reach stays silent rather than showing
-        // whatever the allocation held.
-        let painted: Vec<usize> =
-            (9..=12).flat_map(|key| [ring.x_of(key), ring.x_of(key) + CAPACITY]).collect();
-        for (x, texel) in pixels.iter().take(tex_w).enumerate() {
-            if !painted.contains(&x) {
-                assert_eq!(*texel, Color32::BLACK, "unwritten column {x}");
-            }
-        }
-    }
+        /// Pixels across a test frame, and so slabs across it: a readback row must
+        /// be 256-byte aligned, which puts the width at a multiple of 64.
+        const W: u32 = 64;
 
-    /// The shade table stands in for `cell_color(ramp, bin_level(..))`, and this
-    /// holds it to that mapping byte for byte across every setting that reshapes
-    /// it — the ramp, the dB window's width and position, and the tilt, which is
-    /// the only reason rows differ from each other at all.
-    ///
-    /// A level-indexed table cannot be exact (see [`SHADES`]), so the assertion
-    /// is the BOUND: one level of one channel, on the few texels whose true
-    /// value sat within the sample spacing of a rounding boundary. Asserting the
-    /// rate as well as the size is what makes this a real check — a slope or
-    /// offset read out of the CLAMPED mapping flattens a row, and every texel of
-    /// it would still be "within one level" of black.
-    #[test]
-    fn the_shade_table_matches_the_mapping_it_replaces() {
-        let cell_color = crate::panes::spectral::spectrogram::cell_color;
-        let ramps = crate::SpectrogramPreset::ALL.map(|p| p.gradient());
-        // A row per octave across the spectrum's whole reach, so the tilt's
-        // effect is sampled where it is largest as well as at the pivot.
-        let bins: Vec<Bin> = (0..12)
-            .map(|i| {
-                let midi = SPECTRUM_MIN_MIDI + i as f32 * 12.0;
-                Bin { read: RowRead::Mean { from: 0, to: 1 }, midi, t: i as f32 / 11.0 }
-            })
-            .collect();
-        let (mut worst, mut differing, mut total) = (0i32, 0u64, 0u64);
-        for ramp in ramps {
-            // Including a window narrower than the guard allows, so the table
-            // inherits the same collapse `loudness_db` protects against.
-            for &(floor, ceiling) in &[(-60.0, 0.0), (-120.0, 6.0), (-30.0, -20.0), (-10.0, -10.0)]
-            {
-                for tilt in [0.0, 3.0, -3.0, 6.0] {
-                    let cfg = SpectrumConfig {
-                        spectrogram_gradient: ramp,
-                        volume_floor_db: floor,
-                        volume_ceiling_db: ceiling,
-                        tilt,
-                        ..SpectrumConfig::default()
-                    };
-                    let shades = Shades::new(&cfg, &bins);
-                    for (r, bin) in bins.iter().enumerate() {
-                        for byte in 0..=BucketDb::MAX {
-                            let want = cell_color(ramp, bin_level(&cfg, byte, bin.midi));
-                            let got = shades.at(r, byte);
-                            total += 1u64;
-                            let d = [
-                                (got.r() as i32 - want.r() as i32).abs(),
-                                (got.g() as i32 - want.g() as i32).abs(),
-                                (got.b() as i32 - want.b() as i32).abs(),
-                            ]
-                            .into_iter()
-                            .max()
-                            .unwrap();
-                            differing += u64::from(d > 0);
-                            assert!(
-                                d <= 1,
-                                "{ramp:?} floor {floor} ceiling {ceiling} tilt {tilt}: row \
-                                 {r} (midi {}) byte {byte} moved a channel by {d} levels \
-                                 ({got:?} against {want:?})",
-                                bin.midi,
-                            );
-                            worst = worst.max(d);
-                        }
-                    }
-                }
-            }
-        }
-        // The rate, not just the size: a row read out of the CLAMPED mapping is
-        // flat, and every texel of it would still be "within one level" of black.
-        assert!(
-            differing * 20 < total,
-            "{differing} of {total} texels differ (worst {worst} level) — the table is \
-             meant to stand in for the mapping, not to approximate it",
-        );
-    }
-
-    /// Scratch: what a gesture frame's two knobs are each worth — the row
-    /// count and the coarse READ — and whether the ring's width is a third.
-    /// The table [`GESTURE_MAGNIFY`] is set from. Not an assertion.
-    ///
-    /// `columns` is the row reads and shade lookups alone, `restart` the whole
-    /// compose into the ring's texture, `narrow` the same into a texture cut
-    /// to the visible run: they come out within noise of each other, so the
-    /// blank fill, the transpose and the twin copy are not where a restart's
-    /// milliseconds are, however many megabytes they move.
-    ///
-    /// `cargo test -p harmonigraph-ui --release timing_parts -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn timing_parts() {
-        use std::time::Instant;
-
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let target_cols = 1024usize;
-        let keep = target_cols + RING_HEADROOM;
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
-        let cfg = SpectrumConfig::default();
-
-        for (label, window_s) in [("12s", 12.0f64), ("120s", 120.0)] {
-            let bucket = live_slab(window_s, target_cols);
-            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
-            let n = (span_needed / interval) as usize;
-            let mut history = crate::SpectrumHistory::default();
-            let mut phase = 0.0f32;
-            for i in 0..n {
-                let mut power = [0.0f32; SPECTRUM_BINS];
-                for h in 1usize..8 {
-                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
-                        % SPECTRUM_BINS;
-                    power[idx] = 0.1 / h as f32;
-                }
-                for (b, p) in power.iter_mut().enumerate() {
-                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
-                }
-                phase += 0.01;
-                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
-            }
-            let newest = history.back().unwrap().time;
-            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
-            let mut agg = SpectrogramAgg::new();
-            let (centers, power) = agg.window(&history, first, bucket, keep);
-            let w = centers.len();
-            let first_key = (centers[0] / bucket).floor() as i64;
-            let last_key = first_key + w as i64 - 1;
-
-            for (scale_label, scale) in [("out", &full), ("in", &tight)] {
-                for rows in [1408usize, 704, 352, 256] {
-                    for coarse in [false, true] {
-                        let bins = bins_for(rows, scale, coarse);
-                        let h = bins.len();
-                        let style = style_for(h, bucket, window_s, scale);
-                        let shades = Shades::new(&cfg, &bins);
-
-                        // Just the row reads and shade lookups for the visible
-                        // columns — no texture, no scatter.
-                        let mut scratch = Vec::with_capacity(h);
-                        let t0 = Instant::now();
-                        let mut sink = 0usize;
-                        for _ in 0..6 {
-                            for i in 0..w {
-                                fill_column_into(&shades, &bins, slab_of(&power, i), &mut scratch);
-                                sink += scratch.len();
-                            }
-                        }
-                        let cols_ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
-
-                        // The whole restart, at the ring's own width...
-                        let restart = |capacity: usize| {
-                            let t0 = Instant::now();
-                            let mut sink = 0usize;
-                            for _ in 0..6 {
-                                let ring =
-                                    SpectrogramRing::restarted(capacity, style.clone(), first_key);
-                                let px = restart_pixels(
-                                    &ring,
-                                    capacity * 2,
-                                    h,
-                                    first_key,
-                                    last_key,
-                                    |i, out| {
-                                        fill_column_into(&shades, &bins, slab_of(&power, i), out)
-                                    },
-                                );
-                                sink += px.len();
-                            }
-                            (t0.elapsed().as_secs_f64() * 1000.0 / 6.0, sink)
-                        };
-                        let (wide_ms, _) = restart(ring_capacity(keep, w));
-                        // ...and at a texture sized to the visible run alone,
-                        // which is all a gesture frame's own restart needs.
-                        let (tight_ms, _) = restart(ring_capacity(0, w));
-                        let mb = |cap: usize| (cap * 2 * h * 4) as f64 / 1e6;
-                        println!(
-                            "{label:>4} {scale_label:>3} rows={rows:<5} coarse={coarse:<5} \
-                             slabs={w:<4} | columns {cols_ms:6.2} | restart {wide_ms:6.2} \
-                             ({:5.1} MB) | narrow {tight_ms:6.2} ({:4.1} MB) | sink {sink}",
-                            mb(ring_capacity(keep, w)),
-                            mb(ring_capacity(0, w)),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Scratch: whether the compose's row read scales across cores. Not an
-    /// assertion.
-    ///
-    /// The read is about three fifths of a settled compose (`timing_mean_log`, a
-    /// floor on the share), and it is the
-    /// term a gesture's frames and its opening full-quality frame BOTH pay, so
-    /// it is the only candidate that helps whichever of the two is the symptom.
-    /// It is also embarrassingly parallel over columns: each writes its own
-    /// `h`-slice of the tile [`restart_pixels`] transposes, reading a slab
-    /// nothing else writes.
-    ///
-    /// What that is worth is a machine question rather than an arithmetic one —
-    /// this box is 6 performance cores and 2 efficiency ones, so the useful
-    /// figure is where the curve flattens, not the core count. Bare
-    /// `thread::scope` per call, which charges every run a spawn a pool would
-    /// not; read the shape, and treat the high-thread columns as a floor on
-    /// what a pool would reach.
-    ///
-    /// It comes out at about **2.5x** across all four rows — a dependent load
-    /// per bucket does not scale with cores the way arithmetic would. Quote the
-    /// RATIOS and not the absolutes: a busy machine moves the one-thread
-    /// baseline by 2x, which is the same warning #363 carries.
-    ///
-    /// The figure that matters most here is not a ratio at all. In one clean
-    /// run the settled zoomed-out build is 13.2 ms and the gesture-rows coarse
-    /// one is 3.3 ms, both SERIAL — so building a gesture's first frame coarse
-    /// is a 3.9x cut where parallelising that same build is 2.5x, and it costs
-    /// no threads inside the host process. Threads are what is left AFTER that,
-    /// and they are worth about 2 ms on each of a gesture's own frames.
-    ///
-    /// `cargo test -p harmonigraph-ui --release timing_compose_scaling -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn timing_compose_scaling() {
-        use std::time::Instant;
-
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
-        let cfg = SpectrumConfig::default();
-        // The slab count a 12 s Span cuts a full-width 2x pane into.
-        let w = 752usize;
-
-        // Every bucket populated, so no run is degenerate and no read is
-        // skipped — the cost is the same either way, and this keeps it honest.
-        let mut power = vec![0u8; w * SPECTRUM_BINS];
-        for (i, v) in power.iter_mut().enumerate() {
-            *v = (30 + (i * 31) % 190) as u8;
+        /// One row of the picture as `row_of` in spectrogram.wgsl lays it out.
+        ///
+        /// Here to PLACE a fixture — which buckets a row will reach for — and to
+        /// write the controls that give a claim its teeth. It never stands in for
+        /// the read: what a row comes out at is measured off the frame.
+        struct Row {
+            lo_t: f32,
+            hi_t: f32,
+            t: f32,
+            midi: f32,
         }
 
-        let rows = 1408usize;
-        for (label, scale, h_rows, coarse) in [
-            ("settled out", &full, rows, false),
-            ("settled  in", &tight, rows, false),
-            ("gesture out", &full, gesture_rows(rows), true),
-            ("gesture  in", &tight, gesture_rows(rows), true),
-        ] {
-            let bins = bins_for(h_rows, scale, coarse);
-            let h = bins.len();
-            let shades = Shades::new(&cfg, &bins);
-            let weight = shades.weight;
-            let mut tile = vec![Color32::BLACK; w * h];
-            let mut base = 0.0f64;
-            let mut line = format!("{label} {h:>4} rows:");
-            for threads in [1usize, 2, 4, 6, 8] {
-                let per = w.div_ceil(threads);
-                let t0 = Instant::now();
-                for _ in 0..8 {
-                    std::thread::scope(|s| {
-                        for (t, chunk) in tile.chunks_mut(per * h).enumerate() {
-                            let (bins, shades, power) = (&bins, &shades, &power);
-                            s.spawn(move || {
-                                for c in 0..chunk.len() / h {
-                                    let slab = slab_of(power, t * per + c);
-                                    for (r, b) in bins.iter().enumerate() {
-                                        chunk[c * h + r] = shades.at(r, b.read.of(slab, weight));
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
-                let ms = t0.elapsed().as_secs_f64() * 1000.0 / 8.0;
-                if threads == 1 {
-                    base = ms;
-                }
-                line += &format!("  {threads}t {ms:5.2} ms ({:.2}x)", base / ms);
-            }
-            println!("{line}");
-        }
-    }
-
-    /// Scratch: where [`RowRead::Mean`] spends a settled compose, and why both
-    /// of the targets inside it are shut. Not an assertion.
-    ///
-    /// Where the loop goes: the shipping read is 7.5 ms of the 13.2 ms compose
-    /// `timing_zoom_costs` measures at these dimensions, about three fifths of
-    /// it. Read that share as a FLOOR rather than as a number — one slab is read
-    /// here over and over, so the buckets sit in L1 throughout, where the
-    /// compose it is scaled against walks 752 distinct slabs, some 2.9 MB, once
-    /// each. The in-situ read can only be dearer, which moves the share up and
-    /// leaves the ratios alone, since every arm shares the residency.
-    ///
-    /// **The weight table is a PARAMETER of [`RowRead::of`], and the `global`
-    /// arm stands for the version that reaches for it by name.** [`ROW_WEIGHT`]
-    /// is a `LazyLock`, so naming it inside the read carries an atomic load of
-    /// the lock's state — and the cost of that is read off the COMPOSE, not off
-    /// this bench: a settled build at 1408 rows is 13.2 ms in
-    /// `timing_zoom_costs` against 15.4 ms reaching the global, on
-    /// byte-identical pixels. `global` is here so the shape stays measurable at
-    /// all, and it puts the index at **1.12x** of the read — well short of what
-    /// the compose gains, which is the discrepancy to respect rather than
-    /// explain away. The compose's saving barely tracks how many rows index the
-    /// table (zoomed in, with 1022 of 1408 rows a `Lerp` that never reaches it,
-    /// it is still 1.9 of the 2.2 ms), while this bench's does. So the two are
-    /// not measuring one thing, and the compose is the one that decides.
-    ///
-    /// **The `log2` is the other target, and it stays.** One per ROW per COLUMN,
-    /// 1408 x 752 of them on a full-height 2x pane, and the answer is quantized
-    /// to a `u8` step the moment it lands, so the accuracy a libm call buys is
-    /// thrown away before anything reads it. Standing a bit-trick in its place
-    /// measures **1.2x** on the loop, which is an upper bound (see below) and
-    /// still not a frame. It is the whole of what removing the call could ever
-    /// pay, so the careful version — one that has to argue its error stays
-    /// inside the rounding — is not worth writing.
-    ///
-    /// **No copy-vs-copy ratio here is worth tuning against under about 1.25x.**
-    /// Two byte-identical copies of this arithmetic sitting in different
-    /// functions of one binary measure 1.23x apart on code layout alone, which
-    /// is the same order as everything the copies are being asked about. Both
-    /// figures above survive it — one because the compose confirms it in situ,
-    /// the other because a bound is all it needs — but a NEW one at this size
-    /// would be a statement about where the linker put things. The `shipping`
-    /// and `copy+libm` pair is the one to watch it on: they are the same
-    /// arithmetic reached through the call and hand-inlined, they measure the
-    /// same, and a gap opening between them is layout and not a lead.
-    ///
-    /// Inside the read the cost is the `weight[top - v]` gather and its sum —
-    /// a dependent load per bucket, over runs that jointly cover the whole
-    /// spectrum whatever the row count. That does not vectorize, which is why
-    /// the coarse [`RowRead::Max`] rather than a faster mean is what a gesture
-    /// trades down to.
-    ///
-    /// `cargo test -p harmonigraph-ui --release timing_mean_log -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn timing_mean_log() {
-        use std::time::Instant;
-
-        // log2 on (0, 1] to about 0.002, which is 0.003 of a stored step —
-        // below the rounding this feeds, so the picture is the question this
-        // does NOT have to answer to bound the timing.
-        fn fast_log2(x: f32) -> f32 {
-            let bits = x.to_bits();
-            let exp = ((bits >> 23) & 0xFF) as i32 - 127;
-            let mant = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
-            exp as f32 + ((-0.344845 * mant + 2.024658) * mant - 1.674873)
+        fn row_of(read: &SpectrogramRead, r: u32) -> Row {
+            let reach = 1.0 + 2.0 * read.margin;
+            let rows = read.rows as f32;
+            let lo_t = -read.margin + reach * r as f32 / rows;
+            let hi_t = -read.margin + reach * (r + 1) as f32 / rows;
+            let t = 0.5 * (lo_t + hi_t);
+            Row { lo_t, hi_t, t, midi: read.min_midi + t * read.span }
         }
 
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let bins = bins_for(1408, &full, false);
-        let means = bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
-        // A slab with something in every bucket, so no run is degenerate.
-        let mut slab = [0u8; SPECTRUM_BINS];
-        for (i, v) in slab.iter_mut().enumerate() {
-            *v = (40 + (i * 7) % 180) as u8;
+        fn bucket_of(read: &SpectrogramRead, t: f32) -> usize {
+            let midi = read.min_midi + t * read.span;
+            let b = ((midi - read.spectrum_min_midi) * read.bins_per_semitone).floor();
+            b.clamp(0.0, SPECTRUM_BINS as f32 - 1.0) as usize
         }
 
-        // The table reached exactly as [`fill_column_into`] reaches it: derefed
-        // once, outside every loop that follows.
-        let weight: &[f32; 256] = &ROW_WEIGHT;
-
-        // The baseline goes through [`RowRead::of`] itself. A copy of the
-        // arithmetic would read identically and measure whatever it had drifted
-        // into: this bench's conclusions are RATIOS against the shipping mean,
-        // so a baseline that is merely a good imitation of it answers a question
-        // nobody asked. The copies below are copies only because there is no way
-        // to reach inside `of` and change one thing.
-        let shipping = || {
-            let t0 = Instant::now();
-            let mut sink = 0u32;
-            for _ in 0..200 {
-                for b in &bins {
-                    if matches!(b.read, RowRead::Mean { .. }) {
-                        sink += u32::from(b.read.of(&slab, weight));
-                    }
-                }
-            }
-            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-        };
-        let copy = |log: fn(f32) -> f32| {
-            let t0 = Instant::now();
-            let mut sink = 0u32;
-            for _ in 0..200 {
-                for b in &bins {
-                    let (from, to) = match b.read {
-                        RowRead::Mean { from, to } => (from, to),
-                        _ => continue,
-                    };
-                    let r = &slab[from..to];
-                    let top = r.iter().copied().max().unwrap_or(0);
-                    if r.len() < 2 {
-                        sink += u32::from(top);
-                        continue;
-                    }
-                    let sum: f32 = r.iter().map(|&v| weight[usize::from(top - v)]).sum();
-                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
-                    sink += u32::from(top.saturating_sub(steps.round() as u8));
-                }
-            }
-            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-        };
-        // The same copy with [`ROW_WEIGHT`] named INSIDE the run — the whole of
-        // the difference, and what the parameter on `of` buys.
-        let global = || {
-            let t0 = Instant::now();
-            let mut sink = 0u32;
-            for _ in 0..200 {
-                for b in &bins {
-                    let (from, to) = match b.read {
-                        RowRead::Mean { from, to } => (from, to),
-                        _ => continue,
-                    };
-                    let r = &slab[from..to];
-                    let top = r.iter().copied().max().unwrap_or(0);
-                    if r.len() < 2 {
-                        sink += u32::from(top);
-                        continue;
-                    }
-                    let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
-                    let steps = -(sum / r.len() as f32).log2() * ROW_MEAN_STEPS;
-                    sink += u32::from(top.saturating_sub(steps.round() as u8));
-                }
-            }
-            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-        };
-        // Four arms, because three questions are being asked and no one pair
-        // answers two of them. The SHARE of a compose has to be read off the
-        // shipping path; the worth of the `log2` off a pair differing in the
-        // logarithm and in nothing else; the cost of the `LazyLock` off the
-        // closest pair there is to one differing only in where the table comes
-        // from. Reading either ratio against the shipping arm instead would
-        // credit it with whatever margin the copy carries of its own.
-        // `global` against `copy` is NOT that clean pair, and the gap is worth
-        // knowing before the ratio is quoted: `copy` reaches its logarithm
-        // through a `fn(f32) -> f32` it takes as a parameter, because it has to
-        // serve both the libm and the bit-trick arm, while `global` calls
-        // `log2` directly. So their ratio carries the indirection as well as
-        // the table. A fifth arm holding the logarithm fixed would close it;
-        // what makes that not worth writing is that nothing rests on the
-        // number — the table's cost is argued from the COMPOSE (see
-        // [`RowRead::of`]), and this arm is here so the shape stays measurable
-        // at all rather than to size it.
-        // Interleaved rounds, each arm scored by its BEST. One pass of an arm is
-        // some 20 us, which is short enough that a scheduler decision or a walk
-        // onto an efficiency core outweighs the thing being measured — run in
-        // sequence and scored by a single reading, these swap order between
-        // runs. The minimum is the run that was not interrupted, and
-        // interleaving keeps a slow patch of machine from landing on one arm.
-        let (mut ship_ms, mut glob_ms) = (f64::MAX, f64::MAX);
-        let (mut libm_ms, mut fast_ms) = (f64::MAX, f64::MAX);
-        let (mut a, mut b, mut c, mut d) = (0, 0, 0, 0);
-        for _ in 0..9 {
-            let s = shipping();
-            let g = global();
-            let l = copy(f32::log2);
-            let f = copy(fast_log2);
-            (ship_ms, glob_ms) = (ship_ms.min(s.0), glob_ms.min(g.0));
-            (libm_ms, fast_ms) = (libm_ms.min(l.0), fast_ms.min(f.0));
-            (a, b, c, d) = (s.1, g.1, l.1, f.1);
+        /// The buckets row `r` reads, whichever arm it takes.
+        fn run_of(read: &SpectrogramRead, r: u32) -> std::ops::Range<usize> {
+            let row = row_of(read, r);
+            let idx = bucket_of(read, row.lo_t);
+            idx..(bucket_of(read, row.hi_t) + 1).min(SPECTRUM_BINS)
         }
-        assert_eq!((a, b, c), (b, c, d), "the four arms must compute the same column");
-        println!(
-            "{means} Mean rows of {}: shipping {ship_ms:.4} | global {glob_ms:.4} | \
-             copy+libm {libm_ms:.4} | copy+bit-trick {fast_ms:.4} ms/column",
-            bins.len(),
-        );
-        println!(
-            "  a LazyLock index inside the run costs {:.2}x | log2 is worth {:.2}x \
-             (both copy vs copy) | `RowRead::of` against its own hand copy {:.2}x",
-            glob_ms / libm_ms,
-            libm_ms / fast_ms,
-            ship_ms / libm_ms,
-        );
-        // Scaled to the column count a full-width pane composes.
-        println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
-    }
 
-    /// Scratch harness for the zoom-performance audit: prints where a zoom
-    /// frame's milliseconds go, at pane-realistic sizes. Not an assertion.
-    /// Run by hand, in release:
-    /// `cargo test -p harmonigraph-ui --release timing_zoom -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn timing_zoom_costs() {
-        use std::time::Instant;
+        /// The whole pitch axis, which is where a row spans the most buckets and
+        /// the row geometry is worked hardest.
+        fn whole_axis() -> PitchScale {
+            let span = SPECTRUM_BINS as f32 / BINS_PER_SEMITONE as f32;
+            PitchScale { min_midi: SPECTRUM_MIN_MIDI, max_midi: SPECTRUM_MIN_MIDI + span, span }
+        }
 
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        // A Retina pane: ~700 points of pitch axis at 2x, quantized as the plan
-        // quantizes it.
-        let rows = 1408usize;
-        let target_cols = 1024usize;
-        let keep = target_cols + RING_HEADROOM;
-
-        // Zoomed out (the full axis: every read a Mean) and zoomed in (12
-        // semitones: 1022 of 1408 rows a Lerp, the other 386 a Mean over a run
-        // of two — narrow enough that the two arms split the pane, not narrow
-        // enough that one of them is gone).
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
-
-        for (label, window_s) in [("12s", 12.0f64), ("120s", 120.0), ("600s", 600.0)] {
-            let bucket = live_slab(window_s, target_cols);
-            // Fill the store as playback would, far enough back to cover the
-            // retention a rebuild reaches (capped by the store's own reach).
-            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
-            let n = (span_needed / interval) as usize;
-            let mut history = crate::SpectrumHistory::default();
-            let mut phase = 0.0f32;
-            for i in 0..n {
-                let mut power = [0.0f32; SPECTRUM_BINS];
-                for h in 1usize..8 {
-                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
-                        % SPECTRUM_BINS;
-                    power[idx] = 0.1 / h as f32;
-                }
-                for (b, p) in power.iter_mut().enumerate() {
-                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
-                }
-                phase += 0.01;
-                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
-            }
-            let newest = history.back().unwrap().time;
-            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
-
-            for (scale_label, scale) in [("out", &full), ("in", &tight)] {
-                let t0 = Instant::now();
-                let bins_full = bins_for(rows, scale, false);
-                let bins_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-                // The refold a bucket change pays: every call a full rebuild.
-                let mut agg = SpectrogramAgg::new();
-                let t0 = Instant::now();
-                for i in 0..6 {
-                    let b = if i % 2 == 0 { bucket } else { bucket * 2.0 };
-                    let _ = agg.window(&history, first, b, keep);
-                }
-                let refold_ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
-                assert!(agg.rebuilds() >= 6, "each call should have rebuilt");
-
-                // Steady state for contrast: nothing new to fold — what remains
-                // is view()'s per-frame clone of the window.
-                let (centers, power) = agg.window(&history, first, bucket, keep);
-                // Slabs at THIS rung, which is what everything below composes.
-                // Taken from the refold loop, it would be reported a rung out.
-                let w = centers.len();
-                let t0 = Instant::now();
-                for _ in 0..20 {
-                    let _ = agg.window(&history, first, bucket, keep);
-                }
-                let steady_ms = t0.elapsed().as_secs_f64() * 1000.0 / 20.0;
-
-                // The pixel compose a ring restart pays — every frame of a
-                // pitch or Level gesture, at the gesture's row count — with the
-                // GPU upload on top, in the renderer's own timing.
-                let cfg = SpectrumConfig::default();
-                let capacity = ring_capacity(keep, centers.len());
-                let first_key = (centers[0] / bucket).floor() as i64;
-                let last_key = first_key + centers.len() as i64 - 1;
-                let compose = |bins: &[Bin]| {
-                    let style = style_for(bins.len(), bucket, window_s, scale);
-                    let h = bins.len();
-                    let t0 = Instant::now();
-                    let mut sink = 0usize;
-                    for _ in 0..6 {
-                        let shades = Shades::new(&cfg, bins);
-                        let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
-                        let px = restart_pixels(
-                            &ring,
-                            capacity * 2,
-                            h,
-                            first_key,
-                            last_key,
-                            |i, out| fill_column_into(&shades, bins, slab_of(&power, i), out),
-                        );
-                        sink += px.len();
-                    }
-                    (t0.elapsed().as_secs_f64() * 1000.0 / 6.0, sink)
-                };
-                let (full_ms, _) = compose(&bins_full);
-                let gesture = gesture_rows(rows);
-                let bins_gesture = bins_for(gesture, scale, true);
-                let (gesture_ms, _) = compose(&bins_gesture);
-
-                // What a refold actually walks: from the retention cutoff (or
-                // the window's first column, whichever is older) to the back.
-                let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
-                let start = history.partition_point(|c| c.time < cutoff).min(first);
-                println!(
-                    "{label:>5} {scale_label:>4}: cols_folded={:<5} slabs={w:<5} | \
-                     refold {refold_ms:5.2} ms | compose {full_ms:5.2} ms at {rows} rows, \
-                     {gesture_ms:5.2} ms at {gesture} | steady {steady_ms:5.2} ms | \
-                     bins_for {bins_ms:4.2} ms",
-                    history.len() - start,
-                );
+        /// The half of a [`PaneView`] [`read_of`] reads; the rest decides a fold
+        /// that no test here performs.
+        fn view_of(scale: PitchScale, cfg: SpectrumConfig) -> PaneView {
+            PaneView {
+                ppp: 1.0,
+                pitch_len: 1.0,
+                depth_len: 1.0,
+                window: 1.0,
+                scale,
+                cfg,
+                whole: false,
             }
         }
-    }
 
-    /// A row's read is a filter whose SUPPORT is set by the row count, so the
-    /// picture's overall brightness moves with the row count — which is what a
-    /// gesture changes, twice over, and what a pane resize changes on its own.
-    ///
-    /// Three tables, all in dB of the ramp's own domain (the default window is
-    /// 60 dB, so a figure over ~1.2 dB is over 2% of the whole range):
-    ///
-    /// - What a gesture frame adds, split into the half the row cut
-    ///   ([`gesture_rows`]) carries and the half the coarse read
-    ///   ([`RowRead::Max`]) adds on top of it.
-    /// - The same pitch range at five row counts, settled — the pane-resize
-    ///   and offline-resolution case, with no gesture in it.
-    /// - The same sweep on pure noise, which is the distribution
-    ///   [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
-    ///   converges over. It is the control: the mean's dependence there is a
-    ///   fifth of what it is over partials, so what moves the brightness is
-    ///   spectral features NARROWER than a row, not the floor the order was set
-    ///   against.
-    ///
-    /// `cargo test -p harmonigraph-ui --release brightness_across_resolutions -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn brightness_across_resolutions() {
-        let step = harmonigraph_core::spectrogram::DB_STEP;
-        let weight: &[f32; 256] = &ROW_WEIGHT;
-        let scale_of = |span: f32| {
-            let min_midi = if span >= 119.0 {
-                harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
-            } else {
-                60.0 - span / 2.0
+        /// A grid the callback takes, keyed from 0 in a ring exactly the run's
+        /// size — so `key mod capacity` is the identity and a fixture about the
+        /// READ says nothing about slots.
+        ///
+        /// A generation of its own every time, which is what makes a SEQUENCE of
+        /// these frames legible: the copy is keyed on it, so without a fresh one a
+        /// second frame through the same resources patches the slabs the caller
+        /// declared dirty — none — and redraws the first frame's bytes. That path
+        /// is `the_gpu_grid_equals_a_full_upload_after_any_sequence`'s subject and
+        /// nothing else here wants it.
+        fn grid_of(run: Vec<u8>) -> SpectrogramGrid {
+            static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let slabs = run.len() / SPECTRUM_BINS;
+            SpectrogramGrid {
+                generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                serial: 1,
+                uploaded: Arc::default(),
+                capacity: slabs as u32,
+                bins: SPECTRUM_BINS as u32,
+                first_key: 0,
+                run: Arc::new(run),
+                dirty: Vec::new(),
+            }
+        }
+
+        /// A quad over `size`, mapping pixel column `px` to slab `px + 0.5` and
+        /// pixel row `py` to row `py`.
+        ///
+        /// Those are the taps' own centres, where the four-tap blend collapses onto
+        /// one texel — so a pixel of the frame IS a texel of the picture, and a
+        /// claim about a texel can be read off it with no filter in between. That
+        /// costs the width and the height: `size` must be the slab count by the row
+        /// count.
+        fn texel_quad(
+            read: &SpectrogramRead,
+            slabs: u32,
+            size: [u32; 2],
+        ) -> Vec<SpectrogramVertex> {
+            assert_eq!(size, [slabs, read.rows], "a texel per pixel means one pixel per texel");
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            // The shader stretches the FIRST and LAST row centres across whatever
+            // `t` the quad carries, so those centres are the quad's own ends.
+            let (t0, t1) = (row_of(read, 0).t, row_of(read, read.rows - 1).t);
+            let v = |x: f32, y: f32| SpectrogramVertex {
+                pos: [x, y],
+                slab: x / w * slabs as f32,
+                t: t0 + (t1 - t0) * y / h,
             };
-            PitchScale { min_midi, max_midi: min_midi + span, span }
-        };
-        // The pane-average level an image draws: a gesture image is stretched
-        // over the pane, so its mean over its OWN rows is what the pane shows.
-        let avg = |bins: &[Bin], db: &[BucketDb]| -> f64 {
-            bins.iter().map(|b| f64::from(b.read.of(db, weight))).sum::<f64>() / bins.len() as f64
-        };
+            vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+        }
 
-        let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
-        let noise = analysed_column(&[]);
+        fn pixel(frame: &[u8], size: [u32; 2], px: u32, py: u32) -> [u8; 4] {
+            let i = ((py * size[0] + px) * 4) as usize;
+            frame[i..i + 4].try_into().expect("four channels")
+        }
 
-        println!("\n-- what a gesture frame adds, dB --");
-        println!(
-            "{:>9} {:>6} {:>6} {:>6} {:>8} {:>8}",
-            "zoom", "pane", "rows", "wide%", "row cut", "+ read"
-        );
-        for &pane_rows in &[1408usize, 704, 448] {
-            for &span in &[119.6f32, 60.0, 24.0, 12.0, 3.0] {
-                let scale = scale_of(span);
-                let g = gesture_rows(pane_rows);
-                let settled = avg(&bins_for(pane_rows, &scale, false), &chord);
-                let cut = avg(&bins_for(g, &scale, false), &chord);
-                let coarse = avg(&bins_for(g, &scale, true), &chord);
-                let wide = bins_for(g, &scale, true)
-                    .iter()
-                    .filter(|b| matches!(b.read, RowRead::Max { .. }))
-                    .count();
-                println!(
-                    "{:>9} {:>6} {:>6} {:>5.0}% {:>+8.2} {:>+8.2}",
-                    format!("{span:.0} semi"),
-                    pane_rows,
-                    g,
-                    100.0 * wide as f32 / g as f32,
-                    (cut - settled) as f32 * step,
-                    (coarse - cut) as f32 * step,
+        /// A gradient table that reads back what the shader READ: entry `i` is the
+        /// grey `i`, which [`probe_read`]'s level mapping indexes exactly, so a
+        /// pixel's red channel is the stored dB byte the row came out at.
+        ///
+        /// An instrument rather than the picture. These claims are about the read,
+        /// and getting a number back out of a real ramp would mean inverting a
+        /// gamut solve.
+        fn probe_shades() -> SpectrogramShades {
+            SpectrogramShades {
+                generation: 1,
+                lut: Arc::new((0..256).map(|i| [i as u8, i as u8, i as u8, 255]).collect()),
+            }
+        }
+
+        /// [`read_of`]'s scalars with the level mapping replaced by `byte / 256`.
+        ///
+        /// [`probe_shades`] then lands on the byte itself: the shader's index is
+        /// `min(u32(level * 256), 255)`, the division is exact in binary, and the
+        /// read is integer-valued in both arms.
+        fn probe_read(view: &PaneView, rows: usize) -> SpectrogramRead {
+            SpectrogramRead {
+                level0: 0.0,
+                level_per_step: 1.0 / 256.0,
+                level_per_midi: 0.0,
+                ..read_of(view, rows)
+            }
+        }
+
+        /// A quad over the whole run and the whole visible pitch range.
+        ///
+        /// Not the pane's own mesh, deliberately: the pane cuts its strip to the
+        /// depths the data reaches and holds a sliver past the newest slab's
+        /// centre, so a slab at either end of the run can be off-picture — and a
+        /// fixture drawn through it would not reach the slot it claims to be
+        /// checking. Where the strip is cut and where the sliver holds is
+        /// `the_leading_sliver_holds_the_newest_slabs_centre`'s claim, not this
+        /// one's.
+        fn run_quad(slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            let v = |x: f32, y: f32| SpectrogramVertex {
+                pos: [x, y],
+                slab: x / w * slabs as f32,
+                t: 1.0 - y / h,
+            };
+            vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+        }
+
+        /// One quad per slab, each carrying its slab coordinate CONSTANT across its
+        /// own block of pixel columns.
+        ///
+        /// A block per slab and no blend between them, so a column of the frame
+        /// names exactly one slot: a mis-slotted slab is a whole block of the wrong
+        /// value rather than a seam a filter could explain. The run may then be any
+        /// width the fold produces, where [`texel_quad`] needs it to be the frame's.
+        fn slab_blocks(slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            (0..slabs)
+                .flat_map(|j| {
+                    let (x0, x1) = (w * j as f32 / slabs as f32, w * (j + 1) as f32 / slabs as f32);
+                    let v = |x: f32, y: f32| SpectrogramVertex {
+                        pos: [x, y],
+                        slab: j as f32 + 0.5,
+                        t: 1.0 - y / h,
+                    };
+                    [v(x0, 0.0), v(x1, 0.0), v(x1, h), v(x0, 0.0), v(x1, h), v(x0, h)]
+                })
+                .collect()
+        }
+
+        /// The pixel column comfortably inside slab `j`'s block — its centre,
+        /// which is at least half a block from either seam.
+        fn block_centre(j: u32, slabs: u32, size: [u32; 2]) -> u32 {
+            ((j as f32 + 0.5) / slabs as f32 * size[0] as f32) as u32
+        }
+
+        /// The pane's own geometry and settings, sized so a run fits inside a
+        /// frame's pixel columns with room to see each slab.
+        fn pane(window: f64, depth_len: f32, rows: f32) -> PaneView {
+            PaneView {
+                ppp: 1.0,
+                pitch_len: rows,
+                depth_len,
+                window,
+                scale: whole_axis(),
+                cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
+                whole: false,
+            }
+        }
+
+        /// A column whose whole spectrum is the one stored byte `db`, so a slab
+        /// folded from it reads that byte at every row and a block of the frame is
+        /// one number.
+        fn flat_column(time: f64, db: BucketDb) -> crate::SpectrogramColumn {
+            let power = 10f32.powf(0.1 * harmonigraph_core::spectrogram::db_of(db));
+            col(time, &(0..SPECTRUM_BINS).map(|b| (b, power)).collect::<Vec<_>>())
+        }
+
+        /// What the GPU holds equals a full upload of the same run, through every
+        /// way the run can move.
+        ///
+        /// The grid's GPU copy is the one cached thing left in this pipeline, and
+        /// its key is a statement about which slabs are in which slots. A slot the
+        /// key believes and the buffer contradicts is a WRONG COLUMN — a lap-old
+        /// slice of audio drawn as if it were now — and nothing on the CPU can see
+        /// one: the run is right, the geometry is right, and the picture is
+        /// plausible. So the delta is measured against the only thing that can
+        /// contradict it, a frame built from the run alone.
+        ///
+        /// Every event that moves the run is scripted here and counted, because a
+        /// sequence that quietly never folded, never pruned or never wrapped would
+        /// pass this by drawing one picture twice.
+        /// What the sequence below has to have reached for its equality to mean
+        /// anything, counted as it plays.
+        #[derive(Default)]
+        struct Tally {
+            /// The clock the fixture's columns are stamped on, and how many have
+            /// been pushed.
+            clock: f64,
+            pushed: u32,
+            folds: u32,
+            prunes: u32,
+            holds: u32,
+            reveals: u32,
+            crossings: u32,
+            rebuilds: u32,
+            backwards: u32,
+            /// The previous frame's slab width and first key, which is what makes
+            /// a crossing, a reveal and a prune tellable apart.
+            last: Option<(f64, i64)>,
+            /// Generations minted for the full-upload side, so it never inherits
+            /// its own previous frame.
+            fresh: u64,
+        }
+
+        #[test]
+        fn the_gpu_grid_equals_a_full_upload_after_any_sequence() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [128, 64];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut tally = Tally { clock: 100.0, ..Tally::default() };
+
+            // A moving peak over a low bed, so consecutive slabs differ and a slab
+            // written into the wrong slot draws a different picture.
+            let push = |t: &mut Tally, spectrum: &mut crate::AudioSpectrum, n: u32, gap: f64| {
+                t.clock += gap;
+                for _ in 0..n {
+                    let mut bins = [0.02f32; SPECTRUM_BINS];
+                    bins[400 + (t.pushed as usize * 13) % 3000] = 1.0;
+                    spectrum.push_history(t.clock, &bins);
+                    t.clock += interval;
+                    t.pushed += 1;
+                }
+            };
+
+            let frame = |t: &mut Tally,
+                         spectrum: &mut crate::AudioSpectrum,
+                         headless: &mut SpectrogramHeadless,
+                         view: &PaneView|
+             -> (SpectrogramGrid, SpectrogramRead, Vec<u8>) {
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist
+                        .partition_point(|c| c.time < t.clock - view.window)
+                        .saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(t.clock, |c| c.time),
+                };
+                let plan = Plan::new(view, &columns);
+                let uploads = spectrum.spectrogram[0].gpu.full_uploads();
+                let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
+                let hit = spectrum.spectrogram[0].gpu.hit(&plan.key).is_some();
+                run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
+                t.folds += u32::from(!hit);
+                t.rebuilds += u32::from(spectrum.spectrogram[0].gpu.full_uploads() > uploads);
+                t.backwards += u32::from(
+                    refolds > 0
+                        && spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds())
+                            > refolds,
                 );
+                let (grid, shades) = frame_data(spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let read = read_of(view, plan.rows);
+                let vertices = run_quad(slabs, SIZE);
+
+                if let Some((bucket, first_key)) = t.last {
+                    t.crossings += u32::from(bucket != plan.bucket);
+                    t.reveals += u32::from(grid.first_key < first_key && bucket == plan.bucket);
+                    t.prunes += u32::from(
+                        grid.first_key == first_key && grid.dirty.contains(&grid.first_key),
+                    );
+                }
+                t.last = Some((plan.bucket, grid.first_key));
+                // A HELD slab is a copy of the one before it, which is the only way
+                // two neighbours can carry the same bytes under this fixture.
+                t.holds += u32::from((1..slabs as usize).any(|j| {
+                    grid.run[(j - 1) * SPECTRUM_BINS..j * SPECTRUM_BINS]
+                        == grid.run[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
+                }));
+
+                let delta = headless.frame(
+                    0,
+                    SIZE,
+                    vertices.clone(),
+                    grid.clone(),
+                    read.clone(),
+                    shades.clone(),
+                );
+                // The same run with nothing said about what the GPU holds: a
+                // generation and a pane of its own, so it is built from the run and
+                // can inherit neither the delta pane's buffer nor its own.
+                t.fresh += 1;
+                let whole = SpectrogramGrid {
+                    generation: t.fresh,
+                    serial: 1,
+                    uploaded: Arc::default(),
+                    dirty: Vec::new(),
+                    ..grid.clone()
+                };
+                let full = headless.frame(1, SIZE, vertices, whole, read.clone(), shades);
+                assert_eq!(delta, full, "a slot the delta wrote disagrees with the run it named");
+                (grid, read, delta)
+            };
+
+            // Spans that straddle a rung of `live_slab`'s ladder at this pane
+            // width: 0.6 s cuts into 16 ms slabs and 0.8 s into 32 ms ones.
+            let (near, mid, far) = (0.3f64, 0.6, 0.8);
+            let view = |window: f64| pane(window, 40.0, 64.0);
+            push(&mut tally, &mut spectrum, 120, 0.0);
+            for _ in 0..3 {
+                frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+                push(&mut tally, &mut spectrum, 4, 0.0);
             }
+            // A window scrolling by less than a slab: its first slab keeps its key
+            // while columns leave it, so the aggregator reprunes it in place.
+            for _ in 0..6 {
+                push(&mut tally, &mut spectrum, 1, 0.0);
+                frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            }
+            // A window narrowed and widened again: the widening reaches back to
+            // slabs the frame before it did not draw, and the far end crosses a
+            // rung on the way.
+            for span in [near, near, mid, far, far, mid] {
+                frame(&mut tally, &mut spectrum, &mut headless, &view(span));
+                push(&mut tally, &mut spectrum, 4, 0.0);
+            }
+            // One empty slab: a seam in the sample stream, which the aggregator
+            // fills by holding the column before it.
+            push(&mut tally, &mut spectrum, 6, 0.024);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            // A transport jump backwards, which no delta can describe.
+            tally.clock -= 0.4;
+            push(&mut tally, &mut spectrum, 40, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            // A context that went away: the copy is gone and nothing about it can
+            // be assumed.
+            spectrum.spectrogram[0].gpu.release();
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+
+            for (count, what) in [
+                (tally.folds, "folds"),
+                (tally.prunes, "first-slab prunes"),
+                (tally.holds, "held slabs"),
+                (tally.reveals, "slabs revealed by a widening window"),
+                (tally.crossings, "ladder rungs crossed"),
+                (tally.rebuilds, "full uploads"),
+                (tally.backwards, "backward jumps"),
+            ] {
+                assert!(count > 0, "the sequence never reached any {what}");
+            }
+
+            // And the equality has teeth: one more fold, drawn with its list of
+            // moved slabs WITHHELD, leaves the buffer holding what the run before
+            // it put there — a different picture. Without this an equality that
+            // could never fail would read as coverage.
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            let view = view(mid);
+            let hist = spectrum.history();
+            let columns = Columns {
+                first: hist
+                    .partition_point(|c| c.time < tally.clock - view.window)
+                    .saturating_sub(1),
+                len: hist.len(),
+                newest: hist.back().map_or(tally.clock, |c| c.time),
+            };
+            let plan = Plan::new(&view, &columns);
+            run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
+            let (moved, shades) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
+            assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
+            let read = read_of(&view, plan.rows);
+            let slabs = (moved.run.len() / SPECTRUM_BINS) as u32;
+            let withheld = headless.frame(
+                0,
+                SIZE,
+                run_quad(slabs, SIZE),
+                SpectrogramGrid { dirty: Vec::new(), ..moved.clone() },
+                read.clone(),
+                shades.clone(),
+            );
+            tally.fresh += 1;
+            let full = headless.frame(
+                1,
+                SIZE,
+                run_quad(slabs, SIZE),
+                SpectrogramGrid {
+                    generation: tally.fresh,
+                    uploaded: Arc::default(),
+                    dirty: Vec::new(),
+                    ..moved
+                },
+                read,
+                shades,
+            );
+            assert_ne!(withheld, full, "withholding the delta drew the same picture anyway");
         }
 
-        for (name, db) in [("partials", &chord), ("noise", &noise)] {
-            println!("\n-- settled, same range at five row counts, dB from 256 rows ({name}) --");
-            for &span in &[119.6f32, 60.0, 24.0, 12.0] {
-                let scale = scale_of(span);
-                let mut line = String::new();
-                let mut base = 0.0;
-                for (k, &rows) in [256usize, 448, 704, 1408, 2816].iter().enumerate() {
-                    let a = avg(&bins_for(rows, &scale, false), db);
-                    if k == 0 {
-                        base = a;
-                    }
-                    line += &format!("  {rows}:{:+.2}", (a - base) as f32 * step);
-                }
-                println!("{:>9}{line}", format!("{span:.0} semi"));
+        /// Keys before zero and a run that wraps past the end of the ring place
+        /// each slab where the shader reads it.
+        ///
+        /// Three readers work out a slot from a key and no compiler checks that
+        /// they agree: [`ring_capacity`] sizes the ring, the render crate scatters
+        /// a slab into `key mod capacity`, and the shader walks forward from the
+        /// run's first slot with the same modulus. Two of the three are only ever
+        /// exercised together at the two places the arithmetic is not the identity
+        /// — a key before zero, where a truncating remainder answers negative, and
+        /// a run that crosses the ring's end, where the forward walk has to come
+        /// round.
+        ///
+        /// The render crate holds the same pair against a grid it builds itself;
+        /// this one goes through the fold, so the capacity and the keys are the
+        /// pane's own rather than a fixture's.
+        #[test]
+        fn slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [64, 4];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            let view = pane(0.3, 24.0, 24.0);
+            let bucket = live_slab(view.window, 24);
+
+            // Time runs from before zero to after it, and a slab's byte is a
+            // function of its own KEY — so neighbouring slabs differ, a slab drawn
+            // from the wrong slot is the wrong number, and the ramp never repeats
+            // inside a run.
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut times = Vec::new();
+            for i in 0..238 {
+                let time = -1.5 + i as f64 * interval;
+                let key = (time / bucket).floor() as i64;
+                spectrum.history.push(flat_column(time, 60 + key.rem_euclid(190) as u8));
+                times.push(time);
             }
-        }
-    }
 
-    /// One analysed column through the real transform, so the partials carry
-    /// the taper's own skirts and the floor is the transform's rather than one
-    /// this fixture picked. An empty `notes` leaves the noise alone.
-    fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
-        let sr = 48_000.0f32;
-        let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
-        let mut seed = 0x1234_5678u32;
-        let mut noise = move || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
-        };
-        let buf: Vec<f32> = (0..1 << 16)
-            .map(|i| {
-                let t = i as f32 / sr;
-                // Sawtooths by partial, rolled off 1/k and band-limited by hand.
-                let v: f32 = notes
-                    .iter()
-                    .flat_map(|&m| {
-                        let f = harmonigraph_core::spectrum::midi_to_hz(m);
-                        (1..=24).map(move |k| (f * k as f32, k))
-                    })
-                    .filter(|&(fk, _)| fk < sr * 0.45)
-                    .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
-                    .sum();
-                v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
-            })
-            .collect();
-        an.push_samples(&buf);
-        an.pitch_spectrum()
-            .expect("a full window analyses")
-            .iter()
-            .map(|&p| harmonigraph_core::spectrogram::quantize(p))
-            .collect()
-    }
+            let (mut negative, mut wrapped) = (0u32, 0u32);
+            let mut now = -1.2;
+            while now < 0.4 {
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist.partition_point(|c| c.time < now - view.window).saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(now, |c| c.time),
+                };
+                let plan = Plan::new(&view, &columns);
+                run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let (grid, _) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let first_slot = grid.first_key.rem_euclid(i64::from(grid.capacity)) as u32;
+                negative += u32::from(grid.first_key < 0);
+                wrapped += u32::from(first_slot + slabs > grid.capacity);
 
-    /// Scratch: what coarsening the TIME axis is worth, which is the knob
-    /// [`timing_parts`] does not turn. Not an assertion.
-    ///
-    /// A gesture coarsens the PITCH axis whichever axis the pointer is moving,
-    /// so a Span drag pays a brightness change on an axis it is holding still
-    /// (#491). Halving the slabs instead is the trade that costs nothing on the
-    /// axis being read — this is what it costs on the one being drawn.
-    ///
-    /// Zoomed out, where both the read and the brightness change are worst.
-    ///
-    /// `cargo test -p harmonigraph-ui --release timing_slabs -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn timing_slabs() {
-        use std::time::Instant;
-
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let window_s = 120.0f64;
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let cfg = SpectrumConfig::default();
-
-        println!(
-            "{:>6} {:>6} {:>7} {:>6} {:>9} {:>8}",
-            "cols", "rows", "read", "slabs", "restart", "MB"
-        );
-        for target_cols in [1024usize, 512, 256] {
-            let keep = target_cols + RING_HEADROOM;
-            let bucket = live_slab(window_s, target_cols);
-            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
-            let n = (span_needed / interval) as usize;
-            let mut history = crate::SpectrumHistory::default();
-            let mut phase = 0.0f32;
-            for i in 0..n {
-                let mut power = [0.0f32; SPECTRUM_BINS];
-                for h in 1usize..8 {
-                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
-                        % SPECTRUM_BINS;
-                    power[idx] = 0.1 / h as f32;
-                }
-                for (b, p) in power.iter_mut().enumerate() {
-                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
-                }
-                phase += 0.01;
-                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
-            }
-            let newest = history.back().unwrap().time;
-            let first = history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
-            let mut agg = SpectrogramAgg::new();
-            let (centers, power) = agg.window(&history, first, bucket, keep);
-            let w = centers.len();
-            let first_key = (centers[0] / bucket).floor() as i64;
-            let last_key = first_key + w as i64 - 1;
-
-            for rows in [1408usize, 704] {
-                for coarse in [false, true] {
-                    let bins = bins_for(rows, &full, coarse);
-                    let h = bins.len();
-                    let style = style_for(h, bucket, window_s, &full);
-                    let shades = Shades::new(&cfg, &bins);
-                    let capacity = ring_capacity(keep, w);
-                    let t0 = Instant::now();
-                    let mut sink = 0usize;
-                    for _ in 0..6 {
-                        let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
-                        let px = restart_pixels(
-                            &ring,
-                            capacity * 2,
-                            h,
-                            first_key,
-                            last_key,
-                            |i, out| fill_column_into(&shades, &bins, slab_of(&power, i), out),
+                let read = probe_read(&view, plan.rows);
+                let frame = headless.frame(
+                    0,
+                    SIZE,
+                    slab_blocks(slabs, SIZE),
+                    grid.clone(),
+                    read,
+                    probe_shades(),
+                );
+                for j in 0..slabs {
+                    let want = grid.run[j as usize * SPECTRUM_BINS];
+                    let got = pixel(&frame, SIZE, block_centre(j, slabs, SIZE), SIZE[1] / 2)[0];
+                    assert_eq!(
+                        got,
+                        want,
+                        "slab {j} of the run at key {} (slot {}, ring {}) drew slot {:?}",
+                        grid.first_key,
+                        (grid.first_key + i64::from(j)).rem_euclid(i64::from(grid.capacity)),
+                        grid.capacity,
+                        (0..slabs).find(|&k| grid.run[k as usize * SPECTRUM_BINS] == got),
+                    );
+                    if j > 0 {
+                        assert_ne!(
+                            want,
+                            grid.run[(j - 1) as usize * SPECTRUM_BINS],
+                            "slabs {} and {j} draw alike, so a swap between them is invisible",
+                            j - 1,
                         );
-                        sink += px.len();
                     }
-                    let ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
-                    assert!(sink > 0);
-                    println!(
-                        "{target_cols:>6} {rows:>6} {:>7} {w:>6} {ms:>9.2} {:>8.1}",
-                        if coarse { "max" } else { "mean" },
-                        (capacity * 2 * h * 4) as f64 / 1e6,
+                }
+                now += 2.0 * bucket;
+            }
+            assert!(negative > 0, "no frame's run started before zero");
+            assert!(wrapped > 0, "no frame's run crossed the ring's end");
+        }
+
+        /// Energy at one bucket of one slab lights that slab's column at that
+        /// bucket's row, and nothing else.
+        ///
+        /// The row geometry and the slot arithmetic each place a texel, in
+        /// different units, and a picture with everything in the right place except
+        /// its energy is the failure neither of them reports: the frame is bright
+        /// somewhere, so nothing looks broken, and it is a transposition or an
+        /// off-by-one row away from the sound it claims to draw.
+        #[test]
+        fn energy_at_one_bucket_of_one_slab_lights_that_texel_and_no_other() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // Rows far coarser than the bucket grid, so a row is a RUN and the
+            // bucket has to be found inside one rather than landed on.
+            const ROWS: u32 = 32;
+            const SLAB: u32 = 17;
+            const ROW: u32 = 11;
+            let view = view_of(whole_axis(), SpectrumConfig::default());
+            let read = probe_read(&view, ROWS as usize);
+            // Mid-run, because adjacent rows SHARE the bucket their boundary falls
+            // in — a bucket at the edge would be read by two rows and the claim
+            // below would be false of the picture rather than of the code.
+            let run = run_of(&read, ROW);
+            let bucket = run.start + run.len() / 2;
+            let reached: Vec<u32> =
+                (0..ROWS).filter(|&r| run_of(&read, r).contains(&bucket)).collect();
+            assert_eq!(reached, [ROW], "bucket {bucket} is read by rows {reached:?}");
+
+            let mut bytes = vec![0u8; W as usize * SPECTRUM_BINS];
+            bytes[SLAB as usize * SPECTRUM_BINS + bucket] = q(1.0);
+            let size = [W, ROWS];
+            let frame = headless.frame(
+                0,
+                size,
+                texel_quad(&read, W, size),
+                grid_of(bytes),
+                read.clone(),
+                probe_shades(),
+            );
+            let lit = pixel(&frame, size, SLAB, ROW)[0];
+            assert!(lit > 0, "the loud texel drew nothing");
+            for py in 0..ROWS {
+                for px in 0..W {
+                    if (px, py) == (SLAB, ROW) {
+                        continue;
+                    }
+                    assert_eq!(
+                        pixel(&frame, size, px, py)[0],
+                        0,
+                        "slab {px} row {py} carries energy that belongs at slab {SLAB} row {ROW}",
                     );
                 }
             }
         }
-    }
 
-    /// Scratch: what changing the slab width costs the AGGREGATOR, which is the
-    /// term `timing_slabs` does not carry. Not an assertion.
-    #[test]
-    #[ignore]
-    fn timing_refold() {
-        use std::time::Instant;
-
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        for window_s in [12.0f64, 120.0] {
-            let target_cols = 1024usize;
-            let keep = target_cols + RING_HEADROOM;
-            let fine = live_slab(window_s, target_cols);
-            let coarse = live_slab(window_s, target_cols / 4);
-            let span_needed = keep as f64 * coarse * 1.1 + 5.0;
-            let n = (span_needed / interval) as usize;
-            let mut history = crate::SpectrumHistory::default();
-            let mut phase = 0.0f32;
-            for i in 0..n {
-                let mut power = [0.0f32; SPECTRUM_BINS];
-                for h in 1usize..8 {
-                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
-                        % SPECTRUM_BINS;
-                    power[idx] = 0.1 / h as f32;
-                }
-                phase += 0.01;
-                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
+        /// The picture's noise floor SETTLES as the pitch axis zooms out, instead
+        /// of climbing with the number of buckets a row happens to span.
+        ///
+        /// Read by MAX, a row asks "how large was the largest of N draws", whose
+        /// answer grows like the log of N and so has no limit: the floor between
+        /// the partials reads brighter the further out the zoom, which is a
+        /// statement about the layout rather than about the sound. The power mean
+        /// estimates a fixed property of the distribution instead — see
+        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER).
+        ///
+        /// The comparison starts at 8 buckets rather than at 1 because the step
+        /// from ONE bucket to several is inherent and belongs to neither rule: one
+        /// bucket reads a SAMPLE of the distribution, any number of them reads a
+        /// STATISTIC of it, and that step is paid once on the way off a single
+        /// bucket. What is at issue is only the part that keeps climbing.
+        ///
+        /// The MAX control is what gives the first assertion its teeth: it fails if
+        /// the noise is too flat, or the runs too short, for either rule to be
+        /// tested. It is arithmetic on the same bytes rather than a second frame,
+        /// because the shader has no max arm to render.
+        #[test]
+        fn the_noise_floor_settles_as_the_pitch_axis_zooms_out() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // Exponentially distributed power around -60 dB: the distribution a
+            // noise floor's buckets have, and the one whose maximum keeps growing.
+            let mut seed = 0x2545_F491_4F6C_DD1Du64;
+            let mut power = [0.0f32; SPECTRUM_BINS];
+            for p in power.iter_mut() {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let u = ((seed >> 11) as f64 / (1u64 << 53) as f64).clamp(1e-12, 1.0);
+                *p = (-u.ln() * 1e-6) as f32;
             }
-            let first = history
-                .partition_point(|c| c.time < history.back().unwrap().time - window_s)
-                .saturating_sub(1);
+            let column: Vec<u8> = power.iter().map(|&p| q(p)).collect();
+            let view = view_of(whole_axis(), SpectrumConfig::default());
 
-            let mut agg = SpectrogramAgg::new();
-            let t0 = Instant::now();
-            let _ = agg.window(&history, first, fine, keep);
-            let cold = t0.elapsed().as_secs_f64() * 1000.0;
-
-            // The incremental path: same bucket, nothing new to fold.
-            let t0 = Instant::now();
-            for _ in 0..20 {
-                let _ = agg.window(&history, first, fine, keep);
-            }
-            let warm = t0.elapsed().as_secs_f64() * 1000.0 / 20.0;
-
-            // Alternating buckets, which is what opening and settling a pitch
-            // gesture would do: every call is a refold.
-            let t0 = Instant::now();
-            for i in 0..10 {
-                let b = if i % 2 == 0 { coarse } else { fine };
-                let _ = agg.window(&history, first, b, keep);
-            }
-            let flip = t0.elapsed().as_secs_f64() * 1000.0 / 10.0;
-
-            println!(
-                "window={window_s:>5}s cols={n:>6} fine={fine:.3}s coarse={coarse:.3}s | \
-                 first fold {cold:6.2} | carry-forward {warm:6.2} | refold {flip:6.2} ms"
+            // Every slab the same column, so the pane mean is the row read's own
+            // and the time axis contributes nothing to it.
+            let bytes: Vec<u8> = (0..W).flat_map(|_| column.iter().copied()).collect();
+            let floor = |per_row: usize, headless: &mut SpectrogramHeadless| -> (f64, f64) {
+                let rows = (SPECTRUM_BINS / per_row) as u32;
+                let read = probe_read(&view, rows as usize);
+                let runs: Vec<std::ops::Range<usize>> =
+                    (0..rows).map(|r| run_of(&read, r)).collect();
+                let widest = runs.iter().map(|r| r.len()).max().expect("a row");
+                assert!(
+                    runs.iter().all(|r| r.len() >= 2) && widest <= per_row + 2,
+                    "rows of {per_row} buckets came out {}..{widest} wide",
+                    runs.iter().map(|r| r.len()).min().expect("a row"),
+                );
+                let size = [W, rows];
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read.clone(),
+                    probe_shades(),
+                );
+                let mean =
+                    frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>() / (W * rows) as f64;
+                // The same rows read by MAX, which is what the mean is being
+                // measured against.
+                let by_max = runs
+                    .iter()
+                    .map(|r| f64::from(column[r.clone()].iter().copied().max().expect("a bucket")))
+                    .sum::<f64>()
+                    / rows as f64;
+                (mean, by_max)
+            };
+            let step = f64::from(harmonigraph_core::spectrogram::DB_STEP);
+            let (mean_8, max_8) = floor(8, &mut headless);
+            let (mean_64, max_64) = floor(64, &mut headless);
+            let climb = (mean_64 - mean_8) * step;
+            assert!(climb < 1.5, "the floor climbed {climb:.2} dB across a three-octave zoom");
+            let by_max = (max_64 - max_8) * step;
+            assert!(
+                by_max > 2.2,
+                "a plain MAX climbed only {by_max:.2} dB, so this proves nothing"
             );
         }
-    }
 
-    /// What [`GESTURE_SLAB_CUT`] costs the picture, which is the other half of
-    /// the trade [`brightness_across_resolutions`] measures on the pitch side.
-    ///
-    /// A slab is a MAX over the columns in it, so widening one can only raise a
-    /// texel — the same shape as the row cut's, on the axis a pitch gesture is
-    /// holding still. What bounds it is that the columns are nearly the same
-    /// data: the hop is 8 ms against a 171 ms window, so neighbours share ~95%
-    /// of their samples and a max over more of them has little room to climb.
-    ///
-    /// Driven by an ENVELOPE rather than a steady tone, because a steady tone
-    /// is the case where a max over more columns is trivially free. Staccato is
-    /// the worst case a gesture meets — a note whose slab is mostly silence is
-    /// exactly where one loud column carries the whole widened slab.
-    ///
-    /// `cargo test -p harmonigraph-ui --release brightness_of_the_slab_cut -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn brightness_of_the_slab_cut() {
-        let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let weight: &[f32; 256] = &ROW_WEIGHT;
-        let step = harmonigraph_core::spectrogram::DB_STEP;
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let bins = bins_for(1408, &full, false);
-
-        println!("{:>10} {:>8} {:>9} {:>9} {:>8}", "material", "window", "fine", "coarse", "delta");
-        for (name, duty) in [("sustained", 1.0f64), ("legato", 0.75), ("staccato", 0.25)] {
-            for window_s in [12.0f64, 120.0] {
-                let target = 1024usize;
-                let keep = target + RING_HEADROOM;
-                let fine = live_slab(window_s, target);
-                let coarse = live_slab(window_s, target / GESTURE_SLAB_CUT);
-                let n = ((keep as f64 * coarse * 1.1 + 5.0) / interval) as usize;
-
-                let mut history = crate::SpectrumHistory::default();
-                for i in 0..n {
-                    let t = i as f64 * interval;
-                    // One note per half second, sounding for `duty` of it.
-                    let on = (t % 0.5) < 0.5 * duty;
-                    let mut power = [0.0f32; SPECTRUM_BINS];
-                    for h in 1usize..12 {
-                        let idx = (700 + h * 640).min(SPECTRUM_BINS - 1);
-                        power[idx] = if on { 0.2 / h as f32 } else { 0.0 };
-                    }
-                    for (b, p) in power.iter_mut().enumerate() {
-                        *p += 1e-8 * (1.0 + ((b * 7 + i) % 13) as f32);
-                    }
-                    history.push(crate::SpectrogramColumn::from_power(t, &power));
-                }
-                let newest = history.back().unwrap().time;
-                let first =
-                    history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
-
-                // Pane-average level over the whole drawn image, both ways.
-                let avg = |bucket: f64| -> f64 {
-                    let mut agg = SpectrogramAgg::new();
-                    let (centers, power) = agg.window(&history, first, bucket, keep);
-                    let w = centers.len();
-                    let total: f64 = (0..w)
-                        .map(|i| {
-                            let slab = slab_of(&power, i);
-                            bins.iter().map(|b| f64::from(b.read.of(slab, weight))).sum::<f64>()
-                                / bins.len() as f64
-                        })
-                        .sum();
-                    total / w as f64
+        /// A ramp of stored bytes renders dark to bright.
+        ///
+        /// Every step between the store and the screen is monotone on its own — the
+        /// read, the level affine, the table — and the picture's whole grammar is
+        /// that brighter means louder, so a sign or an index flipped anywhere in
+        /// the chain is a heatmap that reads backwards while every part of it looks
+        /// right.
+        ///
+        /// Lightness in `L*`, which is the units the gradient is authored in: a
+        /// channel sum weights blue like green and would call a violet and a yellow
+        /// of one sum equally bright. Opacity is not measurable here and stays with
+        /// `cells_are_opaque_and_run_dark_to_bright` — the pane's bed is opaque and
+        /// egui's blend leaves the target's alpha at 1 whatever a fragment writes.
+        #[test]
+        fn a_ramp_of_stored_bytes_renders_dark_to_bright() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // One row over the whole axis and a constant column per slab, so a
+            // slab's texel is that slab's byte and the ramp is the frame.
+            let size = [W, 1];
+            let bytes: Vec<u8> = (0..W).flat_map(|j| vec![(j * 4) as u8; SPECTRUM_BINS]).collect();
+            for preset in crate::SpectrogramPreset::ALL {
+                let cfg = SpectrumConfig {
+                    spectrogram_gradient: preset.gradient(),
+                    ..Default::default()
                 };
-                let (a, b) = (avg(fine), avg(coarse));
-                println!(
-                    "{name:>10} {:>7.0}s {:>9.1} {:>9.1} {:>+7.2} dB",
-                    window_s,
-                    a * f64::from(step),
-                    b * f64::from(step),
-                    (b - a) as f32 * step,
+                let view = view_of(whole_axis(), cfg);
+                let read = read_of(&view, 1);
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read,
+                    GpuGrid::default().shades(&cfg),
                 );
+                let lightness = |px: u32| {
+                    let c = pixel(&frame, size, px, 0);
+                    let v = |b: u8| f64::from(b) / 255.0;
+                    harmonigraph_scene::color::lightness_of_encoded(v(c[0]), v(c[1]), v(c[2]))
+                };
+                for px in 1..W {
+                    assert!(
+                        lightness(px) >= lightness(px - 1) - 1e-9,
+                        "{preset:?}: byte {} draws darker than byte {}",
+                        px * 4,
+                        (px - 1) * 4,
+                    );
+                }
+                assert!(lightness(0) < 0.5, "{preset:?}: silence must sit on the ramp's black end");
+                assert!(lightness(W - 1) > lightness(0) + 0.2, "{preset:?}: the ramp barely moved");
+            }
+        }
+
+        /// The quiet end of the ramp FADES to black rather than falling off a cliff
+        /// into it.
+        ///
+        /// A shortcut answering everything under some dB as silence is invisible
+        /// while the Level window bottoms out above it, and becomes a hard edge —
+        /// faintest colour straight to black — the moment the window can be dragged
+        /// below. The control is the same bucket at the default window, where it
+        /// really is under the floor: without it, a picture that had gone black
+        /// everywhere would pass the first half by drawing nothing.
+        #[test]
+        fn a_bucket_above_a_dragged_down_floor_still_draws_a_colour() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let size = [W, 1];
+            let quiet = q(1e-9); // -90 dB
+            let bytes = vec![quiet; W as usize * SPECTRUM_BINS];
+            let drawn = |cfg: SpectrumConfig, headless: &mut SpectrogramHeadless| {
+                let view = view_of(whole_axis(), cfg);
+                let read = read_of(&view, 1);
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read,
+                    GpuGrid::default().shades(&cfg),
+                );
+                pixel(&frame, size, 0, 0)
+            };
+            let default = SpectrumConfig { volume_ceiling_db: 0.0, ..SpectrumConfig::default() };
+            assert_eq!(
+                drawn(default, &mut headless)[..3],
+                [0, 0, 0],
+                "a -90 dB bucket is under the default -60 dB floor and must be black",
+            );
+            let dragged = SpectrumConfig { volume_floor_db: -120.0, ..default };
+            let lit = drawn(dragged, &mut headless);
+            assert_ne!(
+                lit[..3],
+                [0, 0, 0],
+                "a -90 dB bucket 30 dB above a -120 dB floor was cut off instead of faded",
+            );
+        }
+
+        /// The curve and the heatmap read one run of buckets the same way.
+        ///
+        /// They hold their buckets differently — the curve as floats of power in
+        /// Rust, the heatmap as bytes of dB in WGSL — so the mean is written twice,
+        /// and two forms of one definition drift. This is the only thing holding
+        /// the shader to the Rust, and what the drift costs is visible rather than
+        /// subtle: a pixel of the curve and a row of the heatmap cover the SAME
+        /// buckets, and the pane draws both from one gradient through one loudness
+        /// mapping precisely so equal levels read equal, so a disagreement puts a
+        /// ridge and the curve over it at different heights on one tone.
+        ///
+        /// The tolerance is the store's own, not a fudge: the heatmap's side rounds
+        /// to [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) twice over, once
+        /// quantizing each bucket and once re-encoding the mean, and the table it
+        /// then lands in is sampled at [`SHADES`] levels.
+        #[test]
+        fn the_curve_and_the_heatmap_read_a_run_of_buckets_alike() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let cfg = SpectrumConfig::default();
+            let lut = GpuGrid::default().shades(&cfg).lut;
+            let step = harmonigraph_core::spectrogram::DB_STEP;
+            let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+            let mut next = || {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 11) as f64 / (1u64 << 53) as f64
+            };
+
+            // One row over the whole picture, so the frame IS that row's read,
+            // once per slab. The visible range sets how many buckets it covers:
+            // below a sixteenth of a semitone the margin is capped and widens it,
+            // above that the range itself does — between them they reach every run
+            // length from a pair to a full 32.
+            let spans: Vec<f32> = [0.01f32, 0.025, 0.05]
+                .into_iter()
+                .chain((5..=32).map(|n: u32| (n - 3) as f32 / 32.0))
+                .collect();
+            let size = [W, 1];
+            let mut lengths = std::collections::BTreeSet::new();
+            for span in spans {
+                let view = view_of(
+                    PitchScale { min_midi: SPECTRUM_MIN_MIDI + 20.0, max_midi: 0.0, span },
+                    cfg,
+                );
+                let read = read_of(&view, 1);
+                let run = run_of(&read, 0);
+                lengths.insert(run.len());
+                let midi = row_of(&read, 0).midi;
+                for _ in 0..4 {
+                    // A case per slab: 90 dB of spread, which is where two forms
+                    // of one mean have the most room to disagree — a flat run
+                    // agrees trivially.
+                    let powers: Vec<Vec<f32>> = (0..W)
+                        .map(|_| (0..run.len()).map(|_| 10f64.powf(-9.0 * next()) as f32).collect())
+                        .collect();
+                    let mut bytes = vec![0u8; W as usize * SPECTRUM_BINS];
+                    for (j, ps) in powers.iter().enumerate() {
+                        for (b, &p) in run.clone().zip(ps.iter()) {
+                            bytes[j * SPECTRUM_BINS + b] = q(p);
+                        }
+                    }
+                    let frame = headless.frame(
+                        0,
+                        size,
+                        texel_quad(&read, W, size),
+                        grid_of(bytes),
+                        read.clone(),
+                        SpectrogramShades { generation: 1, lut: lut.clone() },
+                    );
+                    for (j, ps) in powers.iter().enumerate() {
+                        let curve = 10.0 * power_mean(ps).max(1e-30).log10();
+                        // The band the store's own rounding leaves the heatmap
+                        // free to land in, widened by the one table index a level
+                        // sitting on a slice boundary can fall either side of.
+                        let index = |db: f32| {
+                            let level = spectrogram_level_db(&cfg, db, midi);
+                            ((level * SHADES as f32) as usize).min(SHADES - 1)
+                        };
+                        let lo = index(curve - 2.0 * step).saturating_sub(1);
+                        let hi = (index(curve + 2.0 * step) + 1).min(SHADES - 1);
+                        let got = pixel(&frame, size, j as u32, 0);
+                        assert!(
+                            (lo..=hi).any(|i| lut[i][..3] == got[..3]),
+                            "a run of {} at {curve:.3} dB drew {got:?}, outside the table's \
+                         {lo}..={hi} ({:?} to {:?})",
+                            run.len(),
+                            lut[lo],
+                            lut[hi],
+                        );
+                    }
+                }
+            }
+            // The sweep really did reach every run length it claims to.
+            assert_eq!(
+                lengths.iter().copied().collect::<Vec<_>>(),
+                (2..=32).collect::<Vec<_>>(),
+                "the spans reached run lengths {lengths:?}",
+            );
+        }
+
+        /// One analysed column through the real transform, so the partials carry
+        /// the taper's own skirts and the floor is the transform's rather than one
+        /// this fixture picked. An empty `notes` leaves the noise alone.
+        fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
+            let sr = 48_000.0f32;
+            let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
+            let mut seed = 0x1234_5678u32;
+            let mut noise = move || {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+            };
+            let buf: Vec<f32> = (0..1 << 16)
+                .map(|i| {
+                    let t = i as f32 / sr;
+                    // Sawtooths by partial, rolled off 1/k and band-limited by hand.
+                    let v: f32 = notes
+                        .iter()
+                        .flat_map(|&m| {
+                            let f = harmonigraph_core::spectrum::midi_to_hz(m);
+                            (1..=24).map(move |k| (f * k as f32, k))
+                        })
+                        .filter(|&(fk, _)| fk < sr * 0.45)
+                        .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
+                        .sum();
+                    v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
+                })
+                .collect();
+            an.push_samples(&buf);
+            an.pitch_spectrum()
+                .expect("a full window analyses")
+                .iter()
+                .map(|&p| harmonigraph_core::spectrogram::quantize(p))
+                .collect()
+        }
+
+        /// Scratch: what the picture's overall brightness does as the pane's row
+        /// count changes, which is the resize and offline-resolution case (#491).
+        /// Not an assertion.
+        ///
+        /// A row's read is a filter whose SUPPORT is set by the row count, so the
+        /// same audio at the same zoom draws brighter or darker as the pane grows
+        /// — visible when the editor and an export of the same take disagree. The
+        /// noise row is the control: the mean's dependence over a pure floor is a
+        /// fraction of what it is over partials, so what moves the brightness is
+        /// spectral features NARROWER than a row rather than the floor
+        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
+        /// was set against.
+        ///
+        /// Through the shader, so the number stands for the picture that ships;
+        /// [`probe_read`] is what makes the pane mean readable off it.
+        ///
+        /// `cargo test -p harmonigraph-ui --release gpu::brightness_across_resolutions -- --ignored --nocapture`
+        #[test]
+        #[ignore]
+        fn brightness_across_resolutions() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let step = f64::from(harmonigraph_core::spectrogram::DB_STEP);
+            let scale_of = |span: f32| {
+                let min_midi = if span >= 119.0 { SPECTRUM_MIN_MIDI } else { 60.0 - span / 2.0 };
+                PitchScale { min_midi, max_midi: min_midi + span, span }
+            };
+            let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
+            let noise = analysed_column(&[]);
+
+            for (name, column) in [("partials", &chord), ("noise", &noise)] {
+                let bytes: Vec<u8> = (0..W).flat_map(|_| column.iter().copied()).collect();
+                println!(
+                    "\n-- settled, same range at five row counts, dB from 256 rows ({name}) --"
+                );
+                for &span in &[119.6f32, 60.0, 24.0, 12.0] {
+                    let view = view_of(scale_of(span), SpectrumConfig::default());
+                    let mut line = String::new();
+                    let mut base = 0.0;
+                    for (k, &rows) in [256u32, 448, 704, 1408, 2816].iter().enumerate() {
+                        let read = probe_read(&view, rows as usize);
+                        let size = [W, rows];
+                        let frame = headless.frame(
+                            0,
+                            size,
+                            texel_quad(&read, W, size),
+                            grid_of(bytes.clone()),
+                            read,
+                            probe_shades(),
+                        );
+                        let mean = frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>()
+                            / f64::from(W * rows);
+                        if k == 0 {
+                            base = mean;
+                        }
+                        line += &format!("  {rows}:{:+.2}", (mean - base) * step);
+                    }
+                    println!("{:>9}{line}", format!("{span:.0} semi"));
+                }
             }
         }
     }

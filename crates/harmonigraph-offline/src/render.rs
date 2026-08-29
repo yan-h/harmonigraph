@@ -78,12 +78,11 @@ fn empty_window_warning(ws: &harmonigraph_ui::WholeSong) -> Option<String> {
 ///
 /// One constructor rather than a literal at each call site, because the field
 /// that matters here is invisible by its ABSENCE: `max_texture_side` left unset
-/// makes egui report its own 2048 default and the spectrogram plan against it
+/// makes egui report its own 2048 default and size its font atlas against that
 /// (issue #368, and see [`Renderer::max_texture_side`](crate::frames::Renderer::max_texture_side)).
 /// A second `RawInput` built by hand is a second place for that field to go
 /// missing, and nothing downstream reports the loss — the frames still render,
-/// a quarter of the area smaller. Sharing it puts the render loop's own input
-/// under the test that measures what the limit buys.
+/// with labels the atlas had no room for.
 fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::RawInput {
     egui::RawInput {
         screen_rect: Some(screen),
@@ -458,135 +457,6 @@ mod tests {
             roll: harmonigraph_core::NoteRoll::default(),
         };
         assert!(empty_window_warning(&sparse).is_some(), "one column is not a heatmap");
-    }
-
-    /// **The texture limit the context is told is what the DEVICE takes**, and
-    /// it costs the exported picture rows.
-    ///
-    /// `RawInput::max_texture_side` left `None` makes egui report its own 2048
-    /// default whatever the GPU underneath allows, and the spectrogram reads
-    /// that number for both axes of its heatmap: rows clamped to it outright,
-    /// slabs through `slab_ceiling`. Every offline render was therefore held to
-    /// a quarter of the area this device takes, with nothing on screen or in
-    /// stderr saying so — issue #368. The editor never had the gap; the
-    /// vendored egui-baseview has always passed its renderer's limit in.
-    ///
-    /// Shot twice through the pipeline the loop runs, differing in that one
-    /// field, and read at the UPLOAD rather than only at the pixels: the
-    /// heatmap comes out `65x2048` against a pane asking for 2400 rows, and
-    /// `65x2400` once the device's own limit is the one in force. That is the
-    /// half of #368 which predates the slab clamp — the rows have been cut to a
-    /// 2048 that was never this device's for as long as the whole-song build
-    /// has existed.
-    ///
-    /// The frames are compared too, because a resolution the picture never
-    /// reaches is plumbing for its own sake. They differ modestly here (the
-    /// heatmap is 65 texels wide at a one-second take), which is why the
-    /// upload's own size carries the claim and the pixels only corroborate it.
-    ///
-    /// A one-frame shot rather than a `render` call, because `render` owns its
-    /// context and the limit under test is what that context is built with —
-    /// but through [`frame_input`], the loop's own constructor, so the field
-    /// this pins is the field an export is drawn with and not a copy of it.
-    #[test]
-    fn the_context_is_told_what_this_device_takes_and_it_costs_the_picture_rows() {
-        // egui's `InputState` default — what a context reports when nothing
-        // fills the field in.
-        const ASSUMED: usize = 2048;
-        // Taller than `ASSUMED` on the pitch axis, and narrow so the readback
-        // stays small: the rows are what this measures. The "spectral" preset
-        // is full-frame and the fresh orientation puts pitch on the vertical,
-        // so the pane's pitch axis is the frame's own height.
-        const SIZE: [u32; 2] = [600, 2400];
-        const PPP: f32 = 1.0;
-
-        let sr = 48_000.0f32;
-        let n = sr as usize; // one second
-        let samples: Vec<f32> =
-            (0..n).map(|i| 0.6 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
-        let audio = Audio { sample_rate: sr, samples, channels: 1 };
-        let layout = Layout::preset("spectral").unwrap();
-
-        // One frame at a given limit: the pixels, and the tallest image the
-        // frame uploaded — the heatmap, the only texture here taller than the
-        // font atlas's 64 rows.
-        let shoot = |max_texture_side: usize| -> Option<(Vec<u8>, usize)> {
-            let mut renderer = crate::frames::Renderer::new(SIZE)?;
-            let context = egui::Context::default();
-            harmonigraph_ui::theme::apply_theme(&context);
-            context.set_pixels_per_point(PPP);
-
-            let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
-            state.set_background(layout.background);
-            let span = 1.0;
-            state.whole_song = Some(harmonigraph_ui::WholeSong::precompute(
-                &audio.samples,
-                audio.channels,
-                audio.sample_rate,
-                0.0,
-                0.0,
-                span,
-                &state.spectrum_config,
-            ));
-
-            let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
-            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
-            let placements = layout.resolve(points);
-            let background = egui::Color32::from_rgb(
-                layout.background.0,
-                layout.background.1,
-                layout.background.2,
-            );
-            let now = span;
-            let output = context.run_ui(
-                // The loop's own constructor, which is what puts `render`'s
-                // input under this test rather than beside it.
-                frame_input(screen, now, max_texture_side),
-                |ui| {
-                    for (pane, rect) in &placements {
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        harmonigraph_ui::draw_pane(&mut child, *pane, &mut state, now);
-                    }
-                },
-            );
-            let rows =
-                output.textures_delta.set.iter().map(|(_, d)| d.image.height()).max().unwrap_or(0);
-            let primitives = context.tessellate(output.shapes, PPP);
-            let pixels = renderer.render(&primitives, &output.textures_delta, PPP, background);
-            Some((pixels, rows))
-        };
-
-        let device = match crate::frames::Renderer::new(SIZE) {
-            Some(renderer) => renderer.max_texture_side(),
-            // CI without a GPU: the pipeline cannot be exercised at all.
-            None => {
-                eprintln!("skipping: no usable GPU adapter");
-                return;
-            }
-        };
-        assert!(
-            device > ASSUMED,
-            "this device takes {device}, so #368 bought nothing here and the shots below \
-             cannot differ",
-        );
-
-        let (assumed_px, assumed_rows) = shoot(ASSUMED).expect("a GPU, checked above");
-        let (told_px, told_rows) = shoot(device).expect("a GPU, checked above");
-        assert_eq!(
-            assumed_rows, ASSUMED,
-            "the fixture no longer reproduces #368: a pane asking for {} rows was not cut \
-             to egui's default",
-            SIZE[1],
-        );
-        assert_eq!(
-            told_rows, SIZE[1] as usize,
-            "the device's own limit still did not buy the pane its own pixels",
-        );
-        assert!(
-            assumed_px != told_px,
-            "the {device} this device takes drew the same frame as the {ASSUMED} egui \
-             assumes, so the rows reached no pixel",
-        );
     }
 
     /// Whole-song playhead mode: the spectrogram is precomputed from the whole

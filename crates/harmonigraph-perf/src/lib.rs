@@ -155,7 +155,7 @@ pub struct ShellTimings {
 /// transposing two of them, which is a silent wrong answer rather than a
 /// compile error.
 #[derive(Clone, Copy, Default)]
-pub struct FrameCosts<'a> {
+pub struct FrameCosts {
     /// Shell work before the UI ran: draining the event rings.
     pub shell_ms: f32,
     /// Building the UI — the dock and its panes.
@@ -193,17 +193,10 @@ pub struct FrameCosts<'a> {
     /// stroked rounded rect costs.
     pub roll_notes: u32,
     /// The spectrogram's cache fallbacks since the plugin opened: full
-    /// re-aggregations of the window, and ring restarts BY REASON, one slot
-    /// per reason. CUMULATIVE, so the readout below can difference them into a
-    /// rate without a dropped frame losing an event.
-    ///
-    /// A borrowed SLICE, so how many reasons there are and what they are
-    /// called stay the caller's business — this crate counts them and reports
-    /// which slot dominated, and the analyzer's `Restart` enum, which is what
-    /// fills it, never has to be visible from down here. A fixed length would
-    /// mean the same number declared in two crates with nothing checking that
-    /// they agree.
-    pub spectrogram_fallbacks: (u32, &'a [u32]),
+    /// re-aggregations of the window, and full uploads of the slab grid.
+    /// CUMULATIVE, so the readout below can difference them into a rate without
+    /// a dropped frame losing an event.
+    pub spectrogram_fallbacks: (u32, u32),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -440,7 +433,7 @@ pub struct StageInfo {
     /// Private, unlike the three the overlay prints: nothing outside this
     /// crate draws a sample, and a table only this crate can build is a table
     /// only this crate can get wrong.
-    sample: Option<fn(&FrameCosts<'_>) -> f32>,
+    sample: Option<fn(&FrameCosts) -> f32>,
 }
 
 /// A stage the breakdown prints a row for, read straight out of the frame's
@@ -450,7 +443,7 @@ const fn measured(
     stage: Stage,
     depth: u8,
     label: &'static str,
-    sample: fn(&FrameCosts<'_>) -> f32,
+    sample: fn(&FrameCosts) -> f32,
 ) -> StageInfo {
     StageInfo { stage, depth, label, breakdown: true, sample: Some(sample) }
 }
@@ -471,7 +464,7 @@ const fn by_hand(
     stage: Stage,
     depth: u8,
     label: &'static str,
-    sample: Option<fn(&FrameCosts<'_>) -> f32>,
+    sample: Option<fn(&FrameCosts) -> f32>,
 ) -> StageInfo {
     StageInfo { stage, depth, label, breakdown: false, sample }
 }
@@ -567,7 +560,7 @@ pub struct PerfStats {
     pub verts: u32,
     pub roll_notes: u32,
     /// The spectrogram's fallbacks PER SECOND — window re-aggregations and ring
-    /// restarts — latched with everything else.
+    /// full uploads — latched with everything else.
     ///
     /// A rate and not a total, because the total climbs by one whenever the
     /// layout legitimately changes and would read the same as a cache that has
@@ -575,19 +568,8 @@ pub struct PerfStats {
     /// this pane's silent performance bugs sat at hundreds a second while a
     /// healthy build sits at zero.
     pub spec_fallbacks: (f32, f32),
-    /// Which SLOT accounted for most of the restarts in that interval — the
-    /// question that turns a rate into somewhere to look. `None` while there are
-    /// none.
-    ///
-    /// A slot rather than the name of a reason, because the slots are the
-    /// caller's (see [`FrameCosts::spectrogram_fallbacks`]): counting them is
-    /// this crate's job and naming them is the analyzer's, which is the only
-    /// place that knows what its own cache gave up on.
-    pub spec_restart_slot: Option<usize>,
-    /// The totals the rates were last differenced from. A slot the previous
-    /// latch never saw differences against zero, so a caller is free to start
-    /// counting more of them.
-    last_fallbacks: (u32, Vec<u32>),
+    /// The totals the rates were last differenced from.
+    last_fallbacks: (u32, u32),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -627,8 +609,7 @@ impl Default for PerfStats {
             verts: 0,
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
-            spec_restart_slot: None,
-            last_fallbacks: (0, Vec::new()),
+            last_fallbacks: (0, 0),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -640,7 +621,7 @@ impl Default for PerfStats {
     }
 }
 
-impl<'a> FrameCosts<'a> {
+impl FrameCosts {
     /// Gather a frame's costs from the three places they are measured: what
     /// the shell timed before the UI ran, the dock build this pass, and the
     /// lattice renderer's own atomics.
@@ -656,8 +637,8 @@ impl<'a> FrameCosts<'a> {
         cpu_ms: f32,
         lattice: &harmonigraph_render::LatticeStats,
         roll_notes: u32,
-        spectrogram_fallbacks: (u32, &'a [u32]),
-    ) -> FrameCosts<'a> {
+        spectrogram_fallbacks: (u32, u32),
+    ) -> FrameCosts {
         let ms = |bits: &std::sync::atomic::AtomicU32| {
             f32::from_bits(bits.load(std::sync::atomic::Ordering::Relaxed))
         };
@@ -700,7 +681,7 @@ impl PerfStats {
     /// Under a frame-rate cap the request is a delayed one, so the readout
     /// blended a hardcoded 60 with the true rate and reported ~45 fps for a
     /// perfectly steady 30.
-    pub fn record(&mut self, costs: FrameCosts<'_>, now: f64, workload: Workload) {
+    pub fn record(&mut self, costs: FrameCosts, now: f64, workload: Workload) {
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
         // Every stage the frame's costs answer for, off the table — so a stage
@@ -752,37 +733,12 @@ impl PerfStats {
             if elapsed.is_finite() && elapsed > 0.0 {
                 let rate =
                     |total: u32, then: u32| (total.saturating_sub(then) as f64 / elapsed) as f32;
-                // A slot the previous latch did not hold differences against
-                // zero, so the first latch of a run reports the counts it was
-                // handed rather than none of them.
-                let by_reason: Vec<u32> = costs
-                    .spectrogram_fallbacks
-                    .1
-                    .iter()
-                    .enumerate()
-                    .map(|(i, total)| {
-                        total.saturating_sub(self.last_fallbacks.1.get(i).copied().unwrap_or(0))
-                    })
-                    .collect();
-                let restarts: u32 = by_reason.iter().sum();
                 self.spec_fallbacks = (
                     rate(costs.spectrogram_fallbacks.0, self.last_fallbacks.0),
-                    (restarts as f64 / elapsed) as f32,
+                    rate(costs.spectrogram_fallbacks.1, self.last_fallbacks.1),
                 );
-                // The reason that accounted for most of them, which is the one
-                // worth naming.
-                self.spec_restart_slot = by_reason
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(_, n)| **n)
-                    .filter(|(_, n)| **n > 0)
-                    .map(|(i, _)| i);
             }
-            self.last_fallbacks.0 = costs.spectrogram_fallbacks.0;
-            // Held rather than replaced, so a latch four times a second does
-            // not allocate for a list whose length never changes.
-            self.last_fallbacks.1.clear();
-            self.last_fallbacks.1.extend_from_slice(costs.spectrogram_fallbacks.1);
+            self.last_fallbacks = costs.spectrogram_fallbacks;
             self.last_readout = now;
         }
         self.workload = workload;
@@ -953,14 +909,11 @@ mod tests {
         let mut perf = PerfStats::default();
         let mut now = 0.0;
         let mut totals = (0u32, 0u32);
-        let mut tick = |perf: &mut PerfStats, now: &mut f64, folds: u32, rings: u32| {
-            totals = (totals.0 + folds, totals.1 + rings);
+        let mut tick = |perf: &mut PerfStats, now: &mut f64, folds: u32, uploads: u32| {
+            totals = (totals.0 + folds, totals.1 + uploads);
             *now += 1.0 / 60.0;
             perf.record(
-                FrameCosts {
-                    spectrogram_fallbacks: (totals.0, &[totals.1, 0, 0, 0, 0, 0]),
-                    ..Default::default()
-                },
+                FrameCosts { spectrogram_fallbacks: totals, ..Default::default() },
                 *now,
                 Workload::default(),
             );
@@ -986,26 +939,12 @@ mod tests {
         for _ in 0..120 {
             tick(&mut perf, &mut now, 1, 1);
         }
-        let (folds, rings) = perf.spec_fallbacks;
+        let (folds, uploads) = perf.spec_fallbacks;
         assert!((folds - 60.0).abs() < 5.0, "a per-frame refold read as {folds}/s, not ~60");
-        assert!((rings - 60.0).abs() < 5.0, "a per-frame restart read as {rings}/s, not ~60");
-
-        // And it points WHERE to look: the slot that accounted for most of the
-        // restarts in the interval — which the caller names, and which for the
-        // analyzer is the difference between "the image changed", "the pane
-        // changed" and "the window jumped".
-        assert_eq!(perf.spec_restart_slot, Some(0));
-        let mut heavier = (totals.0, [totals.1, totals.1 + 200, 0, 0, 0, 0]);
-        for _ in 0..120 {
-            heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
-            now += 1.0 / 60.0;
-            perf.record(
-                FrameCosts { spectrogram_fallbacks: (heavier.0, &heavier.1), ..Default::default() },
-                now,
-                Workload::default(),
-            );
-        }
-        assert_eq!(perf.spec_restart_slot, Some(1), "the dominant reason must follow the counts",);
+        assert!(
+            (uploads - 60.0).abs() < 5.0,
+            "a per-frame full upload read as {uploads}/s, not ~60"
+        );
     }
 
     #[test]
