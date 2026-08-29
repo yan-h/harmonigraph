@@ -111,7 +111,7 @@
 //! The kernel is normalized by its own weights, so the fold answers in the
 //! analyzer's own units: a bucket reading power P surrounded by more of the
 //! same folds to P, exactly as
-//! [`power_mean`](super::spectral::spectrogram::power_mean) answers for the
+//! [`footprint_mean`](super::spectral::spectrogram::footprint_mean) answers for the
 //! Spiral pane. That is what lets the result go through the shared
 //! [`loudness`] curve and mean the same thing
 //! there as everywhere else, and it is what makes the width bar a TOLERANCE

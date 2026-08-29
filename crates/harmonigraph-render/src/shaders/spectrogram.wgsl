@@ -18,22 +18,17 @@ struct Locals {
     /// The visible pitch range: MIDI at pitch fraction 0, and semitones across.
     min_midi: f32,
     span: f32,
-    /// How far past the visible range the edge rows reach, in pitch fraction.
-    margin: f32,
     /// MIDI of bucket 0's lower edge, and how many buckets one semitone holds.
     spectrum_min_midi: f32,
     bins_per_semitone: f32,
-    /// The level mapping, affine in the stored byte and in MIDI: a row's own
-    /// offset is `level0 + level_per_midi * midi`, and a stored step is worth
-    /// `level_per_step` of the 0..1 the gradient is indexed by.
+    /// The level mapping, affine in the stored byte and in MIDI: a bucket's
+    /// level is `level0 + level_per_step * byte + level_per_midi * midi`,
+    /// clamped, which is the 0..1 the gradient is indexed by.
     level0: f32,
     level_per_step: f32,
     level_per_midi: f32,
-    /// Stored steps the power mean falls per halving of the summed weight.
-    mean_steps: f32,
-    /// Rows the picture is read at along pitch. Sets both the row geometry and
-    /// the pitch axis' own filtering, which is the whole of what makes the
-    /// read resolution-dependent.
+    /// Pixels the pane spends on the pitch axis, which sets how wide one
+    /// fragment's footprint is and so which arm of the resample it takes.
     rows: u32,
     /// Buckets in one slab, and the bytes one slab occupies in `grid` — the
     /// latter padded to a multiple of 4 so a slab can be written on its own.
@@ -44,19 +39,20 @@ struct Locals {
     first_slot: u32,
     /// Slabs in the visible run.
     run_slabs: u32,
-    _pad: u32,
+    /// Scalars, not a `vec3`: a vector here would align to 16 and shift itself
+    /// off the offset the Rust struct writes.
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
 /// The grid, packed four stored bytes to a word. Slot `s` bucket `b` is byte
 /// `s * stride + b`.
 @group(0) @binding(1) var<storage, read> grid: array<u32>;
-/// The weight a bucket carries in the power mean, indexed by how many stored
-/// steps below its run's loudest it sits.
-@group(0) @binding(2) var<storage, read> weight: array<f32, 256>;
 /// The gradient sampled at `textureDimensions(lut).x` equal level slices,
 /// opaque and in gamma space — the bytes `Color32` carries.
-@group(0) @binding(3) var lut: texture_2d<f32>;
+@group(0) @binding(2) var lut: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -86,17 +82,6 @@ fn vs_heatmap(
     return out;
 }
 
-/// Nearest whole number, ties AWAY from zero — which WGSL's own `round` is
-/// not: it takes ties to even. Both callers round a value the Rust read rounds
-/// with `f32::round`, and both pass a value that is never negative.
-///
-/// `x - floor(x)` is exact at these magnitudes, so the comparison is the tie
-/// rule itself rather than an approximation of it.
-fn round_half_away(x: f32) -> f32 {
-    let f = floor(x);
-    return select(f, f + 1.0, x - f >= 0.5);
-}
-
 /// One stored byte out of the grid. The buffer is words, so a byte costs a
 /// shift and a mask; a slab is padded to `stride` bytes and the padding is
 /// never addressed.
@@ -105,108 +90,101 @@ fn stored(slot: u32, bucket: u32) -> u32 {
     return (grid[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu;
 }
 
-/// The bucket a pitch fraction falls in, clamped into the spectrum.
-fn bucket_of(t: f32) -> u32 {
+/// Where a pitch fraction sits on the bucket axis: bucket `b` spans
+/// `[b, b + 1)`, so this is continuous and the floor of it is a bucket index.
+fn bucket_x(t: f32) -> f32 {
     let midi = locals.min_midi + t * locals.span;
-    let b = floor((midi - locals.spectrum_min_midi) * locals.bins_per_semitone);
-    return u32(clamp(b, 0.0, f32(locals.bins) - 1.0));
+    return (midi - locals.spectrum_min_midi) * locals.bins_per_semitone;
 }
 
-/// One row of the picture: the slice of pitch fraction it covers, its centre,
-/// and the MIDI there.
+/// The IMAGE this fragment resamples: one virtual row per bucket, each holding
+/// the level that bucket alone would be drawn at — the ramp's 0..1, tilted at
+/// the bucket's own pitch and clamped there.
 ///
-/// Rows tile `[-margin, 1 + margin]` rather than `[0, 1]`, so the edge rows
-/// reach past the visible range by the width of a bucket and the filtering
-/// carries cleanly to the picture's own edges.
-struct Row {
-    lo_t: f32,
-    hi_t: f32,
-    t: f32,
-    midi: f32,
-};
-
-fn row_of(r: u32) -> Row {
-    let m = locals.margin;
-    let reach = 1.0 + 2.0 * m;
-    let rows = f32(locals.rows);
-    var row: Row;
-    row.lo_t = -m + reach * f32(r) / rows;
-    row.hi_t = -m + reach * f32(r + 1u) / rows;
-    row.t = 0.5 * (row.lo_t + row.hi_t);
-    row.midi = locals.min_midi + row.t * locals.span;
-    return row;
+/// Clamped per bucket and not after the combine, which is what makes the
+/// picture an image of the spectrum rather than of a mean of it: a partial
+/// standing above the window's ceiling contributes a full-bright bucket to
+/// whatever covers it, and a floor below the window contributes black, so a
+/// feature narrower than a pixel dims in proportion to its share of that pixel
+/// instead of being dragged off the ramp by its neighbours.
+fn bucket_level(slot: u32, b: u32) -> f32 {
+    let midi = locals.spectrum_min_midi + (f32(b) + 0.5) / locals.bins_per_semitone;
+    let v = f32(stored(slot, b));
+    let level = locals.level0 + locals.level_per_step * v + locals.level_per_midi * midi;
+    return clamp(level, 0.0, 1.0);
 }
 
-/// The stored value row `row` reads out of the slab in slot `slot`, in the dB
-/// the buckets hold — which is also the domain the ramp reads, so combining
-/// buckets here combines exactly what will be drawn.
+/// The level one fragment reads out of the slab in slot `slot`: an image
+/// resample of [`bucket_level`] over the pitch this fragment covers.
 ///
-/// Which of the row and the bucket grid is finer picks the arm: a power mean
-/// where the row is wider than what it reads, an interpolation where it is
-/// narrower, since the grid is then being asked for more than it holds.
-fn read_row(slot: u32, row: Row) -> f32 {
-    let idx = bucket_of(row.lo_t);
-    let last = bucket_of(row.hi_t);
+/// The footprint is the fragment's own — exactly one pane pixel of the pitch
+/// axis, so the footprints TILE it — and which of it and the bucket grid is
+/// finer picks the arm.
+///
+/// MINIFYING (a pixel wider than a bucket) it is the AREA-WEIGHTED MEAN of the
+/// levels under `[x0, x1)`: fractional weights where the footprint cuts its
+/// first and last bucket, unit weights between. That is what a GPU does to a
+/// texture it draws small, and it is the whole of why the pane's pixel height
+/// no longer decides the picture's brightness: the operator is LINEAR in the
+/// quantity the ramp is indexed by, footprints tile the axis, and every
+/// footprint covers the same number of buckets — so the pane-integrated level
+/// is the average over the buckets on screen at any pixel height. A power mean
+/// over the same run is not linear and no order of one is: a feature narrower
+/// than a pixel is attenuated as the pixel widens while its share of the pane
+/// grows, and the two do not cancel.
+///
+/// MAGNIFYING (a pixel narrower than a bucket) the grid is being asked for
+/// more than it holds, so it is read BETWEEN the two bucket centres this
+/// fragment sits between. A bucket's centre is half a bucket above where the
+/// floor divides them, which is the 0.5; the clamp keeps the upper tap inside
+/// the spectrum.
+fn read_level(slot: u32, t: f32) -> f32 {
+    let half = 0.5 / f32(locals.rows);
+    let x0 = bucket_x(t - half);
+    let x1 = bucket_x(t + half);
+    let top = f32(locals.bins) - 1.0;
+    let idx = u32(clamp(floor(x0), 0.0, top));
+    let last = u32(clamp(floor(x1), 0.0, top));
     if last > idx {
-        let to = min(last + 1u, locals.bins);
-        var top = 0u;
-        for (var b = idx; b < to; b = b + 1u) {
-            top = max(top, stored(slot, b));
-        }
-        let n = to - idx;
-        // One bucket IS its own mean; the arm is reached only from a run of
-        // two or more, so this is the degenerate case answered rather than
-        // one the picture arrives at.
-        if n < 2u {
-            return f32(top);
-        }
-        // Denominated against `top` (hence the subtraction, never negative),
-        // so the sum runs from 1 up to the run's length and the answer can
-        // only come DOWN from the loudest bucket. An absolute weight at this
-        // order spans the stored range far enough to flush to zero in an f32.
+        let lo = clamp(x0, 0.0, f32(locals.bins));
+        let hi = clamp(x1, 0.0, f32(locals.bins));
         var sum = 0.0;
-        for (var b = idx; b < to; b = b + 1u) {
-            sum = sum + weight[top - stored(slot, b)];
+        var total = 0.0;
+        for (var b = idx; b <= last; b = b + 1u) {
+            let w = max(min(hi, f32(b) + 1.0) - max(lo, f32(b)), 0.0);
+            sum = sum + w * bucket_level(slot, b);
+            total = total + w;
         }
-        let steps = -log2(sum / f32(n)) * locals.mean_steps;
-        // The Rust read subtracts saturating, so a run long enough to fall
-        // past the bottom lands on 0 rather than wrapping.
-        return max(f32(top) - round_half_away(steps), 0.0);
+        // A run of two or more whose overlap has been clamped to nothing — the
+        // degenerate answered rather than one the picture arrives at.
+        if total <= 0.0 {
+            return bucket_level(slot, idx);
+        }
+        return sum / total;
     }
-    // Narrower than a bucket: read between the two whose centres straddle this
-    // row's centre. A bucket's centre sits half a bucket above where
-    // `bucket_of` divides them, which is the 0.5; the clamp keeps the upper
-    // tap inside the spectrum.
-    let x = (row.midi - locals.spectrum_min_midi) * locals.bins_per_semitone - 0.5;
-    let lo = u32(clamp(floor(x), 0.0, f32(locals.bins) - 2.0));
-    let f = clamp(x - f32(lo), 0.0, 1.0);
-    let a = f32(stored(slot, lo));
-    let b = f32(stored(slot, lo + 1u));
-    return round_half_away(a + (b - a) * f);
+    let x = bucket_x(t) - 0.5;
+    let b = u32(clamp(floor(x), 0.0, f32(locals.bins) - 2.0));
+    let f = clamp(x - f32(b), 0.0, 1.0);
+    return mix(bucket_level(slot, b), bucket_level(slot, b + 1u), f);
 }
 
-/// The colour one texel of the picture would have carried: the row's read,
-/// mapped to a 0..1 level and looked up in the gradient.
+/// The heatmap's colour at this fragment: the two slabs either side of it read
+/// at this fragment's own footprint, blended, and looked up once.
+///
+/// The blend is in LEVEL space, the space the pitch resample already works in,
+/// so one operator spans both axes and the gradient is applied to the answer
+/// rather than to each tap. Against blending the two COLOURS it differs only
+/// by the ramp's own curvature across one slab boundary, which is the whole of
+/// what reading time this way costs.
+///
+/// The clamp on the slab axis is a sampler's `ClampToEdge`: past the newest
+/// slab the picture holds its edge rather than reading a slot the run does not
+/// own. The pitch axis needs none — a footprint that runs off the spectrum is
+/// clamped bucket by bucket inside [`read_level`].
 ///
 /// The lookup TRUNCATES into the table, matching the level's own quantization
 /// — the table is sampled at the centre of each slice, so the entry a level
 /// falls into is the one nearest it.
-fn shade(slot: u32, row: Row) -> vec4<f32> {
-    let value = read_row(slot, row);
-    let row0 = locals.level0 + locals.level_per_midi * row.midi;
-    let level = clamp(row0 + locals.level_per_step * value, 0.0, 1.0);
-    let levels = textureDimensions(lut).x;
-    let i = min(u32(level * f32(levels)), levels - 1u);
-    return textureLoad(lut, vec2<u32>(i, 0u), 0);
-}
-
-/// The heatmap's colour at this fragment: four texel reads blended in GAMMA
-/// space, which is the filtering an `Rgba8Unorm` egui texture gets — the
-/// sampler blends raw bytes and egui's shader encodes afterwards.
-///
-/// The clamp at both ends of each axis is the sampler's `ClampToEdge`: past
-/// the newest slab and past the outermost row the picture holds its edge
-/// rather than reading a slot the run does not own.
 fn heatmap_color(in: VertexOut) -> vec4<f32> {
     // Slab centres sit at half-integers, so the taps straddle `slab - 0.5`.
     let n = f32(locals.run_slabs);
@@ -221,27 +199,10 @@ fn heatmap_color(in: VertexOut) -> vec4<f32> {
     let s0 = (locals.first_slot + j0) % locals.capacity;
     let s1 = (locals.first_slot + j1) % locals.capacity;
 
-    // Row centres sit at `(r + 0.5) / rows` of the span between the first and
-    // last row's own centres, which is what the picture's pitch axis was
-    // stretched across.
-    let t0c = row_of(0u).t;
-    let tnc = row_of(locals.rows - 1u).t;
-    let denom = tnc - t0c;
-    let v = select((in.t - t0c) / denom, 0.0, denom == 0.0);
-    let rows = f32(locals.rows);
-    let y = v * rows - 0.5;
-    let ry = clamp(floor(y), 0.0, rows - 1.0);
-    let r0 = u32(ry);
-    let r1 = min(r0 + 1u, locals.rows - 1u);
-    let fy = clamp(y - ry, 0.0, 1.0);
-
-    let low = row_of(r0);
-    let high = row_of(r1);
-    let c = mix(
-        mix(shade(s0, low), shade(s1, low), fx),
-        mix(shade(s0, high), shade(s1, high), fx),
-        fy,
-    );
+    let level = mix(read_level(s0, in.t), read_level(s1, in.t), fx);
+    let levels = textureDimensions(lut).x;
+    let i = min(u32(level * f32(levels)), levels - 1u);
+    let c = textureLoad(lut, vec2<u32>(i, 0u), 0);
     // Opaque: silence is the ramp's dark end, so the plane is filled rather
     // than see-through, and every entry of the table is opaque already.
     return vec4<f32>(c.rgb, 1.0);

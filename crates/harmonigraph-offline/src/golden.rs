@@ -4,7 +4,8 @@
 //! ways, the floor settles as the axis zooms out, cells run dark to bright —
 //! and each passes for any picture holding its property. That is the right
 //! shape while the look is moving and the wrong one for #503, which rewrites
-//! the compose as a fragment shader and has to say the picture did not move.
+//! the compose as a fragment shader and has to say exactly what the picture
+//! did.
 //! Nothing else in the tree can say that: the heatmap is built on the CPU and
 //! uploaded, so a claim test can read the arithmetic and never the pixels.
 //!
@@ -17,11 +18,12 @@
 //! **Each frame reaches one thing #503 changes**, and that is what makes the
 //! set worth its runtime rather than one frame worth four:
 //!
-//! - a TALL and a SHORT pane, zoomed out. Both take a power mean over a run of
-//!   buckets, and their difference is the per-pixel footprint — the
-//!   8.7 dB pane-height dependence of #491, which the port (PR B) must leave
-//!   exactly where it is and the bucket-space filter (PR C) exists to remove.
-//!   Neither frame carries that alone; the pair does.
+//! - a TALL and a SHORT pane, zoomed out. Both resample the same bucket-space
+//!   image and differ only in how finely they sample it, so what the pair
+//!   carries is the INVARIANCE #491 asked for — neither frame says anything
+//!   about it alone. The bucket-space filter is what put them there: before it
+//!   the short pane drew a mean of 75.5/255 against the tall one's 55.2, and
+//!   after it 43.9 against 42.3.
 //! - a ZOOMED-IN pane, where a row is narrower than a bucket and reads a lerp
 //!   between two of them instead. Its half-bucket centre offset is one of the
 //!   things #503's own trap list calls easy to lose in the port, and no
@@ -31,11 +33,12 @@
 //!   separately, and the live frames say nothing about it.
 //!
 //! Each frame was held against the read it claims, by breaking that read and
-//! measuring what moved. Flattening the power mean to a plain max moves the
-//! short pane by a mean of 7.9/255, the tall by 4.3 and the whole-song frame
-//! by 3.8, and the zoomed-in one by 0.4 — the ordering the footprint argument
-//! predicts, widest run first. Dropping the lerp's half-bucket centre offset
-//! moves the zoomed-in frame by 1.1 and the other three by nothing at all.
+//! measuring what moved. Flattening the minifying arm to a plain max over its
+//! run moves the short pane by a mean of 32.0/255, the tall by 14.8 and the
+//! whole-song frame by 12.5, and the zoomed-in one by 1.1 — the ordering the
+//! footprint argument predicts, widest run first. Dropping the magnifying
+//! arm's half-bucket centre offset moves the zoomed-in frame by 1.1 and the
+//! other three by nothing at all.
 //! Before that last number the zoomed-in shot was six semitones over 384
 //! rows, which the two-octave floor widened under it into a mean on every
 //! row: it drew a plausible frame, blessed, and measured nothing.
@@ -116,11 +119,12 @@ const PARTIALS: usize = 24;
 
 /// Amplitude of the broadband bed under the tones.
 ///
-/// The bed is not decoration. A row zoomed out averages a run of buckets, and
-/// over digital silence every bucket in the run holds the same value — where
-/// the power mean, a plain max and an average all agree, so the read the port
-/// has to preserve is invisible. It is also what #491's 8.7 dB is measured on:
-/// the FLOOR is what moves with the pane's height, not the partials.
+/// The bed is not decoration. A row zoomed out resamples a run of buckets, and
+/// over digital silence every bucket in the run holds the same value — where a
+/// mean, a plain max and a lerp all agree, so the read the set is held against
+/// is invisible. It is also what makes the tall/short pair a measurement at
+/// all: the floor between the partials is the part of the picture a change of
+/// pane height moves most.
 const BED: f32 = 0.02;
 
 /// A deterministic bed: a plain LCG, so the same shot draws the same noise on
