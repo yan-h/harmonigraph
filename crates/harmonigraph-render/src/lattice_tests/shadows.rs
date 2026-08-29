@@ -824,3 +824,60 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
         SIZE,
     );
 }
+
+/// A name's shadow reaches the BLOOM, and spends nothing anywhere else.
+///
+/// The composite is `scene + bloom * strength` into an eight-bit target, so
+/// over a bright halo the pixel beside a name is already past 1 and pins to
+/// white — and the shadow, spent on `scene` alone, arrives as nothing however
+/// deep it is dialled. `glow_shadow_bloom` spends the same shadow on the SECOND
+/// attachment instead, the one the bright pass reads, so what comes off is the
+/// light being ADDED rather than darkness being added to a picture with no
+/// range left to hold it.
+///
+/// The second half is the one worth the fixture: with the Bloom shut the bar
+/// moves NOTHING, which is what says it is spent on the bright pass's copy and
+/// never on the picture a person sees. That, and not a claim about lit nodes,
+/// is the property — anything that clears the bright pass's threshold under a
+/// name is something this bar can take light off, and a node's own ink clears
+/// it without a halo.
+#[test]
+fn a_names_shadow_reaches_the_bloom_and_spends_nothing_elsewhere() {
+    const SHADOW: f32 = 0.6;
+    const DEPTH: f32 = 0.85;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The pane's own clear stays BLACK: the bright pass reads the scene's
+    // offscreen attachment rather than the pane, and a reading of what the
+    // bloom did wants the lattice to be the only bright thing in the frame.
+    let scene_of = |bloom: f32, on_bloom: f32| -> Scene {
+        let mut scene = lit_node_and_a_name(1.6, SHADOW, DEPTH);
+        scene.bloom_strength = bloom;
+        scene.glow_shadow_bloom = on_bloom;
+        scene
+    };
+    let mut shot = |bloom: f32, on_bloom: f32| -> Vec<u8> {
+        let scene = scene_of(bloom, on_bloom);
+        let named = name_at(&scene, SIZE, name_on_the_band(&scene));
+        shooter.shot_with(&scene, named)
+    };
+
+    // The fixture has to be carrying a bloom at all, or both readings below are
+    // taken on a frame with nothing in it for the bar to move.
+    let (lit, dark) = (shot(1.0, 0.0), shot(0.0, 0.0));
+    let bloomed = differing_pixels(&lit, &dark);
+    assert!(bloomed > 1000, "opening the Bloom moved {bloomed} pixels, so this frame carries none");
+
+    let moved = differing_pixels(&lit, &shot(1.0, 1.0));
+    assert!(
+        moved > 100,
+        "taking the name's shadow to the bloom's copy of the picture moved {moved} pixels",
+    );
+    assert_eq!(
+        differing_pixels(&dark, &shot(0.0, 1.0)),
+        0,
+        "the bar moved a frame with the Bloom shut, so it is spending itself on the picture \
+         rather than on the copy the bright pass reads",
+    );
+}

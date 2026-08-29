@@ -1174,6 +1174,38 @@ pub struct ViewConfig {
     /// draw multiplies by 1. Independent of
     /// [`glow_reach`](Self::glow_reach).
     pub glow_shadow_depth: f32,
+    /// How much deeper a NAME's shadow lands on the copy of the picture the
+    /// bloom reads than on the picture a person sees, 0..=1.
+    ///
+    /// 0 is the two identical, which is every other caster and is what this
+    /// opens on. 1 takes the bloom's copy under a name to a whole shadow while
+    /// leaving the visible one exactly where
+    /// [`glow_shadow_depth`](Self::glow_shadow_depth) put it.
+    ///
+    /// It exists because a shadow is a MULTIPLY and the bloom is an ADD. The
+    /// composite is `scene + bloom * `[`bloom_strength`](Self::bloom_strength)
+    /// into an eight-bit target, so over a bright halo the pixel beside a name
+    /// is already past 1 and pins to white — and a shadow that does not carry
+    /// the sum back under 1 lands as nothing whatever its depth. A name over an
+    /// unlit node keeps its shadow; the same name over a sounding one loses it,
+    /// and turning the Shadow up to answer that darkens the whole picture for
+    /// the sake of one node.
+    ///
+    /// This spends the depth where it is not seen. The bright pass reads the
+    /// second attachment of the scene pass, so a deeper shadow THERE takes away
+    /// the light being added rather than adding darkness to the picture, and
+    /// over an unlit node — where there is no bloom to take — it does nothing at
+    /// all. That is what makes it an answer to the bright case alone rather
+    /// than a second Shadow depth.
+    ///
+    /// A name's alone, and the one number in the lattice only a name spends.
+    /// A label's INK is already the one thing kept out of that attachment (so a
+    /// name neither glows nor bites the halo of the node it covers), so this is
+    /// a dial on a difference the design already draws, not a new exception to
+    /// "one bar, one darkness". What it buys is paid for in that same halo: the
+    /// hole is blurred with everything else, so the light dims around a name
+    /// over a region wider than the name.
+    pub glow_shadow_bloom: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2161,6 +2193,8 @@ impl ViewConfig {
         // is the unit interval.
         self.glow_shadow_depth =
             finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
+        self.glow_shadow_bloom =
+            finite_or(self.glow_shadow_bloom, fresh.glow_shadow_bloom).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2483,6 +2517,9 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_shadow_depth: 0.85,
+            // Off, so a fresh view is the picture before this bar existed and
+            // the bar is an addition rather than a restyle.
+            glow_shadow_bloom: 0.0,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own

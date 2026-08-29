@@ -129,11 +129,13 @@ struct Uniforms {
     // composited at the BOTTOM of the scene pass, which is what puts it under
     // every shadow the lattice casts.
     misc10: vec4<f32>,
-    // The SHADOW's two dials. x: how wide it is, as a share of a node's radius
-    // — the σ every caster's ink is blurred at (`shadow::sigma_px`) and the
-    // reach every quad is grown by (`shadow_reach_uv`); w: how dark it lands,
-    // 1 taking the frame under a solid caster down to `SHADOW_KEEP_FLOOR`. y/z
-    // unused and zeroed by the CPU.
+    // The SHADOW's three dials. x: how wide it is, as a share of a node's
+    // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
+    // the reach every quad is grown by (`shadow_reach_uv`); y: how much deeper
+    // a NAME's shadow lands on the copy of the picture the bloom's bright pass
+    // reads, which is a text.wgsl dial and read nowhere in this file; w: how
+    // dark it lands, 1 taking the frame under a solid caster down to
+    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
     //
     // Read wherever a caster spends its cell (`shadow_through`), which is every
     // ink draw of the scene pass. NOT zeroed with misc10: a shadow is cast with
