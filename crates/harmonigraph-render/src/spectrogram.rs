@@ -21,6 +21,7 @@
 //! heatmap's single-level flips against a golden frame come from.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
@@ -55,6 +56,19 @@ pub struct SpectrogramGrid {
     /// the GPU holds. A stale slot is a wrong column and nothing on the CPU
     /// can see it.
     pub generation: u64,
+    /// This handover's own number, echoed into [`uploaded`](Self::uploaded)
+    /// once the writes below have been queued. Distinct per handover, where
+    /// [`generation`](Self::generation) is deliberately not.
+    pub serial: u64,
+    /// The last [`serial`](Self::serial) a `prepare` finished, shared with the
+    /// caller.
+    ///
+    /// A callback is not certain to run — egui drops one whose clip rect is
+    /// empty — so this is the only evidence the caller has that the slots it
+    /// believes are written really were. A caller computing its next delta
+    /// against a run this never named is computing it against a buffer that
+    /// never received it.
+    pub uploaded: Arc<AtomicU64>,
     pub capacity: u32,
     pub bins: u32,
     /// The visible run: keys `first_key .. first_key + run.len() / bins`,
@@ -606,6 +620,13 @@ impl CallbackTrait for SpectrogramCallback {
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
+        // Last, and only on the path that wrote: the caller reads this to
+        // decide whether its next delta may be computed against this run, so
+        // it has to name a run whose slabs are in their slots. Every early
+        // return above leaves it standing at the previous handover, which is
+        // what makes an undrawn frame legible rather than silent.
+        self.grid.uploaded.store(self.grid.serial, Ordering::Relaxed);
+
         Vec::new()
     }
 
@@ -649,55 +670,78 @@ impl CallbackTrait for SpectrogramCallback {
     }
 }
 
-/// The pixel path a dependent crate's parity test measures: the same
-/// `prepare`/`paint` a frame takes, into a fresh `Rgba8Unorm` texture cleared
-/// to opaque black, read back as tightly packed RGBA8 rows.
+/// A headless GPU a dependent crate's pixel tests draw through: one device
+/// and one set of `CallbackResources`, held across frames.
+///
+/// Held, because a single-shot frame can only ever take the full-upload path —
+/// fresh resources hold no grid to patch. A test of the DELTA (which slabs the
+/// caller says have moved) has to hand the same resources one frame after
+/// another, exactly as a pane does.
 ///
 /// `None` where the machine has no GPU adapter, which every caller returns on.
-/// `size[0]` must be a multiple of 64, so the readback's rows stay 256-byte
-/// aligned.
-///
-/// The shipping callback and not a reimplementation of it: a parity test
-/// against a second draw path can only measure the second path.
-pub fn spectrogram_headless_frame(
-    size: [u32; 2],
-    vertices: Vec<SpectrogramVertex>,
-    grid: SpectrogramGrid,
-    read: SpectrogramRead,
-    shades: SpectrogramShades,
-) -> Option<Vec<u8>> {
-    let (device, queue) = crate::gpu_harness::headless_device()?;
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let rect =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
-    let callback =
-        SpectrogramCallback { vertices, grid, read, shades, target_format: format, pane_id: 0 };
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let buffers = callback.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-    queue.submit(buffers.into_iter().chain([encoder.finish()]));
+pub struct SpectrogramHeadless {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    resources: CallbackResources,
+}
 
-    let texture = crate::gpu_harness::render_to_texture(
-        &device,
-        &queue,
-        size,
-        format,
-        wgpu::Color::BLACK,
-        |pass| {
-            callback.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: size,
-                },
-                pass,
-                &resources,
-            );
-        },
-    );
-    Some(crate::gpu_harness::readback(&device, &queue, &texture, size))
+impl SpectrogramHeadless {
+    pub fn new() -> Option<SpectrogramHeadless> {
+        let (device, queue) = crate::gpu_harness::headless_device()?;
+        Some(SpectrogramHeadless { device, queue, resources: CallbackResources::default() })
+    }
+
+    /// One frame: the same `prepare`/`paint` a pane takes, into a fresh
+    /// `Rgba8Unorm` texture cleared to opaque black, read back as tightly
+    /// packed RGBA8 rows.
+    ///
+    /// The shipping callback and not a reimplementation of it: a parity test
+    /// against a second draw path can only measure the second path.
+    ///
+    /// `size[0]` must be a multiple of 64, so the readback's rows stay
+    /// 256-byte aligned. `pane_id` picks which grid copy this frame patches,
+    /// so a test wanting a full upload beside a delta asks on a second id.
+    pub fn frame(
+        &mut self,
+        pane_id: u64,
+        size: [u32; 2],
+        vertices: Vec<SpectrogramVertex>,
+        grid: SpectrogramGrid,
+        read: SpectrogramRead,
+        shades: SpectrogramShades,
+    ) -> Vec<u8> {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
+        let callback =
+            SpectrogramCallback { vertices, grid, read, shades, target_format: format, pane_id };
+        let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let buffers =
+            callback.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
+        self.queue.submit(buffers.into_iter().chain([encoder.finish()]));
+
+        let texture = crate::gpu_harness::render_to_texture(
+            &self.device,
+            &self.queue,
+            size,
+            format,
+            wgpu::Color::BLACK,
+            |pass| {
+                callback.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: size,
+                    },
+                    pass,
+                    &self.resources,
+                );
+            },
+        );
+        crate::gpu_harness::readback(&self.device, &self.queue, &texture, size)
+    }
 }
 
 #[cfg(test)]
@@ -793,7 +837,16 @@ mod tests {
     }
 
     fn grid_of(run: Arc<Vec<u8>>, bins: u32, capacity: u32, first_key: i64) -> SpectrogramGrid {
-        SpectrogramGrid { generation: 1, capacity, bins, first_key, run, dirty: Vec::new() }
+        SpectrogramGrid {
+            generation: 1,
+            serial: 1,
+            uploaded: Arc::default(),
+            capacity,
+            bins,
+            first_key,
+            run,
+            dirty: Vec::new(),
+        }
     }
 
     /// A quad over the whole surface: `slab` running 0..n left to right, `t`
@@ -1252,6 +1305,11 @@ mod tests {
     ///
     /// This is the new cache key and the only thing checking it: a stale slot
     /// is a wrong column, and nothing on the CPU can see one.
+    ///
+    /// Each frame's acknowledgement is checked alongside, because it is what
+    /// entitles the CALLER to send the next delta: a serial that arrives for a
+    /// frame that wrote nothing would license a delta against a buffer that
+    /// never received the run.
     #[test]
     fn a_delta_upload_draws_what_a_full_upload_draws() {
         let Some((device, queue)) = headless_device() else {
@@ -1263,6 +1321,7 @@ mod tests {
         let mut resources = CallbackResources::default();
         let mut previous: Option<Vec<u8>> = None;
         let mut moved = 0;
+        let uploaded: Arc<AtomicU64> = Arc::default();
 
         let steps = &[
             Step::new("the first upload", 1, 8, 0, &[], &[]),
@@ -1287,8 +1346,11 @@ mod tests {
                 let key = step.first_key + j;
                 run.extend(versioned_slab(key, *version.entry(key).or_insert(0), bins));
             }
+            let serial = uploaded.load(Ordering::Relaxed) + 1;
             let grid = SpectrogramGrid {
                 generation: step.generation,
+                serial,
+                uploaded: uploaded.clone(),
                 capacity: step.capacity,
                 bins: bins as u32,
                 first_key: step.first_key,
@@ -1297,6 +1359,12 @@ mod tests {
             };
             let cb = callback(full_quad(SLABS as u32), &grid, &read);
             let incremental = frame_with(&device, &queue, &mut resources, &cb);
+            assert_eq!(
+                uploaded.load(Ordering::Relaxed),
+                serial,
+                "{} drew without acknowledging its run",
+                step.label
+            );
             let full = fresh_frame(&device, &queue, &cb);
             assert_eq!(
                 incremental, full,
@@ -1310,6 +1378,27 @@ mod tests {
         // Every step but the two that only re-declare the same picture moves
         // it, so the equality above is being asked of frames that differ.
         assert!(moved >= 8, "only {moved} steps changed the picture");
+
+        // A frame with nothing to draw writes no slab, so it must not claim
+        // one: the caller reads the acknowledgement as "the run I handed over
+        // is in its slots", which an early return has not made true.
+        let standing = uploaded.load(Ordering::Relaxed);
+        let empty = SpectrogramGrid {
+            generation: 9,
+            serial: standing + 1,
+            uploaded: uploaded.clone(),
+            capacity: 8,
+            bins: bins as u32,
+            first_key: 0,
+            run: Arc::new(Vec::new()),
+            dirty: Vec::new(),
+        };
+        prepare_once(&device, &queue, &mut resources, &callback(full_quad(1), &empty, &read));
+        assert_eq!(
+            uploaded.load(Ordering::Relaxed),
+            standing,
+            "a frame that drew nothing acknowledged a run it never wrote",
+        );
     }
 
     /// Keys before zero and a run that wraps past the end of the ring land
@@ -1336,6 +1425,8 @@ mod tests {
         for (capacity, first_key) in [(128u32, -37i64), (160, -37)] {
             let grid = SpectrogramGrid {
                 generation: 1,
+                serial: 1,
+                uploaded: Arc::default(),
                 capacity,
                 bins: bins as u32,
                 first_key,
@@ -1408,7 +1499,7 @@ mod tests {
         assert_eq!(live(&resources), vec![0], "the closed pane is still holding its grid");
     }
 
-    /// [`spectrogram_headless_frame`] is the callback, so a dependent crate's
+    /// [`SpectrogramHeadless::frame`] is the callback, so a dependent crate's
     /// parity test measures the path that ships rather than a second one.
     #[test]
     fn the_headless_frame_is_the_frame_the_callback_paints() {
@@ -1419,9 +1510,9 @@ mod tests {
         let grid = grid_of(noisy_grid(BINS as usize, 6), BINS, 8, 0);
         let cb = callback(full_quad(6), &grid, &read);
         let through_callback = fresh_frame(&device, &queue, &cb);
-        let through_entry =
-            spectrogram_headless_frame(SIZE, full_quad(6), grid.clone(), read.clone(), shades())
-                .expect("this machine has an adapter, the harness above just used it");
+        let through_entry = SpectrogramHeadless::new()
+            .expect("this machine has an adapter, the harness above just used it")
+            .frame(0, SIZE, full_quad(6), grid.clone(), read.clone(), shades());
         assert_eq!(through_entry, through_callback);
     }
 }

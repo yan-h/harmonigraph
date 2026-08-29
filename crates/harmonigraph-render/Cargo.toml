@@ -18,7 +18,7 @@ egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 naga = { workspace = true, optional = true }
-# Blocks on wgpu's async adapter/device setup in `spectrogram_headless_frame`,
+# Blocks on wgpu's async adapter/device setup in `SpectrogramHeadless`,
 # which is a library entry point rather than a test helper.
 pollster = "0.4"
 

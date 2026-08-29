@@ -270,6 +270,27 @@ pub(crate) struct GpuGrid {
     /// Bumped whenever nothing can be said about what the GPU holds: a first
     /// frame, a fresh context ([`GpuGrid::release`]), a capacity change.
     generation: u64,
+    /// Handovers made on this surface; the next [`accept`](Self::accept) takes
+    /// the one after. It names a RUN, where
+    /// [`generation`](Self::generation) names a buffer.
+    serial: u64,
+    /// The serial the render crate last finished a `prepare` for — the
+    /// acknowledgement that the run it names really is in the buffer.
+    ///
+    /// A callback is not certain to run: egui drops one whose clip rect is
+    /// empty. One dropped frame is covered by re-sending
+    /// [`SentRun::dirty`](SentRun::dirty), but a run that ADVANCES while
+    /// callbacks are being dropped is not — each frame's delta would be
+    /// computed against a run the GPU never received, and a slab that entered
+    /// the run during that stretch keeps `key - capacity` in its slot forever,
+    /// since the byte comparison sees it as already held. An unacknowledged
+    /// run is therefore treated as no run at all.
+    ///
+    /// egui's multi-pass layout is not that case and must not be read as one:
+    /// `request_discard` runs the UI twice and throws the first pass's shapes
+    /// away, but the second pass is a key HIT, so nothing is accepted between
+    /// them and this still names the run being drawn.
+    uploaded: Arc<std::sync::atomic::AtomicU64>,
     /// The run last handed to a callback, and which of its keys the GPU is being
     /// asked to write.
     ///
@@ -295,6 +316,9 @@ struct SentRun {
     /// Which columns it was folded from — a match means this run is still the
     /// picture, and nothing is folded at all.
     key: RunKey,
+    /// This run's own handover number, which the GPU echoes back through
+    /// [`GpuGrid::uploaded`] once it has written it.
+    serial: u64,
     /// The oldest visible slab's key; the run is contiguous from there.
     first_key: i64,
     /// Slots the GPU buffer holds. The run must fit inside it, so a key's slot
@@ -362,21 +386,38 @@ impl GpuGrid {
             "a run of {} slabs puts two keys in one of {capacity} slots",
             run.len() / SPECTRUM_BINS,
         );
+        self.serial += 1;
+        let acknowledged = |sent: &SentRun| {
+            self.uploaded.load(std::sync::atomic::Ordering::Relaxed) == sent.serial
+        };
         let dirty = match &self.sent {
-            // The buffer is the same one, so what it holds is known slab by
-            // slab and only the slabs that moved need writing.
-            Some(sent) if sent.capacity == capacity => sent.moved(first_key, &run),
+            // The buffer is the same one and the GPU has said so, so what it
+            // holds is known slab by slab and only the slabs that moved need
+            // writing.
+            Some(sent) if sent.capacity == capacity && acknowledged(sent) => {
+                sent.moved(first_key, &run)
+            }
             // A different capacity is a different buffer — the slot a key lands
-            // in is `key mod capacity`, so the whole mapping moves — and no
-            // previous run at all is a context that has just been rebuilt.
-            // Either way the copy is made from the run rather than patched.
+            // in is `key mod capacity`, so the whole mapping moves — no previous
+            // run at all is a context that has just been rebuilt, and a run the
+            // GPU never acknowledged is one nothing can be said about (see
+            // [`uploaded`](Self::uploaded)). All three make the copy from the
+            // run rather than patching it.
             _ => {
                 self.generation += 1;
                 self.full_uploads += 1;
                 Vec::new()
             }
         };
-        self.sent = Some(SentRun { key, first_key, capacity, run: Arc::new(run), dirty, layout });
+        self.sent = Some(SentRun {
+            key,
+            serial: self.serial,
+            first_key,
+            capacity,
+            run: Arc::new(run),
+            dirty,
+            layout,
+        });
     }
 
     /// The grid a frame hands to the callback, or `None` before anything has
@@ -385,6 +426,8 @@ impl GpuGrid {
         let sent = self.sent.as_ref()?;
         Some(SpectrogramGrid {
             generation: self.generation,
+            serial: sent.serial,
+            uploaded: self.uploaded.clone(),
             capacity: sent.capacity as u32,
             bins: SPECTRUM_BINS as u32,
             first_key: sent.first_key,
@@ -2159,6 +2202,10 @@ mod tests {
                             power,
                             layout,
                         );
+                        // Every frame here draws, so the next one's delta is
+                        // measured against a buffer that has the run — see
+                        // [`GpuGrid::uploaded`].
+                        acknowledge(&gpu);
                         // Past the frames that fill the window, where the run is
                         // still growing at both ends.
                         if t > span + 1.0 {
@@ -2258,6 +2305,7 @@ mod tests {
                 power,
                 layout,
             );
+            acknowledge(&gpu);
         }
 
         assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -2470,7 +2518,10 @@ mod tests {
             let plan = Plan::new(view, cols);
             let layout = run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
             let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("a run was accepted");
-            (layout, sent.run.clone(), sent.dirty.clone())
+            let held = (layout, sent.run.clone(), sent.dirty.clone());
+            // The frame drew, which is what entitles the next one to a delta.
+            acknowledge(&spectrum.spectrogram[0].gpu);
+            held
         };
 
         let cols = columns(200, 91.99);
@@ -2509,6 +2560,90 @@ mod tests {
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
         assert!(dirty.is_empty(), "a fresh context was sent a delta");
         assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 3);
+    }
+
+    /// The acknowledgement the render crate's `prepare` makes at the end of a
+    /// frame that wrote — see [`GpuGrid::uploaded`], and
+    /// `a_delta_upload_draws_what_a_full_upload_draws` for the store itself.
+    /// Playing it by hand is what lets a CPU test run a frame that reached the
+    /// GPU beside one that did not.
+    fn acknowledge(gpu: &GpuGrid) {
+        let grid = gpu.grid().expect("a run to acknowledge");
+        grid.uploaded.store(grid.serial, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A run the GPU never acknowledged is uploaded whole, not patched.
+    ///
+    /// [`GpuGrid::accept`] moves `sent` forward on every frame, and a frame's
+    /// callback is not certain to run — egui drops one whose clip rect is
+    /// empty. Re-sending [`SentRun::dirty`] covers ONE dropped frame; it does
+    /// not cover a run that ADVANCES across several, where each delta is
+    /// measured against a run the GPU never received. A slab that entered the
+    /// run during that stretch then keeps `key - capacity` in its slot for
+    /// good: the byte comparison sees it as already held, so no later frame
+    /// repairs it, and the column is a lap old with nothing on the CPU able to
+    /// see it.
+    #[test]
+    fn a_run_the_gpu_never_saw_is_uploaded_whole() {
+        let view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 600.0,
+            window: 1.5,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: 1.5, ..SpectrumConfig::default() },
+            whole: false,
+        };
+        // A fresh surface, filled past the window, and the columns that carry
+        // it one slab further on. Replayed twice, so the two runs differ only
+        // in whether the first frame reached the GPU.
+        let sequence = |acknowledged: bool| {
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut bins = [0.0f32; SPECTRUM_BINS];
+            bins[1000] = 0.8;
+            let mut time = 90.0;
+            for _ in 0..200 {
+                spectrum.push_history(time, &bins);
+                time += 0.01;
+            }
+            let fold = |spectrum: &mut crate::AudioSpectrum, newest: f64, len: usize| {
+                let plan = Plan::new(&view, &Columns { first: 0, len, newest });
+                run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("accepted");
+                (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
+            };
+            let before = fold(&mut spectrum, time - 0.01, 200);
+            if acknowledged {
+                acknowledge(&spectrum.spectrogram[0].gpu);
+            }
+            // Four columns at 10 ms carry the window past a 16 ms slab
+            // boundary, so the second run holds a key the first did not.
+            for _ in 0..4 {
+                spectrum.push_history(time, &bins);
+                time += 0.01;
+            }
+            let after = fold(&mut spectrum, time - 0.01, 204);
+            (before, after, spectrum.spectrogram[0].gpu.full_uploads())
+        };
+
+        let (before, after, uploads) = sequence(false);
+        let entered = (after.0 + after.1 as i64) - (before.0 + before.1 as i64);
+        assert!(entered > 0, "the window never advanced, so no key entered the run to be missed",);
+        assert_eq!(after.2, 0, "a run the GPU never saw was patched with a delta");
+        assert_eq!(uploads, 2, "an unacknowledged run was treated as one the GPU holds");
+
+        // And the same frames with the acknowledgement in between: the delta
+        // path stands, and it has exactly the entering slab and the two the
+        // window is still accumulating to write.
+        let (_, after, uploads) = sequence(true);
+        assert_eq!(uploads, 1, "an acknowledged run was uploaded whole");
+        // The slabs that entered, the window's first (repruned as columns
+        // leave it) and the newest (still accumulating) — a delta, not a run.
+        assert!(
+            (1..=entered as usize + 2).contains(&after.2),
+            "an acknowledged run wrote {} slabs rather than a delta",
+            after.2,
+        );
     }
 
     /// The gradient table is keyed on what decides a texel of it, so two
@@ -2670,6 +2805,82 @@ mod tests {
         );
     }
 
+    /// The affine and the table the UI hands the shader stand in for the
+    /// mapping they replaced, byte for byte.
+    ///
+    /// The shader is given three scalars and a table of [`SHADES`] colours in
+    /// place of `spectrogram_level_db` and `cell_color`; if the pair parts
+    /// company with the mapping, the heatmap draws a colour the curve beside it
+    /// never would, at every level rather than at one. A table indexed by level
+    /// cannot be exact for every row at once (see [`SHADES`]), so the claim is
+    /// one level of one channel — and the RATE as well as the size, because a
+    /// row read out of the CLAMPED mapping is flat and every texel of it would
+    /// still be "within one level" of black.
+    ///
+    /// CPU, because both halves are pure functions of the config: `level_affine`
+    /// is what [`read_of`] uploads and [`GpuGrid::shades`] is the table beside
+    /// it. What the SHADER makes of the pair is
+    /// `gpu::the_curve_and_the_heatmap_read_a_run_of_buckets_alike`'s.
+    #[test]
+    fn the_shade_table_matches_the_mapping_it_replaces() {
+        use crate::panes::spectral::axes::spectrogram_level_db;
+        let cell_color = crate::panes::spectral::spectrogram::cell_color;
+        let (mut worst, mut differing, mut total) = (0i32, 0u64, 0u64);
+        for ramp in crate::SpectrogramPreset::ALL.map(|p| p.gradient()) {
+            // Including a window narrower than the guard allows, so the table
+            // inherits the same collapse `spectrogram_window` protects against.
+            for &(floor, ceiling) in &[(-60.0, 0.0), (-120.0, 6.0), (-30.0, -20.0), (-10.0, -10.0)]
+            {
+                for tilt in [0.0, 3.0, -3.0, 6.0] {
+                    let cfg = SpectrumConfig {
+                        spectrogram_gradient: ramp,
+                        volume_floor_db: floor,
+                        volume_ceiling_db: ceiling,
+                        tilt,
+                        ..SpectrumConfig::default()
+                    };
+                    let lut = GpuGrid::default().shades(&cfg).lut;
+                    // A row per octave across the spectrum's whole reach, so
+                    // the tilt is sampled where it is largest as well as at the
+                    // pivot.
+                    for i in 0..12 {
+                        let midi = SPECTRUM_MIN_MIDI + i as f32 * 12.0;
+                        for byte in 0..=BucketDb::MAX {
+                            let want =
+                                cell_color(ramp, spectrogram_level_db(&cfg, db_of(byte), midi));
+                            // The index the shader takes: the affine it is
+                            // handed, truncated into the table.
+                            let level = bin_level_for_test(&cfg, byte, midi);
+                            let got = lut[((level * SHADES as f32) as usize).min(SHADES - 1)];
+                            total += 1;
+                            let d = [
+                                (i32::from(got[0]) - i32::from(want.r())).abs(),
+                                (i32::from(got[1]) - i32::from(want.g())).abs(),
+                                (i32::from(got[2]) - i32::from(want.b())).abs(),
+                            ]
+                            .into_iter()
+                            .max()
+                            .expect("three channels");
+                            differing += u64::from(d > 0);
+                            assert!(
+                                d <= 1,
+                                "{ramp:?} floor {floor} ceiling {ceiling} tilt {tilt}: midi \
+                                 {midi} byte {byte} moved a channel by {d} levels ({got:?} \
+                                 against {want:?})",
+                            );
+                            worst = worst.max(d);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            differing * 20 < total,
+            "{differing} of {total} texels differ (worst {worst} level) — the table is meant \
+             to stand in for the mapping, not to approximate it",
+        );
+    }
+
     /// The run key names WHICH COLUMNS were folded, and nothing about how they
     /// are read.
     ///
@@ -2816,6 +3027,986 @@ mod tests {
                 (moved - expected).abs() < 1e-6,
                 "step {i} bent the mapping: expected {expected}, got {moved}",
             );
+        }
+    }
+
+    /// The heatmap as the GPU draws it: the claims whose subject is the picture
+    /// rather than the bookkeeping under it.
+    ///
+    /// Every test here returns early where the machine has no GPU adapter, which is
+    /// what [`SpectrogramHeadless::new`] answers `None` for.
+    mod gpu {
+        use super::*;
+        use crate::panes::spectral::axes::spectrogram_level_db;
+        use crate::panes::spectral::spectrogram::power_mean;
+        use harmonigraph_render::{SpectrogramHeadless, SpectrogramVertex};
+
+        /// Pixels across a test frame, and so slabs across it: a readback row must
+        /// be 256-byte aligned, which puts the width at a multiple of 64.
+        const W: u32 = 64;
+
+        /// One row of the picture as `row_of` in spectrogram.wgsl lays it out.
+        ///
+        /// Here to PLACE a fixture — which buckets a row will reach for — and to
+        /// write the controls that give a claim its teeth. It never stands in for
+        /// the read: what a row comes out at is measured off the frame.
+        struct Row {
+            lo_t: f32,
+            hi_t: f32,
+            t: f32,
+            midi: f32,
+        }
+
+        fn row_of(read: &SpectrogramRead, r: u32) -> Row {
+            let reach = 1.0 + 2.0 * read.margin;
+            let rows = read.rows as f32;
+            let lo_t = -read.margin + reach * r as f32 / rows;
+            let hi_t = -read.margin + reach * (r + 1) as f32 / rows;
+            let t = 0.5 * (lo_t + hi_t);
+            Row { lo_t, hi_t, t, midi: read.min_midi + t * read.span }
+        }
+
+        fn bucket_of(read: &SpectrogramRead, t: f32) -> usize {
+            let midi = read.min_midi + t * read.span;
+            let b = ((midi - read.spectrum_min_midi) * read.bins_per_semitone).floor();
+            b.clamp(0.0, SPECTRUM_BINS as f32 - 1.0) as usize
+        }
+
+        /// The buckets row `r` reads, whichever arm it takes.
+        fn run_of(read: &SpectrogramRead, r: u32) -> std::ops::Range<usize> {
+            let row = row_of(read, r);
+            let idx = bucket_of(read, row.lo_t);
+            idx..(bucket_of(read, row.hi_t) + 1).min(SPECTRUM_BINS)
+        }
+
+        /// The whole pitch axis, which is where a row spans the most buckets and
+        /// the row geometry is worked hardest.
+        fn whole_axis() -> PitchScale {
+            let span = SPECTRUM_BINS as f32 / BINS_PER_SEMITONE as f32;
+            PitchScale { min_midi: SPECTRUM_MIN_MIDI, max_midi: SPECTRUM_MIN_MIDI + span, span }
+        }
+
+        /// The half of a [`PaneView`] [`read_of`] reads; the rest decides a fold
+        /// that no test here performs.
+        fn view_of(scale: PitchScale, cfg: SpectrumConfig) -> PaneView {
+            PaneView {
+                ppp: 1.0,
+                pitch_len: 1.0,
+                depth_len: 1.0,
+                window: 1.0,
+                scale,
+                cfg,
+                whole: false,
+            }
+        }
+
+        /// A grid the callback takes, keyed from 0 in a ring exactly the run's
+        /// size — so `key mod capacity` is the identity and a fixture about the
+        /// READ says nothing about slots.
+        ///
+        /// A generation of its own every time, which is what makes a SEQUENCE of
+        /// these frames legible: the copy is keyed on it, so without a fresh one a
+        /// second frame through the same resources patches the slabs the caller
+        /// declared dirty — none — and redraws the first frame's bytes. That path
+        /// is `the_gpu_grid_equals_a_full_upload_after_any_sequence`'s subject and
+        /// nothing else here wants it.
+        fn grid_of(run: Vec<u8>) -> SpectrogramGrid {
+            static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let slabs = run.len() / SPECTRUM_BINS;
+            SpectrogramGrid {
+                generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                serial: 1,
+                uploaded: Arc::default(),
+                capacity: slabs as u32,
+                bins: SPECTRUM_BINS as u32,
+                first_key: 0,
+                run: Arc::new(run),
+                dirty: Vec::new(),
+            }
+        }
+
+        /// A quad over `size`, mapping pixel column `px` to slab `px + 0.5` and
+        /// pixel row `py` to row `py`.
+        ///
+        /// Those are the taps' own centres, where the four-tap blend collapses onto
+        /// one texel — so a pixel of the frame IS a texel of the picture, and a
+        /// claim about a texel can be read off it with no filter in between. That
+        /// costs the width and the height: `size` must be the slab count by the row
+        /// count.
+        fn texel_quad(
+            read: &SpectrogramRead,
+            slabs: u32,
+            size: [u32; 2],
+        ) -> Vec<SpectrogramVertex> {
+            assert_eq!(size, [slabs, read.rows], "a texel per pixel means one pixel per texel");
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            // The shader stretches the FIRST and LAST row centres across whatever
+            // `t` the quad carries, so those centres are the quad's own ends.
+            let (t0, t1) = (row_of(read, 0).t, row_of(read, read.rows - 1).t);
+            let v = |x: f32, y: f32| SpectrogramVertex {
+                pos: [x, y],
+                slab: x / w * slabs as f32,
+                t: t0 + (t1 - t0) * y / h,
+            };
+            vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+        }
+
+        fn pixel(frame: &[u8], size: [u32; 2], px: u32, py: u32) -> [u8; 4] {
+            let i = ((py * size[0] + px) * 4) as usize;
+            frame[i..i + 4].try_into().expect("four channels")
+        }
+
+        /// A gradient table that reads back what the shader READ: entry `i` is the
+        /// grey `i`, which [`probe_read`]'s level mapping indexes exactly, so a
+        /// pixel's red channel is the stored dB byte the row came out at.
+        ///
+        /// An instrument rather than the picture. These claims are about the read,
+        /// and getting a number back out of a real ramp would mean inverting a
+        /// gamut solve.
+        fn probe_shades() -> SpectrogramShades {
+            SpectrogramShades {
+                generation: 1,
+                lut: Arc::new((0..256).map(|i| [i as u8, i as u8, i as u8, 255]).collect()),
+            }
+        }
+
+        /// [`read_of`]'s scalars with the level mapping replaced by `byte / 256`.
+        ///
+        /// [`probe_shades`] then lands on the byte itself: the shader's index is
+        /// `min(u32(level * 256), 255)`, the division is exact in binary, and the
+        /// read is integer-valued in both arms.
+        fn probe_read(view: &PaneView, rows: usize) -> SpectrogramRead {
+            SpectrogramRead {
+                level0: 0.0,
+                level_per_step: 1.0 / 256.0,
+                level_per_midi: 0.0,
+                ..read_of(view, rows)
+            }
+        }
+
+        /// A quad over the whole run and the whole visible pitch range.
+        ///
+        /// Not the pane's own mesh, deliberately: the pane cuts its strip to the
+        /// depths the data reaches and holds a sliver past the newest slab's
+        /// centre, so a slab at either end of the run can be off-picture — and a
+        /// fixture drawn through it would not reach the slot it claims to be
+        /// checking. Where the strip is cut and where the sliver holds is
+        /// `the_leading_sliver_holds_the_newest_slabs_centre`'s claim, not this
+        /// one's.
+        fn run_quad(slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            let v = |x: f32, y: f32| SpectrogramVertex {
+                pos: [x, y],
+                slab: x / w * slabs as f32,
+                t: 1.0 - y / h,
+            };
+            vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+        }
+
+        /// One quad per slab, each carrying its slab coordinate CONSTANT across its
+        /// own block of pixel columns.
+        ///
+        /// A block per slab and no blend between them, so a column of the frame
+        /// names exactly one slot: a mis-slotted slab is a whole block of the wrong
+        /// value rather than a seam a filter could explain. The run may then be any
+        /// width the fold produces, where [`texel_quad`] needs it to be the frame's.
+        fn slab_blocks(slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+            let (w, h) = (size[0] as f32, size[1] as f32);
+            (0..slabs)
+                .flat_map(|j| {
+                    let (x0, x1) = (w * j as f32 / slabs as f32, w * (j + 1) as f32 / slabs as f32);
+                    let v = |x: f32, y: f32| SpectrogramVertex {
+                        pos: [x, y],
+                        slab: j as f32 + 0.5,
+                        t: 1.0 - y / h,
+                    };
+                    [v(x0, 0.0), v(x1, 0.0), v(x1, h), v(x0, 0.0), v(x1, h), v(x0, h)]
+                })
+                .collect()
+        }
+
+        /// The pixel column comfortably inside slab `j`'s block — its centre,
+        /// which is at least half a block from either seam.
+        fn block_centre(j: u32, slabs: u32, size: [u32; 2]) -> u32 {
+            ((j as f32 + 0.5) / slabs as f32 * size[0] as f32) as u32
+        }
+
+        /// The pane's own geometry and settings, sized so a run fits inside a
+        /// frame's pixel columns with room to see each slab.
+        fn pane(window: f64, depth_len: f32, rows: f32) -> PaneView {
+            PaneView {
+                ppp: 1.0,
+                pitch_len: rows,
+                depth_len,
+                window,
+                scale: whole_axis(),
+                cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
+                whole: false,
+            }
+        }
+
+        /// A column whose whole spectrum is the one stored byte `db`, so a slab
+        /// folded from it reads that byte at every row and a block of the frame is
+        /// one number.
+        fn flat_column(time: f64, db: BucketDb) -> crate::SpectrogramColumn {
+            let power = 10f32.powf(0.1 * harmonigraph_core::spectrogram::db_of(db));
+            col(time, &(0..SPECTRUM_BINS).map(|b| (b, power)).collect::<Vec<_>>())
+        }
+
+        /// What the GPU holds equals a full upload of the same run, through every
+        /// way the run can move.
+        ///
+        /// The grid's GPU copy is the one cached thing left in this pipeline, and
+        /// its key is a statement about which slabs are in which slots. A slot the
+        /// key believes and the buffer contradicts is a WRONG COLUMN — a lap-old
+        /// slice of audio drawn as if it were now — and nothing on the CPU can see
+        /// one: the run is right, the geometry is right, and the picture is
+        /// plausible. So the delta is measured against the only thing that can
+        /// contradict it, a frame built from the run alone.
+        ///
+        /// Every event that moves the run is scripted here and counted, because a
+        /// sequence that quietly never folded, never pruned or never wrapped would
+        /// pass this by drawing one picture twice.
+        /// What the sequence below has to have reached for its equality to mean
+        /// anything, counted as it plays.
+        #[derive(Default)]
+        struct Tally {
+            /// The clock the fixture's columns are stamped on, and how many have
+            /// been pushed.
+            clock: f64,
+            pushed: u32,
+            folds: u32,
+            prunes: u32,
+            holds: u32,
+            reveals: u32,
+            crossings: u32,
+            rebuilds: u32,
+            backwards: u32,
+            /// The previous frame's slab width and first key, which is what makes
+            /// a crossing, a reveal and a prune tellable apart.
+            last: Option<(f64, i64)>,
+            /// Generations minted for the full-upload side, so it never inherits
+            /// its own previous frame.
+            fresh: u64,
+        }
+
+        #[test]
+        fn the_gpu_grid_equals_a_full_upload_after_any_sequence() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [128, 64];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut tally = Tally { clock: 100.0, ..Tally::default() };
+
+            // A moving peak over a low bed, so consecutive slabs differ and a slab
+            // written into the wrong slot draws a different picture.
+            let push = |t: &mut Tally, spectrum: &mut crate::AudioSpectrum, n: u32, gap: f64| {
+                t.clock += gap;
+                for _ in 0..n {
+                    let mut bins = [0.02f32; SPECTRUM_BINS];
+                    bins[400 + (t.pushed as usize * 13) % 3000] = 1.0;
+                    spectrum.push_history(t.clock, &bins);
+                    t.clock += interval;
+                    t.pushed += 1;
+                }
+            };
+
+            let frame = |t: &mut Tally,
+                         spectrum: &mut crate::AudioSpectrum,
+                         headless: &mut SpectrogramHeadless,
+                         view: &PaneView|
+             -> (SpectrogramGrid, SpectrogramRead, Vec<u8>) {
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist
+                        .partition_point(|c| c.time < t.clock - view.window)
+                        .saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(t.clock, |c| c.time),
+                };
+                let plan = Plan::new(view, &columns);
+                let uploads = spectrum.spectrogram[0].gpu.full_uploads();
+                let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
+                let hit = spectrum.spectrogram[0].gpu.hit(&plan.key).is_some();
+                run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
+                t.folds += u32::from(!hit);
+                t.rebuilds += u32::from(spectrum.spectrogram[0].gpu.full_uploads() > uploads);
+                t.backwards += u32::from(
+                    refolds > 0
+                        && spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds())
+                            > refolds,
+                );
+                let (grid, shades) = frame_data(spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let read = read_of(view, plan.rows);
+                let vertices = run_quad(slabs, SIZE);
+
+                if let Some((bucket, first_key)) = t.last {
+                    t.crossings += u32::from(bucket != plan.bucket);
+                    t.reveals += u32::from(grid.first_key < first_key && bucket == plan.bucket);
+                    t.prunes += u32::from(
+                        grid.first_key == first_key && grid.dirty.contains(&grid.first_key),
+                    );
+                }
+                t.last = Some((plan.bucket, grid.first_key));
+                // A HELD slab is a copy of the one before it, which is the only way
+                // two neighbours can carry the same bytes under this fixture.
+                t.holds += u32::from((1..slabs as usize).any(|j| {
+                    grid.run[(j - 1) * SPECTRUM_BINS..j * SPECTRUM_BINS]
+                        == grid.run[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
+                }));
+
+                let delta = headless.frame(
+                    0,
+                    SIZE,
+                    vertices.clone(),
+                    grid.clone(),
+                    read.clone(),
+                    shades.clone(),
+                );
+                // The same run with nothing said about what the GPU holds: a
+                // generation and a pane of its own, so it is built from the run and
+                // can inherit neither the delta pane's buffer nor its own.
+                t.fresh += 1;
+                let whole = SpectrogramGrid {
+                    generation: t.fresh,
+                    serial: 1,
+                    uploaded: Arc::default(),
+                    dirty: Vec::new(),
+                    ..grid.clone()
+                };
+                let full = headless.frame(1, SIZE, vertices, whole, read.clone(), shades);
+                assert_eq!(delta, full, "a slot the delta wrote disagrees with the run it named");
+                (grid, read, delta)
+            };
+
+            // Spans that straddle a rung of `live_slab`'s ladder at this pane
+            // width: 0.6 s cuts into 16 ms slabs and 0.8 s into 32 ms ones.
+            let (near, mid, far) = (0.3f64, 0.6, 0.8);
+            let view = |window: f64| pane(window, 40.0, 64.0);
+            push(&mut tally, &mut spectrum, 120, 0.0);
+            for _ in 0..3 {
+                frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+                push(&mut tally, &mut spectrum, 4, 0.0);
+            }
+            // A window scrolling by less than a slab: its first slab keeps its key
+            // while columns leave it, so the aggregator reprunes it in place.
+            for _ in 0..6 {
+                push(&mut tally, &mut spectrum, 1, 0.0);
+                frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            }
+            // A window narrowed and widened again: the widening reaches back to
+            // slabs the frame before it did not draw, and the far end crosses a
+            // rung on the way.
+            for span in [near, near, mid, far, far, mid] {
+                frame(&mut tally, &mut spectrum, &mut headless, &view(span));
+                push(&mut tally, &mut spectrum, 4, 0.0);
+            }
+            // One empty slab: a seam in the sample stream, which the aggregator
+            // fills by holding the column before it.
+            push(&mut tally, &mut spectrum, 6, 0.024);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            // A transport jump backwards, which no delta can describe.
+            tally.clock -= 0.4;
+            push(&mut tally, &mut spectrum, 40, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            // A context that went away: the copy is gone and nothing about it can
+            // be assumed.
+            spectrum.spectrogram[0].gpu.release();
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
+
+            for (count, what) in [
+                (tally.folds, "folds"),
+                (tally.prunes, "first-slab prunes"),
+                (tally.holds, "held slabs"),
+                (tally.reveals, "slabs revealed by a widening window"),
+                (tally.crossings, "ladder rungs crossed"),
+                (tally.rebuilds, "full uploads"),
+                (tally.backwards, "backward jumps"),
+            ] {
+                assert!(count > 0, "the sequence never reached any {what}");
+            }
+
+            // And the equality has teeth: one more fold, drawn with its list of
+            // moved slabs WITHHELD, leaves the buffer holding what the run before
+            // it put there — a different picture. Without this an equality that
+            // could never fail would read as coverage.
+            push(&mut tally, &mut spectrum, 8, 0.0);
+            let view = view(mid);
+            let hist = spectrum.history();
+            let columns = Columns {
+                first: hist
+                    .partition_point(|c| c.time < tally.clock - view.window)
+                    .saturating_sub(1),
+                len: hist.len(),
+                newest: hist.back().map_or(tally.clock, |c| c.time),
+            };
+            let plan = Plan::new(&view, &columns);
+            run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
+            let (moved, shades) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
+            assert!(!moved.dirty.is_empty(), "nothing moved, so nothing could be withheld");
+            let read = read_of(&view, plan.rows);
+            let slabs = (moved.run.len() / SPECTRUM_BINS) as u32;
+            let withheld = headless.frame(
+                0,
+                SIZE,
+                run_quad(slabs, SIZE),
+                SpectrogramGrid { dirty: Vec::new(), ..moved.clone() },
+                read.clone(),
+                shades.clone(),
+            );
+            tally.fresh += 1;
+            let full = headless.frame(
+                1,
+                SIZE,
+                run_quad(slabs, SIZE),
+                SpectrogramGrid {
+                    generation: tally.fresh,
+                    uploaded: Arc::default(),
+                    dirty: Vec::new(),
+                    ..moved
+                },
+                read,
+                shades,
+            );
+            assert_ne!(withheld, full, "withholding the delta drew the same picture anyway");
+        }
+
+        /// Keys before zero and a run that wraps past the end of the ring place
+        /// each slab where the shader reads it.
+        ///
+        /// Three readers work out a slot from a key and no compiler checks that
+        /// they agree: [`ring_capacity`] sizes the ring, the render crate scatters
+        /// a slab into `key mod capacity`, and the shader walks forward from the
+        /// run's first slot with the same modulus. Two of the three are only ever
+        /// exercised together at the two places the arithmetic is not the identity
+        /// — a key before zero, where a truncating remainder answers negative, and
+        /// a run that crosses the ring's end, where the forward walk has to come
+        /// round.
+        ///
+        /// The render crate holds the same pair against a grid it builds itself;
+        /// this one goes through the fold, so the capacity and the keys are the
+        /// pane's own rather than a fixture's.
+        #[test]
+        fn slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            const SIZE: [u32; 2] = [64, 4];
+            let interval = crate::AudioSpectrum::FFT_INTERVAL;
+            let cfg = SpectrumConfig::default();
+            let view = pane(0.3, 24.0, 24.0);
+            let bucket = live_slab(view.window, 24);
+
+            // Time runs from before zero to after it, and a slab's byte is a
+            // function of its own KEY — so neighbouring slabs differ, a slab drawn
+            // from the wrong slot is the wrong number, and the ramp never repeats
+            // inside a run.
+            let mut spectrum = crate::AudioSpectrum::default();
+            let mut times = Vec::new();
+            for i in 0..238 {
+                let time = -1.5 + i as f64 * interval;
+                let key = (time / bucket).floor() as i64;
+                spectrum.history.push(flat_column(time, 60 + key.rem_euclid(190) as u8));
+                times.push(time);
+            }
+
+            let (mut negative, mut wrapped) = (0u32, 0u32);
+            let mut now = -1.2;
+            while now < 0.4 {
+                let hist = spectrum.history();
+                let columns = Columns {
+                    first: hist.partition_point(|c| c.time < now - view.window).saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().map_or(now, |c| c.time),
+                };
+                let plan = Plan::new(&view, &columns);
+                run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
+                let (grid, _) = frame_data(&mut spectrum, 0, &cfg).expect("a grid to draw");
+                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let first_slot = grid.first_key.rem_euclid(i64::from(grid.capacity)) as u32;
+                negative += u32::from(grid.first_key < 0);
+                wrapped += u32::from(first_slot + slabs > grid.capacity);
+
+                let read = probe_read(&view, plan.rows);
+                let frame = headless.frame(
+                    0,
+                    SIZE,
+                    slab_blocks(slabs, SIZE),
+                    grid.clone(),
+                    read,
+                    probe_shades(),
+                );
+                for j in 0..slabs {
+                    let want = grid.run[j as usize * SPECTRUM_BINS];
+                    let got = pixel(&frame, SIZE, block_centre(j, slabs, SIZE), SIZE[1] / 2)[0];
+                    assert_eq!(
+                        got,
+                        want,
+                        "slab {j} of the run at key {} (slot {}, ring {}) drew slot {:?}",
+                        grid.first_key,
+                        (grid.first_key + i64::from(j)).rem_euclid(i64::from(grid.capacity)),
+                        grid.capacity,
+                        (0..slabs).find(|&k| grid.run[k as usize * SPECTRUM_BINS] == got),
+                    );
+                    if j > 0 {
+                        assert_ne!(
+                            want,
+                            grid.run[(j - 1) as usize * SPECTRUM_BINS],
+                            "slabs {} and {j} draw alike, so a swap between them is invisible",
+                            j - 1,
+                        );
+                    }
+                }
+                now += 2.0 * bucket;
+            }
+            assert!(negative > 0, "no frame's run started before zero");
+            assert!(wrapped > 0, "no frame's run crossed the ring's end");
+        }
+
+        /// Energy at one bucket of one slab lights that slab's column at that
+        /// bucket's row, and nothing else.
+        ///
+        /// The row geometry and the slot arithmetic each place a texel, in
+        /// different units, and a picture with everything in the right place except
+        /// its energy is the failure neither of them reports: the frame is bright
+        /// somewhere, so nothing looks broken, and it is a transposition or an
+        /// off-by-one row away from the sound it claims to draw.
+        #[test]
+        fn energy_at_one_bucket_of_one_slab_lights_that_texel_and_no_other() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // Rows far coarser than the bucket grid, so a row is a RUN and the
+            // bucket has to be found inside one rather than landed on.
+            const ROWS: u32 = 32;
+            const SLAB: u32 = 17;
+            const ROW: u32 = 11;
+            let view = view_of(whole_axis(), SpectrumConfig::default());
+            let read = probe_read(&view, ROWS as usize);
+            // Mid-run, because adjacent rows SHARE the bucket their boundary falls
+            // in — a bucket at the edge would be read by two rows and the claim
+            // below would be false of the picture rather than of the code.
+            let run = run_of(&read, ROW);
+            let bucket = run.start + run.len() / 2;
+            let reached: Vec<u32> =
+                (0..ROWS).filter(|&r| run_of(&read, r).contains(&bucket)).collect();
+            assert_eq!(reached, [ROW], "bucket {bucket} is read by rows {reached:?}");
+
+            let mut bytes = vec![0u8; W as usize * SPECTRUM_BINS];
+            bytes[SLAB as usize * SPECTRUM_BINS + bucket] = q(1.0);
+            let size = [W, ROWS];
+            let frame = headless.frame(
+                0,
+                size,
+                texel_quad(&read, W, size),
+                grid_of(bytes),
+                read.clone(),
+                probe_shades(),
+            );
+            let lit = pixel(&frame, size, SLAB, ROW)[0];
+            assert!(lit > 0, "the loud texel drew nothing");
+            for py in 0..ROWS {
+                for px in 0..W {
+                    if (px, py) == (SLAB, ROW) {
+                        continue;
+                    }
+                    assert_eq!(
+                        pixel(&frame, size, px, py)[0],
+                        0,
+                        "slab {px} row {py} carries energy that belongs at slab {SLAB} row {ROW}",
+                    );
+                }
+            }
+        }
+
+        /// The picture's noise floor SETTLES as the pitch axis zooms out, instead
+        /// of climbing with the number of buckets a row happens to span.
+        ///
+        /// Read by MAX, a row asks "how large was the largest of N draws", whose
+        /// answer grows like the log of N and so has no limit: the floor between
+        /// the partials reads brighter the further out the zoom, which is a
+        /// statement about the layout rather than about the sound. The power mean
+        /// estimates a fixed property of the distribution instead — see
+        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER).
+        ///
+        /// The comparison starts at 8 buckets rather than at 1 because the step
+        /// from ONE bucket to several is inherent and belongs to neither rule: one
+        /// bucket reads a SAMPLE of the distribution, any number of them reads a
+        /// STATISTIC of it, and that step is paid once on the way off a single
+        /// bucket. What is at issue is only the part that keeps climbing.
+        ///
+        /// The MAX control is what gives the first assertion its teeth: it fails if
+        /// the noise is too flat, or the runs too short, for either rule to be
+        /// tested. It is arithmetic on the same bytes rather than a second frame,
+        /// because the shader has no max arm to render.
+        #[test]
+        fn the_noise_floor_settles_as_the_pitch_axis_zooms_out() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // Exponentially distributed power around -60 dB: the distribution a
+            // noise floor's buckets have, and the one whose maximum keeps growing.
+            let mut seed = 0x2545_F491_4F6C_DD1Du64;
+            let mut power = [0.0f32; SPECTRUM_BINS];
+            for p in power.iter_mut() {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let u = ((seed >> 11) as f64 / (1u64 << 53) as f64).clamp(1e-12, 1.0);
+                *p = (-u.ln() * 1e-6) as f32;
+            }
+            let column: Vec<u8> = power.iter().map(|&p| q(p)).collect();
+            let view = view_of(whole_axis(), SpectrumConfig::default());
+
+            // Every slab the same column, so the pane mean is the row read's own
+            // and the time axis contributes nothing to it.
+            let bytes: Vec<u8> = (0..W).flat_map(|_| column.iter().copied()).collect();
+            let floor = |per_row: usize, headless: &mut SpectrogramHeadless| -> (f64, f64) {
+                let rows = (SPECTRUM_BINS / per_row) as u32;
+                let read = probe_read(&view, rows as usize);
+                let runs: Vec<std::ops::Range<usize>> =
+                    (0..rows).map(|r| run_of(&read, r)).collect();
+                let widest = runs.iter().map(|r| r.len()).max().expect("a row");
+                assert!(
+                    runs.iter().all(|r| r.len() >= 2) && widest <= per_row + 2,
+                    "rows of {per_row} buckets came out {}..{widest} wide",
+                    runs.iter().map(|r| r.len()).min().expect("a row"),
+                );
+                let size = [W, rows];
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read.clone(),
+                    probe_shades(),
+                );
+                let mean =
+                    frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>() / (W * rows) as f64;
+                // The same rows read by MAX, which is what the mean is being
+                // measured against.
+                let by_max = runs
+                    .iter()
+                    .map(|r| f64::from(column[r.clone()].iter().copied().max().expect("a bucket")))
+                    .sum::<f64>()
+                    / rows as f64;
+                (mean, by_max)
+            };
+            let step = f64::from(harmonigraph_core::spectrogram::DB_STEP);
+            let (mean_8, max_8) = floor(8, &mut headless);
+            let (mean_64, max_64) = floor(64, &mut headless);
+            let climb = (mean_64 - mean_8) * step;
+            assert!(climb < 1.5, "the floor climbed {climb:.2} dB across a three-octave zoom");
+            let by_max = (max_64 - max_8) * step;
+            assert!(
+                by_max > 2.2,
+                "a plain MAX climbed only {by_max:.2} dB, so this proves nothing"
+            );
+        }
+
+        /// A ramp of stored bytes renders dark to bright.
+        ///
+        /// Every step between the store and the screen is monotone on its own — the
+        /// read, the level affine, the table — and the picture's whole grammar is
+        /// that brighter means louder, so a sign or an index flipped anywhere in
+        /// the chain is a heatmap that reads backwards while every part of it looks
+        /// right.
+        ///
+        /// Lightness in `L*`, which is the units the gradient is authored in: a
+        /// channel sum weights blue like green and would call a violet and a yellow
+        /// of one sum equally bright. Opacity is not measurable here and stays with
+        /// `cells_are_opaque_and_run_dark_to_bright` — the pane's bed is opaque and
+        /// egui's blend leaves the target's alpha at 1 whatever a fragment writes.
+        #[test]
+        fn a_ramp_of_stored_bytes_renders_dark_to_bright() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            // One row over the whole axis and a constant column per slab, so a
+            // slab's texel is that slab's byte and the ramp is the frame.
+            let size = [W, 1];
+            let bytes: Vec<u8> = (0..W).flat_map(|j| vec![(j * 4) as u8; SPECTRUM_BINS]).collect();
+            for preset in crate::SpectrogramPreset::ALL {
+                let cfg = SpectrumConfig {
+                    spectrogram_gradient: preset.gradient(),
+                    ..Default::default()
+                };
+                let view = view_of(whole_axis(), cfg);
+                let read = read_of(&view, 1);
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read,
+                    GpuGrid::default().shades(&cfg),
+                );
+                let lightness = |px: u32| {
+                    let c = pixel(&frame, size, px, 0);
+                    let v = |b: u8| f64::from(b) / 255.0;
+                    harmonigraph_scene::color::lightness_of_encoded(v(c[0]), v(c[1]), v(c[2]))
+                };
+                for px in 1..W {
+                    assert!(
+                        lightness(px) >= lightness(px - 1) - 1e-9,
+                        "{preset:?}: byte {} draws darker than byte {}",
+                        px * 4,
+                        (px - 1) * 4,
+                    );
+                }
+                assert!(lightness(0) < 0.5, "{preset:?}: silence must sit on the ramp's black end");
+                assert!(lightness(W - 1) > lightness(0) + 0.2, "{preset:?}: the ramp barely moved");
+            }
+        }
+
+        /// The quiet end of the ramp FADES to black rather than falling off a cliff
+        /// into it.
+        ///
+        /// A shortcut answering everything under some dB as silence is invisible
+        /// while the Level window bottoms out above it, and becomes a hard edge —
+        /// faintest colour straight to black — the moment the window can be dragged
+        /// below. The control is the same bucket at the default window, where it
+        /// really is under the floor: without it, a picture that had gone black
+        /// everywhere would pass the first half by drawing nothing.
+        #[test]
+        fn a_bucket_above_a_dragged_down_floor_still_draws_a_colour() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let size = [W, 1];
+            let quiet = q(1e-9); // -90 dB
+            let bytes = vec![quiet; W as usize * SPECTRUM_BINS];
+            let drawn = |cfg: SpectrumConfig, headless: &mut SpectrogramHeadless| {
+                let view = view_of(whole_axis(), cfg);
+                let read = read_of(&view, 1);
+                let frame = headless.frame(
+                    0,
+                    size,
+                    texel_quad(&read, W, size),
+                    grid_of(bytes.clone()),
+                    read,
+                    GpuGrid::default().shades(&cfg),
+                );
+                pixel(&frame, size, 0, 0)
+            };
+            let default = SpectrumConfig { volume_ceiling_db: 0.0, ..SpectrumConfig::default() };
+            assert_eq!(
+                drawn(default, &mut headless)[..3],
+                [0, 0, 0],
+                "a -90 dB bucket is under the default -60 dB floor and must be black",
+            );
+            let dragged = SpectrumConfig { volume_floor_db: -120.0, ..default };
+            let lit = drawn(dragged, &mut headless);
+            assert_ne!(
+                lit[..3],
+                [0, 0, 0],
+                "a -90 dB bucket 30 dB above a -120 dB floor was cut off instead of faded",
+            );
+        }
+
+        /// The curve and the heatmap read one run of buckets the same way.
+        ///
+        /// They hold their buckets differently — the curve as floats of power in
+        /// Rust, the heatmap as bytes of dB in WGSL — so the mean is written twice,
+        /// and two forms of one definition drift. This is the only thing holding
+        /// the shader to the Rust, and what the drift costs is visible rather than
+        /// subtle: a pixel of the curve and a row of the heatmap cover the SAME
+        /// buckets, and the pane draws both from one gradient through one loudness
+        /// mapping precisely so equal levels read equal, so a disagreement puts a
+        /// ridge and the curve over it at different heights on one tone.
+        ///
+        /// The tolerance is the store's own, not a fudge: the heatmap's side rounds
+        /// to [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) twice over, once
+        /// quantizing each bucket and once re-encoding the mean, and the table it
+        /// then lands in is sampled at [`SHADES`] levels.
+        #[test]
+        fn the_curve_and_the_heatmap_read_a_run_of_buckets_alike() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let cfg = SpectrumConfig::default();
+            let lut = GpuGrid::default().shades(&cfg).lut;
+            let step = harmonigraph_core::spectrogram::DB_STEP;
+            let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+            let mut next = || {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (seed >> 11) as f64 / (1u64 << 53) as f64
+            };
+
+            // One row over the whole picture, so the frame IS that row's read,
+            // once per slab. The visible range sets how many buckets it covers:
+            // below a sixteenth of a semitone the margin is capped and widens it,
+            // above that the range itself does — between them they reach every run
+            // length from a pair to a full 32.
+            let spans: Vec<f32> = [0.01f32, 0.025, 0.05]
+                .into_iter()
+                .chain((5..=32).map(|n: u32| (n - 3) as f32 / 32.0))
+                .collect();
+            let size = [W, 1];
+            let mut lengths = std::collections::BTreeSet::new();
+            for span in spans {
+                let view = view_of(
+                    PitchScale { min_midi: SPECTRUM_MIN_MIDI + 20.0, max_midi: 0.0, span },
+                    cfg,
+                );
+                let read = read_of(&view, 1);
+                let run = run_of(&read, 0);
+                lengths.insert(run.len());
+                let midi = row_of(&read, 0).midi;
+                for _ in 0..4 {
+                    // A case per slab: 90 dB of spread, which is where two forms
+                    // of one mean have the most room to disagree — a flat run
+                    // agrees trivially.
+                    let powers: Vec<Vec<f32>> = (0..W)
+                        .map(|_| (0..run.len()).map(|_| 10f64.powf(-9.0 * next()) as f32).collect())
+                        .collect();
+                    let mut bytes = vec![0u8; W as usize * SPECTRUM_BINS];
+                    for (j, ps) in powers.iter().enumerate() {
+                        for (b, &p) in run.clone().zip(ps.iter()) {
+                            bytes[j * SPECTRUM_BINS + b] = q(p);
+                        }
+                    }
+                    let frame = headless.frame(
+                        0,
+                        size,
+                        texel_quad(&read, W, size),
+                        grid_of(bytes),
+                        read.clone(),
+                        SpectrogramShades { generation: 1, lut: lut.clone() },
+                    );
+                    for (j, ps) in powers.iter().enumerate() {
+                        let curve = 10.0 * power_mean(ps).max(1e-30).log10();
+                        // The band the store's own rounding leaves the heatmap
+                        // free to land in, widened by the one table index a level
+                        // sitting on a slice boundary can fall either side of.
+                        let index = |db: f32| {
+                            let level = spectrogram_level_db(&cfg, db, midi);
+                            ((level * SHADES as f32) as usize).min(SHADES - 1)
+                        };
+                        let lo = index(curve - 2.0 * step).saturating_sub(1);
+                        let hi = (index(curve + 2.0 * step) + 1).min(SHADES - 1);
+                        let got = pixel(&frame, size, j as u32, 0);
+                        assert!(
+                            (lo..=hi).any(|i| lut[i][..3] == got[..3]),
+                            "a run of {} at {curve:.3} dB drew {got:?}, outside the table's \
+                         {lo}..={hi} ({:?} to {:?})",
+                            run.len(),
+                            lut[lo],
+                            lut[hi],
+                        );
+                    }
+                }
+            }
+            // The sweep really did reach every run length it claims to.
+            assert_eq!(
+                lengths.iter().copied().collect::<Vec<_>>(),
+                (2..=32).collect::<Vec<_>>(),
+                "the spans reached run lengths {lengths:?}",
+            );
+        }
+
+        /// One analysed column through the real transform, so the partials carry
+        /// the taper's own skirts and the floor is the transform's rather than one
+        /// this fixture picked. An empty `notes` leaves the noise alone.
+        fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
+            let sr = 48_000.0f32;
+            let mut an = harmonigraph_core::spectrum::SpectrumAnalyzer::new(sr);
+            let mut seed = 0x1234_5678u32;
+            let mut noise = move || {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / (1 << 24) as f32 - 0.5
+            };
+            let buf: Vec<f32> = (0..1 << 16)
+                .map(|i| {
+                    let t = i as f32 / sr;
+                    // Sawtooths by partial, rolled off 1/k and band-limited by hand.
+                    let v: f32 = notes
+                        .iter()
+                        .flat_map(|&m| {
+                            let f = harmonigraph_core::spectrum::midi_to_hz(m);
+                            (1..=24).map(move |k| (f * k as f32, k))
+                        })
+                        .filter(|&(fk, _)| fk < sr * 0.45)
+                        .map(|(fk, k)| (std::f32::consts::TAU * fk * t).sin() / k as f32)
+                        .sum();
+                    v * 0.05 + noise() * if notes.is_empty() { 0.1 } else { 0.0005 }
+                })
+                .collect();
+            an.push_samples(&buf);
+            an.pitch_spectrum()
+                .expect("a full window analyses")
+                .iter()
+                .map(|&p| harmonigraph_core::spectrogram::quantize(p))
+                .collect()
+        }
+
+        /// Scratch: what the picture's overall brightness does as the pane's row
+        /// count changes, which is the resize and offline-resolution case (#491).
+        /// Not an assertion.
+        ///
+        /// A row's read is a filter whose SUPPORT is set by the row count, so the
+        /// same audio at the same zoom draws brighter or darker as the pane grows
+        /// — visible when the editor and an export of the same take disagree. The
+        /// noise row is the control: the mean's dependence over a pure floor is a
+        /// fraction of what it is over partials, so what moves the brightness is
+        /// spectral features NARROWER than a row rather than the floor
+        /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
+        /// was set against.
+        ///
+        /// Through the shader, so the number stands for the picture that ships;
+        /// [`probe_read`] is what makes the pane mean readable off it.
+        ///
+        /// `cargo test -p harmonigraph-ui --release gpu::brightness_across_resolutions -- --ignored --nocapture`
+        #[test]
+        #[ignore]
+        fn brightness_across_resolutions() {
+            let Some(mut headless) = SpectrogramHeadless::new() else {
+                return;
+            };
+            let step = f64::from(harmonigraph_core::spectrogram::DB_STEP);
+            let scale_of = |span: f32| {
+                let min_midi = if span >= 119.0 { SPECTRUM_MIN_MIDI } else { 60.0 - span / 2.0 };
+                PitchScale { min_midi, max_midi: min_midi + span, span }
+            };
+            let chord = analysed_column(&[48.0, 55.0, 60.0, 64.0]);
+            let noise = analysed_column(&[]);
+
+            for (name, column) in [("partials", &chord), ("noise", &noise)] {
+                let bytes: Vec<u8> = (0..W).flat_map(|_| column.iter().copied()).collect();
+                println!(
+                    "\n-- settled, same range at five row counts, dB from 256 rows ({name}) --"
+                );
+                for &span in &[119.6f32, 60.0, 24.0, 12.0] {
+                    let view = view_of(scale_of(span), SpectrumConfig::default());
+                    let mut line = String::new();
+                    let mut base = 0.0;
+                    for (k, &rows) in [256u32, 448, 704, 1408, 2816].iter().enumerate() {
+                        let read = probe_read(&view, rows as usize);
+                        let size = [W, rows];
+                        let frame = headless.frame(
+                            0,
+                            size,
+                            texel_quad(&read, W, size),
+                            grid_of(bytes.clone()),
+                            read,
+                            probe_shades(),
+                        );
+                        let mean = frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>()
+                            / f64::from(W * rows);
+                        if k == 0 {
+                            base = mean;
+                        }
+                        line += &format!("  {rows}:{:+.2}", (mean - base) * step);
+                    }
+                    println!("{:>9}{line}", format!("{span:.0} semi"));
+                }
+            }
         }
     }
 }
