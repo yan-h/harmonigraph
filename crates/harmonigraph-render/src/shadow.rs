@@ -4,7 +4,7 @@
 //!
 //! One cell per caster, at a scale that keeps the blur's cost flat: a cell is
 //! the caster's box grown by the blur's reach, drawn at `min(1, 3 / σ)` of the
-//! target's pixels, so σ is at most [`SIGMA_CELL_MAX`] texels in every cell and
+//! target's pixels, so σ is at most `SIGMA_CELL_MAX` texels in every cell and
 //! the kernel at most nineteen taps whatever the Shadow bar says. The atlas is
 //! about the names' own area at the fresh Shadow and shrinks as the bar widens.
 //!
