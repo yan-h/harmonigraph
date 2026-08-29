@@ -523,9 +523,11 @@ fn glyph_pipeline(
     depth: Option<wgpu::TextureFormat>,
 ) -> wgpu::RenderPipeline {
     let (vertex, fragment) = entries;
+    // The whole module: text.wgsl names the light, the wash and the shadow
+    // atlas that common.wgsl declares (`with_common`).
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text_shader"),
-        source: wgpu::ShaderSource::Wgsl(TEXT_SRC.into()),
+        source: wgpu::ShaderSource::Wgsl(crate::with_common(TEXT_SRC).into()),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("text_pipeline_layout"),
@@ -981,8 +983,9 @@ pub(crate) mod tests {
 
     #[test]
     fn baked_text_shader_validates() {
-        let module = naga::front::wgsl::parse_str(TEXT_SRC)
-            .map_err(|e| e.emit_to_string(TEXT_SRC))
+        let src = crate::with_common(TEXT_SRC);
+        let module = naga::front::wgsl::parse_str(&src)
+            .map_err(|e| e.emit_to_string(&src))
             .expect("text.wgsl must parse");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

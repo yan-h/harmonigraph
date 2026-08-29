@@ -240,31 +240,6 @@ const GLOW_BASE: f32 = 0.8;
 // difference between a light on a node and a field the node sits in.
 const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 const GLOW_FALLOFF_FLAT: f32 = 0.25;
-// The least of the frame a shadow is allowed to leave, as the factor it keeps
-// under a caster's solid middle: the Shadow depth's own floor.
-//
-// A floor and not a clamp on the depth, because the depth is spent as an
-// EXPONENT over the blur (`shadow_through`) — a number of stops — and zero has
-// no number of stops under it.
-//
-// A 1024th and not a 255th, so the depth bar's top is exactly black under a
-// solid caster: the scene target is 8-bit, so a factor under half a code value
-// of anything it can hold rounds the frame away, which is what the top of that
-// bar says it does.
-const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
-
-// How much blurred ink is a whole shadow — text.wgsl's `GAIN`, spelled a second
-// time because there is no linkage between shader modules and pinned to it by
-// `the_ring_and_the_name_spend_one_gain`.
-//
-// The blur of a caster's coverage is at most 1, and only deep inside a caster
-// far wider than σ; a hairline ring is a few pixels against a σ of several, so
-// its blur peaks at a fraction of that. This is the factor that fraction is
-// multiplied up by, and the `min(…, 1)` under it keeps the Shadow depth a true
-// FLOOR: a wide caster saturates there rather than overshooting, and the gain
-// only deepens the thin ones.
-const SHADOW_GAIN: f32 = 2.5;
-
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -300,50 +275,12 @@ const INK_STRIP_N: u32 = 64u;
 //    node's colour is carried from (the pair ping-pongs — see `InkStrip`).
 //  - `fs_ink_blur` reads the raw strip that pass has just written.
 //  - the light's own draw reads the blurred one.
+//
+// Group 1's one texture slot, shared with common.wgsl's `glow_tex`: no entry
+// point reads both — the strip is the ink pass's and the light's own draw's,
+// the light is the node and marker draws' — so the node pipelines carry no
+// second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
-
-// The finished light, as a node's own ink reads it: the glow's target,
-// composited at the bottom of the scene pass and sampled again here so that
-// ink is washed by the field standing at its own pixel (`node_paint`,
-// `plus_paint`).
-//
-// The SAME slot as the strip above, and that is what keeps both pipeline
-// layouts as they are: no entry point reads both — the strip is the ink
-// pass's and the light's own draw's, this is the node and marker draws' —
-// and a binding collision is diagnosed per entry point, so the two share
-// group 1's one texture slot instead of the node pipelines carrying a
-// second, empty one. An entry point that ever wanted both would fail to
-// compile, loudly, at pipeline creation.
-//
-// Read with `textureLoad` and never a sampler: the target is created at the
-// scene's own pixel size, so it is 1:1 with the attachment being written and
-// any filtering would be a blur nobody asked for. It also takes no
-// derivative, which is what keeps it out of the early-out parity test's way.
-@group(1) @binding(0) var glow_tex: texture_2d<f32>;
-
-// The same light, blended with MAX rather than screened: an overlap here is
-// exactly as bright as the brighter of the nodes making it. What the wash
-// actually reads is the two mixed by `glow_meld`, since a blend is
-// fixed-function and a dial between two of them can only be had after both
-// are written (`create_glow_pipeline` in harmonigraph-render).
-//
-// A slot of its own rather than the shared one above: this is read alongside
-// `glow_tex` and not instead of it, which is exactly the case that trick does
-// not cover.
-@group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
-
-// The shadow atlas: every caster's own ink, blurred into a cell of its own
-// (`shadow.rs`). A node's draw and a marker's each read the ONE cell that is a
-// picture of their own ink, and multiply whatever is already in the frame under
-// them by what that blur leaves (`shadow_through`). No receiver carries any
-// shadow code: the light is composited under everything and takes every shadow
-// by being there first.
-//
-// Bound at group 2 on the scene pipelines alone. The draws that FILL a cell
-// bind none of it — a texture cannot be read while it is the target being
-// written — and take the atlas's size off `u.misc14` instead.
-@group(2) @binding(0) var shadow_atlas: texture_2d<f32>;
-@group(2) @binding(1) var shadow_samp: sampler;
 
 // The Shadow: how wide every caster's blur is, as a share of a node's radius.
 //
@@ -369,8 +306,8 @@ fn glow_shadow() -> f32 {
 // solid middle takes away, 1 leaving `SHADOW_KEEP_FLOOR` of it.
 //
 // A FLOOR rather than a scale, which is what the `min(…, 1)` under the gain in
-// `shadow_through` buys: a caster wide against σ saturates here, and the gain
-// only deepens the thin ones. At 0 nothing casts and every draw multiplies by
+// `shadow_transmittance` buys: a caster wide against σ saturates here, and the
+// gain only deepens the thin ones. At 0 nothing casts and every draw multiplies by
 // 1, which is the picture with no shadow in it at all.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
@@ -398,53 +335,9 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
     );
 }
 
-// Where a point of the pane reads its caster's cell, in atlas texels: the
-// cell's origin plus how far into the box the point stands, at the scale the
-// packer related the two by.
-fn cell_texel(points: vec2<f32>, rect: vec4<f32>, cell: vec4<f32>, k: f32) -> vec2<f32> {
-    return cell.xy + (points - rect.xy) * k;
-}
-
-// Whether a caster's cell was packed at all. A cell the atlas had no room for
-// is zeroed (`fits` in shadow.rs), and a zeroed cell sits at the ORIGIN — so a
-// draw that filled it anyway would paint its ink over whatever cell IS packed
-// there. Every fill draw asks this first and collapses its quad instead.
-fn cell_packed(cell: vec4<f32>) -> bool {
-    return cell.z > 0.0 && cell.w > 0.0;
-}
-
-// A quad with no area, off the viewport: what a fill draw emits for a cell the
-// atlas had no room for.
-fn no_quad() -> vec4<f32> {
-    return vec4<f32>(2.0, 2.0, 0.0, 1.0);
-}
-
-// That texel as a clip position, for the draws that FILL the atlas.
-//
-// The pane's own `w` is carried through rather than replaced by 1: screen
-// barycentrics survive an affine remap of the screen, so a quad remapped this
-// way interpolates every varying exactly as the pane's own draw does, and the
-// cell holds the node's picture rather than a sheared copy of it.
-fn cell_clip(texel: vec2<f32>, w: f32) -> vec4<f32> {
-    let size = max(u.misc14.zw, vec2<f32>(1.0));
-    return vec4<f32>(
-        (2.0 * texel.x / size.x - 1.0) * w,
-        (1.0 - 2.0 * texel.y / size.y) * w,
-        0.0,
-        w,
-    );
-}
-
-// What a caster's own blurred ink leaves of the frame under this fragment,
-// 0..=1: `keep` raised to the blur, with the caster's LEVEL spent as a share of
-// the result rather than inside the exponent.
-//
-// text.wgsl's `fs_shadow_box` is the same arithmetic over a name's box, and the
-// two have to agree or one Shadow bar is two darknesses. Spent as a SHARE
-// because `1 - level * (1 - T)` is a caster of opacity `level` letting the rest
-// of the light straight through: a marker a tenth of the way in at the top of
-// the depth bar casts a tenth of a shadow, where the same level inside the
-// exponent would have it cast half.
+// A node's or a marker's own cell of the atlas, read at this fragment and spent
+// through `shadow_transmittance`: what its blurred ink leaves of the frame under
+// it, 0..=1.
 //
 // A caster with no cell leaves the frame exactly whole — a frame with no atlas
 // (either Shadow bar at its bottom) packs no cell at all, and every draw
@@ -460,10 +353,8 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> f32 {
     // One bilinear tap. A cell is drawn at a fraction of the target's pixels
     // once σ is past `shadow::SIGMA_CELL_MAX`, and the tap is what makes a blur
     // wider than its own texels read smooth.
-    let blur = clamp(textureSampleLevel(shadow_atlas, shadow_samp, uv, 0.0).r, 0.0, 1.0);
-    let keep = max(1.0 - glow_shadow_depth(), SHADOW_KEEP_FLOOR);
-    let through = pow(keep, min(SHADOW_GAIN * blur, 1.0));
-    return 1.0 - clamp(level, 0.0, 1.0) * (1.0 - through);
+    let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
+    return shadow_transmittance(blur, glow_shadow_depth(), level);
 }
 
 // How much of the light a LIT slice washes over its own ink with
@@ -486,36 +377,6 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> f32 {
 // finished picture rather than from this field.
 fn glow_wash() -> f32 {
     return clamp(u.misc13.x, 0.0, 1.0);
-}
-
-// `share` of `light`, laid over ink already premultiplied by `alpha`. Every
-// piece of the lattice's ink takes the light through here — a node's rings,
-// marks and glyphs (`node_paint`) and a resting marker (`plus_paint`) — so the
-// lattice wears it in one operation rather than in several that have to agree.
-//
-// A SCREEN, where the ground under the ink takes an over, and the difference is
-// what a NEIGHBOUR's light is allowed to do. The field is melded, so the light
-// at a piece of ink carries every sheet's halo; an over (`ink * (1 - light.a)`)
-// lets a saturated halo from behind take the ink's other channels DOWN — a
-// white name under a red one comes out red — which is ink losing its colour to
-// something it stands in front of. `w + ink * (1 - w)` per channel can only
-// brighten, whatever reaches the pixel. The ground keeps the over instead: that
-// is `fs_glow_over`'s own blend state.
-//
-// Premultiplied, so the ink's own term carries `alpha`: this is the screen of
-// the ink over `w`, scaled by the coverage the ink has, and whoever fills the
-// `(1 - alpha)` it leaves takes its own light separately.
-//
-// What this does NOT give ink is a way to hold off a NEIGHBOUR's light: the
-// field is one layer, so washed ink is tinted by a far sheet's halo as well as
-// by its own, light reaching through it from behind. Interleaving the sheets is
-// the only answer to that and is the thing this design exists to not do; a
-// node's own halo is the maximum at its own pixel, the falloff being measured
-// from its centre, so the far share is small unless a lit node sits directly
-// behind.
-fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f32> {
-    let w = light * share;
-    return w * alpha + ink * (1.0 - w);
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
@@ -771,7 +632,8 @@ fn vs_node_cell(
 ) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
-    out.clip_pos = select(no_quad(), cell_clip(texel, out.clip_pos.w), cell_packed(box.cell));
+    out.clip_pos =
+        select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
     out.shadow_cell = box.cell;
     out.shadow_at = vec3<f32>(texel, box.terms.z);
     return out;
@@ -2750,7 +2612,8 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     let rect = u.plus_shadow_rect;
     let texel = u.plus_shadow_cell.xy + corner * rect.zw * u.plus_shadow_terms.x;
     var out: PlusVsOut;
-    out.clip_pos = select(no_quad(), cell_clip(texel, 1.0), cell_packed(u.plus_shadow_cell));
+    out.clip_pos =
+        select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(u.plus_shadow_cell));
     // The box is one arm grown by the blur's reach on each side, and the
     // crossing is at its middle, so half the box in arms is this quad's margin.
     let arm_points = max(u.plus_shadow_terms.w, 1e-6);
@@ -2760,18 +2623,6 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     out.shadow_at = vec3<f32>(0.0);
     return out;
 }
-
-/// The two attachments the offscreen scene pass carries.
-///
-/// `picture` is everything, and is what the composite puts on screen.
-/// `nodes` is the same picture with the node LABELS left out — the bright
-/// pass reads it, so a name neither glows nor takes a bite out of the halo
-/// of the node it covers. Every draw that is not a label writes the same
-/// fragment to both, so the two differ in exactly one thing.
-struct SceneOut {
-    @location(0) picture: vec4<f32>,
-    @location(1) nodes: vec4<f32>,
-};
 
 /// The node pipelines. `fs_main` is the single-attachment form, which the
 /// parity test's direct-to-egui-pass reference draws through; `fs_main_scene`
@@ -2845,23 +2696,6 @@ fn glow_level(in: VsOut) -> f32 {
 /// alone. See [`glow_light`], which is the only place it is spent.
 fn glow_meld() -> f32 {
     return clamp(u.misc.z, 0.0, 1.0);
-}
-
-/// The finished light at a pixel of the glow's target: the two blends the
-/// light was written under, mixed by the Meld bar.
-///
-/// Every reader of the target takes it through here — the draws that read it
-/// back (at [`light_coord`]) and the composite that lays it down (blit.wgsl's
-/// `fs_glow_over`) — because ink painting a different mix from the picture it
-/// stands in is a halo drawn round every node.
-///
-/// A mix of two premultiplied colours, so the result is premultiplied too, and
-/// the max is bounded above by the screen at every texel: neither end can put
-/// more light in a pixel than the screen already had.
-fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
-    let screened = textureLoad(glow_tex, coord, 0);
-    let brightest = textureLoad(glow_max_tex, coord, 0);
-    return mix(brightest, screened, meld);
 }
 
 /// Where in the glow's target one fragment of the scene pass stands: the pixel

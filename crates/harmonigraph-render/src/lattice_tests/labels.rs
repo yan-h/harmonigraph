@@ -765,23 +765,6 @@ fn a_names_shadow_reaches_as_far_as_its_width_says() {
     assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
 }
 
-/// The Shadow depth's floor is one number across a name and a ring:
-/// text.wgsl's `KEEP_FLOOR` is lattice.wgsl's `SHADOW_KEEP_FLOOR`.
-///
-/// Written twice because there is no linkage between shader modules, and the
-/// one constant the two shadows still share: the top of the depth bar is a
-/// shadow ten stops deep on both, so a name's shadow and a ring's at that
-/// setting are the same darkness.
-#[test]
-fn the_names_shadow_depth_bottoms_out_where_the_rings_does() {
-    use crate::shadow::tests::shader_const;
-    assert_eq!(
-        shader_const(crate::text::TEXT_SRC, "KEEP_FLOOR"),
-        shader_const(SHADER_SRC, "SHADOW_KEEP_FLOOR"),
-        "the names' floor and the rings' have drifted apart",
-    );
-}
-
 /// The mid-grey the share tests stand on, as the pane's ground and the
 /// Shooter's clear alike.
 const GREY: f32 = 0.55;
