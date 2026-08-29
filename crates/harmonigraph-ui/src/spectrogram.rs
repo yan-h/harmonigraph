@@ -801,9 +801,13 @@ pub(crate) fn run_for(
     plan: &Plan,
     view: &PaneView,
 ) -> Option<TexLayout> {
-    // The width this frame settles on is the next frame's incumbent, whichever
-    // arm draws it — see [`Plan::new`].
-    spectrum.spectrogram[surface].held_bucket = Some(plan.bucket);
+    // The width this frame settles on is the next frame's incumbent — the LIVE
+    // width alone, since only that arm reads it. The whole-song build cuts its
+    // grid straight from the window rather than off the ladder, so its bucket
+    // is not a rung, and a live frame holding one would sit at a width the
+    // ladder never offers for as long as the window stayed near it. See
+    // [`Plan::new`].
+    spectrum.spectrogram[surface].held_bucket = (!view.whole).then_some(plan.bucket);
     match spectrum.spectrogram[surface].gpu.hit(&plan.key) {
         Some(layout) => Some(layout),
         None => build(spectrum, whole, surface, plan, view),
@@ -1291,11 +1295,12 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
     planned.max(visible + 2)
 }
 
-/// Slabs of headroom [`ring_capacity`] holds past the PANE's own column count —
-/// `target_cols`, which is what the capacity is sized off, so it holds still
-/// across a Span drag. Four covers the breathing described there (a column's
-/// spacing at the far edge is at most one slab, plus a floor at each end); the
-/// rest is margin, and `ring_capacity`'s body leans on the whole eight.
+/// Slabs of headroom [`ring_capacity`] holds past the rung [`ring_slots`] rounds
+/// the pane's own column count up to, which is at least `target_cols` — so it
+/// holds still across a Span drag and across most of a pane one. Four covers
+/// the breathing described there (a column's spacing at the far edge is at most
+/// one slab, plus a floor at each end); the rest is margin, and
+/// `ring_capacity`'s body leans on the whole eight.
 const RING_HEADROOM: usize = 8;
 
 /// Slots to give the ring for a pane asking for `target_cols` slabs: the count
@@ -2277,7 +2282,7 @@ mod tests {
                 // interval` of them) to make a case these already bracket.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
-                    let planned = cols as usize + RING_HEADROOM;
+                    let planned = ring_slots(cols as usize);
                     let bucket = live_slab(span, cols as usize);
                     let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
 
@@ -2362,7 +2367,7 @@ mod tests {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // One rung, end to end: at the 1024-slab cap a width holds while the
         // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
         // 32.8 s. The sweep stops just inside both ends, since crossing a rung
@@ -2472,7 +2477,7 @@ mod tests {
     fn a_span_drag_refolds_once_per_rung_crossed() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // Two rungs of travel each way: 50 s sits in the 64 ms rung and 10 s on
         // the ladder's floor, so a drag between them crosses at 32.768 s and
         // 16.384 s. Below the floor the width cannot move at all, which is why
@@ -2552,7 +2557,7 @@ mod tests {
     fn a_span_dithering_across_a_rung_settles_on_one_width() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let cols = LIVE_SLAB_CAP as usize;
-        let planned = cols + RING_HEADROOM;
+        let planned = ring_slots(cols);
         // The boundary between the 32 ms and 64 ms rungs: `live_slab` steps up
         // exactly where the window stops fitting in `cols` slabs.
         let boundary = 0.032 * cols as f64;
@@ -2659,6 +2664,88 @@ mod tests {
             );
             assert_eq!(moves, 1, "a {travel} pt/frame drag re-cut the grid {moves} times");
         }
+    }
+
+    /// Whether `bucket` is a rung of [`live_slab`]'s ladder — the floor, times a
+    /// power of two.
+    fn is_rung(bucket: f64) -> bool {
+        let steps = bucket / (crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS);
+        steps > 0.0 && (steps.log2() - steps.log2().round()).abs() < 1e-9
+    }
+
+    /// A live frame drawn after a whole-song one cuts its grid on a LADDER
+    /// RUNG, not on the width the whole-song build happened to leave behind.
+    ///
+    /// The two builds share a surface but not a ladder: whole-song cuts its
+    /// grid straight from the window (`window / target_cols`), so its width is
+    /// an arbitrary real and not a rung. Held into a live frame it would sit
+    /// there for as long as the window stayed near it — and the ladder's
+    /// guarantee that the STORE is fine enough to fill the grid
+    /// (see [`live_slab`]) is a claim about rungs, so a live grid cut at a
+    /// non-rung width has nothing standing behind it.
+    ///
+    /// The fixture is built to be held if anything is: the whole-song width is
+    /// coarser than the live rung and inside the live window's [`RUNG_HOLD`]
+    /// margin, which are the two things [`held_slab`] asks.
+    #[test]
+    fn a_live_frame_after_a_whole_song_one_cuts_on_a_rung() {
+        // A whole-song frame at 50 s over 1000 slabs: a width of 0.05 s, which
+        // is between the 32 ms and 64 ms rungs and so on neither.
+        let (start, span) = (0.0, 50.0);
+        let columns: Vec<_> = (0..((span / crate::AudioSpectrum::FFT_INTERVAL) as usize))
+            .map(|i| col(i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
+            .collect();
+        let ws =
+            crate::WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() };
+        let mut spectrum = crate::AudioSpectrum::default();
+        let whole_view = PaneView {
+            ppp: 2.0,
+            pitch_len: 300.0,
+            depth_len: 500.0,
+            window: span,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() },
+            whole: true,
+        };
+        let whole_columns = Columns { first: 0, len: ws.columns.len(), newest: span };
+        let whole_plan = Plan::new(&whole_view, &whole_columns, None);
+        assert!(
+            !is_rung(whole_plan.bucket),
+            "the fixture's whole-song width {} IS a rung, so it cannot be told apart",
+            whole_plan.bucket,
+        );
+        run_for(&mut spectrum, Some(&ws), 0, &whole_plan, &whole_view).expect("a whole run");
+
+        // The live frame on that same surface. Its own rung is 32 ms, and the
+        // whole-song width above is both coarser and inside the hold's margin
+        // (30 s is past 1024 * 0.05 * 0.5 * 0.95), so a held one would stick.
+        let mut clock = 0.0;
+        let mut bins = [0.0f32; SPECTRUM_BINS];
+        bins[1000] = 0.8;
+        while clock < 40.0 {
+            spectrum.push_history(clock, &bins);
+            clock += crate::AudioSpectrum::FFT_INTERVAL;
+        }
+        let live_view = PaneView {
+            window: 30.0,
+            depth_len: LIVE_SLAB_CAP * 0.5,
+            whole: false,
+            cfg: SpectrumConfig { roll_seconds: 30.0, ..SpectrumConfig::default() },
+            ..whole_view
+        };
+        let hist = spectrum.history();
+        let live_columns = Columns {
+            first: hist.partition_point(|c| c.time < clock - live_view.window).saturating_sub(1),
+            len: hist.len(),
+            newest: hist.back().map_or(clock, |c| c.time),
+        };
+        let held = spectrum.spectrogram[0].held_bucket;
+        let live_plan = Plan::new(&live_view, &live_columns, held);
+        assert!(
+            is_rung(live_plan.bucket),
+            "a live frame after a whole-song one was cut at {} s, off the ladder",
+            live_plan.bucket,
+        );
     }
 
     /// The hold reaches the pane through the SURFACE: a Span dithering on a
@@ -4394,9 +4481,9 @@ mod tests {
             const SIZE: [u32; 2] = [64, 64];
             let interval = crate::AudioSpectrum::FFT_INTERVAL;
             let cfg = SpectrumConfig::default();
-            // A Span deep enough that the ladder holds the slab width still
-            // across the whole travel below, so what the sweep varies is the
-            // ring's size and nothing else.
+            // A Span deep enough to sit well up the ladder. Both ladders step
+            // on the travel below — `live_slab` reads `target_cols` too — and
+            // the budget at the bottom counts the crossings of each.
             let window = 180.0;
             let mut spectrum = crate::AudioSpectrum::default();
             let mut clock = 0.0f64;

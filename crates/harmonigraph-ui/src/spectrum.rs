@@ -75,7 +75,9 @@ pub(crate) struct SpectrogramSurface {
     /// The slab width the previous frame drew at, which is what gives
     /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
     /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the
-    /// first frame, and after a surface is released.
+    /// first live frame, and while the whole-song build is drawing — its width
+    /// is cut from the window rather than off the ladder, so it is no rung for
+    /// the hold to hold.
     pub(crate) held_bucket: Option<f64>,
 }
 
