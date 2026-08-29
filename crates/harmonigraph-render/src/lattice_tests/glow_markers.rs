@@ -451,12 +451,13 @@ fn one_shadow_is_one_distance_whatever_the_cross_it_stands_off() {
 ///   parked outside the halo fails here rather than passing vacuously.
 /// - Nothing is ever dimmed, the wash being a screen (`wash_over`).
 ///
-/// The pixels are found by DIFFING the field in and out of the scene rather
-/// than off the geometry, so a marker the node happened to cover leaves the set
-/// empty instead of quietly handing these claims to the node — and then
-/// narrowed to the ones the marker covers in FULL. What shows through its
-/// antialiased rim is the ground's share of the light, which is the Shadow bars'
-/// answer and not this bar's.
+/// On the pixels the marker covers in FULL ([`fully_inked`]): what shows
+/// through its antialiased rim is the ground's share of the light, which is the
+/// Shadow bars' answer and not this bar's.
+///
+/// Which MIX of the field the marker wears is not a claim ONE node can carry —
+/// the two blends the Meld bar mixes agree wherever only one node writes — and
+/// is `the_meld_reaches_the_light_a_resting_marker_wears`, at two.
 #[test]
 fn a_resting_marker_wears_the_wash_it_stands_in() {
     const SIZE: [u32; 2] = [256, 256];
@@ -490,19 +491,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     // The glow OFF is what the marker is measured against: no light at the
     // pixel is the one setting left that takes the wash out of the picture.
     let off = shooter.shot(&at(0.0, true));
-    let drawn: Vec<usize> = (0..bare.len())
-        .step_by(4)
-        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && off[i..i + 4] != bare[i..i + 4])
-        .collect();
-    // The marker's colour, read off the picture rather than converted by hand:
-    // it is laid down flat and premultiplied over a black frame, so a pixel it
-    // covers COMPLETELY carries that colour exactly and every other one carries
-    // a fraction of it. The brightest value in the set is therefore the colour
-    // itself, and the pixels holding it are the ones with nothing showing
-    // through.
-    let full: [u8; 3] =
-        std::array::from_fn(|c| drawn.iter().map(|&i| off[i + c]).max().unwrap_or(0));
-    let marker: Vec<usize> = drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
+    let marker = fully_inked(&bare, &off);
     assert!(
         marker.len() > 300,
         "the marker covers {} pixels the node had not already covered",
