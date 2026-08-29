@@ -12,11 +12,11 @@
 //! The set is two kinds of scene, and the difference is worth keeping
 //! straight because it decides what a diff MEANS.
 //!
-//! **Scenes a feature PR is not supposed to reach** — a node standing in front
-//! of what is drawn behind it, and the resting marker field standing in one
-//! node's light. A Shimmer or a Wash change leaves both alone, so a diff here on
-//! such a PR is the blast radius being wider than its author believed, which
-//! is the one thing the claim tests cannot say.
+//! **Scenes a feature PR is not supposed to reach** — a node standing in its
+//! own shadow, and the resting marker field standing in one node's light. A
+//! Shimmer or a Wash change leaves both alone, so a diff here on such a PR is
+//! the blast radius being wider than its author believed, which is the one
+//! thing the claim tests cannot say.
 //!
 //! **Scenes the shadow rework (#498) is supposed to move**, each carrying one
 //! phenomenon its design changes: a chord's overlapping halos, the live view,
@@ -79,15 +79,15 @@ impl From<Scene> for Shot {
 // Scenes a feature PR is not supposed to reach
 // ---------------------------------------------------------------------------
 
-/// A node standing in front of what is drawn behind it.
+/// A node standing in its own shadow.
 ///
-/// The subject is DEPTH ORDERING and the geometry of a node's own layers,
-/// rather than any dial's look: the node draws over the sheets and markers
-/// behind it, and casts over them at whatever the Shadow says.
+/// The subject is a node's own LAYERS and the order they stack in — the rings,
+/// the band, the wedge a mark extends — together with what the whole of that
+/// ink casts into the light around it, rather than any dial's look.
 ///
 /// A mark is held, so the frame carries the bulge: a node's shape swells over
 /// the wedge a mark extends and hugs the rings everywhere else.
-fn node_over_its_clearing() -> Scene {
+fn a_node_in_its_own_shadow() -> Scene {
     let mut scene = layered_node(2, 0.6, true, 0.85);
     // The fixture's ground is white because its own readings are differences
     // against it. A golden is read as an absolute frame instead, and a
@@ -110,8 +110,8 @@ fn node_over_its_clearing() -> Scene {
 /// the suite can see, so this frame is the one carrying the acceptance
 /// criterion.
 fn resting_markers_in_one_light() -> Scene {
-    // The dials the marker suite measures shadows at, so the frame shows the
-    // moat rather than a marker sitting in undimmed light.
+    // The dials the marker suite measures shadows at, so the frame shows a
+    // marker's shadow rather than a marker sitting in undimmed light.
     shadowed_markers(0.85, 0.5, 1.0)
 }
 
@@ -238,7 +238,7 @@ fn a_chord_at_the_fresh_view() -> Scene {
 /// probe's own pairing at this Reach: the light is SCREENED, so a wide flat
 /// halo on every node saturates toward white, and 12-TET lights every node of
 /// a pitch class in the window rather than the five the chord names. A frame
-/// clipped to white records nothing — the same reason `node_over_its_clearing`
+/// clipped to white records nothing — the same reason `a_node_in_its_own_shadow`
 /// does not stand on the white ground its own fixture ships.
 fn a_chord_at_a_wide_reach() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
@@ -360,8 +360,9 @@ fn a_named_node(shadow: f32) -> Scene {
 /// Across rather than along, so a pair straddles the band: the channel between
 /// two strokes runs along the band's own arc, and the shadows meeting in it
 /// meet over the band's ink at one end and over the ground past its edge at the
-/// other. Both receivers in one frame is what makes it worth a golden, since a
-/// hole and a wash are what #498 replaces with one multiply.
+/// other. Both receivers in one frame is what makes it worth a golden: one
+/// multiply takes the same share off ink as off ground, and only a frame
+/// carrying both can show that it does.
 ///
 /// Blocks off the fixture atlas rather than letters: the atlas patch is an
 /// opaque square (`text::tests::atlas`), so a stroke has straight sides and
@@ -653,15 +654,14 @@ fn check(name: &str, shot: Shot) {
     }
 }
 
-/// A node standing over what is behind it is byte-identical to the frame on
-/// record.
+/// A node standing in its own shadow is byte-identical to the frame on record.
 ///
-/// Depth ordering and the shape of a node's own layers are what this frame
+/// A node's own layers and the shape of what they cast are what this frame
 /// holds, so a diff here on a PR about how any one element LOOKS is reach its
 /// author did not intend.
 #[test]
-fn a_node_over_its_clearing_draws_the_frame_on_record() {
-    check("node-clearing", node_over_its_clearing().into());
+fn a_node_in_its_own_shadow_draws_the_frame_on_record() {
+    check("node-shadow", a_node_in_its_own_shadow().into());
 }
 
 /// The resting marker field in one node's light is byte-identical to the
