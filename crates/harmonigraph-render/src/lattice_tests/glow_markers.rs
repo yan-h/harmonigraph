@@ -167,11 +167,11 @@ fn a_crosss_shadow_is_worth_its_ink() {
 /// past what its SOLID length alone would cast.
 ///
 /// The taper is a length beside the reach, not a share of it, and the fresh one
-/// is nearly half the arm — so a shadow cast from where the taper STARTS comes
-/// off a cross barely longer than the square its arms cross in, and one Shadow
-/// of dilation rounds that into a dark square standing under a plus. What the
-/// eye reads a marker by is its ARMS, and this is the claim that keeps them in
-/// the shadow.
+/// is nearly half the arm — so a shadow blurred off the taper's SOLID length
+/// alone comes off a cross barely longer than the square its arms cross in, and
+/// one Shadow of blur rounds that into a dark square standing under a plus.
+/// What the eye reads a marker by is its ARMS, and this is the claim that keeps
+/// them in the shadow.
 ///
 /// Three arms and not two, because the taper also thins the INK the blur is
 /// taken of, and a reach read off a threshold gives a little of itself up with
@@ -242,6 +242,14 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
         "the solid length cast as far as the whole arm ({solid} against {square}), so there is \
          no span here for the tapered cross to be placed along",
     );
+    // The taper has to reach the CELL, or the claim below is met by a blur
+    // that never saw it: a shadow drawn off the arm's box rather than off its
+    // ink puts the tapered cross exactly on the square one and passes.
+    assert!(
+        tapered < square,
+        "a cross tapering from {TAPERED} of its arm shadowed as far as a square end \
+         ({tapered} against {square}), so the taper is not in the ink being blurred",
+    );
     // Two thirds of the way, where the taper is three quarters of the arm: the
     // claim is which of the two lengths the shadow is cast from, and a third of
     // that span is more room than the depth's own share of the threshold needs.
@@ -253,25 +261,30 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
     );
 }
 
-/// A tapered arm gives up its shadow with its ink, and gives up the SHARE of it
-/// that it gives up of its own length.
+/// A tapered arm gives up its shadow with its INK, and with nothing else: the
+/// deeper the taper, the less light the cross takes off the halo, and never in
+/// one step.
 ///
 /// An arm's ink fades to nothing over its last stretch so that it arrives at
-/// nothing rather than stopping at something (`plus_coverage`); a shadow held at
-/// full depth under that stretch caps the arm in dark exactly where the ink has
-/// gone, which is the arrival the taper is there to prevent.
+/// nothing rather than stopping at something (`plus_coverage`), and the shadow
+/// is a blur of that ink — so the taper reaches the shadow by thinning what is
+/// blurred and there is no coupling of its own to tune. Not the stretch WHOLE,
+/// which is the shape constraint rather than a taste: an arm fading from a
+/// fifth of its length still casts a third of what a square end casts, where a
+/// shadow cut back to the solid length would cap each arm in dark exactly where
+/// its ink has gone — the arrival the taper is there to prevent.
+///
+/// The steps are a tenth of the square's apart rather than merely ordered: an
+/// order alone is met by one code value, which is what a taper that moved the
+/// ink and left the blur behind would give.
 ///
 /// Measured as light TAKEN off the halo rather than as a reach, because what
 /// moves here is the depth and not the footprint — the test above is the one
 /// that holds the footprint still. The ground is the square end's, which is the
-/// largest ink of the three: a tapered cross draws inside that same box at a
+/// largest ink of the family: a tapered cross draws inside that same box at a
 /// lower alpha, so one exclusion answers for all of them.
-///
-/// The square end is the top of the family and that is the other half of the
-/// claim: the fade is spent at the taper's own width, so an arm with no taper
-/// pays nothing for having none.
 #[test]
-fn a_tapered_arm_gives_up_the_share_of_its_shadow_it_gives_up_of_its_length() {
+fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
     const SIZE: [u32; 2] = [256, 256];
     const SHADOW: f32 = 0.30;
     const ARM: f32 = 0.9;
@@ -307,9 +320,14 @@ fn a_tapered_arm_gives_up_the_share_of_its_shadow_it_gives_up_of_its_length() {
     let most = taken(&mut shooter, 0.2);
     assert!(square > 0, "a square-ended cross took no light off the halo it stands in");
     assert!(
-        square > some && some > most,
+        some * 10 < square * 9 && most * 10 < some * 9,
         "an arm fading over none, two fifths and four fifths of its length took {square}, {some} \
-         and {most} of light off the halo, which is not one order",
+         and {most} of light off the halo, which is not one order by a tenth a step",
+    );
+    assert!(
+        most * 3 > square,
+        "an arm fading from a fifth of its length took {most} against the square end's {square}, \
+         which is the taper given up whole rather than thinned",
     );
 }
 

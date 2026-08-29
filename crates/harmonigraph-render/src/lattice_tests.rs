@@ -15,6 +15,7 @@ mod golden;
 mod labels;
 mod marks;
 mod octaves;
+mod shadows;
 mod shimmer;
 mod ships;
 mod sweep;
