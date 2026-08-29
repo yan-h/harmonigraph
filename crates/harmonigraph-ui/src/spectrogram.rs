@@ -623,6 +623,22 @@ impl Plan {
 /// instead, the curve would integrate `ppp` times as many buckets per column as
 /// the heatmap does, and a ridge and the curve over it would sit at different
 /// heights on any display that is not 1x.
+/// Physical pixels per egui point for a spectral pane's two pictures, and the
+/// single read of it: the heatmap declares a fragment's footprint from the row
+/// count derived here (the shader's `0.5 / rows`) and the curve derives a
+/// column width from the same number, so a floor applied to one read and not
+/// the other puts a ridge and the curve drawn over it on different runs of
+/// buckets.
+///
+/// Raw, because the counts downstream carry their own floors ([`pitch_pixels`]
+/// takes `.max(2)`, [`Plan::new`] clamps its slab count). A floor HERE would
+/// claim more pixels than the device has, and each fragment would then
+/// integrate a fraction of the buckets it actually covers — the pane-height
+/// dependence of #491, arrived at through the footprint instead of the pane.
+pub(crate) fn pane_ppp(ctx: &egui::Context) -> f32 {
+    ctx.pixels_per_point()
+}
+
 pub(crate) fn pitch_pixels(pitch_len: f32, ppp: f32) -> usize {
     ((pitch_len * ppp).round() as usize).max(2)
 }

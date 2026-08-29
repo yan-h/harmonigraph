@@ -5,8 +5,13 @@ use crate::*;
 
 #[test]
 fn baked_shader_validates() {
-    validate_wgsl("lattice.wgsl", &with_common(SHADER_SRC), LATTICE_ENTRY_POINTS)
-        .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
+    validate_wgsl(
+        "lattice.wgsl",
+        &with_common(SHADER_SRC),
+        common_lines(COMMON_SRC),
+        LATTICE_ENTRY_POINTS,
+    )
+    .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
 }
 
 /// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust

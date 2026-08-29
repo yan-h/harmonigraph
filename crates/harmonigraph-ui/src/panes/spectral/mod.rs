@@ -144,8 +144,9 @@ pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     now: f64,
-    // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
-    // Render preview, so two live copies don't clobber one shared texture.
+    // Which spectrogram surface this is: 0 the docked pane / offline render,
+    // 1 the Render preview — two live spectrograms in a frame need their own
+    // grid.
     surface: usize,
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
@@ -374,7 +375,7 @@ pub(crate) fn spectral_pane(
             // the same disagreement a MAX would cause, arrived at from the
             // other side.
             let bucket_x = |midi: f32| (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
-            let ppp = painter.ctx().pixels_per_point();
+            let ppp = crate::spectrogram::pane_ppp(painter.ctx());
             let cols = crate::spectrogram::curve_cols(axes.pitch_len(), ppp);
             let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {

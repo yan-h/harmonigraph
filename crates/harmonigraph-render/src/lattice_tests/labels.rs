@@ -688,7 +688,7 @@ fn a_name_holds_the_light_off_the_ground_it_stands_on() {
 /// ground its ink never covers, and which of those pixels it darkened.
 ///
 /// The pair at a depth of 0 is asserted here rather than left to a caller, and
-/// it is what says the darkening measured is the STANDOFF: with the Shadow shut
+/// it is what says the darkening measured is the SHADOW: with the Shadow shut
 /// nothing a name draws may take light off anything, so a reading that survives
 /// this is not the glyph pass finding some other way to darken the picture.
 ///

@@ -630,19 +630,21 @@ impl TextResources {
         self.target_format != target_format
     }
 
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        let layout = glyph_bind_group_layout(device);
-        // Read once for the pair, and BEFORE the count below: a reload
-        // committed between the two would raise a count this build has not
-        // taken, and the rebuild it is owed would then never be asked for.
+    /// The rim pass and the fill pass off ONE read of the module, which is the
+    /// whole of what a build of the text module decides here. Split out
+    /// because a reload owes exactly this pair and nothing else in the struct
+    /// — see [`TextResources::rebuild_pipelines`].
+    fn pipelines(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        target_format: wgpu::TextureFormat,
+    ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
         let shader = glyph_shader(device, &crate::text_source());
-        #[cfg(feature = "hot-reload")]
-        let generation = crate::reload::generation();
         let rim_pipeline = create_text_pipeline(
             device,
             &shader,
             target_format,
-            &layout,
+            layout,
             None,
             ("vs_glyph", "fs_rim"),
             None,
@@ -652,12 +654,53 @@ impl TextResources {
             device,
             &shader,
             target_format,
-            &layout,
+            layout,
             None,
             ("vs_glyph", "fs_fill"),
             None,
             crate::EGUI_BLEND,
         );
+        (rim_pipeline, fill_pipeline)
+    }
+
+    /// Swap in pipelines built for what the next frame is drawing, KEEPING the
+    /// mirrored atlas and every pane prepared against it.
+    ///
+    /// The mirror is what ASKS for an upload. It holds the key of the sheet it
+    /// last saw and the UI side sends one only when that key moves
+    /// (`atlas_if_changed`), so a mirror dropped on the way through is never
+    /// refilled: `prepare` finds no atlas, returns early, and every haloed
+    /// label stays absent for the life of the context with nothing left to ask
+    /// for it. That is the trap `SharedState::release_context_resources`
+    /// documents one layer along, reached through a reload rather than a new
+    /// window.
+    ///
+    /// Nothing carried over depends on the module or the target format: the
+    /// atlas and the marks are SAMPLED textures and a pane's bind group is
+    /// built against the layout this keeps, so replacing the pair below is the
+    /// whole of the debt.
+    fn rebuild_pipelines(&mut self, device: &wgpu::Device, target_format: wgpu::TextureFormat) {
+        // The source is read inside, and BEFORE the count below: a reload
+        // committed between the two would raise a count this build has not
+        // taken, and the rebuild it is owed would then never be asked for.
+        let (rim_pipeline, fill_pipeline) = Self::pipelines(device, &self.layout, target_format);
+        #[cfg(feature = "hot-reload")]
+        {
+            self.generation = crate::reload::generation();
+        }
+        self.rim_pipeline = rim_pipeline;
+        self.fill_pipeline = fill_pipeline;
+        self.target_format = target_format;
+    }
+
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+        let layout = glyph_bind_group_layout(device);
+        // Read once for the pair, and BEFORE the count below: a reload
+        // committed between the two would raise a count this build has not
+        // taken, and the rebuild it is owed would then never be asked for.
+        let (rim_pipeline, fill_pipeline) = Self::pipelines(device, &layout, target_format);
+        #[cfg(feature = "hot-reload")]
+        let generation = crate::reload::generation();
         TextResources {
             rim_pipeline,
             fill_pipeline,
@@ -910,11 +953,17 @@ impl CallbackTrait for TextCallback {
         _egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let recreate = callback_resources
-            .get::<TextResources>()
-            .is_none_or(|r| r.is_stale(self.target_format));
-        if recreate {
-            callback_resources.insert(TextResources::new(device, queue, self.target_format));
+        match callback_resources.get_mut::<TextResources>() {
+            // Stale pipelines are the whole of what a reload or a format change
+            // owes; the mirrored atlas beside them is what ASKS for its own
+            // refill, so it is rebuilt in place rather than replaced.
+            Some(resources) if resources.is_stale(self.target_format) => {
+                resources.rebuild_pipelines(device, self.target_format);
+            }
+            Some(_) => {}
+            None => {
+                callback_resources.insert(TextResources::new(device, queue, self.target_format));
+            }
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
@@ -1036,7 +1085,8 @@ pub(crate) mod tests {
 
     #[test]
     fn baked_text_shader_validates() {
-        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), TEXT_ENTRY_POINTS)
+        let seam = crate::common_lines(crate::COMMON_SRC);
+        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, TEXT_ENTRY_POINTS)
             .expect("baked text.wgsl must parse, validate, and keep its entry points");
     }
 
@@ -1098,6 +1148,49 @@ pub(crate) mod tests {
         // happens once rather than on every frame from here on.
         let after = TextResources::new(&device, &queue, FORMAT);
         assert!(!after.is_stale(FORMAT));
+    }
+
+    /// And the rebuild it asks for KEEPS the mirrored atlas.
+    ///
+    /// `pipelines_built_before_a_reload_are_stale` asks only that the rebuild
+    /// happen; this asks what it costs. The mirror is what asks for an upload
+    /// — the UI side sends a sheet only when its key moves — so a mirror
+    /// dropped while rebuilding is never refilled: `prepare` finds no atlas,
+    /// returns early, and every haloed label (the Analyzer's pitch names, the
+    /// Spiral's, the lattice badge) stays absent for the life of the context.
+    /// A reload is the one moment that is reachable without a new window, and
+    /// it is the workflow the reload exists to serve.
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn a_reload_rebuilds_the_pipelines_without_dropping_the_atlas() {
+        let _guard = crate::reload::test_lock();
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut resources = TextResources::new(&device, &queue, FORMAT);
+
+        // A sheet in hand, the way a frame that has drawn one label leaves it.
+        resources.mirror_atlas(&device, &queue, Some(&atlas()), Some(&mark_sheet()));
+        assert!(
+            !resources.atlas.is_empty() && !resources.marks.is_empty(),
+            "the fixture never filled the mirror, so what follows measures nothing",
+        );
+
+        crate::reload::publish(format!(
+            "{}\n// a_reload_rebuilds_the_pipelines_without_dropping_the_atlas\n",
+            crate::with_common(TEXT_SRC)
+        ));
+        assert!(resources.is_stale(FORMAT), "a reload the text pipelines never heard about");
+
+        resources.rebuild_pipelines(&device, FORMAT);
+
+        assert!(!resources.is_stale(FORMAT), "the rebuild did not take the published build");
+        assert!(
+            !resources.atlas.is_empty(),
+            "the reload dropped the mirrored font atlas: nothing upstream will send \
+             another, so every haloed label stays absent from here on",
+        );
+        assert!(!resources.marks.is_empty(), "the reload dropped the mirrored mark sheet");
     }
 
     #[test]

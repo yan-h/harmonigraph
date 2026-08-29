@@ -211,7 +211,7 @@ pub(crate) fn draw_spectrogram(
     }
 
     let view = PaneView {
-        ppp: painter.ctx().pixels_per_point().max(1.0),
+        ppp: crate::spectrogram::pane_ppp(painter.ctx()),
         pitch_len: axes.pitch_len(),
         depth_len: time.region_depth_len(axes),
         window: time.window(),

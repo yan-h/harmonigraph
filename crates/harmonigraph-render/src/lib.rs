@@ -47,7 +47,7 @@ mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
-/// picture the CPU used to compose texel by texel. Here the aggregator's slab
+/// picture a CPU compose would build texel by texel. Here the aggregator's slab
 /// grid is the texture and the read is per fragment, so a zoom, a resize or a
 /// palette change is a uniform.
 mod spectrogram;
@@ -145,10 +145,10 @@ pub(crate) const COMMON_SRC: &str = include_str!("shaders/common.wgsl");
 /// anything in common.wgsl is handed the result. Common goes first, so a module
 /// can call into it and it can call into no module.
 ///
-/// A module that names nothing in it — blit.wgsl, shadow.wgsl, glow.wgsl,
-/// roll.wgsl — is compiled as it stands. Handing them the common half anyway
-/// would be a second declaration of `glow_max_tex` at blit.wgsl's own slot for
-/// it, which is a compile error rather than a tidy-up.
+/// A module that names nothing in it is compiled as it stands. Handing one the
+/// common half anyway would be a second declaration of `glow_max_tex` at
+/// blit.wgsl's own slot for it, which is a compile error rather than a
+/// tidy-up.
 pub(crate) fn module_source(common: &str, module: &str) -> String {
     format!("{common}\n{module}")
 }
@@ -303,6 +303,15 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
 struct ReloadedShaders {
     lattice: String,
     text: String,
+    /// Lines the common half takes in both modules above — the seam a naga
+    /// diagnostic's line number has to be read against.
+    ///
+    /// Carried rather than recomputed from `COMMON_SRC`, because these two
+    /// were built against the common half on DISK: once an edit there has
+    /// added or removed a line, the baked seam is wrong by that many for
+    /// every message from then on, which is the failure the banner exists to
+    /// prevent rather than to commit.
+    seam: usize,
 }
 
 /// Watches the three files those two modules are made of, on disk (dev builds
@@ -386,6 +395,7 @@ impl ShaderWatcher {
                 Some(ReloadedShaders {
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
+                    seam: common_lines(&common),
                 })
             }
         }
@@ -408,9 +418,14 @@ impl ShaderWatcher {
 /// A diagnostic's line number is the CONCATENATED module's, which is no line of
 /// either file. Naga weaves those numbers through a rendered snippet, so the
 /// seam is stated rather than the numbers rewritten.
+///
+/// `seam` is the caller's because it is a property of the common half THIS
+/// `source` was built from, and the hot-reload path's is read off disk: taking
+/// it from `COMMON_SRC` here would state the baked half's seam over a module
+/// joined to a different one, and be wrong by however many lines common.wgsl
+/// has gained or lost since the build.
 #[cfg(any(test, feature = "hot-reload"))]
-fn validate_wgsl(name: &str, source: &str, required: &[&str]) -> Result<(), String> {
-    let seam = common_lines(COMMON_SRC);
+fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Result<(), String> {
     let banner = |body: String| {
         format!(
             "in {name} (lines 1-{seam} below are common.wgsl; past that, \
@@ -625,8 +640,9 @@ struct Uniforms {
     /// cannot be bound while it is the target being written, so its size
     /// cannot be read off it.
     ///
-    /// Both halves are settled in `prepare`: the atlas is sized there, after
-    /// the packing, and the pane's points are the screen descriptor's.
+    /// The two halves are settled in different places: the pane's points in
+    /// `from_scene`, the atlas's size in `prepare`, which is after the packing
+    /// and so the earliest the size is known.
     misc14: [f32; 4],
     /// The ONE cell every resting marker's shadow is read out of, as three
     /// rows rather than a buffer: every cross is the same shape at the same σ
@@ -3614,8 +3630,15 @@ impl CallbackTrait for LatticeCallback {
             // whichever half happened to compile would leave a name's shadow on
             // one build of `shadow_transmittance` and a node's on another —
             // which is the split this reload exists to close, not to make.
-            let checked = validate_wgsl("lattice.wgsl", &reloaded.lattice, LATTICE_ENTRY_POINTS)
-                .and_then(|()| validate_wgsl("text.wgsl", &reloaded.text, text::TEXT_ENTRY_POINTS));
+            let checked = validate_wgsl(
+                "lattice.wgsl",
+                &reloaded.lattice,
+                reloaded.seam,
+                LATTICE_ENTRY_POINTS,
+            )
+            .and_then(|()| {
+                validate_wgsl("text.wgsl", &reloaded.text, reloaded.seam, text::TEXT_ENTRY_POINTS)
+            });
             match checked {
                 Ok(()) => {
                     let source = &reloaded.lattice;

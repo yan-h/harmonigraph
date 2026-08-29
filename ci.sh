@@ -37,6 +37,17 @@ run cargo test --workspace
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
 
+# ...and RUN harmonigraph-render's own tests in that same configuration, which
+# is the half a check cannot do. The unification above does not merely compile
+# the plugin with hot-reload on, it also deletes every
+# `#[cfg(not(feature = "hot-reload"))]` test from the workspace binary — so the
+# arm of `text_source` the bundle actually ships (lib.rs) and the test that
+# pins it to the baked concatenation (text.rs) are both invisible to the run
+# above. Dropping `with_common` from that arm would pass every gate and ship a
+# plugin whose glyph pipelines compile text.wgsl without the common half,
+# surfacing as a pipeline panic on first paint inside the DAW.
+run cargo test -p harmonigraph-render
+
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
 # dependencies and runs none of their tests. The patches they carry are the
