@@ -1,22 +1,31 @@
-//! Byte-exact frames for the parts of the picture a feature PR is not
-//! supposed to reach.
+//! Byte-exact frames: the one place in this crate where a build is compared
+//! against another build.
 //!
 //! Every other test in this suite is a CLAIM test: it names a property and
 //! measures it, so it passes for any picture holding that property. That is
 //! the right shape for a dial whose look is still moving, and it is why five
 //! shader terms survive the whole suite (#450) and why #453 could move the
 //! frame by a mean of 3.3/255 with local swings of −90 while 146 tests stayed
-//! green. Nothing here compares a build against another build, so
-//! "behaviour-preserving" is otherwise an unverifiable claim.
+//! green. Without these frames "behaviour-preserving" is an unverifiable
+//! claim.
 //!
-//! These two do compare, and their subject is chosen so that a re-baseline is
-//! rare rather than weekly: a node over the clearing it cuts in what stands
-//! behind it, and the resting marker field standing in one node's light. Both are the parts a Shimmer or a Wash change
-//! leaves alone, so a diff here on such a PR is the blast radius being wider
-//! than its author believed — which is the one thing the claim tests cannot
-//! say. Scenes that move by design stay out on purpose; a gate that fires on
-//! every PR is one that gets blessed without being read, and a blind bless is
-//! exactly the failure this exists to catch.
+//! The set is two kinds of scene, and the difference is worth keeping
+//! straight because it decides what a diff MEANS.
+//!
+//! **Scenes a feature PR is not supposed to reach** — a node over the
+//! clearing it cuts, and the resting marker field standing in one node's
+//! light. A Shimmer or a Wash change leaves both alone, so a diff here on
+//! such a PR is the blast radius being wider than its author believed, which
+//! is the one thing the claim tests cannot say.
+//!
+//! **Scenes the shadow rework (#498) is supposed to move**, each carrying one
+//! phenomenon its design changes: a chord's overlapping halos, the live view,
+//! a sheet standing behind a node, a name's own strokes meeting at a wide
+//! Shadow (#490), a name standing on a node's band rather than in its empty
+//! middle (the receiver asymmetry), the same at Render scale 2 (#496), and two
+//! names on ONE sheet whose nodes cover each other (#469). These are here to
+//! be MEASURED when they move, not to stay still: PRs B and C of #498 each
+//! re-baseline them and state what moved.
 //!
 //! **A changed golden is a stated picture change.** Re-baseline with
 //! `HARMONIGRAPH_BLESS=1 cargo test -p harmonigraph-render golden`, look at
@@ -29,6 +38,8 @@
 
 use super::fixtures::*;
 use crate::*;
+use harmonigraph_core::Tuning;
+use harmonigraph_scene::Camera;
 use std::path::PathBuf;
 
 /// Wide enough that a marker's arms and the halo bridges between nodes are
@@ -48,13 +59,31 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("golden")
 }
 
+/// One golden frame: a scene, the names standing on it, and what the pane is
+/// filled with behind it.
+struct Shot {
+    scene: Scene,
+    labels: LatticeLabels,
+    clear: wgpu::Color,
+}
+
+impl From<Scene> for Shot {
+    /// Over black, which is what every fixture in this suite but the
+    /// whole-lattice ones is written against.
+    fn from(scene: Scene) -> Shot {
+        Shot { scene, labels: LatticeLabels::default(), clear: wgpu::Color::BLACK }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenes a feature PR is not supposed to reach
+// ---------------------------------------------------------------------------
+
 /// A node standing in front of what is drawn behind it, over a white ground.
 ///
 /// The subject is the CLEARING — the hole a node cuts so that it reads as
 /// being in front of the sheets and markers behind — which is depth ordering
-/// and geometry rather than any dial's look. The ground is white because the
-/// clearing is measured as what changed where the hole is, and over black
-/// that is a few levels rather than a channel's whole range.
+/// and geometry rather than any dial's look.
 ///
 /// A mark is held, so the frame carries the bulge: the hole is the node's own
 /// shape one reach out, so it swells over the wedge a mark extends and hugs
@@ -86,6 +115,421 @@ fn resting_markers_in_one_light() -> Scene {
     // moat rather than a marker sitting in undimmed light.
     shadowed_markers(0.85, 0.5, 1.0)
 }
+
+// ---------------------------------------------------------------------------
+// Scenes the shadow rework is supposed to move
+// ---------------------------------------------------------------------------
+
+/// The chord every whole-lattice golden is lit by — #453's own, so a diff here
+/// is read against the A/B that measured the per-element refactor.
+///
+/// Five notes rather than one: under [`Tuning::default`]'s 12-TET they land on
+/// nodes spread across the sheet, so the frame carries halos OVERLAPPING,
+/// which is where a shadow model's combining rule shows.
+const CHORD: [u8; 5] = [55, 60, 64, 67, 71];
+
+/// The lattice `view` draws at `camera`, with [`CHORD`] held.
+///
+/// Through `derive_scene` rather than assembled by hand, which is the whole
+/// point of the whole-lattice goldens: a Scene written out here is a SECOND
+/// answer to what the shell computes, agreeing today and drifting on the first
+/// change to `derive.rs`. What these frames are of is the app's picture.
+///
+/// 12-TET throughout, [`Tuning::default`]'s own, because that is the tuning a
+/// bare MIDI chord is IN. A retuned lattice matches a plain integer note only
+/// inside `tuning.tolerance`, half a cent — a quarter-comma fifth is 3.1 cents
+/// off one and its third 12.4, so the same chord under it lights one node in
+/// five and the frame is bare ground. The DAW's lattice gets its notes bent
+/// onto its own nodes; nothing here bends them, and a tuning is not a look —
+/// no draw path in this crate reads one.
+fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for note in CHORD {
+        tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+    }
+    // The Fade off, so one frame is the whole picture rather than a shot of an
+    // envelope part way through. The light's own clock is already out: nothing
+    // has carried a `GlowStep` here, so every node reads its settled level.
+    let frame = harmonigraph_scene::FrameParams { fade_time: 0.0, ..Default::default() };
+    // Late enough that `mark_delay` has passed and the melody/bass marks are
+    // in the frame — at 0.0 a chord held at 0.0 has earned none of them.
+    const NOW: f64 = 1.0;
+    let tuning = Tuning::default();
+    let derive = |camera| {
+        harmonigraph_scene::derive_scene(
+            &tracker,
+            &tuning,
+            view,
+            &view.reach(),
+            &frame,
+            camera,
+            None,
+            NOW,
+        )
+    };
+    // Aimed at a lit NODE, in a second pass. Where the lit set sits depends on
+    // the chord and on the window's own centre, so a camera pointed at the
+    // lattice origin frames a different share of it in each scene here, and at
+    // this zoom a frame can miss it entirely. At a NODE rather than at the lit
+    // set's centroid, which for a scattered set is a position with nothing on
+    // it — an empty centre in a frame this close is an empty frame.
+    let settled = derive(camera);
+    let at = settled
+        .nodes
+        .iter()
+        .filter(|n| n.activation > 0.0)
+        .min_by(|a, b| a.world_pos.length_squared().total_cmp(&b.world_pos.length_squared()))
+        .expect("the chord must light a node inside the drawn window")
+        .world_pos;
+    let mut scene = derive(Camera { target: at, ..camera });
+    // The ground a lattice pane paints its own rect with, which is what the
+    // light lands on in the editor. `derive_scene` already answers this; it is
+    // restated because [`on_the_ground_it_clears_to`] reads it back, and a
+    // frame whose pane and whose knockouts disagree is the one thing that
+    // helper exists to stop.
+    scene.background = harmonigraph_scene::skin::well_color();
+    scene
+}
+
+/// A frame standing on the ground it clears its own holes to.
+///
+/// The pair has to agree: `Scene::background` is what a node's knockout paints,
+/// so a lattice over a black pane draws a patch of lighter grey round every
+/// node that the app has nowhere on screen — and every whole-lattice frame here
+/// is a lattice of them. text.wgsl's `background` uniform says the same of a
+/// name's hole from the other side.
+fn on_the_ground_it_clears_to(scene: Scene) -> Shot {
+    let ground = scene.background;
+    Shot {
+        clear: wgpu::Color {
+            r: f64::from(ground.x),
+            g: f64::from(ground.y),
+            b: f64::from(ground.z),
+            a: 1.0,
+        },
+        ..scene.into()
+    }
+}
+
+/// Where the whole-lattice goldens stand: near enough that a node is tens of
+/// pixels across at [`GOLDEN_SIZE`], so a ring and a marker's arms are both
+/// several pixels wide.
+///
+/// [`Camera::DEFAULT_DISTANCE`] is 12, which fits about ten nodes across the
+/// frame and leaves each one a dozen pixels — the halos would still be there
+/// and nothing inside a node would be readable.
+fn near_camera() -> Camera {
+    Camera { distance: 4.0, ..Default::default() }
+}
+
+/// The fresh view, lit by a chord.
+///
+/// The reference frame for the family: every dial at the value a fresh blob
+/// opens on, so a re-baseline here is the shipped look moving.
+fn a_chord_at_the_fresh_view() -> Scene {
+    lattice(&harmonigraph_scene::ViewConfig::default(), near_camera())
+}
+
+/// The same chord with the light spread wide enough that neighbouring halos
+/// meet everywhere.
+///
+/// #453's fourth A/B scene, and the regime its mechanism 3 lives in: at the
+/// fresh Reach the halos barely touch, so the rule two lights combine under is
+/// invisible.
+///
+/// The Strength comes down as the Reach goes up, and further than the offline
+/// probe's own pairing at this Reach: the light is SCREENED, so a wide flat
+/// halo on every node saturates toward white, and 12-TET lights every node of
+/// a pitch class in the window rather than the five the chord names. A frame
+/// clipped to white records nothing — the same reason `node_over_its_clearing`
+/// does not stand on the white ground its fixture ships.
+fn a_chord_at_a_wide_reach() -> Scene {
+    let view = harmonigraph_scene::ViewConfig {
+        glow_reach: 4.0,
+        glow_feather: 1.0,
+        glow_strength: 0.16,
+        ..Default::default()
+    };
+    lattice(&view, near_camera())
+}
+
+/// The lattice as Yan's DAW draws it.
+///
+/// Read out of a live Bitwig project with `./read-plugin-state.py` (the
+/// `capture-daw-state` skill) on 2026-08-28. Of everything that capture holds,
+/// four fields differ from the fresh view: a Shadow a fifth wider, its fade
+/// with it, the Shadow depth at the top of its bar rather than 0.85, and the
+/// window centred one fifth along.
+///
+/// That is the whole of the difference and it earns the frame, because the
+/// freeze list and the shadow rework are both judged at these settings and
+/// nowhere else — a picture change invisible at the fresh Shadow and obvious at
+/// a wider one at full depth is a change that ships.
+///
+/// The capture's TUNING, zoom and pan are deliberately not taken. The tuning
+/// would empty the frame (see [`lattice`]); zoom and pan are navigation state,
+/// outside what a capture is read for at all, and his sits at the near end of
+/// the zoom's travel where a frame this size holds one node's top half.
+fn the_live_view() -> Scene {
+    let view = harmonigraph_scene::ViewConfig {
+        center_threes: 1,
+        glow_shadow: 0.196_915_06,
+        glow_shadow_soft: 0.196_915_06,
+        glow_shadow_depth: 1.0,
+        ..Default::default()
+    };
+    lattice(&view, near_camera())
+}
+
+/// A sevens sheet standing behind the home one.
+///
+/// The depth ordering the whole design turns on: a sheet is not a plane the
+/// renderer draws, it is the nodes and resting markers at one sevens step, and
+/// what puts them behind is their place in `order`. #459 asked for this frame;
+/// #498 needs it because a caster on the home sheet has to darken what stands
+/// on the sheet behind it, at whatever depth it darkens the ground.
+fn a_sheet_behind_a_node() -> Scene {
+    let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+    lattice(&view, near_camera())
+}
+
+/// How far the Shadow bar opens on a fresh blob — for the frames that are
+/// about something else and want the bar where the picture has it.
+fn fresh_shadow() -> f32 {
+    harmonigraph_scene::ViewConfig::default().glow_shadow
+}
+
+/// Where the name goldens stand, and closer than the claim tests' own
+/// `Camera::DEFAULT_DISTANCE`.
+///
+/// A profile walked along one row reads the same at any zoom; a frame a person
+/// looks at does not. At 12 the fixture's node is a quarter of the frame
+/// across and the rest is halo, so the glyph and the shadow around it — the
+/// whole subject — are a handful of pixels.
+const NAME_DISTANCE: f32 = 4.0;
+
+/// One stroke of a golden's name, in NODE RADII, `x` across the band and `y`
+/// along it.
+///
+/// Half the band's own depth across, so a lone stroke stands wholly on ink with
+/// its shadow falling off both edges — which is the asymmetry
+/// [`a_name_on_a_nodes_band`] is for. Longer than the band is deep along it, so
+/// the stroke reads as a stroke rather than a dot at any of these sizes.
+///
+/// Node radii rather than points, so the shape holds if [`NAME_DISTANCE`] or
+/// [`GOLDEN_SIZE`] moves — the Shadow bar is in node radii too, and a name
+/// sized in points would slide out from under its own shadow.
+const STROKE: glam::Vec2 = glam::Vec2::new(0.22, 0.55);
+
+/// The Shadow [`two_strokes_of_one_name`] stands at, in node radii.
+const WIDE_SHADOW: f32 = 0.6;
+
+/// How far two strokes of one name stand apart, in node radii.
+///
+/// Narrower than two shadows of [`WIDE_SHADOW`] can meet across, or the frame
+/// holds two separate shadows and says nothing about how they meet. Both sides
+/// are in node radii, which is why the strokes are sized that way rather than
+/// in points: the Shadow bar is, so the pair moves together under any camera —
+/// and being constants, the reach is checked when the crate is built rather
+/// than when the frame is drawn.
+const STROKE_GAP: f32 = 0.18;
+const _: () = assert!(
+    STROKE_GAP < 2.0 * WIDE_SHADOW,
+    "two strokes further apart than their shadows reach cast two shadows, not one meeting",
+);
+
+/// How large a whole name draws on a lattice frame, as a share of a node's
+/// radius on the pane — about what the lattice typesets one at, and sized off
+/// the node for [`STROKE`]'s reason.
+const NAME_SHARE: f32 = 0.9;
+
+/// The lit node the name frames stand on, framed on the BAND rather than on
+/// the node.
+///
+/// The camera looks at where the name will stand, so the frame is the band's
+/// arc through the middle with the node's inside to one side of it and bare
+/// ground to the other — which is the comparison the frame is for. Aimed at
+/// the node instead, the subject is a dozen pixels off in a corner and most of
+/// the frame is the empty middle a name says nothing about.
+fn a_named_node(shadow: f32) -> Scene {
+    let mut scene = lit_node_and_a_name(1.6, shadow, 1.0);
+    scene.camera.distance = NAME_DISTANCE;
+    scene.camera.target = name_on_the_band(&scene);
+    scene
+}
+
+/// `strokes` blocks of ONE name, centred on the middle of the node's octave
+/// band and laid out ACROSS it.
+///
+/// Across rather than along, so a pair straddles the band: the channel between
+/// two strokes runs along the band's own arc, and the shadows meeting in it
+/// meet over the band's ink at one end and over the ground past its edge at the
+/// other. Both receivers in one frame is what makes it worth a golden, since a
+/// hole and a wash are what #498 replaces with one multiply.
+///
+/// Blocks off the fixture atlas rather than letters: the atlas patch is an
+/// opaque square (`text::tests::atlas`), so a stroke has straight sides and
+/// the channel between two of them is a shape a reader of the contact sheet
+/// can find.
+fn strokes_on_the_band(scene: &Scene, strokes: usize) -> LatticeLabels {
+    let at = on_screen(scene, GOLDEN_SIZE, name_on_the_band(scene));
+    let unit = node_points(scene);
+    let (w, h, gap) = (STROKE.x * unit, STROKE.y * unit, STROKE_GAP * unit);
+    let span = strokes as f32 * w + (strokes - 1) as f32 * gap;
+    let glyphs = (0..strokes)
+        .map(|k| {
+            let x = at.x - span / 2.0 + k as f32 * (w + gap);
+            name_glyph(scene, [x, at.y - h / 2.0, w, h])
+        })
+        .collect();
+    a_name(scene, GOLDEN_SIZE, glyphs)
+}
+
+/// A node's own radius on the golden pane, in points — the unit every Shadow
+/// in the picture is dialled in, and what `LatticeLabels::node_points` carries
+/// to the glyph pass.
+fn node_points(scene: &Scene) -> f32 {
+    scene.node_radius * scene.camera.points_per_world(GOLDEN_SIZE[1] as f32)
+}
+
+/// A name standing on the INK of the node it names, at the fresh Shadow.
+///
+/// The receiver asymmetry in one frame. Ink is washed with the RAW light and a
+/// name's shadow is a HOLE, so what a name does to the band under it is not
+/// what it does to the ground beside it — at a quarter Shadow the ground keeps
+/// 55% and the ink 75%. #498's PR B is the diff on this frame.
+///
+/// The band rather than the middle: a node's own clearing has already cleared
+/// its middle to the ground, so a name there paints the ground over the ground
+/// and the picture cannot tell.
+fn a_name_on_a_nodes_band() -> Shot {
+    let scene = a_named_node(fresh_shadow());
+    let labels = strokes_on_the_band(&scene, 1);
+    Shot { labels, ..scene.into() }
+}
+
+/// The same name at Render scale 2.
+///
+/// #496: the field a name's Shadow is measured in is sized at the RENDER
+/// scale while the divisor that turns it into points is the DEVICE's, so a
+/// name's shadow is suspected of coming out `1/S` of its dialled width while
+/// every ring and cross keeps theirs. Nothing in the suite can see it, because
+/// no claim test compares one Render scale against another; this frame records
+/// what the build actually draws, and the PR that fixes it re-baselines here.
+fn a_name_at_render_scale_2() -> Shot {
+    let mut shot = a_name_on_a_nodes_band();
+    shot.scene.render_scale = 2.0;
+    shot
+}
+
+/// Two strokes of one name at a WIDE Shadow — #490's repro.
+///
+/// Between the bowl and the crossbar of a `G` the ground is exactly as dark as
+/// it would be beside either stroke alone, and the medial axis between them
+/// reads as one shadow shoving the other aside. `field_standoff` is
+/// `standoff_coverage(distance to the NEAREST ink)`, and nearest is a `min`:
+/// `profile(min(d1, d2)) = max(p1, p2)`, so the second stroke contributes
+/// nothing and the crease is a gradient discontinuity in an otherwise smooth
+/// field.
+fn two_strokes_of_one_name() -> Shot {
+    let scene = a_named_node(WIDE_SHADOW);
+    let labels = strokes_on_the_band(&scene, 2);
+    Shot { labels, ..scene.into() }
+}
+
+/// Two names on ONE sheet, on nodes that cover each other on screen.
+///
+/// The case only the any-to-any design gets right (#498) and the one #469
+/// measured: under an oblique camera two nodes of the same sevens step overlap,
+/// so which of them shadows the other is a per-NODE answer. Anything that
+/// groups casters by sheet — #497's layers, the sheet-ordered composite — has
+/// to leave this pair alone.
+///
+/// Perspective and steeply pitched, which is what makes the overlap: a sheet's
+/// rows are foreshortened by `cos(pitch)` and a node's diameter is half the
+/// lattice spacing, so rows start covering each other past about 60°.
+///
+/// The pair is SEARCHED for rather than named, because which nodes light up is
+/// the chord's and the window's answer, and a hand-picked index would silently
+/// stop overlapping the first time either moved — the frame would still render
+/// and would still be blessed.
+fn names_overlapping_on_one_sheet() -> Shot {
+    let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+    let camera = Camera {
+        projection: harmonigraph_scene::Projection::Perspective,
+        pitch: 1.1,
+        distance: 4.0,
+        ..Default::default()
+    };
+    let scene = lattice(&view, camera);
+    let pane = glam::Vec2::new(GOLDEN_SIZE[0] as f32, GOLDEN_SIZE[1] as f32);
+    let projector = scene.projector(pane);
+    let unit = node_points(&scene);
+    let size = NAME_SHARE * unit;
+    // How far each node stands along the view, which is what the pass sorts
+    // nodes of one sheet by (`order` in lib.rs) — so the pair below is nearer
+    // and farther in the same terms the picture is painted in.
+    let eye = scene.camera.eye();
+    let forward = (scene.camera.target - eye).normalize_or_zero();
+    // Every node with ink whose NAME would land whole on the pane. An idle node
+    // paints no pixel, so a name on one stands over nothing and says nothing
+    // about a shadow landing on ink; a name half off the pane is a fixture
+    // measuring its own clipping.
+    let named: Vec<(usize, glam::Vec2, f32)> = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.activation > 0.0)
+        .filter_map(|(i, n)| {
+            let at = projector.project(n.world_pos)?;
+            let inside = at.cmpge(glam::Vec2::splat(size)).all()
+                && at.cmple(pane - glam::Vec2::splat(size)).all();
+            inside.then(|| (i, at, (n.world_pos - eye).dot(forward)))
+        })
+        .collect();
+    // A node's own radius on the pane, measured by projecting a point one
+    // radius out rather than scaled off the target plane's answer: under
+    // perspective a far node draws smaller, which is the whole reason its
+    // neighbours crowd it.
+    let radius = |i: usize, at: glam::Vec2| {
+        let n = &scene.nodes[i];
+        let edge = n.world_pos + glam::Vec3::X * scene.node_radius * n.scale;
+        projector.project(edge).map_or(0.0, |e| e.distance(at))
+    };
+    let pair = named
+        .iter()
+        .enumerate()
+        .flat_map(|(k, a)| named[k + 1..].iter().map(move |b| (a, b)))
+        .find(|((ia, pa, _), (ib, pb, _))| {
+            scene.nodes[*ia].lattice_pos.sevens == scene.nodes[*ib].lattice_pos.sevens
+                && pa.distance(*pb) < radius(*ia, *pa) + radius(*ib, *pb)
+        });
+    let (a, b) = pair.expect(
+        "the fixture must put two lit nodes of ONE sheet over each other, both far enough \
+         inside the pane to wear a name — widen the pitch, or bring the camera in",
+    );
+    // Nearer LAST, which is the order the pass paints them in and the whole
+    // claim of the frame: the near node's name has to sit on the far node's
+    // rings and not the other way round.
+    let (far, near) = if a.2 > b.2 { (a, b) } else { (b, a) };
+    assert!(
+        far.2 > near.2,
+        "the pair stands at one depth, so which of them is in front is a tie the picture \
+         breaks arbitrarily and the frame claims nothing",
+    );
+    let glyph =
+        |at: glam::Vec2| name_glyph(&scene, [at.x - size / 2.0, at.y - size / 2.0, size, size]);
+    let labels = names(
+        &scene,
+        GOLDEN_SIZE,
+        vec![(far.0 as u32, vec![glyph(far.1)]), (near.0 as u32, vec![glyph(near.1)])],
+    );
+    Shot { labels, ..on_the_ground_it_clears_to(scene) }
+}
+
+// ---------------------------------------------------------------------------
+// The gate itself
+// ---------------------------------------------------------------------------
 
 /// Mean and largest per-channel drift between two RGBA8 frames.
 ///
@@ -160,18 +604,30 @@ fn write_contact_sheet(name: &str, expected: &[u8], actual: &[u8]) -> PathBuf {
     path
 }
 
-fn check(name: &str, scene: &Scene) {
+/// How many distinct levels a frame has to carry to count as a picture.
+///
+/// The vacuity guard the whole set shares. A golden cannot pass for the wrong
+/// reason the way a claim test can — it asserts every pixel — but it CAN be a
+/// frame with nothing in it: a scene whose camera looks past the lattice, a
+/// name projected off the pane, a window that culled everything. Such a frame
+/// is blessed once and then agrees with itself forever, which is the failure
+/// #450's rule names in the shape a golden takes it in. Twenty is far below
+/// what any of these scenes draws and far above a flat fill plus its edge.
+const LEVELS: usize = 20;
+
+fn check(name: &str, shot: Shot) {
     let Some(mut shooter) = Shooter::new(GOLDEN_SIZE) else {
-        // Said out loud, as `harmonigraph-offline`'s render tests say it. This
-        // is the tree's only gate on what the lattice LOOKS like, and a silent
-        // return reports `ok` without reading the golden, rendering, or
-        // comparing — so a machine with no adapter is indistinguishable from a
-        // machine where the picture still matches, including when the goldens
-        // have been deleted (the missing-file panic is downstream of here).
-        eprintln!("skipping golden {name}: no usable GPU adapter");
         return;
     };
-    let actual = shooter.shot(scene);
+    shooter.clear = shot.clear;
+    let actual = shooter.shot_with(&shot.scene, shot.labels);
+    let levels: std::collections::BTreeSet<[u8; 4]> =
+        actual.chunks_exact(4).map(|px| [px[0], px[1], px[2], px[3]]).collect();
+    assert!(
+        levels.len() >= LEVELS,
+        "{name} drew {} distinct pixel values — the fixture reaches nothing",
+        levels.len(),
+    );
     let path = golden_dir().join(format!("{name}.png"));
 
     if std::env::var_os("HARMONIGRAPH_BLESS").is_some() {
@@ -215,7 +671,7 @@ fn check(name: &str, scene: &Scene) {
 /// not intend.
 #[test]
 fn a_node_over_its_clearing_draws_the_frame_on_record() {
-    check("node-clearing", &node_over_its_clearing());
+    check("node-clearing", node_over_its_clearing().into());
 }
 
 /// The resting marker field in one node's light is byte-identical to the
@@ -226,5 +682,53 @@ fn a_node_over_its_clearing_draws_the_frame_on_record() {
 /// of them and fails this.
 #[test]
 fn the_resting_marker_field_draws_the_frame_on_record() {
-    check("resting-markers-in-one-light", &resting_markers_in_one_light());
+    check("resting-markers-in-one-light", resting_markers_in_one_light().into());
+}
+
+/// The fresh view under a chord is byte-identical to the frame on record.
+#[test]
+fn a_chord_at_the_fresh_view_draws_the_frame_on_record() {
+    check("chord-fresh", on_the_ground_it_clears_to(a_chord_at_the_fresh_view()));
+}
+
+/// The same chord with the halos meeting everywhere.
+#[test]
+fn a_chord_at_a_wide_reach_draws_the_frame_on_record() {
+    check("chord-wide-reach", on_the_ground_it_clears_to(a_chord_at_a_wide_reach()));
+}
+
+/// The lattice at the settings the DAW is actually carrying.
+#[test]
+fn the_live_view_draws_the_frame_on_record() {
+    check("live-view", on_the_ground_it_clears_to(the_live_view()));
+}
+
+/// A sevens sheet behind the home one.
+#[test]
+fn a_sheet_behind_a_node_draws_the_frame_on_record() {
+    check("sheet-behind-a-node", on_the_ground_it_clears_to(a_sheet_behind_a_node()));
+}
+
+/// A name standing on its node's band.
+#[test]
+fn a_name_on_a_nodes_band_draws_the_frame_on_record() {
+    check("name-on-a-band", a_name_on_a_nodes_band());
+}
+
+/// The same name at Render scale 2.
+#[test]
+fn a_name_at_render_scale_2_draws_the_frame_on_record() {
+    check("name-at-render-scale-2", a_name_at_render_scale_2());
+}
+
+/// Two strokes of one name at a wide Shadow.
+#[test]
+fn two_strokes_of_one_name_draw_the_frame_on_record() {
+    check("two-strokes-at-a-wide-shadow", two_strokes_of_one_name());
+}
+
+/// Two names on one sheet, on nodes that cover each other.
+#[test]
+fn names_overlapping_on_one_sheet_draw_the_frame_on_record() {
+    check("names-overlapping-on-one-sheet", names_overlapping_on_one_sheet());
 }

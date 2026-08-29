@@ -253,6 +253,19 @@ pub(super) struct Shooter {
     /// rather than one reused. The tests that used to name these by hand all
     /// counted up the same way, and none ever asked for a repeat.
     pub(super) pane: u64,
+    /// What the pane is filled with before the callback draws. BLACK, which is
+    /// what nearly every fixture here is written against: they read a
+    /// DIFFERENCE between two shots, and a ground of zero keeps that difference
+    /// the pixels the shot is about.
+    ///
+    /// A fixture reading an ABSOLUTE frame has to keep this and
+    /// [`Scene::background`] agreeing instead. `background` is what a node's
+    /// knockout PAINTS, so a hole over a pane cleared to something else draws a
+    /// patch the app never shows — text.wgsl's own `background` uniform says
+    /// the same of a name's hole. The fixtures that set the two apart do it on
+    /// purpose, to make a hole visible that is invisible by construction in the
+    /// picture.
+    pub(super) clear: wgpu::Color,
 }
 
 impl Shooter {
@@ -267,6 +280,7 @@ impl Shooter {
             format: wgpu::TextureFormat::Rgba8Unorm,
             size,
             pane: 1,
+            clear: wgpu::Color::BLACK,
         })
     }
 
@@ -326,13 +340,8 @@ impl Shooter {
             cb.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
         self.queue.submit(bufs.into_iter().chain([encoder.finish()]));
         let resources = &self.resources;
-        let tex = render_to_texture(
-            &self.device,
-            &self.queue,
-            size,
-            self.format,
-            wgpu::Color::BLACK,
-            |pass| {
+        let tex =
+            render_to_texture(&self.device, &self.queue, size, self.format, self.clear, |pass| {
                 cb.paint(
                     egui::PaintCallbackInfo {
                         viewport: rect,
@@ -343,8 +352,7 @@ impl Shooter {
                     pass,
                     resources,
                 );
-            },
-        );
+            });
         readback(&self.device, &self.queue, &tex, size)
     }
 }
@@ -915,4 +923,117 @@ pub(super) fn harmonic(profile: &[f64], k: usize) -> f64 {
         im += v * a.sin();
     }
     2.0 * (re * re + im * im).sqrt() / n
+}
+
+/// The name's own fixture: a lit node at the origin and a light wide enough to
+/// reach past every ring it paints.
+///
+/// The arrangement is `a_resting_marker_wears_the_wash_it_stands_in`'s, and
+/// deliberately: the name tests are that cross's claims asked of a name, so
+/// what they are read against has to be the same picture with the cross swapped
+/// for a glyph.
+pub(super) fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.glow_reach = reach;
+    scene.glow_strength = 1.5;
+    scene.glow_feather = 1.0;
+    scene.glow_shadow = shadow;
+    // The fade the whole width of the shadow, which is the pairing the bar
+    // ships in and the one the width means anything simple at: `glow_shadow_soft`
+    // is clamped to the width by `ViewConfig::sanitize`, so a fixture that left
+    // it alone would narrow its own fade as it widened its shadow.
+    scene.glow_shadow_soft = shadow;
+    scene.glow_shadow_depth = depth;
+    // The markers away: a cross would write a standoff of its own into the
+    // layer the name tests read.
+    scene.pluses.clear();
+    scene
+}
+
+/// How wide a fixture's glyph is drawn, in points. Its atlas patch is 8 texels
+/// square and opaque (`text::tests::atlas`), so at this size it is a solid
+/// block of ink several pixels across — and a pixel inside it carries the
+/// label's colour exactly, which is what the wash is read on.
+pub(super) const NAME_SIZE: f32 = 12.0;
+
+/// Where a name stands to be read against a node's INK rather than against the
+/// ground: the middle of the octave band, on the +x axis.
+///
+/// The empty middle is the one place a name over a node says nothing — a node's
+/// own clearing has already cleared it to the ground, so a name there paints
+/// the ground over the ground and the picture cannot tell. Derived off the
+/// scene's own band radii rather than written as a number, because a fixture
+/// that retunes the stack would otherwise leave the name standing where the
+/// band no longer is: the ring radii are in quad uv, whose 1 is
+/// [`Scene::marker_unit`] world units.
+pub(super) fn name_on_the_band(scene: &Scene) -> glam::Vec3 {
+    let uv = (scene.outer_inner + scene.outer_outer) * 0.5;
+    assert!(uv > 0.0, "the fixture must wear an octave band for a name to stand on");
+    glam::Vec3::new(uv * scene.marker_unit, 0.0, 0.0)
+}
+
+/// Where `world` lands on a `size` pane, in points.
+pub(super) fn on_screen(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> glam::Vec2 {
+    scene
+        .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
+        .project(world)
+        .expect("the fixture stands in front of the camera")
+}
+
+/// One stroke of a fixture's name: the atlas's opaque block filling `rect`, in
+/// the resting field's own grey.
+pub(super) fn name_glyph(scene: &Scene, rect: [f32; 4]) -> GlyphInstance {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let ink = scene.lattice_ground;
+    GlyphInstance {
+        rect,
+        fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
+        // The shadow's strength, which is the whole of what the glow pass reads
+        // off this colour (`fs_glyph_glow`).
+        rim: [0, 0, 0, 255],
+        ..crate::text::tests::glyph()
+    }
+}
+
+/// One name per run handed over: the node it names, and its glyphs.
+pub(super) fn names(
+    scene: &Scene,
+    size: [u32; 2],
+    runs: Vec<(u32, Vec<GlyphInstance>)>,
+) -> LatticeLabels {
+    LatticeLabels {
+        labels: runs
+            .iter()
+            .map(|(node, glyphs)| Label { node: *node, glyphs: glyphs.len() as u32 })
+            .collect(),
+        glyphs: runs.into_iter().flat_map(|(_, glyphs)| glyphs).collect(),
+        // How large a node draws here, which is the unit the Shadow bars are
+        // dialled in and so the whole of what gives the name's standoff a size.
+        // Taken off the camera exactly as the pane takes it
+        // (`TextBatch::lattice_labels`), a fixture that made its own answer up
+        // being one that could agree with the shader while disagreeing with the
+        // picture.
+        node_points: scene.node_radius * scene.camera.points_per_world(size[1] as f32),
+        atlas: Some(crate::text::tests::atlas()),
+        marks: Some(crate::text::tests::mark_sheet()),
+        slide: SlideAxis::default(),
+    }
+}
+
+/// [`names`] with every glyph on the scene's first node.
+pub(super) fn a_name(scene: &Scene, size: [u32; 2], glyphs: Vec<GlyphInstance>) -> LatticeLabels {
+    names(scene, size, vec![(0, glyphs)])
+}
+
+/// [`a_name`] as a single [`NAME_SIZE`] glyph standing at `world`.
+pub(super) fn name_at(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> LatticeLabels {
+    let at = on_screen(scene, size, world);
+    let rect = [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
+    a_name(scene, size, vec![name_glyph(scene, rect)])
 }

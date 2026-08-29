@@ -569,47 +569,11 @@ fn a_label_adds_no_light_through_the_bloom() {
     );
 }
 
-/// The name's own fixture: a lit node at the origin and a light wide enough to
-/// reach past every ring it paints.
-///
-/// The arrangement is `a_resting_marker_wears_the_wash_it_stands_in`'s, and
-/// deliberately: the tests below are that cross's claims asked of a name, so
-/// what they are read against has to be the same picture with the cross swapped
-/// for a glyph.
-fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene {
-    let mut scene = single_marked_node(0, 0);
-    scene.camera = harmonigraph_scene::Camera {
-        projection: harmonigraph_scene::Projection::Orthographic,
-        yaw: 0.0,
-        pitch: 0.0,
-        ..Default::default()
-    };
-    scene.glow_reach = reach;
-    scene.glow_strength = 1.5;
-    scene.glow_feather = 1.0;
-    scene.glow_shadow = shadow;
-    // The fade the whole width of the shadow, which is the pairing the bar
-    // ships in and the one the width means anything simple at: `glow_shadow_soft`
-    // is clamped to the width by `ViewConfig::sanitize`, so a fixture that left
-    // it alone would narrow its own fade as it widened its shadow.
-    scene.glow_shadow_soft = shadow;
-    scene.glow_shadow_depth = depth;
-    // The markers away: a cross would write a standoff of its own into the
-    // layer both tests below read.
-    scene.pluses.clear();
-    scene
-}
-
-/// Where the name stands in that fixture: uv 1 is 1.8 node radii, so the
-/// outermost ring reaches 1.57 world units and this is well clear of it, inside
-/// a reach that carries light past both.
+/// Where the name stands in [`lit_node_and_a_name`] where the reading is of the
+/// GROUND: uv 1 is 1.8 node radii, so the outermost ring reaches 1.57 world
+/// units and this is well clear of it, inside a reach that carries light past
+/// both. [`name_on_the_band`] is where a reading wants the node's ink instead.
 const NAME_AT: glam::Vec3 = glam::Vec3::new(3.0, 0.0, 0.0);
-
-/// How wide that name's one glyph is drawn, in points. Its atlas patch is 8
-/// texels square and opaque (`text::tests::atlas`), so at this size it is a
-/// solid block of ink several pixels across — and a pixel inside it carries the
-/// label's colour exactly, which is what the wash is read on.
-const NAME_SIZE: f32 = 12.0;
 
 /// The Shadow width the fresh view opens at, for the shots that are about
 /// something else and want the bar left where the picture has it.
@@ -618,37 +582,6 @@ const FRESH_SHADOW: f32 = 0.16;
 /// That name, in the resting field's own grey and at full strength.
 fn one_name(scene: &Scene, size: [u32; 2]) -> LatticeLabels {
     name_at(scene, size, NAME_AT)
-}
-
-/// [`one_name`]'s glyph, standing wherever the caller puts it.
-fn name_at(scene: &Scene, size: [u32; 2], world: glam::Vec3) -> LatticeLabels {
-    let at = scene
-        .projector(glam::Vec2::new(size[0] as f32, size[1] as f32))
-        .project(world)
-        .expect("the name stands in front of the camera");
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let ink = scene.lattice_ground;
-    LatticeLabels {
-        glyphs: vec![GlyphInstance {
-            rect: [at.x - NAME_SIZE / 2.0, at.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE],
-            fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
-            // The shadow's strength, which is the whole of what the glow pass
-            // reads off this colour (`fs_glyph_glow`).
-            rim: [0, 0, 0, 255],
-            ..crate::text::tests::glyph()
-        }],
-        labels: vec![Label { node: 0, glyphs: 1 }],
-        // How large a node draws here, which is the unit the Shadow bars are
-        // dialled in and so the whole of what gives the name's standoff a size.
-        // Taken off the camera exactly as the pane takes it
-        // (`TextBatch::lattice_labels`), a fixture that made its own answer up
-        // being one that could agree with the shader while disagreeing with the
-        // picture.
-        node_points: scene.node_radius * scene.camera.points_per_world(size[1] as f32),
-        atlas: Some(crate::text::tests::atlas()),
-        marks: Some(crate::text::tests::mark_sheet()),
-        slide: SlideAxis::default(),
-    }
 }
 
 /// A name wears the light it stands in, exactly as a resting cross does.
@@ -890,19 +823,13 @@ fn a_name_covers_the_rings_it_stands_on() {
     /// in lattice.wgsl. The outer bound on anything a node paints, and so on
     /// anything a hole cut in that node can be read against.
     const NODE_QUAD: f32 = 1.6;
-    /// Where the name stands: on the node's own octave band rather than in the
-    /// empty middle, which is the one place a hole can be READ. A node's own
-    /// clearing has already cleared its middle to the ground, so a name there
-    /// paints the ground over the ground and the picture cannot tell.
-    const ON_THE_BAND: glam::Vec3 = glam::Vec3::new(1.0, 0.0, 0.0);
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The name in the node's own middle, which is where the lattice puts one.
     let mut shots = |shadow: f32| -> (Scene, Vec<u8>, Vec<u8>) {
         let scene = lit_node_and_a_name(0.0, shadow, 1.0);
         let bare = shooter.shot(&scene);
-        let named = shooter.shot_with(&scene, name_at(&scene, SIZE, ON_THE_BAND));
+        let named = shooter.shot_with(&scene, name_at(&scene, SIZE, name_on_the_band(&scene)));
         (scene, bare, named)
     };
 
