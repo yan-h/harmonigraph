@@ -324,7 +324,7 @@ impl Fold {
     /// The kernel-weighted mean power above the floor at absolute MIDI `pitch`,
     /// or `None` where the analyzer's axis does not reach that pitch.
     ///
-    /// The CPU's form of what the shader does per wedge — `spectrum_at` on the
+    /// The CPU's form of what the shader does per wedge — `spectrum_color_at` on the
     /// grid above, at the octave's own pitch — and so test-only: it exists to
     /// let a claim about the fold be made in the dB the harmonic series
     /// predicts, rather than through a byte, a colour ramp and a GPU.
@@ -334,7 +334,7 @@ impl Fold {
             return None;
         }
         // Bucket `b` stands for `SPECTRUM_MIN_MIDI + (b + 0.5) / 32` — the
-        // grid's own convention, and the shader's `spectrum_at` subtracts the
+        // grid's own convention, and the shader's `spectrum_color_at` subtracts the
         // same half so the fold and the ring place a partial at one pitch.
         let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
         let i = (x.max(0.0) as usize).min(SPECTRUM_BINS - 2);
@@ -470,7 +470,7 @@ impl RingLevels {
     /// Per BUCKET rather than per node, which is what makes the ring cost the
     /// same whatever the extents are: the grid is one reading the whole lattice
     /// shares, and each node's wedges are a window onto it (the shader's
-    /// `spectrum_at`). That holds for the fold as much as for the raw spectrum —
+    /// `spectrum_color_at`). That holds for the fold as much as for the raw spectrum —
     /// the kernel is the same shape wherever it is centred, so folding it over
     /// the grid once answers every node and every octave at a stroke.
     ///
@@ -1424,7 +1424,7 @@ mod tests {
 
     /// A probe at a bucket's own centre reads that bucket, not a blend of it
     /// and its neighbour: the reader subtracts the grid's half-bucket offset
-    /// exactly as `bucket_pitch` and the shader's `spectrum_at` do, so both
+    /// exactly as `bucket_pitch` and the shader's `spectrum_color_at` do, so both
     /// readings place a partial at the same pitch.
     #[test]
     fn a_probe_at_a_buckets_centre_reads_that_bucket_alone() {

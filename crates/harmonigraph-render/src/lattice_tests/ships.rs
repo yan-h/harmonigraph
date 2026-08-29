@@ -543,7 +543,7 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         paint.folded = true;
         // Keep the analyzer gate and volume-color ramp at one level, so every
         // wedge whose octave the axis reaches reads the same entry. Off the
-        // axis `spectrum_at` answers 0 whatever the grid holds, which this
+        // axis `spectrum_color_at` answers 0 whatever the grid holds, which this
         // wheel stays clear of.
         paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
         paint.color_levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
