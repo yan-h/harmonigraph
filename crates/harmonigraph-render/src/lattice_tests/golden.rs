@@ -87,7 +87,6 @@ fn a_node_in_its_own_shadow() -> Scene {
     // gradient rather than one flat value.
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
-    scene.glow_feather = 1.0;
     scene
 }
 
@@ -223,17 +222,19 @@ fn a_chord_at_the_fresh_view() -> Scene {
 /// fresh Reach the halos barely touch, so the rule two lights combine under is
 /// invisible.
 ///
-/// The Strength comes down as the Reach goes up, and further than the offline
-/// probe's own pairing at this Reach: the light is SCREENED, so a wide flat
-/// halo on every node saturates toward white, and 12-TET lights every node of
-/// a pitch class in the window rather than the five the chord names. A frame
-/// clipped to white records nothing — the same reason `a_node_in_its_own_shadow`
+/// The Strength comes down as the Reach goes up: the light is SCREENED and
+/// 12-TET lights every node of a pitch class in the window rather than the
+/// five the chord names, so the overlaps run brighter than any one halo. Half
+/// the bar is where this frame holds the most, and a golden is chosen for that
+/// rather than for looking right — it spans 74 levels between its 5th and 95th
+/// percentiles with nothing at either rail, so a change that dims the light
+/// and a change that brightens it both have room to show. A frame clipped to
+/// white records nothing, which is the same reason `a_node_in_its_own_shadow`
 /// does not stand on the white ground its own fixture ships.
 fn a_chord_at_a_wide_reach() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         glow_reach: 4.0,
-        glow_feather: 1.0,
-        glow_strength: 0.16,
+        glow_strength: 0.5,
         ..Default::default()
     };
     lattice(&view, near_camera())

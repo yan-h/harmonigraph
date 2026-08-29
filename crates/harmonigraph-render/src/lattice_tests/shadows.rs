@@ -108,9 +108,11 @@ fn atlas_of(shooter: &Shooter) -> Option<[u32; 2]> {
 /// bar names, σ being half of it (`shadow::sigma_px`) and the blur of a
 /// half-plane keeping 2.3% of the light at 2σ.
 ///
-/// The pair stands on one value of the light, which the fixture asserts: the
-/// Feather is at the top of its bar, so the field out past the rings is even
-/// and the only thing between the two readings is the shadow.
+/// Each reading is a SHARE of the light at its own pixel, taken against the
+/// same pixel with the Shadow depth at 0, so the falloff's own slope between
+/// the two divides out and what is left is the shadow. The fixture asserts
+/// only that both points stand on light enough for a share of it to be more
+/// than quantization.
 #[test]
 fn the_light_beside_a_ring_is_held_off_within_one_shadow_width() {
     const SHADOW: f32 = 0.6;
@@ -133,10 +135,16 @@ fn the_light_beside_a_ring_is_held_off_within_one_shadow_width() {
     let out = beside + (2.0 * sigma(&scene)).round() as u32;
     assert!(out < SIZE[0], "the pair runs off the pane at {out}");
     let (near_flat, far_flat) = (bright_at(&flat, beside, row), bright_at(&flat, out, row));
+    // Enough light at BOTH to measure a share of, which is all the pair needs:
+    // the two losses below are each taken against this same shot at the same
+    // pixel, so the falloff between them is divided out rather than assumed
+    // away. The floor is set by the smaller claim — `far < 0.05` is a reading
+    // of a Gaussian tail and not of the quantizer only while a twentieth of
+    // the far value is still several levels.
     assert!(
-        near_flat > 200 && (near_flat - far_flat).abs() <= 4,
-        "the pair must stand on one value of the light: {near_flat} beside the ring against \
-         {far_flat} one Shadow width out",
+        near_flat > 120 && far_flat > 80,
+        "the pair must stand on light enough to take a share of: {near_flat} beside the ring \
+         against {far_flat} one Shadow width out",
     );
 
     let loss = |x: u32, flat_at: i64| 1.0 - bright_at(&deep, x, row) as f64 / flat_at as f64;
@@ -511,7 +519,6 @@ fn a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from() {
         let mut scene = on_ground(SHADOW, 1.0);
         scene.glow_reach = 1.6;
         scene.glow_strength = 1.5;
-        scene.glow_feather = 1.0;
         scene.nodes[0].glow.level = level;
         if cross {
             scene.pluses = vec![one_marker(glam::Vec3::new(3.2, 0.0, 0.0), ARM, CROSS_INK, 1.0)];

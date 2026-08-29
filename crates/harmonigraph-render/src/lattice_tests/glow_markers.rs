@@ -454,10 +454,6 @@ fn one_shadow_is_one_distance_whatever_the_cross_it_stands_off() {
 /// On the pixels the marker covers in FULL ([`fully_inked`]): what shows
 /// through its antialiased rim is the ground's share of the light, which is the
 /// Shadow bars' answer and not this bar's.
-///
-/// Which MIX of the field the marker wears is not a claim ONE node can carry —
-/// the two blends the Meld bar mixes agree wherever only one node writes — and
-/// is `the_meld_reaches_the_light_a_resting_marker_wears`, at two.
 #[test]
 fn a_resting_marker_wears_the_wash_it_stands_in() {
     const SIZE: [u32; 2] = [256, 256];
@@ -467,9 +463,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     // The lit node at the origin, and one marker beside it. uv 1 is 1.8 node
     // radii (`node_vertex`), so this node's outermost ring at uv 0.795 reaches
     // 1.57 world units and the marker's near tip stands at 2.2 — clear of the
-    // ink, and inside a reach dialled to carry light well past it. The feather
-    // is at the top of its bar so what stands out there is an even field
-    // rather than the skirt of a falloff heaped on the node.
+    // ink, and inside a reach dialled to carry light well past it.
     let at = |reach: f32, marker: bool| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
@@ -480,7 +474,6 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_feather = 1.0;
         if marker {
             scene.pluses =
                 vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];

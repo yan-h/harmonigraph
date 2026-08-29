@@ -258,41 +258,6 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// whole ring stack casting it, past which there is no more shape to soften.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
-/// The two ends of the Glow section's Feather bar, as the rate the light's
-/// exponential comes off at across its own span. Mirrored in lattice.wgsl
-/// (`GLOW_FALLOFF_TIGHT`/`FLAT`), which holds the rationale for the numbers
-/// and is the copy the picture is drawn from; `harmonigraph-render` asserts the
-/// two agree. This copy is what the bar's own preview is drawn from
-/// ([`glow_skirt`]).
-pub const GLOW_FALLOFF_TIGHT: f32 = 3.0;
-pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
-
-/// `smoothstep(0, 1, x)`, as WGSL spells it.
-fn smoothstep(x: f32) -> f32 {
-    let t = x.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/// How much of a node's light is left `p` of the way from its centre to where
-/// the light stops, 0..=1 of the peak, at `feather`
-/// ([`ViewConfig::glow_feather`]): the Feather bar's preview.
-///
-/// A COPY of `glow_layer` in lattice.wgsl and not the function itself, which
-/// is the one thing the Fade curve bar's preview did not have to be: that one
-/// is handed the envelope the notes run on, and the light's falloff runs on
-/// the GPU with nothing on the CPU to hand over. So it is a copy, kept to the
-/// shader's own two lines — the exponential at the rate the bar mixes, under
-/// the window that shuts it over the far half of the span — and the render
-/// crate holds both lines to the shader's text
-/// (`the_feather_bars_preview_is_the_skirt_the_shader_draws`). The base the
-/// shader scales by is left out, the preview being a shape rather than an
-/// amount; the Strength bar is that.
-pub fn glow_skirt(feather: f32, p: f32) -> f32 {
-    let rate = GLOW_FALLOFF_TIGHT + (GLOW_FALLOFF_FLAT - GLOW_FALLOFF_TIGHT) * feather;
-    let window = 1.0 - smoothstep((p - 0.5) / 0.5);
-    (-rate * p).exp() * window
-}
-
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
 ///
@@ -921,16 +886,6 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-    /// How flat the light's falloff is across that reach, 0 the exponential
-    /// heaped on the node and 1 an even field lit right out to where the window
-    /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_feather: f32,
-    /// How much two nodes' overlapping light adds up, 1 screening the halos
-    /// together and 0 leaving an overlap as bright as the brighter node alone
-    /// (see [`ViewConfig::glow_meld`]); already clamped to 0..=1. Inert while
-    /// [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_meld: f32,
     /// The Shadow: how wide every caster's blur is, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to
     /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no

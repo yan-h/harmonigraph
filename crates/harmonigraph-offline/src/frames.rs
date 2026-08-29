@@ -264,8 +264,8 @@ mod tests {
     }
 
     /// The node glow's picture, written to `target/scratch/` — a sweep of the
-    /// Reach and the Feather together, which is the pair that decides whether
-    /// the light is an accent on each node or a field the lattice sits in.
+    /// Reach against the Strength, which is what decides whether the light is
+    /// an accent on each node or a field the lattice sits in.
     ///
     /// A probe: it asserts nothing, the verdict being a look rather than a
     /// number. Kept and `#[ignore]`d for the same reason the ring's is: the
@@ -327,20 +327,18 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         let fresh = harmonigraph_scene::ViewConfig::default();
-        let shots: Vec<(f32, f32, f32)> = vec![
-            (fresh.glow_reach, 0.0, fresh.glow_strength),
-            (2.0, 0.0, 1.0),
-            (2.0, 1.0, 1.0),
-            (4.0, 0.0, 1.0),
-            (4.0, 1.0, 0.6),
-            (8.0, 1.0, 0.4),
+        let shots: Vec<(f32, f32)> = vec![
+            (fresh.glow_reach, fresh.glow_strength),
+            (2.0, 1.0),
+            (4.0, 1.0),
+            (4.0, 0.6),
+            (8.0, 0.4),
         ];
         let home = state.camera;
-        for (reach, feather, strength) in shots {
+        for (reach, strength) in shots {
             state.camera = home;
             state.camera.zoom_by(2.5);
             state.view.glow_reach = reach;
-            state.view.glow_feather = feather;
             state.view.glow_strength = strength;
             let output = context.run_ui(
                 egui::RawInput {
@@ -362,9 +360,9 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "node-glow-reach{:.0}-feather{:.0}.png",
+                "node-glow-reach{:.0}-strength{:.0}.png",
                 reach * 100.0,
-                feather * 100.0,
+                strength * 100.0,
             ));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");

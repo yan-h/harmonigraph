@@ -144,7 +144,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         let res: &LatticeResources = resources.get().expect("prepare created resources");
         let layouts = SceneLayouts {
             uniforms: &res.bind_group_layout,
-            glow: &res.glow_layout,
+            glow: &res.filter_layout,
             shadow: &res.shadow_layout,
         };
         let build =
@@ -189,7 +189,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             let view = texture.create_view(&Default::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("parity_light_bind_group"),
-                layout: &res.glow_layout,
+                layout: &res.filter_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -198,15 +198,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::Sampler(&res.sampler),
-                    },
-                    // The one texture at both of the light's slots, so the
-                    // Meld mixes a colour with itself and hands back that
-                    // colour at every setting: what this fixture holds still is
-                    // the light the ink is washed with, and the bar is not what
-                    // it is comparing.
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&view),
                     },
                 ],
             })
@@ -270,44 +261,30 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 &res.bind_group_layout,
                 &res.strip_layout,
             );
-            let attachment = |label, format| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: SIZE[0],
-                        height: SIZE[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                })
-            };
-            let targets =
-                [attachment("parity_glow", format), attachment("parity_glow_max", format)];
-            let views: Vec<_> =
-                targets.iter().map(|t| t.create_view(&Default::default())).collect();
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("parity_glow"),
+                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = target.create_view(&Default::default());
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("parity_glow_pass"),
-                    color_attachments: &views
-                        .iter()
-                        .map(|view| {
-                            Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })
-                        })
-                        .collect::<Vec<_>>(),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
@@ -320,10 +297,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.draw(0..4, 0..pane.instance_count);
             }
             queue.submit([encoder.finish()]);
-            // The screened attachment alone. The `max`-blended one is left out
-            // of the readback and not out of the comparison — one fragment
-            // emits both together, so a dropped fragment shows in this one.
-            //
             // `readback`'s copy with its one assumption widened: a 256-wide row
             // is 1024 bytes of light, and that is aligned.
             let read = |target: &wgpu::Texture, bytes: u32| {
@@ -353,7 +326,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
                 slice.get_mapped_range().to_vec()
             };
-            read(&targets[0], 4)
+            read(&target, 4)
         };
         assert!(pane.instance_count > 0, "the {name} scene ships no node to compare");
         let light_fast = glow_draw(SHADER_SRC);

@@ -1465,6 +1465,33 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     }
 }
 
+/// A key the struct no longer has costs that key alone: the rest of the view
+/// loads, at the values the blob holds.
+///
+/// The other half of the sweep above, and the half that decides what a RETIRED
+/// field costs. A saved project still carries every key it was written with —
+/// `glow_feather` and `glow_meld` among them — and nothing in the tree reads
+/// them; what must not happen is the parse failing and taking the whole view
+/// with it, which is what `deny_unknown_fields` anywhere on this struct would
+/// buy. Asked of an invented key rather than of a retired one, because the
+/// property is about the DOOR and a named ex-field would make it a test of
+/// that field's removal.
+#[test]
+fn a_view_carrying_a_key_the_struct_does_not_have_loads_intact() {
+    // A reach that is not the fresh one, so the test can tell a blob that
+    // loaded from a blob that fell back to `Default` whole.
+    let fresh = harmonigraph_scene::ViewConfig { glow_reach: 2.88, ..Default::default() };
+    let full = ron::to_string(&fresh).expect("a view serializes");
+    let with_extra = full.replacen('(', "(a_key_no_field_answers_to:1.0,", 1);
+    let loaded = ron::from_str::<harmonigraph_scene::ViewConfig>(&with_extra)
+        .expect("an unknown key must not sink the view");
+    assert_eq!(
+        ron::to_string(&loaded).expect("a view serializes"),
+        full,
+        "an unknown key changed what the rest of the blob loaded as",
+    );
+}
+
 /// The Display page picked in the editor survives the window closing and
 /// reopening.
 ///

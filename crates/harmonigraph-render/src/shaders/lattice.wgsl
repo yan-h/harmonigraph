@@ -16,11 +16,9 @@ struct Uniforms {
     //    phase a band a fiftieth of a world unit wide. A second spelling of
     //    the same clock is how a later pattern would clock on the wrong one.
     // y: base node radius (world units),
-    // z: how much two nodes' overlapping light adds up (`glow_meld`), 1
-    //    screening the halos together and 0 leaving an overlap as bright as
-    //    the brighter node alone. Away from the glow's own rows because
-    //    blit.wgsl's composite mixes the same two blends and sees only the
-    //    head of this buffer.
+    // z: unused — it carried how much two nodes' overlapping light added up,
+    //    a mix between two blends the glow pass wrote at once. One
+    //    screen-blended field now, so there is nothing to dial between.
     // w: unused — it carried the node style, the paint of a disc at the
     //    node's centre, from when that disc had more than one. A retired
     //    slot rather than a repack, which would renumber the ones around it
@@ -158,7 +156,7 @@ struct Uniforms {
     // takes that field whole. y/z/w unused.
     //
     // A row of its own rather than a spare slot among the glow's dials: the
-    // wash reads the melded light RAW, where every dial up there shapes the
+    // wash reads the light RAW, where every dial up there shapes the
     // light itself, so a bar sitting among them would carry the coupling it
     // exists to break. Zeroed whole with misc10.
     misc13: vec4<f32>,
@@ -224,24 +222,17 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
-// The two ends of the Feather bar, as the rate the light's exponential comes
-// off at across one span (`glow_layer`). Mirrored in harmonigraph-scene, which
-// draws the bar's own preview from its copy; the render crate's tests hold the
-// two pairs to each other, so retune them here and there together.
+// The rate the light's exponential comes off at across one span
+// (`glow_layer`).
 //
-// TIGHT is the accent: down to a fifth of its peak by half the span and to
-// nothing well before the end of it, so the falloff is the whole shape and the
-// node is plainly what the light belongs to.
-//
-// FLAT is the wash: a tenth off by half the span and a fifth by the far edge,
-// where the window has the light near nothing anyway — a constant, as far as
-// the eye is concerned. What shapes the light is then the window alone, full
-// out to half the span and a smoothstep to nothing across the other half,
-// zero-sloped at both ends and so with no rim in it at any width. A node in the
-// middle of that is not lit more than the space around it, which is the whole
-// difference between a light on a node and a field the node sits in.
-const GLOW_FALLOFF_TIGHT: f32 = 3.0;
-const GLOW_FALLOFF_FLAT: f32 = 0.25;
+// An accent: down to a fifth of its peak by half the span and to nothing well
+// before the end of it, so the falloff is the whole shape and the node is
+// plainly what the light belongs to. A field several nodes light at once is
+// reached by widening the Reach until the halos cover each other, which keeps
+// each node the brightest point of its own; a rate flat enough to spread the
+// light on its own instead takes that away, and a screen of several near-flat
+// halos puts more light in the GAP between two nodes than either node has.
+const GLOW_FALLOFF: f32 = 3.0;
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -2378,12 +2369,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // full bar is one field over the whole node, which is the arrangement with
     // no bar in it at all.
     //
-    // The RAW melded light, and that is right in this model rather than a
+    // The RAW light, and that is right in this model rather than a
     // compromise: a node's own shadow does not darken the light it is washed
     // with, and every item drawn in FRONT of it multiplies that wash along with
     // the rest of the frame under it.
     let coord = light_coord(in.clip_pos.xy);
-    let light = glow_light(coord, glow_meld());
+    let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
     return vec4<f32>(washed, final_alpha);
 }
@@ -2683,13 +2674,6 @@ fn glow_level(in: VsOut) -> f32 {
     return clamp(in.glow.x, 0.0, 1.0);
 }
 
-/// How much two nodes' overlapping light adds up (`u.misc.z`): 1 the halos
-/// screened together, 0 an overlap exactly as bright as the brighter node
-/// alone. See [`glow_light`], which is the only place it is spent.
-fn glow_meld() -> f32 {
-    return clamp(u.misc.z, 0.0, 1.0);
-}
-
 /// Where in the glow's target one fragment of the scene pass stands: the pixel
 /// under it, clamped into the texture.
 ///
@@ -2709,12 +2693,6 @@ fn glow_meld() -> f32 {
 fn light_coord(frag_pos: vec2<f32>) -> vec2<i32> {
     let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
     return min(vec2<i32>(frag_pos), edge);
-}
-
-/// How flat the light's falloff is across its own span (`u.misc10.z`): 0 the
-/// exponential heaped on the node, 1 an even field across it.
-fn glow_feather() -> f32 {
-    return clamp(u.misc10.z, 0.0, 1.0);
 }
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
@@ -3066,16 +3044,15 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     // The window, which is where the light STOPS: full to half the span and
-    // shut by the end of it, at every setting of every bar. What the Feather
-    // moves is the falloff underneath it — how much light is left to be shut
-    // off out there — so the Reach alone says how far the light goes.
+    // shut by the end of it, at every setting of every bar. The falloff
+    // underneath it says how much light is left to be shut off out there; the
+    // Reach alone says how far the light goes.
     let window = 1.0 - smoothstep(span * 0.5, span, d);
-    let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());
     // The falloff, plain: one exponential from the node's exact centre outward,
     // with nothing shaping the middle apart from what the node draws over it.
-    // A node's middle gets no treatment of its own — whatever the Reach and
-    // the Feather do out in the halo, they do at radius 0 too.
-    let skirt = GLOW_BASE * exp(-rate * d / span) * window;
+    // A node's middle gets no treatment of its own — whatever the Reach does
+    // out in the halo, it does at radius 0 too.
+    let skirt = GLOW_BASE * exp(-GLOW_FALLOFF * d / span) * window;
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's
@@ -3129,15 +3106,6 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     return vec4<f32>(ink.xyz * alpha, alpha);
 }
 
-/// What a fragment of the light's draw emits: ONE value to both attachments.
-/// What differs between them is the blend they are written under, which is
-/// fixed-function state and not something a fragment can vary (see
-/// `create_glow_pipeline`).
-struct GlowOut {
-    @location(0) screened: vec4<f32>,
-    @location(1) brightest: vec4<f32>,
-};
-
 /// The light draw. No depth in it: this is a pass of its own ahead of the
 /// scene's, so every node's halo melds into one layer before any node is drawn
 /// over it, and no sheet's light is legible as having come first. It is also
@@ -3157,12 +3125,11 @@ struct GlowOut {
 /// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
 /// stage asks how big the node is on screen.
 @fragment
-fn fs_glow(in: VsOut) -> GlowOut {
+fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
     if EARLY_OUT && glow_level(in) <= 0.0 {
         discard;
     }
-    let light = glow_layer(in, length(in.uv));
-    return GlowOut(light, light);
+    return glow_layer(in, length(in.uv));
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points
@@ -3216,7 +3183,7 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // The RAW light, as a node's ink takes it: a marker's own shadow does not
     // darken the light it is washed with.
     let coord = light_coord(in.clip_pos.xy);
-    let light = glow_light(coord, glow_meld());
+    let light = glow_light(coord);
     let washed = wash_over(ink, alpha, light.rgb, 1.0);
     return vec4<f32>(washed, final_alpha);
 }
