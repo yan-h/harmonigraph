@@ -708,19 +708,8 @@ pub enum ShadowKernel {
     /// all still there at the top of the bar. What it gives up is the pocket a
     /// blur builds where two strokes stand close: the distance to the nearer of
     /// two strokes is the distance to one of them, so a crease reads no deeper
-    /// than a lone edge — and #490's crease is exactly that.
-    /// [`DistanceDensity`](Self::DistanceDensity) is what puts it back.
+    /// than a lone edge, and #490's crease is exactly that.
     Distance,
-    /// [`Distance`](Self::Distance) with a Gaussian beside it, whose EXCESS
-    /// over a lone straight edge at the same distance deepens the pocket
-    /// ([`glow_shadow_pocket`](crate::ViewConfig::glow_shadow_pocket)).
-    ///
-    /// Two cells per caster, and the second earns its place by what it
-    /// contributes NOTHING to: a lone edge and a lone stem have zero excess by
-    /// construction, so the term is silent everywhere but inside a `G`'s bowl
-    /// or between two rings — which is exactly where the distance family is
-    /// short and nowhere else.
-    DistanceDensity,
 }
 
 impl ShadowKernel {
@@ -747,22 +736,15 @@ impl ShadowKernel {
             KernelTerm { weight: 0.342, sigma: 0.5158, kind: Blur },
             KernelTerm { weight: 0.626, sigma: 1.1144, kind: Blur },
         ];
-        // σ 1 on both rows: a distance term's own width IS the Shadow bar's,
-        // and the Gaussian beside it on the second row is the one a straight
-        // edge's excess is measured against, so a second ratio here would be a
-        // second width to keep in step for nothing.
+        // σ 1: a distance term's own width IS the Shadow bar's, so a second
+        // ratio here would be a second width to keep in step for nothing.
         const DISTANCE: [KernelTerm; 1] = [KernelTerm { weight: 0.0, sigma: 1.0, kind: Distance }];
-        const DISTANCE_DENSITY: [KernelTerm; 2] = [
-            KernelTerm { weight: 0.0, sigma: 1.0, kind: Distance },
-            KernelTerm { weight: 1.0, sigma: 1.0, kind: Blur },
-        ];
         match self {
             ShadowKernel::Gaussian => &GAUSSIAN,
             ShadowKernel::TwoScale => &TWO_SCALE,
             ShadowKernel::Sky => &SKY,
             ShadowKernel::Exponential => &EXPONENTIAL,
             ShadowKernel::Distance => &DISTANCE,
-            ShadowKernel::DistanceDensity => &DISTANCE_DENSITY,
         }
     }
 

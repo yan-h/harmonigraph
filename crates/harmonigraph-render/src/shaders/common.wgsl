@@ -164,31 +164,20 @@ const DISTANCE_KIND: f32 = 1.0;
 // reason a mixture is worth drawing.
 //
 // One loop across both FAMILIES, branching per term on what its cell holds. The
-// gain and the pocket enter here rather than at the transmittance because which
-// of them applies is a property of the ROW: a blur row is gained and a distance
-// row is not, and a function taking the finished exponent cannot tell them
-// apart.
+// gain enters here rather than at the transmittance because whether it applies
+// is a property of the ROW: a blur row is gained and a distance row is not, and
+// a function taking the finished exponent cannot tell them apart.
 //
 // `terms` is the kernel's own count, off a uniform: a term past it carries
 // weight 0 and would cost a tap for nothing.
-fn shadow_kernel(
-    who: u32,
-    points: vec2<f32>,
-    terms: u32,
-    gain: f32,
-    shape: f32,
-    pocket: f32,
-) -> f32 {
+fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32) -> f32 {
     if who >= arrayLength(&shadow_casters) {
         return 0.0;
     }
     let atlas = vec2<f32>(textureDimensions(shadow_atlas));
-    // The blur terms, summed by weight; and the distance term's own coverage
-    // beside the raw distance and σ that produced it, which the pocket needs.
+    // The blur terms, summed by weight; and the distance term's own coverage.
     var blur = 0.0;
     var cov = 0.0;
-    var distance = 0.0;
-    var sigma = 0.0;
     var flooded = false;
     for (var t = 0u; t < min(terms, SHADOW_TERMS); t = t + 1u) {
         let cell = shadow_casters[who].cell[t];
@@ -209,9 +198,7 @@ fn shadow_kernel(
         let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
         if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
             flooded = true;
-            distance = held;
-            sigma = shadow_casters[who].sigma[t];
-            cov = standoff_coverage(held, 2.0 * sigma, shape);
+            cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t], shape);
         } else {
             blur = blur + map.w * held;
         }
@@ -222,19 +209,7 @@ fn shadow_kernel(
         // a hairline full depth at its own edge by construction — a gain on top
         // of that is the plateau over the whole padded box that the family is
         // here to not draw.
-        //
-        // What a Gaussian standing BESIDE the distance term adds is its EXCESS
-        // over what a lone straight edge would give at the same distance.
-        // `½erfc(d / (σ√2))` is exactly the blur of a half-plane, so a lone
-        // edge and a lone stem have zero excess by construction and this term
-        // is silent everywhere but where two strokes stand close enough for
-        // their blurs to overlap — inside a bowl, between two rings. That is
-        // #490's crease, filled without a pair-walk (#493).
-        //
-        // Zero where the row carries no blur term at all: `blur` is 0 there,
-        // and the excess over a positive edge value is clamped away.
-        let edge = 0.5 * erfc_positive(distance / max(sigma * 1.4142136, 1.0e-6));
-        return min(clamp(cov, 0.0, 1.0) + max(pocket, 0.0) * max(blur - edge, 0.0), 1.0);
+        return clamp(cov, 0.0, 1.0);
     }
     // The GAIN, which is how much of the depth a caster thin against σ is
     // worth: a hairline's blur peaks at a fraction of 1, and without this its
@@ -268,35 +243,6 @@ fn standoff_coverage(d: f32, w: f32, shape: f32) -> f32 {
 // harmonigraph_scene, pinned to them by `the_standoffs_window_is_the_scenes`.
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
-
-// `erfc(x)` for `x` at or above zero, to better than 1.2e-7 — the Numerical
-// Recipes rational form, nine coefficients over one `exp`.
-//
-// WGSL has no `erfc` builtin, and the quantity it is needed for is exact rather
-// than decorative: `½erfc(d / (σ√2))` is what a Gaussian blur of a single
-// straight edge comes to `d` out from it, and the pocket term is the DIFFERENCE
-// between that and the blur actually standing there. An approximation loose
-// enough to show would print as a pocket along every lone edge in the picture,
-// which is the one place the term is supposed to be silent.
-//
-// The negative branch is left out because the argument is a distance: it is
-// clamped at zero where it is read out of the cell, and a function answering
-// for half a domain it is never called on is one branch nobody has to keep
-// true.
-fn erfc_positive(x: f32) -> f32 {
-    let z = max(x, 0.0);
-    let t = 1.0 / (1.0 + 0.5 * z);
-    return t * exp(-z * z - 1.26551223
-        + t * (1.00002368
-        + t * (0.37409196
-        + t * (0.09678418
-        + t * (-0.18628806
-        + t * (0.27886807
-        + t * (-1.13520398
-        + t * (1.48851587
-        + t * (-0.82215223
-        + t * 0.17087277)))))))));
-}
 
 // The steepest the decay may be bent to, whatever a caller asks for.
 //
