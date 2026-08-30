@@ -1174,37 +1174,39 @@ pub struct ViewConfig {
     /// draw multiplies by 1. Independent of
     /// [`glow_reach`](Self::glow_reach).
     pub glow_shadow_depth: f32,
-    /// How much deeper a NAME's shadow lands on the copy of the picture the
-    /// bloom reads than on the picture a person sees, 0..=1.
+    /// How much deeper EVERY caster's shadow lands on the copy of the picture
+    /// the bloom reads than on the picture a person sees, 0..=1.
     ///
-    /// 0 is the two identical, which is every other caster and is what this
-    /// opens on. 1 takes the bloom's copy under a name to a whole shadow while
-    /// leaving the visible one exactly where
-    /// [`glow_shadow_depth`](Self::glow_shadow_depth) put it.
+    /// 0 is the two identical — one shadow written to both attachments — and is
+    /// what this opens on. 1 takes the bloom's copy under a ring, a mark, a
+    /// resting cross or a name to a whole shadow while leaving the visible one
+    /// exactly where [`glow_shadow_depth`](Self::glow_shadow_depth) put it.
     ///
     /// It exists because a shadow is a MULTIPLY and the bloom is an ADD. The
     /// composite is `scene + bloom * `[`bloom_strength`](Self::bloom_strength)
     /// into an eight-bit target, so over a bright halo the pixel beside a name
     /// is already past 1 and pins to white — and a shadow that does not carry
     /// the sum back under 1 lands as nothing whatever its depth. A name over an
-    /// unlit node keeps its shadow; the same name over a sounding one loses it,
+    /// unlit node keeps its shadow; the same item over a sounding one loses it,
     /// and turning the Shadow up to answer that darkens the whole picture for
     /// the sake of one node.
     ///
     /// This spends the depth where it is not seen. The bright pass reads the
     /// second attachment of the scene pass, so a deeper shadow THERE takes away
     /// the light being added rather than adding darkness to the picture, and
-    /// over an unlit node — where there is no bloom to take — it does nothing at
+    /// over an unlit item — where there is no bloom to take — it does nothing at
     /// all. That is what makes it an answer to the bright case alone rather
     /// than a second Shadow depth.
     ///
-    /// A name's alone, and the one number in the lattice only a name spends.
-    /// A label's INK is already the one thing kept out of that attachment (so a
-    /// name neither glows nor bites the halo of the node it covers), so this is
-    /// a dial on a difference the design already draws, not a new exception to
-    /// "one bar, one darkness". What it buys is paid for in that same halo: the
-    /// hole is blurred with everything else, so the light dims around a name
-    /// over a region wider than the name.
+    /// One bar for every caster, which is the rule
+    /// [`glow_shadow_depth`](Self::glow_shadow_depth) is already under: a ring,
+    /// a mark, a resting cross and a name all read it, so what the bright pass
+    /// sees is the whole lattice's shadow rather than the labels' share of it.
+    /// The ink is untouched in either picture — the alpha a premultiplied
+    /// fragment carries is what it takes off the frame UNDER it — so the two
+    /// attachments part in the frame and never in the item. What it buys is
+    /// paid for in the halo: the hole is blurred with everything else, so the
+    /// light dims around a caster over a region wider than the caster.
     pub glow_shadow_bloom: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is

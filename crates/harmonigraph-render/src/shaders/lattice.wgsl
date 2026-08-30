@@ -311,6 +311,22 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
+// How much DEEPER the same shadow lands on the copy of the picture the bloom's
+// bright pass reads than on the picture a person sees (`u.misc11.y`): the depth
+// above, mixed toward a whole 1.
+//
+// 0 is the two identical — one shadow, written to both attachments. Above it
+// the picture keeps the depth its own bar names and the bright pass's copy is
+// taken further down, which is the one thing a multiply cannot do on its own:
+// the composite is `scene + bloom * strength` into an 8-bit target, so over a
+// bright halo the unshadowed pixel is already past 1 and pins to white, and a
+// shadow that does not carry the sum back under 1 arrives as nothing however
+// deep it is dialled. Over an unlit item there is no bloom to take away and
+// this does nothing at all.
+fn glow_shadow_bloom() -> f32 {
+    return clamp(u.misc11.y, 0.0, 1.0);
+}
+
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
 // is drawn at `scale`.
 //
@@ -333,6 +349,15 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
     );
 }
 
+// What a caster's blur leaves of the frame under one fragment, in each of the
+// two pictures the scene pass writes (`SceneOut`): `seen` is the one on screen,
+// `bloom` the copy the bright pass reads. At the bottom of the Shadow-on-bloom
+// bar the two are one number.
+struct ShadowThrough {
+    seen: f32,
+    bloom: f32,
+}
+
 // A node's or a marker's own cell of the atlas, read at this fragment and spent
 // through `shadow_transmittance`: what its blurred ink leaves of the frame under
 // it, 0..=1.
@@ -340,9 +365,9 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
 // A caster with no cell leaves the frame exactly whole — a frame with no atlas
 // (either Shadow bar at its bottom) packs no cell at all, and every draw
 // multiplies by 1 with nothing sampled.
-fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> f32 {
+fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> ShadowThrough {
     if level <= 0.0 || cell.z <= 0.0 || cell.w <= 0.0 {
-        return 1.0;
+        return ShadowThrough(1.0, 1.0);
     }
     // Held inside the cell, so a quad reaching a hair past its own box takes
     // that cell's own empty border rather than the neighbour packed beside it.
@@ -352,7 +377,14 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> f32 {
     // once σ is past `shadow::SIGMA_CELL_MAX`, and the tap is what makes a blur
     // wider than its own texels read smooth.
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
-    return shadow_transmittance(blur, glow_shadow_depth(), level);
+    let depth = glow_shadow_depth();
+    // ONE tap, spent twice. The same function over the same blur and the same
+    // level, so what parts the two pictures is one number and never the shape
+    // of the shadow.
+    return ShadowThrough(
+        shadow_transmittance(blur, depth, level),
+        shadow_transmittance(blur, mix(depth, 1.0, glow_shadow_bloom()), level),
+    );
 }
 
 // How much of the light a LIT slice washes over its own ink with
@@ -2349,10 +2381,43 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4));
 }
 
+/// What a draw lays down in the scene pass: one ink, and the two alphas that
+/// ink's own SHADOW rides in on — one per attachment (`SceneOut`).
+///
+/// The ink is the SAME in both, and that is the whole of what makes the second
+/// alpha safe: a premultiplied fragment's colour term is what the draw puts
+/// there and the alpha is what it takes off the frame under it, so parting the
+/// alphas darkens the bright pass's copy of the frame and leaves the item
+/// itself pixel for pixel where it was.
+struct Painted {
+    rgb: vec3<f32>,
+    /// The picture a person sees, at the Shadow depth's own bar.
+    seen: f32,
+    /// The copy the bright pass reads, at `glow_shadow_bloom`'s deeper one.
+    /// Never the smaller of the two: a deeper shadow leaves less of the frame.
+    bloom: f32,
+}
+
+/// The PICTURE's own fragment, with the ink's threshold spelled on the ink's
+/// own alpha.
+///
+/// The discard reads the DEEPER alpha, so a shadow only the bright pass can
+/// show is not thrown away with the fragment — and a fragment kept for that
+/// reason has to leave the picture exactly where the discard would have, which
+/// is a whole no-op. Without this the Shadow-on-bloom bar darkens the visible
+/// frame by a fraction of a code value in the tail of every shadow, and it is
+/// defined as the bar that does not touch that frame at all.
+fn seen_of(paint: Painted) -> vec4<f32> {
+    if paint.seen < INK_FLOOR {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(paint.rgb, paint.seen);
+}
+
 /// What a node paints at this fragment: its own ink, and the multiply its own
-/// SHADOW lays over everything already in the frame under it. The scene pass's
-/// two entry points below return exactly this; they differ only in how many
-/// attachments they write it to.
+/// SHADOW lays over everything already in the frame under it, twice
+/// (see [`Painted`]). The single-attachment entry point below spends the
+/// visible one alone.
 ///
 /// The shadow rides the blend the pass already composites under.
 /// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
@@ -2367,7 +2432,7 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
 /// light is composited at the bottom of the pass and takes every shadow by
 /// being under everything, which is what makes a shadow land on ink at the
 /// depth it lands on ground.
-fn node_paint(in: VsOut) -> vec4<f32> {
+fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in);
     // The one tap, taken whatever the node paints here — a fragment the ink
     // never reaches is the shadow by itself, and that is most of the quad.
@@ -2378,18 +2443,25 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         // leave the frame where that path would — a shadow under a hundredth of
         // a code value is no shadow, and one of the two writing it while the
         // other discards is a pixel of difference the parity test reads.
-        let shadow = 1.0 - t;
-        if shadow < INK_FLOOR {
+        //
+        // Read off the DEEPER of the two, which is the larger alpha: a discard
+        // takes the fragment out of both attachments at once, so a shadow the
+        // picture cannot show and the bloom's copy can has to survive it. The
+        // two thresholds coincide with the bloom bar at 0.
+        let shadow = 1.0 - t.seen;
+        let bloom = 1.0 - t.bloom;
+        if bloom < INK_FLOOR {
             discard;
         }
-        return vec4<f32>(0.0, 0.0, 0.0, shadow);
+        return Painted(vec3<f32>(0.0), shadow, bloom);
     }
     var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
     if ink.alpha < INK_FLOOR {
         ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0);
     }
-    let final_alpha = 1.0 - (1.0 - ink.alpha) * t;
-    if final_alpha < INK_FLOOR {
+    let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
+    let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
+    if bloom_alpha < INK_FLOOR {
         discard;
     }
     // The WASH: the light standing at this pixel, laid over the node's own INK.
@@ -2411,7 +2483,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
-    return vec4<f32>(washed, final_alpha);
+    return Painted(washed, final_alpha, bloom_alpha);
 }
 
 /// A node's coverage, into its own cell of the shadow atlas (`shadow.rs`) —
@@ -2650,13 +2722,13 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
 /// is the one the offscreen pass uses.
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return node_paint(in);
+    return seen_of(node_paint(in));
 }
 
 @fragment
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
-    return SceneOut(paint, paint);
+    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3168,7 +3240,7 @@ fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points
 /// are two, and for the multiply this alpha rides.
-fn plus_paint(in: PlusVsOut) -> vec4<f32> {
+fn plus_paint(in: PlusVsOut) -> Painted {
     // A marker's edge is a RING's edge: `aa_inside` at its boundary, carrying
     // the one screen-constant soft band the octave band and the audio ring are
     // cut with. A marker has no softness of its own to dial, so the resting
@@ -3195,8 +3267,12 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // the cross the same way — the painter's order the pass already has is the
     // whole of what decides which.
     let t = shadow_through(in.shadow_at.xy, in.shadow_cell, in.shadow_at.z);
-    let final_alpha = 1.0 - (1.0 - alpha) * t;
-    if final_alpha < INK_FLOOR {
+    let final_alpha = 1.0 - (1.0 - alpha) * t.seen;
+    // The bloom's copy takes the deeper of the two, and the discard reads that
+    // one — the larger alpha, so a shadow only the bright pass can show is not
+    // thrown away with the fragment (`node_paint` states the case in full).
+    let bloom_alpha = 1.0 - (1.0 - alpha) * t.bloom;
+    if bloom_alpha < INK_FLOOR {
         discard;
     }
     // Premultiplied, as every draw in this pass is: the marker IS its own ink
@@ -3219,7 +3295,7 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink, alpha, light.rgb, 1.0);
-    return vec4<f32>(washed, final_alpha);
+    return Painted(washed, final_alpha, bloom_alpha);
 }
 
 /// One cross's coverage, into the markers' shared cell of the shadow atlas —
@@ -3236,12 +3312,12 @@ fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
-    return plus_paint(in);
+    return seen_of(plus_paint(in));
 }
 
 @fragment
 fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
-    return SceneOut(paint, paint);
+    return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
 }
 

@@ -47,8 +47,9 @@ struct Locals {
     /// How much DEEPER the same shadow lands on the picture the bloom's bright
     /// pass reads than on the picture a person sees, 0..1 — the lattice's
     /// `glow_shadow_bloom`, mixed from `shadow_depth` toward a whole 1. Read by
-    /// [`fs_shadow_box`] alone, and 0 everywhere else, which is the two
-    /// attachments carrying the same shadow.
+    /// [`fs_shadow_box`] alone; the ring and the cross spend the same number
+    /// off the same uniform in their own module (`shadow_through`), so one bar
+    /// is one darkness on the bright pass's copy as it is on the picture.
     shadow_bloom: f32,
     /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
     _pad: f32,
@@ -587,13 +588,12 @@ fn vs_shadow_box(
 /// layout with group 0 and nothing else, and a pane with no atlas has no dummy
 /// to bind.
 ///
-/// The one draw in the pass whose two attachments differ in the SHADOW rather
-/// than only in the ink. Everything else writes one fragment to both, and a
-/// name already writes to one — its ink is kept out of `nodes` so it neither
-/// glows nor bites the halo of the node it covers (`SceneOut`, common.wgsl) —
-/// so the label is where the picture and the bright pass's copy of it are
-/// already allowed to disagree, and `shadow_bloom` is a dial on a difference
-/// that exists rather than a new exception.
+/// The two attachments part in the SHADOW here as they do at every other
+/// caster's draw (`Painted` in lattice.wgsl): one ink into both, and the alpha
+/// — which is what the fragment takes off the frame under it — deeper in the
+/// copy the bright pass reads. What is a NAME's alone is the ink, kept out of
+/// `nodes` so it neither glows nor bites the halo of the node it covers
+/// (`SceneOut`, common.wgsl).
 ///
 /// What it buys: the composite is `scene + bloom * strength` into an 8-bit
 /// target, so over a bright halo the unshadowed pixel is already past 1 and
