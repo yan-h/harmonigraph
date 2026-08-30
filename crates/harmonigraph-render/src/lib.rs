@@ -648,9 +648,14 @@ struct Uniforms {
     plus_shadow_rect: [f32; 4],
     /// That box's cell in atlas texels: origin, then size.
     plus_shadow_cell: [f32; 4],
-    /// x: points to cell texels; y: σ in those texels; z: the cell's own level,
-    /// which is 1; w: one arm in points, which is what turns a fragment's place
-    /// on a cross into a place in the cell.
+    /// x: points to cell texels; y: σ in those texels; z: the cell's share of
+    /// the target's pixels, which is what the cross's own soft band is scaled
+    /// by where it is RASTERIZED (`aa_width` in lattice.wgsl); w: one arm in
+    /// points, which is what turns a fragment's place on a cross into a place
+    /// in the cell.
+    ///
+    /// The cell's own level is not carried at all, being 1 for every marker —
+    /// each spends its own opacity as a share where it READS the cell.
     plus_shadow_terms: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
@@ -3904,7 +3909,7 @@ impl CallbackTrait for LatticeCallback {
             uniforms.plus_shadow_rect = cell.rect;
             uniforms.plus_shadow_cell = cell.cell;
             uniforms.plus_shadow_terms =
-                [cell.terms[0], cell.terms[1], cell.terms[2], self.marker_arm_points];
+                [cell.terms[0], cell.terms[1], cell.terms[3], self.marker_arm_points];
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;

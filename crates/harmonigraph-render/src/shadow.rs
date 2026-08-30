@@ -107,7 +107,13 @@ pub(crate) struct ShadowBox {
     /// The cell in atlas texels: origin, then size, all whole numbers.
     pub cell: [f32; 4],
     /// x: the scale from points to cell texels; y: σ in cell texels; z: the
-    /// caster's level, 0..=1; w unused.
+    /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels,
+    /// `min(1, SIGMA_CELL_MAX / σ)`.
+    ///
+    /// The last is what a cell's own rasterizer antialiases against
+    /// (`aa_width` in lattice.wgsl): a fragment of the cell is one pane pixel
+    /// divided by it, and a soft band taken off that fragment alone is the
+    /// Shadow bar times a constant rather than a screen width.
     pub terms: [f32; 4],
 }
 
@@ -240,7 +246,12 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
             ShadowBox {
                 rect,
                 cell: if fits { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] },
-                terms: [k, sigma_cell, if fits { caster.level.clamp(0.0, 1.0) } else { 0.0 }, 0.0],
+                terms: [
+                    k,
+                    sigma_cell,
+                    if fits { caster.level.clamp(0.0, 1.0) } else { 0.0 },
+                    scale,
+                ],
             }
         })
         .collect();
