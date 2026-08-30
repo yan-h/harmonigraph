@@ -209,8 +209,10 @@ pub(crate) struct TextUniforms {
     /// carries and how many taps its box takes (`fs_shadow_box`). 0 on every
     /// other surface, which samples the atlas not at all.
     pub(crate) shadow_terms: f32,
-    /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
-    pub(crate) _pad: f32,
+    /// The exponent a DISTANCE row's decay is taken over (`fs_shadow_box`), in
+    /// what WGSL leaves as a gap here aligning the atlas size to 8 bytes. 0 on
+    /// every other surface, which casts no shadow.
+    pub(crate) shadow_shape: f32,
     /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
     /// a name's cell into. 0 everywhere else, where nothing draws into one.
     pub(crate) shadow_atlas_size: [f32; 2],
@@ -998,7 +1000,7 @@ impl CallbackTrait for TextCallback {
             pixels_per_point: ppp,
             shadow_depth: 0.0,
             shadow_terms: 0.0,
-            _pad: 0.0,
+            shadow_shape: 0.0,
             shadow_atlas_size: [0.0; 2],
             shadow_gain: 0.0,
             shadow_curve: 0.0,

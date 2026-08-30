@@ -119,6 +119,17 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // idle branch does is now pinned by
     // `a_silent_lattice_ships_no_nodes_and_still_draws_its_markers` instead,
     // on the CPU side where the decision actually lives.
+    // The wide Shadow again on the DISTANCE row, which is the only way the
+    // kind branch reaches this comparison at all. `shadow_kernel` walks its
+    // terms inside the same fragment the early-outs guard, so a skip sized off
+    // a blur's reach and a row that reaches further is a shadow clipped flat in
+    // the fast pipeline alone — and #508's finding 3 is that `fs_node_cell` has
+    // an early-out of its own, which every fixture above compiles on one row.
+    let distance = || {
+        let mut scene = wide_shadow();
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        scene
+    };
     for (name, scene) in [
         ("lit", parity_scene()),
         ("shimmering", shimmering()),
@@ -126,6 +137,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("folded", folded()),
         ("a wide shadow", wide_shadow()),
         ("a lit field", lit_field()),
+        ("a distance row", distance()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,

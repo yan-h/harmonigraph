@@ -131,11 +131,18 @@ struct Uniforms {
     misc10: vec4<f32>,
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
-    // the reach every quad is grown by (`shadow_reach_uv`); y: how much deeper
-    // a NAME's shadow lands on the copy of the picture the bloom's bright pass
-    // reads, which is a text.wgsl dial and read nowhere in this file; w: how
+    // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
+    // DISTANCE row's decay is taken over (`Scene::glow_shadow_shape`); w: how
     // dark it lands, 1 taking the frame under a solid caster down to
     // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
+    //
+    // Every number on it is the FRAME's, one Shadow across the picture: what a
+    // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
+    // where its cells are packed.
+    //
+    // The shape sits HERE and not on the curve row beside it because it belongs
+    // to a ROW rather than to the depth: it is not read at all unless a term of
+    // this frame's kernel holds a distance.
     //
     // Read wherever a caster spends its cell (`shadow_through`), which is every
     // ink draw of the scene pass. NOT zeroed with misc10: a shadow is cast with
@@ -342,20 +349,34 @@ fn glow_shadow_curve() -> f32 {
     return max(u.shadow_curve.y, 0.0);
 }
 
+// The exponent a DISTANCE row's decay is taken over (`u.misc11.y`). Inert on a
+// blur row — `shadow_kernel` never reaches it unless a term of the row holds a
+// distance.
+fn glow_shadow_shape() -> f32 {
+    return max(u.misc11.y, 0.0);
+}
+
 // How many terms this frame's kernel has (`u.shadow_curve.z`), and how far the
-// widest of them reaches against the picture's own σ (`u.shadow_curve.w`).
+// widest of them reaches past a caster's ink in the picture's own σ
+// (`u.shadow_curve.w`, `ShadowKernel::reach_sigmas`).
 //
 // The widest and not the sum, because a quad has to hold the whole kernel: a
 // caster billboarded on its narrow term's reach cuts the wide one off in a
 // straight line at the box, which is the trap `shadow_reach_uv` exists for and
-// is ×N here. Floored at 1 so a frame with no kernel packed sizes its quads as
-// one Gaussian does.
+// is ×N here.
+//
+// A reach and not a σ RATIO, because the two families do not end at the same
+// multiple of their own width: the ratio times a constant answers for a blur
+// row and would cut a distance row's window off a third of the way in. The
+// multiple is `KernelTerm::reach_sigmas`, spent on the CPU, so a quad here is
+// one number. Floored at `SHADOW_REACH_SIGMAS` so a frame with no kernel packed
+// sizes its quads as one Gaussian does.
 fn glow_shadow_terms() -> u32 {
     return u32(max(u.shadow_curve.z, 0.0));
 }
 
-fn glow_shadow_widest() -> f32 {
-    return max(u.shadow_curve.w, 1.0);
+fn glow_shadow_reach() -> f32 {
+    return max(u.shadow_curve.w, SHADOW_REACH_SIGMAS);
 }
 
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
@@ -367,8 +388,7 @@ fn glow_shadow_widest() -> f32 {
 // is more of its own uv, which is what the division by `scale` says: the Shadow
 // is one width across the picture and not a share of each node.
 fn shadow_reach_uv(scale: f32) -> f32 {
-    return SHADOW_REACH_SIGMAS * 0.5 * glow_shadow() * glow_shadow_widest()
-        / (1.8 * max(scale, 0.05));
+    return 0.5 * glow_shadow() * glow_shadow_reach() / (1.8 * max(scale, 0.05));
 }
 
 // A clip position as a point of the pane, in points — the units a caster's box
@@ -401,17 +421,23 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     if level <= 0.0 {
         return ShadowThrough(1.0, 1.0);
     }
-    // The whole kernel at this point: one tap per term, mixed by weight
-    // (`shadow_blur`). Taken ONCE and spent twice — the mix is what the two
-    // pictures share, and the depth is the only term they part on, so a wider
-    // row costs its taps once however many attachments read them.
-    let blur = shadow_blur(u32(max(who, 0.0)), points, glow_shadow_terms());
+    // The whole kernel at this point: one tap per term, mixed by whatever this
+    // row's own family mixes by (`shadow_kernel`). Taken ONCE and spent twice —
+    // the mix is what the two pictures share, and the depth is the only term
+    // they part on, so a wider row costs its taps once however many attachments
+    // read them.
+    let full = shadow_kernel(
+        u32(max(who, 0.0)),
+        points,
+        glow_shadow_terms(),
+        glow_shadow_gain(),
+        glow_shadow_shape(),
+    );
     let depth = glow_shadow_depth();
-    let gain = glow_shadow_gain();
     let curve = glow_shadow_curve();
     return ShadowThrough(
-        shadow_transmittance(blur, depth, level, gain, curve),
-        shadow_transmittance(blur, 1.0, level, gain, curve),
+        shadow_transmittance(full, depth, level, curve),
+        shadow_transmittance(full, 1.0, level, curve),
     );
 }
 
@@ -662,7 +688,7 @@ struct VsOut {
     // rest is 0. Zero throughout on the draws that do neither.
     @location(10) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment stands on the PANE, in points (xy) — the space every
-    // term's cell is mapped from (`shadow_blur`) — how much of the shadow lands
+    // term's cell is mapped from (`shadow_kernel`) — how much of the shadow lands
     // (z), and how coarse the surface being rasterized ON is, as a share of the
     // target's pixels (w). 1 on every draw that lands on the pane,
     // `shadow::pack`'s own scale on the draw that fills a cell, and the
