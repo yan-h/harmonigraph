@@ -8,6 +8,17 @@
 # so "did the gate run" is a file test rather than a build.
 set -euo pipefail
 
+# git exports GIT_DIR, GIT_INDEX_FILE and the rest to its hooks, and ci.sh runs
+# from .githooks/pre-push — inherited, they aim every git call below at the repo
+# being PUSHED rather than the scratch one, and `git -C` does not override them.
+# What that costs is not a failed test: the commits land on the real branch, the
+# real index is replaced by the scratch one, and `update-ref origin/main` moves a
+# ref every other worktree shares. The same unset guards reclaim-locks.sh and
+# plugin-swap.sh, for the same reason.
+for v in $(env | sed -n 's/^\(GIT_[A-Z_]*\)=.*/\1/p'); do
+  unset "$v"
+done
+
 HOOK=$(cd "$(dirname "$0")/../.." && pwd)/.githooks/pre-push
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -20,6 +31,19 @@ ZERO=0000000000000000000000000000000000000000
 new_repo() {
   rm -rf "$tmp/r" && mkdir -p "$tmp/r"
   git -C "$tmp/r" init -q
+  # Belt and braces over the unset above, and the guard that matters: prove git
+  # resolves INSIDE the scratch repo before anything commits to it. Both paths
+  # are physical, which is what makes the prefix test hold under macOS's
+  # /var -> /private/var symlink.
+  real=$(cd "$tmp/r" && pwd -P)
+  here=$(git -C "$tmp/r" rev-parse --absolute-git-dir 2>/dev/null)
+  case "$here" in
+    "$real"/*) ;;
+    *)
+      echo "refusing: git resolves to ${here:-nothing}, not $real" >&2
+      exit 1
+      ;;
+  esac
   git -C "$tmp/r" config user.email t@t && git -C "$tmp/r" config user.name t
   mkdir -p "$tmp/r/crates"
   echo "fn main() {}" >"$tmp/r/crates/a.rs"
