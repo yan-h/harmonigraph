@@ -3,7 +3,7 @@
 //! at a glance whether the plugin is working the machine hard.
 //!
 //! Where it sits is the user's, and nothing else's: it opens in the editor's
-//! bottom-right corner and is DRAGGED from there to wherever it is wanted,
+//! bottom-left corner and is DRAGGED from there to wherever it is wanted,
 //! which is the only thing that ever moves it (see [`draw_overlay`]). The
 //! position outlives the session — `SharedState::perf_pos`.
 //!
@@ -151,7 +151,7 @@ fn tag_line(
 /// position back through that handle, and nothing else in the tree moves it.
 ///
 /// `None` is "never dragged", and only then does the HUD have a position of
-/// anyone else's choosing: the editor's bottom-right corner, inset, and read
+/// anyone else's choosing: the editor's bottom-left corner, inset, and read
 /// off the editor ALONE — no pane, no tab bar, nothing about the arrangement
 /// underneath it. That is where it OPENS, not where it belongs: the first drag
 /// makes the position the user's and it is honoured from then on.
@@ -302,7 +302,7 @@ pub(crate) fn draw_overlay(
     let inset = OVERLAY_INSET * scale;
     // Where an undragged HUD opens — this function's docs say why it is this
     // corner, and why it is a starting point rather than a rule.
-    let home = egui::pos2(editor.right() - inset - size.x, editor.bottom() - inset - size.y);
+    let home = egui::pos2(editor.left() + inset, editor.bottom() - inset - size.y);
 
     // Held inside the editor here, against the size measured THIS frame,
     // rather than by the Area's own `constrain_to`. An Area measures its
