@@ -111,7 +111,7 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f
 
 // The most terms a caster's kernel is built out of — `SHADOW_TERMS_MAX` in
 // harmonigraph_scene, pinned to it by `the_shaders_term_count_is_the_scenes`.
-const SHADOW_TERMS: u32 = 4u;
+const SHADOW_TERMS: u32 = 2u;
 
 // One caster's whole kernel, as the scene pass reads it (`ShadowCaster` in
 // shadow.rs).
@@ -143,11 +143,11 @@ const DISTANCE_KIND: f32 = 1.0;
 // Every caster's kernel, indexed by the caster's own index in the frame
 // (`pack`'s order).
 //
-// A storage buffer and a group of its own, which is what a MIXTURE costs. One
-// term rode beside the instance; four cannot — a node's rows reach location 15
-// and leave five free, against the eight the cells need — and a term's cell is
-// read by a node, a marker and a name alike, so one array they all index is
-// also one place the shape is written down.
+// A storage buffer and a group of its own, which is what a MIXTURE costs. The
+// whole caster cannot fit the five attribute locations a node leaves after
+// location 15 (see `ShadowCaster` in shadow.rs), and a term's cell is read by a
+// node, a marker and a name alike, so one array they all index is also one place
+// the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
 
 // What a caster's kernel comes to at `points` of the pane, 0..=1 — the EXPONENT
