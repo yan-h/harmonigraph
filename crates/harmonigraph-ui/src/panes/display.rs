@@ -35,7 +35,7 @@ use super::spectral::spectrum_settings_pane;
 use super::system::system_pane;
 use super::view::view_pane;
 use crate::params::ParamBackend;
-use crate::widgets::button_row;
+use crate::theme;
 use crate::SharedState;
 
 /// Display's pages, in the order the picker lists them: the colors every
@@ -69,7 +69,7 @@ impl DisplayPage {
         [Colors, Lattice, Analyzer, System]
     };
 
-    /// The page's name, on its picker button and nowhere else.
+    /// The page's name, on its picker label and nowhere else.
     pub fn title(self) -> &'static str {
         match self {
             DisplayPage::Colors => "Colors",
@@ -103,24 +103,87 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
     }
 }
 
-/// The row of page names at the top of the tab, and the whole of its
+/// The strip of page names at the top of the tab, and the whole of its
 /// navigation.
 ///
 /// No label in front of it, unlike the choice rows inside the pages: one of
 /// those names a setting and then offers its values, where this row IS what the
 /// tab holds — a word in front of it would read as a setting called Page.
 ///
-/// A [`button_row`], so a narrow column wraps the names onto a second line
-/// instead of running the last of them off the edge. A page is reached by
-/// clicking its name and by nothing else, so a name past the pane edge is a
-/// page with no way into it: horizontal scrolling is off in the dock (see
-/// [`Viewer::scroll_bars`](super::Viewer)).
+/// Text and an underline rather than selectable buttons: this row NAVIGATES to
+/// another body, while a filled selectable button inside that body CHANGES a
+/// setting. Giving both jobs one shape makes the page names read as another
+/// enum setting. The hairline under the whole strip ties its names together,
+/// and the accent stroke ties the active name to that boundary.
+///
+/// The row still wraps when the column is too narrow to hold every name. A
+/// page is reached by clicking its name and by nothing else, so a name past the
+/// pane edge is a page with no way into it: horizontal scrolling is off in the
+/// dock (see [`Viewer::scroll_bars`](super::Viewer)).
 fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
-    button_row(ui, |ui| {
+    let selected = *page;
+    let scale = theme::ui_scale(ui.ctx());
+    let row = ui.horizontal_wrapped(|ui| {
+        let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
-            ui.selectable_value(page, choice, choice.title());
+            let title = choice.title();
+            // Both faces decide the allocation, so selecting or hovering a
+            // name can give it emphasis without moving its neighbours or
+            // changing which names wrap.
+            let regular = egui::TextStyle::Button.resolve(ui.style());
+            let strong = egui::TextStyle::Heading.resolve(ui.style());
+            let regular_width =
+                ui.painter().layout_no_wrap(title.to_owned(), regular, theme::text()).size().x;
+            let strong_width =
+                ui.painter().layout_no_wrap(title.to_owned(), strong, theme::text()).size().x;
+            let size = egui::vec2(
+                regular_width.max(strong_width) + 12.0 * scale,
+                theme::row_height(scale),
+            );
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::SelectableLabel,
+                    ui.is_enabled(),
+                    choice == selected,
+                    title,
+                )
+            });
+            tabs.push((choice, response, rect));
         }
+        tabs
     });
+
+    for (choice, response, _) in &row.inner {
+        if response.clicked() {
+            *page = *choice;
+        }
+    }
+
+    // Paint the common boundary first; the selected page's thicker stroke
+    // replaces its own piece of that line rather than floating above it.
+    ui.painter().hline(
+        row.response.rect.x_range(),
+        row.response.rect.bottom(),
+        egui::Stroke::new(1.0, theme::hairline()),
+    );
+    for (choice, response, rect) in row.inner {
+        let emphasized = choice == *page || response.hovered() || response.has_focus();
+        let font = if emphasized {
+            egui::TextStyle::Heading.resolve(ui.style())
+        } else {
+            egui::TextStyle::Button.resolve(ui.style())
+        };
+        let color = if emphasized { theme::text() } else { theme::text_dim() };
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, choice.title(), font, color);
+        if choice == *page {
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom(),
+                egui::Stroke::new(2.0 * scale, theme::accent()),
+            );
+        }
+    }
 }
 
 /// The Lattice page: the whole lattice picture, read from the camera in front
@@ -136,4 +199,51 @@ fn lattice_page(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBa
     nodes_pane(ui, state, params);
     labels_pane(ui, state);
     plus_pane(ui, state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Page navigation is text on one shared boundary, while an enum setting
+    /// is a row of filled controls. The distinction is the whole reason this
+    /// picker has its own widget instead of `selectable_value`.
+    #[test]
+    fn the_page_picker_does_not_read_as_an_option_row() {
+        let mut page = DisplayPage::Analyzer;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+
+        let fills: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill != egui::Color32::TRANSPARENT => {
+                    Some(rect.fill)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(fills.is_empty(), "the page picker drew filled option buttons: {fills:?}");
+
+        let lines: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                _ => None,
+            })
+            .collect();
+        let boundary = lines.iter().find(|(_, stroke)| stroke.color == theme::hairline());
+        let active = lines.iter().find(|(_, stroke)| stroke.color == theme::accent());
+        let (boundary, active) = (
+            boundary.expect("the page names have no common boundary"),
+            active.expect("the active page has no accent underline"),
+        );
+        let width = |points: &[egui::Pos2; 2]| (points[1].x - points[0].x).abs();
+        assert!(
+            width(active.0) < width(boundary.0),
+            "the active stroke does not identify one page",
+        );
+    }
 }

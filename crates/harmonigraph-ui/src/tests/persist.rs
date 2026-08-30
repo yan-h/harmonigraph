@@ -1526,9 +1526,9 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     let out = window.frame(&mut state, vec![]);
     assert!(!drawn(&out, leaf, "Projection"), "the tab must open on the Colors page");
 
-    // The Lattice button on the picker, found where it was painted and clicked
+    // The Lattice name on the picker, found where it was painted and clicked
     // for real.
-    let button = out
+    let target = out
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
@@ -1537,10 +1537,10 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
             }
             _ => None,
         })
-        .expect("the Display pane drew no Lattice button");
-    window.frame(&mut state, vec![egui::Event::PointerMoved(button)]);
-    window.frame(&mut state, vec![egui::Event::PointerMoved(button), press(button, true)]);
-    window.frame(&mut state, vec![press(button, false)]);
+        .expect("the Display pane drew no Lattice picker label");
+    window.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    window.frame(&mut state, vec![egui::Event::PointerMoved(target), press(target, true)]);
+    window.frame(&mut state, vec![press(target, false)]);
     let out = window.frame(&mut state, vec![]);
     assert_eq!(
         state.display_page,
