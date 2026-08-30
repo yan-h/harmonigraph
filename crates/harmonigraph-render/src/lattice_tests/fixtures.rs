@@ -205,9 +205,6 @@ pub(super) fn parity_scene() -> Scene {
         // picture.
         glow_shadow: 0.16,
         glow_shadow_depth: 0.85,
-        // Off, as a fresh view has it: the two attachments carry the
-        // same shadow unless a fixture says otherwise.
-        glow_shadow_bloom: 0.0,
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv

@@ -311,22 +311,6 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
-// How much DEEPER the same shadow lands on the copy of the picture the bloom's
-// bright pass reads than on the picture a person sees (`u.misc11.y`): the depth
-// above, mixed toward a whole 1.
-//
-// 0 is the two identical — one shadow, written to both attachments. Above it
-// the picture keeps the depth its own bar names and the bright pass's copy is
-// taken further down, which is the one thing a multiply cannot do on its own:
-// the composite is `scene + bloom * strength` into an 8-bit target, so over a
-// bright halo the unshadowed pixel is already past 1 and pins to white, and a
-// shadow that does not carry the sum back under 1 arrives as nothing however
-// deep it is dialled. Over an unlit item there is no bloom to take away and
-// this does nothing at all.
-fn glow_shadow_bloom() -> f32 {
-    return clamp(u.misc11.y, 0.0, 1.0);
-}
-
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
 // is drawn at `scale`.
 //
@@ -350,9 +334,9 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
 }
 
 // What a caster's blur leaves of the frame under one fragment, in each of the
-// two pictures the scene pass writes (`SceneOut`): `seen` is the one on screen,
-// `bloom` the copy the bright pass reads. At the bottom of the Shadow-on-bloom
-// bar the two are one number.
+// two pictures the scene pass writes (`SceneOut`): `seen` is the one on
+// screen, `bloom` the copy the bright pass reads, always at a whole shadow
+// (1) whatever `seen`'s own depth is.
 struct ShadowThrough {
     seen: f32,
     bloom: f32,
@@ -379,11 +363,11 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> ShadowThroug
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
     let depth = glow_shadow_depth();
     // ONE tap, spent twice. The same function over the same blur and the same
-    // level, so what parts the two pictures is one number and never the shape
-    // of the shadow.
+    // level, so what parts the two pictures is one number (1 against `depth`)
+    // and never the shape of the shadow.
     return ShadowThrough(
         shadow_transmittance(blur, depth, level),
-        shadow_transmittance(blur, mix(depth, 1.0, glow_shadow_bloom()), level),
+        shadow_transmittance(blur, 1.0, level),
     );
 }
 
@@ -2393,8 +2377,8 @@ struct Painted {
     rgb: vec3<f32>,
     /// The picture a person sees, at the Shadow depth's own bar.
     seen: f32,
-    /// The copy the bright pass reads, at `glow_shadow_bloom`'s deeper one.
-    /// Never the smaller of the two: a deeper shadow leaves less of the frame.
+    /// The copy the bright pass reads, always at a whole shadow (1). Never the
+    /// smaller of the two: a deeper shadow leaves less of the frame.
     bloom: f32,
 }
 
@@ -2404,9 +2388,9 @@ struct Painted {
 /// The discard reads the DEEPER alpha, so a shadow only the bright pass can
 /// show is not thrown away with the fragment — and a fragment kept for that
 /// reason has to leave the picture exactly where the discard would have, which
-/// is a whole no-op. Without this the Shadow-on-bloom bar darkens the visible
-/// frame by a fraction of a code value in the tail of every shadow, and it is
-/// defined as the bar that does not touch that frame at all.
+/// is a whole no-op. Without this, the bloom copy's whole shadow darkens the
+/// visible frame by a fraction of a code value in the tail of every shadow,
+/// where the picture a person sees is defined never to be touched at all.
 fn seen_of(paint: Painted) -> vec4<f32> {
     if paint.seen < INK_FLOOR {
         return vec4<f32>(0.0);

@@ -214,9 +214,8 @@ fn cell_clip(texel: vec2<f32>, size: vec2<f32>, w: f32) -> vec4<f32> {
 // are otherwise allowed to differ in is a caster's SHADOW: a premultiplied
 // fragment's alpha is what it takes off the frame UNDER it, so a deeper alpha
 // here is the same item over a darker copy of the frame rather than a different
-// item (`glow_shadow_bloom` — lattice.wgsl's `Painted`, text.wgsl's
-// `fs_shadow_box`). With that bar at 0 every draw that reaches both writes one
-// identical fragment to them.
+// item (lattice.wgsl's `Painted`, text.wgsl's `fs_shadow_box`) — `nodes`
+// always at a whole shadow (1), whatever `picture`'s own depth is.
 struct SceneOut {
     @location(0) picture: vec4<f32>,
     @location(1) nodes: vec4<f32>,

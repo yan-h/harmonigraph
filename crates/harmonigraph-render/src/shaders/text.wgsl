@@ -44,15 +44,9 @@ struct Locals {
     /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
-    /// How much DEEPER the same shadow lands on the picture the bloom's bright
-    /// pass reads than on the picture a person sees, 0..1 — the lattice's
-    /// `glow_shadow_bloom`, mixed from `shadow_depth` toward a whole 1. Read by
-    /// [`fs_shadow_box`] alone; the ring and the cross spend the same number
-    /// off the same uniform in their own module (`shadow_through`), so one bar
-    /// is one darkness on the bright pass's copy as it is on the picture.
-    shadow_bloom: f32,
     /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
     _pad: f32,
+    _pad3: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
     shadow_atlas_size: vec2<f32>,
@@ -599,21 +593,20 @@ fn vs_shadow_box(
 /// target, so over a bright halo the unshadowed pixel is already past 1 and
 /// pins to white, and a shadow that does not carry the sum back under 1 lands
 /// as nothing at all. Modelled at a halo of 0.9 and a name's `T` of 0.62, the
-/// darkening that reaches the screen is 0.1% at `shadow_bloom` 0 and 38% by the
-/// time the bloom's own copy is taken to depth 1 — with the visible shadow left
-/// exactly as light as it was. Over an unlit node there is no bloom to take
-/// away and the bar does nothing, which is what makes it an answer to the
-/// bright case alone.
+/// darkening that reaches the screen is 38% once the bloom's own copy is taken
+/// to a whole shadow — with the visible shadow left exactly as light as
+/// `shadow_depth` says. Over an unlit node there is no bloom to take away and
+/// this does nothing, which is what makes it an answer to the bright case
+/// alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
     let t = shadow_transmittance(blur, locals.shadow_depth, in.level);
-    // The bright pass's copy, at its own depth. The SAME function over the same
-    // blur and the same level, so what differs between the two pictures is one
-    // number and never the shape of the shadow.
-    let deeper = mix(locals.shadow_depth, 1.0, clamp(locals.shadow_bloom, 0.0, 1.0));
-    let lit = shadow_transmittance(blur, deeper, in.level);
+    // The bright pass's copy, always at a WHOLE shadow (1) rather than at
+    // `shadow_depth`: the copy the bright pass reads takes every caster's
+    // shadow to the shader's own floor, whatever the visible one is left at.
+    let lit = shadow_transmittance(blur, 1.0, in.level);
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),

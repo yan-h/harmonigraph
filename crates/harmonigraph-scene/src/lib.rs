@@ -894,10 +894,6 @@ pub struct Scene {
     /// How dark a shadow lands where it is whole (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
-    /// How much deeper EVERY caster's shadow lands on the copy of the picture
-    /// the bloom reads than on the picture itself (see
-    /// [`ViewConfig::glow_shadow_bloom`]); already clamped to 0..=1.
-    pub glow_shadow_bloom: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///
