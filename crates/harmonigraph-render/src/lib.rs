@@ -640,6 +640,21 @@ struct Uniforms {
     /// `from_scene`, the atlas's size in `prepare`, which is after the packing
     /// and so the earliest the size is known.
     misc14: [f32; 4],
+    /// The shadow's CURVE — what its blur is spent through, where [`misc11`]
+    /// above says how wide and how dark it is. x: the gain, how much a caster
+    /// thin against σ is worth against a solid one (`Scene::glow_shadow_gain`);
+    /// y: the exponent that bends where along the shadow's width the depth sits
+    /// (`Scene::glow_shadow_curve`). z/w unused.
+    ///
+    /// A row of its own rather than `misc11`'s spare slot, because the two
+    /// answer different questions: that row is the shadow's SIZE, which every
+    /// quad, cell and atlas on the CPU is built from, and this one is the
+    /// arithmetic one fragment spends. Nothing here moves a cell.
+    ///
+    /// NOT zeroed with the light, on `misc11`'s own rule.
+    ///
+    /// [`misc11`]: Uniforms::misc11
+    shadow_curve: [f32; 4],
     /// The ONE cell every resting marker's shadow is read out of, as three
     /// rows rather than a buffer: every cross is the same shape at the same σ
     /// and a blur is linear, so one cell serves the whole field and each
@@ -1284,7 +1299,7 @@ impl LatticeCallback {
             // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
             let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
-            let empty = shadow::Caster { rect: [0.0; 4], level: 0.0 };
+            let empty = shadow::Caster { rect: [0.0; 4], level: 0.0, sigma_scale: 1.0 };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
                 to_points(n.world_pos + right * reach),
@@ -1316,7 +1331,13 @@ impl LatticeCallback {
             // LEVEL 1: the coverage the cell is filled with already carries
             // every layer's own envelope (`node_ink`), so a released node's
             // shadow fades with its ink and needs no second term here.
-            shadow::Caster { rect: [min.x, min.y, max.x - min.x, max.y - min.y], level: 1.0 }
+            // The picture's own width: a node is what the Shadow bar is
+            // calibrated on, and only a name is dialled off it.
+            shadow::Caster {
+                rect: [min.x, min.y, max.x - min.x, max.y - min.y],
+                level: 1.0,
+                sigma_scale: 1.0,
+            }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
         // the same shape at the same size — they stand on the home sheet at one
@@ -1330,6 +1351,11 @@ impl LatticeCallback {
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
+        // What a NAME's σ takes against the rest of the picture's, which is the
+        // one caster in the lattice allowed to be other than 1
+        // (`ViewConfig::glow_shadow_name`). Read once, the bar being one number
+        // for every name in the frame.
+        let name_sigma_scale = scene.glow_shadow_name.max(0.0);
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
         // The markers' ONE cell, ahead of everything the walk pushes: every
         // cross is the same shape at the same σ and a blur is linear, so the
@@ -1338,7 +1364,11 @@ impl LatticeCallback {
         // is what lets a marker map its own uv into a cell it did not place.
         if marker_arm_points > 0.0 {
             let a = marker_arm_points;
-            casters.push(shadow::Caster { rect: [-a, -a, 2.0 * a, 2.0 * a], level: 1.0 });
+            casters.push(shadow::Caster {
+                rect: [-a, -a, 2.0 * a, 2.0 * a],
+                level: 1.0,
+                sigma_scale: 1.0,
+            });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let mut loose_drawn = false;
@@ -1372,7 +1402,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run));
+                casters.push(shadow::caster_of(run, name_sigma_scale));
             }
         }
         // The home run can be empty and can run to the end of the order, in
@@ -1447,6 +1477,7 @@ impl LatticeCallback {
                 // frame with no light in it still casts every shadow the
                 // lattice has.
                 misc11: [scene.glow_shadow, scene.glow_shadow_bloom, 0.0, scene.glow_shadow_depth],
+                shadow_curve: [scene.glow_shadow_gain, scene.glow_shadow_curve, 0.0, 0.0],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
@@ -3864,7 +3895,11 @@ impl CallbackTrait for LatticeCallback {
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
-                        _pad2: [0.0; 2],
+                        // And the curve that same shadow is spent through, so
+                        // a name's profile and a ring's are one shape
+                        // (`u.shadow_curve` in lattice.wgsl).
+                        shadow_gain: self.uniforms.shadow_curve[0],
+                        shadow_curve: self.uniforms.shadow_curve[1],
                         // A lattice name paints no rim, so there is no ring for
                         // the two passes that draw one to walk. Zero samples is
                         // what says so (`ring`), and it is what keeps the fill's

@@ -16,9 +16,11 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
-    GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
+    GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -696,7 +698,42 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  short, which is how a shadow says how thick the ink casting it \
                  is. 0% is the picture with no shadow at all.",
             );
-        // Directly under the depth it is measured against.
+        // The two that shape the depth rather than set it, under the pair they
+        // act on: how much of it the picture's THINNEST ink gets, and where
+        // along the shadow's width it sits.
+        ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
+            .display(|v| format!("{v:.2}x"))
+            .show(ui)
+            .on_hover_text(
+                "How much of the Shadow depth the picture's THINNEST ink gets. \
+                 A shadow is a blur of the thing casting it, so a wide band \
+                 blurs to a solid pool and a hairline ring or a stroke of type \
+                 blurs to a faint smudge — and without this they would land at \
+                 wildly different darknesses from one depth. Turning it up \
+                 brings the thin ink up toward the depth the bar names and \
+                 leaves the wide ink exactly where it is, until at the top \
+                 everything in the lattice is one flat silhouette. 0x is the \
+                 picture with no shadow at all.",
+            );
+        ValueBar::new(
+            &mut view.glow_shadow_curve,
+            GLOW_SHADOW_CURVE_MIN..=GLOW_SHADOW_CURVE_MAX,
+            "Shadow curve",
+        )
+        .display(|v| format!("{v:.2}"))
+        .show(ui)
+        .on_hover_text(
+            "Where along a shadow's width its darkness sits. Both ends stay \
+             put — the pool under solid ink stays at the depth, and the far \
+             edge stays at nothing — and this bends everything between them. \
+             Below 1 fills the middle out into a broad even pool that gives \
+             way suddenly at its edge; above 1 pulls the darkness in tight \
+             against the ink and lets the rest go gently, which reads as a \
+             rim. 1 is the plain blur, and the shadow is exactly the shape of \
+             the blur that made it.",
+        );
+        // The depth again, on the picture the bloom reads: a share of the
+        // Shadow depth bar above rather than a bar of its own units.
         ValueBar::new(&mut view.glow_shadow_bloom, 0.0..=1.0, "Shadow on bloom")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
@@ -713,6 +750,24 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  moves. It costs a dimming of the halo around each caster, a \
                  little wider than the caster itself. 0% is the picture with \
                  this bar absent.",
+            );
+        // The one bar in the section a single caster keeps to itself, and the
+        // one that breaks "one Shadow width across the picture" — see
+        // `ViewConfig::glow_shadow_name` for why a letterform is the ink
+        // allowed to ask.
+        ValueBar::new(&mut view.glow_shadow_name, 0.0..=GLOW_SHADOW_NAME_MAX, "Name shadow")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How wide a note name's own shadow is, as a share of the \
+                 Shadow width everything else in the lattice casts. 100% is \
+                 one width across the whole picture, which is what every other \
+                 item takes. A name is the only ink here whose SHAPE has to be \
+                 read, so the blur that says how thick a ring is may not be \
+                 the blur that keeps a letter legible: wider lifts the name \
+                 off the lattice on a soft pool, narrower keeps the shadow \
+                 inside the letterforms, and 0% is the letters dropped as a \
+                 hard-edged copy of themselves with no blur at all.",
             );
         // The ink's own share of the same field, under the bar that says the
         // ground's: the pair is one question asked twice, and the answers are

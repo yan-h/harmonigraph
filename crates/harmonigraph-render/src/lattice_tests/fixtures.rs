@@ -208,6 +208,13 @@ pub(super) fn parity_scene() -> Scene {
         // Off, as a fresh view has it: the two attachments carry the
         // same shadow unless a fixture says otherwise.
         glow_shadow_bloom: 0.0,
+        // The shadow's curve at the fresh view's own: the gain that a name was
+        // calibrated on, an unbent falloff, and one width for a name as for
+        // everything else. A test that says nothing about the three reads the
+        // profile the Shadow bar alone makes.
+        glow_shadow_gain: 2.5,
+        glow_shadow_curve: 1.0,
+        glow_shadow_name: 1.0,
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv

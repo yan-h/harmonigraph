@@ -168,6 +168,18 @@ struct Uniforms {
     // texels, for the draws that fill a cell — they cannot bind the texture
     // they are writing, so its size cannot be read off it.
     misc14: vec4<f32>,
+    // The shadow's CURVE — what its blur is spent through, where misc11 says
+    // how wide and how dark it is. x: the gain, how much a caster thin against
+    // σ is worth against a solid one (`Scene::glow_shadow_gain`); y: the
+    // exponent that bends where along the shadow's width the depth sits
+    // (`Scene::glow_shadow_curve`). z/w unused.
+    //
+    // A row of its own rather than misc11's spare slot, because the two rows
+    // answer different questions: up there is the shadow's SIZE, which every
+    // caster's quad and cell are built from on the CPU, and here is the
+    // arithmetic one fragment spends — nothing on this row moves a quad, a cell
+    // or the atlas. Packed on misc11's rule, whatever the light says.
+    shadow_curve: vec4<f32>,
     // The ONE cell every resting marker's shadow is read out of, as three rows
     // rather than a per-instance buffer: every cross is the same shape at the
     // same σ, and a blur is linear, so `blur(level * ink)` is `level *
@@ -327,6 +339,22 @@ fn glow_shadow_bloom() -> f32 {
     return clamp(u.misc11.y, 0.0, 1.0);
 }
 
+// How much a caster THIN against σ is worth against a solid one
+// (`u.shadow_curve.x`), and where along the shadow's width the depth sits
+// (`u.shadow_curve.y`). The pair `shadow_transmittance` takes, read here so
+// that every caster in this module spends one number.
+//
+// Spent on BOTH of the pictures a caster writes, the depth being the only term
+// the bloom's copy takes differently: what parts the two is how dark the shadow
+// lands and never what shape it is.
+fn glow_shadow_gain() -> f32 {
+    return max(u.shadow_curve.x, 0.0);
+}
+
+fn glow_shadow_curve() -> f32 {
+    return max(u.shadow_curve.y, 0.0);
+}
+
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
 // is drawn at `scale`.
 //
@@ -378,12 +406,14 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> ShadowThroug
     // wider than its own texels read smooth.
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
     let depth = glow_shadow_depth();
-    // ONE tap, spent twice. The same function over the same blur and the same
-    // level, so what parts the two pictures is one number and never the shape
-    // of the shadow.
+    let gain = glow_shadow_gain();
+    let curve = glow_shadow_curve();
+    // ONE tap, spent twice. The same function over the same blur, the same
+    // level and the same curve, so what parts the two pictures is one number
+    // and never the shape of the shadow.
     return ShadowThrough(
-        shadow_transmittance(blur, depth, level),
-        shadow_transmittance(blur, mix(depth, 1.0, glow_shadow_bloom()), level),
+        shadow_transmittance(blur, depth, level, gain, curve),
+        shadow_transmittance(blur, mix(depth, 1.0, glow_shadow_bloom()), level, gain, curve),
     );
 }
 
