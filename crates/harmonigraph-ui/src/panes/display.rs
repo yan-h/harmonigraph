@@ -112,9 +112,9 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
 ///
 /// Text and an underline rather than selectable buttons: this row NAVIGATES to
 /// another body, while a filled selectable button inside that body CHANGES a
-/// setting. Giving both jobs one shape makes the page names read as another
-/// enum setting. The hairline under the whole strip ties its names together,
-/// and the accent stroke ties the active name to that boundary.
+/// setting. Giving both jobs one resting shape makes the page names read as
+/// another enum setting. The hairline under the whole strip ties its names
+/// together, and the accent stroke ties the active name to that boundary.
 ///
 /// The row still wraps when the column is too narrow to hold every name. A
 /// page is reached by clicking its name and by nothing else, so a name past the
@@ -147,6 +147,14 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
     for (choice, response, _) in &row.inner {
         if response.clicked() {
             *page = *choice;
+        }
+    }
+
+    // Match the dock tabs' hover without giving an inactive destination the
+    // persistent fill that makes option controls read as selected.
+    for (choice, response, rect) in &row.inner {
+        if *choice != *page && response.hovered() {
+            ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, theme::surface_faint());
         }
     }
 
@@ -258,10 +266,10 @@ mod tests {
         assert_eq!(font("Analyzer"), font("Colors"));
     }
 
-    /// Hover makes a destination legible without changing its weight. A face
+    /// Hover borrows the dock tabs' highlight without changing weight. A face
     /// change under the pointer makes the letterforms twitch.
     #[test]
-    fn hovering_a_page_brightens_it_without_bolding_it() {
+    fn hovering_a_page_highlights_it_without_bolding_it() {
         let ctx = crate::tests::probe::themed();
         let size = egui::vec2(400.0, 100.0);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
@@ -292,5 +300,12 @@ mod tests {
         assert_eq!(resting_color, theme::text_dim());
         assert_eq!(hovered_color, theme::text());
         assert_eq!(hovered_font, resting_font, "hover changed the label's weight");
+        assert!(
+            hovered.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == theme::surface_faint()
+            )),
+            "hover drew no tab highlight",
+        );
     }
 }
