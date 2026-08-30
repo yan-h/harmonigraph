@@ -127,19 +127,9 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
             let title = choice.title();
-            // Both faces decide the allocation, so selecting a name can give
-            // it emphasis without moving its neighbours or changing which
-            // names wrap.
-            let regular = egui::TextStyle::Button.resolve(ui.style());
-            let strong = egui::TextStyle::Heading.resolve(ui.style());
-            let regular_width =
-                ui.painter().layout_no_wrap(title.to_owned(), regular, theme::text()).size().x;
-            let strong_width =
-                ui.painter().layout_no_wrap(title.to_owned(), strong, theme::text()).size().x;
-            let size = egui::vec2(
-                regular_width.max(strong_width) + 12.0 * scale,
-                theme::row_height(scale),
-            );
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let width = ui.painter().layout_no_wrap(title.to_owned(), font, theme::text()).size().x;
+            let size = egui::vec2(width + 12.0 * scale, theme::row_height(scale));
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
@@ -169,11 +159,7 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
     );
     for (choice, response, rect) in row.inner {
         let active = choice == *page;
-        let font = if active {
-            egui::TextStyle::Heading.resolve(ui.style())
-        } else {
-            egui::TextStyle::Button.resolve(ui.style())
-        };
+        let font = egui::TextStyle::Button.resolve(ui.style());
         let highlighted = active || response.hovered() || response.has_focus();
         let color = if highlighted { theme::text() } else { theme::text_dim() };
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, choice.title(), font, color);
@@ -248,9 +234,32 @@ mod tests {
         );
     }
 
+    /// The underline and color identify the current page without changing its
+    /// letterforms. The Display pages use the same weight behavior as tabs.
+    #[test]
+    fn selecting_a_page_does_not_bold_its_label() {
+        let mut page = DisplayPage::Analyzer;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+        let font = |title: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == title => {
+                        Some(text.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the picker drew no {title:?}"))
+        };
+
+        assert_eq!(font("Analyzer"), font("Colors"));
+    }
+
     /// Hover makes a destination legible without changing its weight. A face
-    /// change under the pointer makes the letterforms twitch even when the
-    /// label keeps the width reserved for its stronger face.
+    /// change under the pointer makes the letterforms twitch.
     #[test]
     fn hovering_a_page_brightens_it_without_bolding_it() {
         let ctx = crate::tests::probe::themed();
