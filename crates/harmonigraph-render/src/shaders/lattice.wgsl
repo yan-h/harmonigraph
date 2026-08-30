@@ -132,18 +132,17 @@ struct Uniforms {
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
     // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
-    // DISTANCE row's decay is taken over (`Scene::glow_shadow_shape`); z: what
-    // its pocket term is multiplied up by (`Scene::glow_shadow_pocket`); w: how
+    // DISTANCE row's decay is taken over (`Scene::glow_shadow_shape`); w: how
     // dark it lands, 1 taking the frame under a solid caster down to
-    // `SHADOW_KEEP_FLOOR`.
+    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
     //
     // Every number on it is the FRAME's, one Shadow across the picture: what a
     // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
     // where its cells are packed.
     //
-    // The two in the middle sit HERE and not on the curve row beside them
-    // because they belong to a ROW rather than to the depth: neither is read at
-    // all unless a term of this frame's kernel holds a distance.
+    // The shape sits HERE and not on the curve row beside it because it belongs
+    // to a ROW rather than to the depth: it is not read at all unless a term of
+    // this frame's kernel holds a distance.
     //
     // Read wherever a caster spends its cell (`shadow_through`), which is every
     // ink draw of the scene pass. NOT zeroed with misc10: a shadow is cast with
@@ -350,16 +349,11 @@ fn glow_shadow_curve() -> f32 {
     return max(u.shadow_curve.y, 0.0);
 }
 
-// The two the DISTANCE family alone reads (`u.misc11.y`, `u.misc11.z`): the
-// exponent its decay is taken over, and what its pocket term is multiplied up
-// by. Inert on a blur row — `shadow_kernel` reaches neither unless a term of
-// the row holds a distance.
+// The exponent a DISTANCE row's decay is taken over (`u.misc11.y`). Inert on a
+// blur row — `shadow_kernel` never reaches it unless a term of the row holds a
+// distance.
 fn glow_shadow_shape() -> f32 {
     return max(u.misc11.y, 0.0);
-}
-
-fn glow_shadow_pocket() -> f32 {
-    return max(u.misc11.z, 0.0);
 }
 
 // How many terms this frame's kernel has (`u.shadow_curve.z`), and how far the
@@ -438,7 +432,6 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
         glow_shadow_terms(),
         glow_shadow_gain(),
         glow_shadow_shape(),
-        glow_shadow_pocket(),
     );
     let depth = glow_shadow_depth();
     let curve = glow_shadow_curve();

@@ -61,10 +61,8 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_each_kernel_costs_this_much() {
-    use harmonigraph_scene::ShadowKernel::{
-        Distance, DistanceDensity, Exponential, Gaussian, Sky, TwoScale,
-    };
-    for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance, DistanceDensity] {
+    use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
+    for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance] {
         for (shadow, where_) in [
             (the_live_view().glow_shadow, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),

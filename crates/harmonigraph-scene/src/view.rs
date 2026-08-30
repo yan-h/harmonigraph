@@ -7,8 +7,8 @@ use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
     GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
-    GLOW_SHADOW_POCKET_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
-    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1267,20 +1267,6 @@ pub struct ViewConfig {
     /// family has no knee: see [`SHADOW_SHAPE_MAX`](crate::SHADOW_SHAPE_MAX).
     /// Inert on a blur row, and the bar is hidden there.
     pub glow_shadow_shape: f32,
-    /// What a distance row's POCKET term is multiplied up by,
-    /// 0..=[`GLOW_SHADOW_POCKET_MAX`].
-    ///
-    /// A distance field answers with the nearest ink and nothing else, so where
-    /// two strokes stand close — inside a `G`'s bowl, between two rings — it is
-    /// no darker than one stroke alone at that distance. The Gaussian beside it
-    /// on [`ShadowKernel::DistanceDensity`] knows the difference, and what this
-    /// scales is its EXCESS over what a lone straight edge would give at the
-    /// same distance: zero at a lone edge and at a lone stem by construction,
-    /// so the term deepens the crease and touches nothing else.
-    ///
-    /// 0 is [`ShadowKernel::Distance`]'s own picture drawn at two cells' cost.
-    /// Inert on every other row, and the bar is grayed there.
-    pub glow_shadow_pocket: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2281,8 +2267,6 @@ impl ViewConfig {
         // number out of range would be waiting there when it is switched back.
         self.glow_shadow_shape = finite_or(self.glow_shadow_shape, fresh.glow_shadow_shape)
             .clamp(crate::SHADOW_SHAPE_MIN, crate::SHADOW_SHAPE_MAX);
-        self.glow_shadow_pocket = finite_or(self.glow_shadow_pocket, fresh.glow_shadow_pocket)
-            .clamp(0.0, GLOW_SHADOW_POCKET_MAX);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2625,10 +2609,6 @@ impl Default for ViewConfig {
             // The plain exponential, which is the ceiling of the shape bar and
             // the only value in its range with no knee anywhere in the decay.
             glow_shadow_shape: 1.0,
-            // Above the 1 that would be "the excess, as it stands": the excess
-            // is a few percent where it exists at all, so a share of 1 is a
-            // pocket the eye has to be told about.
-            glow_shadow_pocket: 1.5,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own
