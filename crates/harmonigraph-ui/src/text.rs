@@ -1033,7 +1033,18 @@ pub(crate) const MARK_SHEET_WIDTH: u32 = 512;
 /// this gets more than this — the repack is skipped when there is nothing dead
 /// to drop, since repacking a live set to the same size every pass is a
 /// full-sheet re-upload per frame for nothing.
-const MARK_SHEET_SOFT_HEIGHT: u32 = 512;
+///
+/// Big enough to hold one GESTURE's worth of sizes, which is the whole of what
+/// picks the number. A repack keeps what the last pass drew and drops the
+/// rest — so a sheet that cannot hold a zoom's range evicts, on the way out,
+/// precisely the sizes the way back in is about to ask for, and every one of
+/// them is re-rasterized and re-published. That is not a slow cache, it is a
+/// cache running backwards: measured over eight full-range sweeps, 512 gave
+/// 668 publications still climbing and 1281 marks rasterized, where this holds
+/// at 108 publications from the second sweep on and 212 marks, with no repack
+/// at all (issue #529). 1024 is not enough to get there; the sheet settles
+/// near 512x1024, so the room costs about 2 MB.
+const MARK_SHEET_SOFT_HEIGHT: u32 = 2048;
 
 /// Where the [`MarkAtlas`] lives: in egui's own per-frame data store, keyed on
 /// the context, so it dies with the window that built it — exactly as the
@@ -1275,11 +1286,42 @@ mod tests {
         mark_key(kind, size_px, MARK_WEIGHT, 1.0)
     }
 
-    /// A walk of `count` distinct sizes, tall enough that a few dozen of them
-    /// fill the sheet past [`MARK_SHEET_SOFT_HEIGHT`] — which is what a zoom
-    /// drag does, a rung at a time.
-    fn a_zooms_worth(count: usize) -> Vec<crate::marks::MarkKey> {
-        (0..count).map(|step| mark_at(MarkKind::Sharp, 60.0 + step as f32)).collect()
+    /// A walk of distinct sizes long enough to fill the sheet past
+    /// [`MARK_SHEET_SOFT_HEIGHT`] — which is what a zoom drag does, a rung at
+    /// a time.
+    ///
+    /// Walked until it clears that height rather than pinned to a count,
+    /// because clearing it is the whole of what the three callers need: a walk
+    /// that stops short leaves the repack nothing to do, so a test about what
+    /// a repack keeps runs against a sheet that was never due one and passes
+    /// for the wrong reason. Pinned, raising the constant guts all three at
+    /// once, and only their own `filled > SOFT_HEIGHT` assertions say so —
+    /// which is how this fixture was found, when the height went up.
+    ///
+    /// Sizes climb by the pixel from 60, and the walk clears the height inside
+    /// the range the app can actually ask for: a mark sets at
+    /// [`crate::marks::MARK_SCALE`] of type bounded at [`MAX_GLYPH_PX`], and
+    /// it is that bound `a_mark_is_never_wider_than_the_sheet_it_is_packed_into`
+    /// works the shelf guarantee out against. A walk that ran past it would be
+    /// packing marks the packer never promised to fit.
+    ///
+    /// Once per binary: every caller wants the same walk, and the tail of it
+    /// is large bitmaps.
+    fn a_zooms_worth() -> &'static [crate::marks::MarkKey] {
+        static WALK: std::sync::OnceLock<Vec<crate::marks::MarkKey>> = std::sync::OnceLock::new();
+        WALK.get_or_init(|| {
+            let mut sheet = MarkAtlas::default();
+            let mut keys = Vec::new();
+            for step in 0.. {
+                let key = mark_at(MarkKind::Sharp, 60.0 + step as f32);
+                sheet.patch(key, 0);
+                keys.push(key);
+                if sheet.image.height() as u32 > MARK_SHEET_SOFT_HEIGHT {
+                    return keys;
+                }
+            }
+            unreachable!("the walk is unbounded above")
+        })
     }
 
     /// What the sheet holds at `patch`, read back out as an image — so a test
@@ -1375,7 +1417,7 @@ mod tests {
         let mut sheet = MarkAtlas::default();
         let first = mark_at(MarkKind::Plus, 11.0);
         let early = sheet.patch(first, 0);
-        for key in a_zooms_worth(80) {
+        for &key in a_zooms_worth() {
             sheet.patch(key, 0);
         }
         assert!(
@@ -1413,7 +1455,7 @@ mod tests {
     #[test]
     fn a_pass_boundary_packs_the_sheet_back_down_to_what_is_drawn() {
         let mut sheet = MarkAtlas::default();
-        for key in a_zooms_worth(80) {
+        for &key in a_zooms_worth() {
             sheet.patch(key, 0);
         }
         let filled = sheet.image.height();
@@ -1477,8 +1519,8 @@ mod tests {
     #[test]
     fn a_sheet_still_drawing_all_its_marks_is_not_repacked() {
         let mut sheet = MarkAtlas::default();
-        let live = a_zooms_worth(80);
-        for &key in &live {
+        let live = a_zooms_worth();
+        for &key in live {
             sheet.patch(key, 0);
         }
         let filled = sheet.image.height();
@@ -1491,7 +1533,7 @@ mod tests {
         // asks for exactly what is already packed.
         let settled = sheet.key;
         for pass in 1..4 {
-            for &key in &live {
+            for &key in live {
                 sheet.patch(key, pass);
             }
             assert_eq!(sheet.key, settled, "pass {pass} repacked a sheet with nothing dead in it");
