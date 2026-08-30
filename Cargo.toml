@@ -91,7 +91,20 @@ baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }
 
 [profile.release]
-lto = "thin"
+# Cross-crate LTO reaches exactly one artifact here, and it is not the plugin.
+# `harmonigraph-plugin` is `crate-type = ["cdylib", "lib"]`, and cargo does not
+# LTO a unit that also emits an rlib, so the bundle Bitwig loads compiles
+# identically either way. That leaves `harmonigraph-offline`, whose frame loop
+# waits on the GPU: at 1920x1080 it renders in 20.4s against 20.5s, which is
+# noise.
+#
+# The cost is charged to every build in every worktree. `thin` puts
+# `-C linker-plugin-lto` on the whole dependency graph, so egui, naga and
+# wgpu-core each compile about 30% dearer to emit bitcode only the offline
+# binary reads, and it turns that binary's link into a 42s single-core tail at
+# the end of a 213s build. A clean release build is 2m23s here and 3m32s with
+# `thin`.
+lto = false
 # The symbol table stays, because a hang is the one failure that leaves nothing
 # to read. A panic writes itself into Bitwig's engine.log and a segfault leaves
 # a crash report, but a plug-in host that stops answering is SIGKILLed by the
