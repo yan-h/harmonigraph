@@ -158,13 +158,25 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         }
     }
 
-    // Paint the common boundary first; the selected page's thicker stroke
-    // replaces its own piece of that line rather than floating above it.
-    ui.painter().hline(
-        row.response.rect.x_range(),
-        row.response.rect.bottom(),
-        egui::Stroke::new(1.0, theme::hairline()),
-    );
+    // Each wrapped line is a strip of its own. One boundary under the whole
+    // block leaves an active page on any earlier line floating between rows.
+    let mut boundaries: Vec<(egui::Rangef, f32)> = Vec::new();
+    for (_, _, rect) in &row.inner {
+        match boundaries.last_mut() {
+            Some((range, bottom)) if (*bottom - rect.bottom()).abs() < 0.5 => {
+                range.max = rect.right();
+            }
+            _ => boundaries.push((rect.x_range(), rect.bottom())),
+        }
+    }
+    // Preserve the full strip boundary when the picker fits on one line.
+    if boundaries.len() == 1 {
+        boundaries[0].0 = row.response.rect.x_range();
+    }
+    for (range, bottom) in boundaries {
+        ui.painter().hline(range, bottom, egui::Stroke::new(1.0, theme::hairline()));
+    }
+
     for (choice, response, rect) in row.inner {
         let active = choice == *page;
         let font = egui::TextStyle::Button.resolve(ui.style());
@@ -264,6 +276,52 @@ mod tests {
         };
 
         assert_eq!(font("Analyzer"), font("Colors"));
+    }
+
+    /// Every wrapped line is a complete navigation strip, so its selected
+    /// page replaces the boundary directly beneath that line.
+    #[test]
+    fn a_wrapped_picker_keeps_the_active_stroke_on_its_row_boundary() {
+        let mut page = DisplayPage::Colors;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(120.0, 160.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+        let lines: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                _ => None,
+            })
+            .collect();
+        let active = lines
+            .iter()
+            .find(|(_, stroke)| stroke.color == theme::accent())
+            .expect("the active page has no accent underline");
+        let boundaries: Vec<_> =
+            lines.iter().filter(|(_, stroke)| stroke.color == theme::hairline()).collect();
+        let labels: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                _ => None,
+            })
+            .collect();
+        let selected_label_y = labels
+            .iter()
+            .find_map(|(title, y)| (*title == "Colors").then_some(*y))
+            .expect("the picker drew no Colors label");
+        let last_label_y = labels.iter().map(|(_, y)| *y).reduce(f32::max).unwrap();
+        assert!(selected_label_y < last_label_y, "the fixture selected a page on the final row");
+        let active_y = active.0[0].y;
+        assert!(
+            boundaries.iter().any(|(points, _)| {
+                (points[0].y - active_y).abs() < 0.01
+                    && points[0].x <= active.0[0].x
+                    && points[1].x >= active.0[1].x
+            }),
+            "the active stroke is detached from its row boundary",
+        );
     }
 
     /// Hover borrows the dock tabs' highlight without changing weight. A face
