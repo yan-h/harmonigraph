@@ -51,8 +51,11 @@ struct Locals {
     /// off the same uniform in their own module (`shadow_through`), so one bar
     /// is one darkness on the bright pass's copy as it is on the picture.
     shadow_bloom: f32,
-    /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
-    _pad: f32,
+    /// How many terms the lattice's kernel has, and so how many cells a caster
+    /// carries and how many taps its box takes (`ShadowKernel::terms`). Read by
+    /// [`fs_shadow_box`] alone, and 0 everywhere else — which is a surface that
+    /// samples the atlas not at all.
+    shadow_terms: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
     shadow_atlas_size: vec2<f32>,
@@ -536,33 +539,39 @@ fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
 
 struct BoxOut {
     @builtin(position) position: vec4<f32>,
-    /// Where this fragment reads the atlas, in atlas texels.
-    @location(0) texel: vec2<f32>,
+    /// Where this fragment stands on the pane, in points — the space every
+    /// term's cell is mapped from (`shadow_blur`).
+    @location(0) at: vec2<f32>,
     /// The caster's level, 0..1.
     @location(1) @interpolate(flat) level: f32,
+    /// Which caster this is, in `shadow_casters`.
+    @location(2) @interpolate(flat) who: u32,
 };
 
-/// A caster's box: the quad its shadow is laid over, which is its ink's own
-/// box grown by the blur's reach (`pack` in shadow.rs). The attributes are one
-/// `ShadowBox`.
+/// A caster's box: the quad its shadow is laid over, which is its ink's own box
+/// grown by the WIDEST of its kernel's terms (`pack` in shadow.rs).
+///
+/// No vertex buffer at all. The draw is one instance at the caster's own index
+/// (`Draw::Label` in lib.rs), so the index IS the instance index, and every
+/// number the quad needs is in the array that index reaches — which is where a
+/// mixture's cells have to live anyway, four of them being more than any
+/// instance stream here has room for.
 @vertex
 fn vs_shadow_box(
     @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
+    @builtin(instance_index) who: u32,
 ) -> BoxOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
+    let caster = shadow_casters[min(who, arrayLength(&shadow_casters) - 1u)];
+    let at = caster.rect.xy + corner * caster.rect.zw;
     var out: BoxOut;
-    out.position = on_screen(rect.xy + corner * rect.zw);
-    // The box's own corner in the cell: the same point in the two spaces the
-    // packer related by `terms.x`, so a fragment anywhere on the quad reads the
-    // blur of the ink that stands at its own pixel.
-    out.texel = cell.xy + corner * rect.zw * terms.x;
-    out.level = terms.z;
+    out.position = on_screen(at);
+    out.at = at;
+    out.level = caster.level.x;
+    out.who = who;
     return out;
 }
 
@@ -585,9 +594,10 @@ fn vs_shadow_box(
 /// the caster. The name's LEVEL is spent there as a share, which is what a name
 /// easing in as its marker eases out casts.
 ///
-/// One bilinear tap. The cell is drawn at a fraction of the target's pixels
-/// once σ is past `SIGMA_CELL_MAX`, and the tap is what makes a blur wider
-/// than its own texels read smooth.
+/// One bilinear tap PER TERM of the kernel, each in its own cell at its own
+/// resolution (`shadow_blur` in common.wgsl), summed by weight before the
+/// transmittance is taken: a sum of transmittances is a different picture from
+/// the transmittance of a sum, and the second is the one a kernel means.
 ///
 /// The LATTICE's box draw alone binds group 2. The bindings a pipeline must
 /// carry are the ones its entry point reads, so every other surface's text —
@@ -613,8 +623,7 @@ fn vs_shadow_box(
 /// bright case alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
-    let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
-    let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
+    let blur = shadow_blur(in.who, in.at, u32(max(locals.shadow_terms, 0.0)));
     let t = shadow_transmittance(
         blur,
         locals.shadow_depth,

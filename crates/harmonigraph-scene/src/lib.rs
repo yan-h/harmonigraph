@@ -51,7 +51,9 @@ pub use spectral::{
     SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
-pub use style::{Gradient, NoteNames, Pulse, SevensLabel};
+pub use style::{
+    Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, SHADOW_TERMS_MAX,
+};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -957,6 +959,10 @@ pub struct Scene {
     /// [`ViewConfig::glow_shadow_name`]); already clamped to
     /// 0..=[`GLOW_SHADOW_NAME_MAX`].
     pub glow_shadow_name: f32,
+    /// Which mixture of Gaussians every caster's ink is blurred with (see
+    /// [`ViewConfig::glow_shadow_kernel`]). Carried whole: the renderer takes
+    /// the row off it rather than a copy of the numbers.
+    pub glow_shadow_kernel: ShadowKernel,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///

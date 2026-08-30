@@ -15,7 +15,7 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
+    Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
     GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
     GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
@@ -698,6 +698,48 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  short, which is how a shadow says how thick the ink casting it \
                  is. 0% is the picture with no shadow at all.",
             );
+        // The kernel, above the three bars that shape what it draws: it is the
+        // only setting here that changes what the blur IS rather than how the
+        // blur is spent, and the only one that costs atlas.
+        choice_row(
+            ui,
+            "Kernel",
+            &mut view.glow_shadow_kernel,
+            &[
+                (
+                    ShadowKernel::Gaussian,
+                    "Gaussian",
+                    "One plain blur. The shape a shadow has had all along, and \
+                     what every other setting here is calibrated against. One \
+                     cell of the shadow atlas per item.",
+                ),
+                (
+                    ShadowKernel::TwoScale,
+                    "Two-scale",
+                    "A tight core with a wide skirt under it, 70/30 at 1:3. The \
+                     cheapest departure from a plain blur: the shadow keeps a \
+                     definite edge near the ink and carries a faint pool well \
+                     past where a Gaussian has stopped. Two cells per item.",
+                ),
+                (
+                    ShadowKernel::Sky,
+                    "Sky",
+                    "The falloff a lit sky has, as three blurs. A core that \
+                     holds the item's shape and a pool that carries much \
+                     further than a Gaussian's — the look a soft window light \
+                     casts. Three cells per item, so the widest Shadow \
+                     settings cost the most here.",
+                ),
+                (
+                    ShadowKernel::Exponential,
+                    "Exponential",
+                    "A cusp at the ink and a straight-line falloff off it, as \
+                     three blurs. The other end of the family from the \
+                     Gaussian's flat middle: darkest right against the ink and \
+                     giving way steadily rather than easing in and out.",
+                ),
+            ],
+        );
         // The two that shape the depth rather than set it, under the pair they
         // act on: how much of it the picture's THINNEST ink gets, and where
         // along the shadow's width it sits.

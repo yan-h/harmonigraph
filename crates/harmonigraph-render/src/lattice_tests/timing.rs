@@ -43,6 +43,31 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
     time_a_frame_of_names(scene, "the top of the Shadow bar");
 }
 
+/// Every row of the kernel table, at both ends of the Shadow bar.
+///
+/// What a MIXTURE costs, which is the number #527 wants before a row is chosen.
+/// A row of N terms packs N cells per caster and takes N taps in every caster's
+/// draw; the blur chain over them is unchanged, every cell's σ still being
+/// capped in texels. The two ends of the bar are here for the same reason the
+/// two probes above are: the atlas SHRINKS as the bar opens and the quads grow,
+/// so a row's cost is not one number.
+#[test]
+#[ignore = "a probe: prints a timing and asserts nothing"]
+fn a_frame_of_names_at_each_kernel_costs_this_much() {
+    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    for kernel in [Gaussian, TwoScale, Sky, Exponential] {
+        for (shadow, where_) in [
+            (the_live_view().glow_shadow, "the live view"),
+            (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),
+        ] {
+            let mut scene = the_live_view();
+            scene.glow_shadow = shadow;
+            scene.glow_shadow_kernel = kernel;
+            time_a_frame_of_names(scene, &format!("{kernel:?} at {where_}"));
+        }
+    }
+}
+
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
