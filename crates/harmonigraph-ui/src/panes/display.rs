@@ -127,9 +127,9 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
             let title = choice.title();
-            // Both faces decide the allocation, so selecting or hovering a
-            // name can give it emphasis without moving its neighbours or
-            // changing which names wrap.
+            // Both faces decide the allocation, so selecting a name can give
+            // it emphasis without moving its neighbours or changing which
+            // names wrap.
             let regular = egui::TextStyle::Button.resolve(ui.style());
             let strong = egui::TextStyle::Heading.resolve(ui.style());
             let regular_width =
@@ -168,13 +168,14 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
         egui::Stroke::new(1.0, theme::hairline()),
     );
     for (choice, response, rect) in row.inner {
-        let emphasized = choice == *page || response.hovered() || response.has_focus();
-        let font = if emphasized {
+        let active = choice == *page;
+        let font = if active {
             egui::TextStyle::Heading.resolve(ui.style())
         } else {
             egui::TextStyle::Button.resolve(ui.style())
         };
-        let color = if emphasized { theme::text() } else { theme::text_dim() };
+        let highlighted = active || response.hovered() || response.has_focus();
+        let color = if highlighted { theme::text() } else { theme::text_dim() };
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, choice.title(), font, color);
         if choice == *page {
             ui.painter().hline(
@@ -245,5 +246,42 @@ mod tests {
             width(active.0) < width(boundary.0),
             "the active stroke does not identify one page",
         );
+    }
+
+    /// Hover makes a destination legible without changing its weight. A face
+    /// change under the pointer makes the letterforms twitch even when the
+    /// label keeps the width reserved for its stronger face.
+    #[test]
+    fn hovering_a_page_brightens_it_without_bolding_it() {
+        let ctx = crate::tests::probe::themed();
+        let size = egui::vec2(400.0, 100.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut page = DisplayPage::Analyzer;
+        let mut draw = |events| {
+            crate::tests::probe::events_into(&ctx, size, rect, events, |ui| {
+                page_picker(ui, &mut page)
+            })
+        };
+        let style = |out: &egui::FullOutput, title: &str| {
+            out.shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == title => {
+                        let format = &text.galley.job.sections[0].format;
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        Some((format.font_id.clone(), format.color, rect.center()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the picker drew no {title:?}"))
+        };
+
+        let resting = draw(vec![]);
+        let (resting_font, resting_color, target) = style(&resting, "Colors");
+        let hovered = draw(vec![egui::Event::PointerMoved(target)]);
+        let (hovered_font, hovered_color, _) = style(&hovered, "Colors");
+        assert_eq!(resting_color, theme::text_dim());
+        assert_eq!(hovered_color, theme::text());
+        assert_eq!(hovered_font, resting_font, "hover changed the label's weight");
     }
 }
