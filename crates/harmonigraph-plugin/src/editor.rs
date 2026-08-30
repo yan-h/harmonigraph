@@ -115,10 +115,6 @@ pub struct EditorShared {
     audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
-    /// The frame interval currently armed on the window, so an unchanged
-    /// cadence doesn't rebuild the run-loop timer every frame. `None` until
-    /// the first frame sets one.
-    frame_interval: Option<f64>,
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<harmonigraph_ui::params::ParamKey>>,
     /// Take recording, driven from the Video pane's toggle.
@@ -157,7 +153,6 @@ impl EditorShared {
             drain_buf: Vec::new(),
             audio_buf: Vec::new(),
             last_frame: None,
-            frame_interval: None,
             gesture: std::cell::Cell::new(None),
             take,
             take_events,
@@ -432,8 +427,8 @@ fn frame(
     // One lock for the whole frame. Uncontended by design: the audio
     // thread only ever touches the rtrb producer, and the editor-drop
     // path runs on this same GUI thread.
-    let mut shared = state.shared.lock();
-    let shared = &mut *shared;
+    let mut guard = state.shared.lock();
+    let shared = &mut *guard;
 
     shared.note_frame();
 
@@ -496,12 +491,30 @@ fn frame(
     }
 
     // Pace the window AFTER the UI has run, so a cap picked this frame takes
-    // effect on the next tick rather than the one after it.
-    let target = target_frame_interval(shared.ui.fps_cap, queue.display_max_fps());
-    if shared.frame_interval != Some(target) {
-        shared.frame_interval = Some(target);
-        queue.set_frame_interval(target);
+    // effect on the next tick rather than the one after it. The lock is
+    // released first because what is armed is a fact about the WINDOW rather
+    // than about the state behind it (see [`WindowState::frame_interval`]).
+    let fps_cap = shared.ui.fps_cap;
+    let display_max_fps = queue.display_max_fps();
+    drop(guard);
+    if let Some(interval) = pace(state, fps_cap, display_max_fps) {
+        queue.set_frame_interval(interval);
     }
+}
+
+/// What the window's frame timer has to be told this frame: the interval the
+/// cap and the display ask for, or `None` when it already ticks at that.
+///
+/// Split out of [`frame`] because it is the whole of the pacing decision and
+/// the only part of it a test can reach: a `Queue` — which is where the real
+/// frame reads the display and arms the timer — borrows window internals that
+/// exist only inside a running window.
+fn pace(
+    state: &mut WindowState,
+    fps_cap: Option<f32>,
+    display_max_fps: Option<f64>,
+) -> Option<f64> {
+    state.arm(target_frame_interval(fps_cap, display_max_fps))
 }
 
 /// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
@@ -783,6 +796,35 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
 struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
+    /// The frame interval armed on THIS window's timer, so an unchanged
+    /// cadence doesn't rebuild the run-loop timer every frame. `None` until
+    /// the first frame arms one.
+    ///
+    /// Per window rather than alongside the rest of the editor's state, and
+    /// that placement is the whole of it: a window opens at baseview's
+    /// `DEFAULT_FRAME_INTERVAL` (~67 Hz) whatever the window before it was
+    /// running at, so a record that outlived the closed window would agree
+    /// with the target the first frame computes, skip the arming, and leave a
+    /// reopened editor ticking at the default until something else moved the
+    /// target. That is a stuck 67 fps that only a cap change clears, and
+    /// clears by accident.
+    frame_interval: Option<f64>,
+}
+
+impl WindowState {
+    fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
+        WindowState { shared, params, frame_interval: None }
+    }
+
+    /// The interval to arm on the window's frame timer, or `None` when it
+    /// already ticks at `target` and re-arming would be pure churn.
+    fn arm(&mut self, target: f64) -> Option<f64> {
+        if self.frame_interval == Some(target) {
+            return None;
+        }
+        self.frame_interval = Some(target);
+        Some(target)
+    }
 }
 
 impl Editor for LatticeEditor {
@@ -860,7 +902,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics_config())
                 .with_size_source(size_source),
-            WindowState { shared: self.shared.clone(), params: self.params.clone() },
+            WindowState::new(self.shared.clone(), self.params.clone()),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the release of what
@@ -970,10 +1012,11 @@ impl Drop for LatticeEditorHandle {
 #[cfg(test)]
 mod tests {
     use super::{
-        target_frame_interval, ClockMapper, EditorShared, DISPLAY_OVERSAMPLE,
-        FALLBACK_FRAME_INTERVAL, MIN_SIZE,
+        pace, target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
+        DISPLAY_OVERSAMPLE, FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
     use harmonigraph_core::notes::NoteEvent;
+    use std::sync::Arc;
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could
@@ -1103,6 +1146,58 @@ mod tests {
             "must oversample, not match, the refresh rate — matching it leaves no margin \
              for jitter, and a missed refresh costs a whole frame",
         );
+    }
+
+    /// A window opens at baseview's `DEFAULT_FRAME_INTERVAL` whatever the
+    /// window before it was running at, so what is armed cannot be remembered
+    /// anywhere that outlives one window: the reopened editor's first frame
+    /// asks for the same interval the closed one ended on, and a carried-over
+    /// record would match it, skip the arming, and leave the timer at the
+    /// ~67 Hz default until a cap change happened to move the target.
+    ///
+    /// The guarantee being measured is that [`WindowState`] — built once per
+    /// [`Editor::spawn`] — is where that record lives, so two of them stand
+    /// for two openings of the editor over one plugin.
+    #[test]
+    fn a_reopened_window_arms_its_own_timer() {
+        // Uncapped on a 144 Hz panel, which is where the stuck rate showed.
+        let (cap, display) = (None, Some(144.0));
+        let target = target_frame_interval(cap, display);
+
+        let mut first = a_window();
+        assert_eq!(pace(&mut first, cap, display), Some(target), "the first frame arms nothing");
+        assert_eq!(pace(&mut first, cap, display), None, "an unchanged cadence rebuilt the timer");
+
+        // That window closes and the editor opens again over the same plugin.
+        let mut second = a_window();
+        assert_eq!(
+            pace(&mut second, cap, display),
+            Some(target),
+            "a reopened window was left ticking at baseview's default",
+        );
+    }
+
+    /// A `WindowState` standing for one opened window.
+    ///
+    /// What it is built over is not what any pacing test measures — the
+    /// decision reads the cap and the display and touches neither the rings
+    /// nor the params — so this exists only to satisfy the constructor, in one
+    /// place rather than once per test.
+    fn a_window() -> WindowState {
+        let (_producer, consumer) = rtrb::RingBuffer::new(1);
+        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(1);
+        let (_recorder, take_control) = harmonigraph_record::channel();
+        WindowState::new(
+            Arc::new(super::Mutex::new(EditorShared::new(
+                consumer,
+                audio_consumer,
+                Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+                Arc::new(super::AtomicU32::new(1)),
+                take_control,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            ))),
+            Arc::new(HarmonigraphParams::default()),
+        )
     }
 
     #[test]
