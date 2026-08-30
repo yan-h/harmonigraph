@@ -1383,9 +1383,9 @@ pub(crate) mod tests {
             // two families' costs part company by construction — the number
             // measures 87x there, and the bound is a CEILING on that rather
             // than a claim it should be smaller. What it catches is the same
-            // thing the eight above does: a change that walks the atlas into
-            // `max_side`, where a caster stops casting with nothing on screen
-            // to say so.
+            // thing the blur-row bound above does: a change that walks the
+            // atlas into `max_side`, where a caster stops casting with nothing
+            // on screen to say so.
             let ratio = area(Distance) / plain;
             eprintln!("Distance at {what}: {ratio:.2}x one Gaussian's cells");
             assert!(
