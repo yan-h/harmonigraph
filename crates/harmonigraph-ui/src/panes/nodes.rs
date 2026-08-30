@@ -722,23 +722,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      past where a Gaussian has stopped. Two cells per item.",
                 ),
                 (
-                    ShadowKernel::Sky,
-                    "Sky",
-                    "The falloff a lit sky has, as three blurs. A core that \
-                     holds the item's shape and a pool that carries much \
-                     further than a Gaussian's — the look a soft window light \
-                     casts. Three cells per item, so the widest Shadow \
-                     settings cost the most here.",
-                ),
-                (
-                    ShadowKernel::Exponential,
-                    "Exponential",
-                    "A cusp at the ink and a straight-line falloff off it, as \
-                     three blurs. The other end of the family from the \
-                     Gaussian's flat middle: darkest right against the ink and \
-                     giving way steadily rather than easing in and out.",
-                ),
-                (
                     ShadowKernel::Distance,
                     "Distance",
                     "Not a blur at all: how far each point stands from the \

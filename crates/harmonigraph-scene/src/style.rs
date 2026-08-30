@@ -493,13 +493,10 @@ pub enum NoteNames {
 
 /// The most terms a shadow's kernel may be built out of.
 ///
-/// Four rather than three, and the fourth is the sky's far tail: three
-/// Gaussians carry that kernel's CORE and stop short of its pool, and a term at
-/// one and a half to two σ is what puts the pool back where a wide Shadow makes
-/// it the point. Nothing here hard-codes a preset's own count — a row is as
-/// long as it is, and this is only what the atlas and the sampler are built to
-/// hold.
-pub const SHADOW_TERMS_MAX: usize = 4;
+/// Two is the core-and-skirt pair [`ShadowKernel::TwoScale`] is built from, the
+/// longest row in the table. This sizes the fixed arrays shared with the
+/// shaders, so it is the representation's bound rather than a per-row setting.
+pub const SHADOW_TERMS_MAX: usize = 2;
 
 /// What a term of a kernel PUTS IN a cell, which is what parts the two families
 /// a Shadow can be drawn from.
@@ -659,18 +656,15 @@ pub const SHADOW_SHAPE_MAX: f32 = 1.0;
 /// the picture is FORM at a wide Shadow: a blur's profile at a hairline carries
 /// the stroke's width, a distance's carries its shape.
 ///
-/// The blur rows are a MIXTURE and not a kernel of its own, because the atlas
-/// blurs separably —
-/// once along x, once along y (`blur` in shadow.wgsl) — and the shapes worth
-/// comparing here are not separable. `1/(1+(r/h)²)²` as a direct convolution is
-/// 361 taps a texel against the 38 the two passes cost; as three Gaussians it
-/// is three cells, each blurred by the chain that already exists, mixed by
-/// weight where a caster reads them. So sky, two-scale and exponential are
-/// ROWS of a table rather than three branches in a shader.
+/// The non-Gaussian blur row is a MIXTURE and not a kernel of its own, because
+/// the atlas blurs separably — once along x, once along y (`blur` in
+/// shadow.wgsl). Two-scale gets its tight core and wide skirt from two cells,
+/// each blurred by the chain that already exists and mixed by weight where a
+/// caster reads them. It is a row of this table rather than a branch in the
+/// shader.
 ///
-/// Every row is fitted by least squares over `r` in 0..12h on the 2-D kernel
-/// and then scaled so a straight edge reads 2.3% of the depth at one Shadow
-/// width — the same rule that puts a plain Gaussian's σ at half the bar
+/// The rows are scaled so a straight edge reads 2.3% of the depth at one
+/// Shadow width — the same rule that puts a plain Gaussian's σ at half the bar
 /// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`), so switching rows
 /// changes the shadow's SHAPE and not how far it reaches.
 ///
@@ -688,15 +682,6 @@ pub enum ShadowKernel {
     /// which is #521's option 6 and the cheapest departure from one Gaussian.
     /// Exact by construction: the row IS the kernel rather than a fit to one.
     TwoScale,
-    /// `1/(1+(r/h)²)²`, the falloff a lit sky has, as three Gaussians: a core
-    /// that holds the caster's shape and a pool that carries much further than
-    /// a Gaussian's. Fitted to 1.0% residual, which is its core; its far tail
-    /// is the term the fourth slot exists for (see [`SHADOW_TERMS_MAX`]).
-    Sky,
-    /// `e^(−r/s)`, as three Gaussians to 2.0% — a cusp at the ink and a
-    /// straight-line falloff off it, which is the other end of the family from
-    /// the Gaussian's flat middle.
-    Exponential,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
     /// ink, spent through the standoff's decay
     /// ([`glow_shadow_shape`](crate::ViewConfig::glow_shadow_shape)).
@@ -726,24 +711,12 @@ impl ShadowKernel {
             KernelTerm { weight: 0.70, sigma: 0.465, kind: Blur },
             KernelTerm { weight: 0.30, sigma: 1.3948, kind: Blur },
         ];
-        const SKY: [KernelTerm; 3] = [
-            KernelTerm { weight: 0.195, sigma: 0.3104, kind: Blur },
-            KernelTerm { weight: 0.535, sigma: 0.5898, kind: Blur },
-            KernelTerm { weight: 0.270, sigma: 1.4486, kind: Blur },
-        ];
-        const EXPONENTIAL: [KernelTerm; 3] = [
-            KernelTerm { weight: 0.033, sigma: 0.1848, kind: Blur },
-            KernelTerm { weight: 0.342, sigma: 0.5158, kind: Blur },
-            KernelTerm { weight: 0.626, sigma: 1.1144, kind: Blur },
-        ];
         // σ 1: a distance term's own width IS the Shadow bar's, so a second
         // ratio here would be a second width to keep in step for nothing.
         const DISTANCE: [KernelTerm; 1] = [KernelTerm { weight: 0.0, sigma: 1.0, kind: Distance }];
         match self {
             ShadowKernel::Gaussian => &GAUSSIAN,
             ShadowKernel::TwoScale => &TWO_SCALE,
-            ShadowKernel::Sky => &SKY,
-            ShadowKernel::Exponential => &EXPONENTIAL,
             ShadowKernel::Distance => &DISTANCE,
         }
     }

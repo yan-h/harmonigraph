@@ -1927,10 +1927,11 @@ struct PaneBuffers {
     /// ([`shadow::ShadowCaster`]), and the bind group naming it at group 3.
     ///
     /// A storage buffer rather than more rows beside the instances, for the
-    /// reason [`shadow::ShadowCaster`] gives: four terms are eight vec4s and a
-    /// node's stream has room for five. Rebuilt with the buffer, which is the
-    /// one thing the atlas's own bind groups must not be — hence a group of
-    /// its own (`shadow::caster_layout`).
+    /// reason [`shadow::ShadowCaster`] gives: two terms use four vec4s for their
+    /// cells and maps before the caster's rect and metadata, while a node's
+    /// stream has room for five. Rebuilt with the buffer, which is the one thing
+    /// the atlas's own bind groups must not be — hence a group of its own
+    /// (`shadow::caster_layout`).
     caster_buffer: wgpu::Buffer,
     caster_capacity: usize,
     caster_count: usize,

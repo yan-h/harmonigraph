@@ -551,9 +551,9 @@ struct BoxOut {
 ///
 /// No vertex buffer at all. The draw is one instance at the caster's own index
 /// (`Draw::Label` in lib.rs), so the index IS the instance index, and every
-/// number the quad needs is in the array that index reaches — which is where a
-/// mixture's cells have to live anyway, four of them being more than any
-/// instance stream here has room for.
+/// number the quad needs is in the shared caster array. The same representation
+/// serves nodes and labels without making this draw carry a second copy in an
+/// instance stream.
 @vertex
 fn vs_shadow_box(
     @builtin(vertex_index) vertex: u32,

@@ -866,12 +866,9 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     // per caster and so reaches the device's limit N times sooner. The clip
     // that keeps a near node's box on the pane is per caster and has to hold
     // for each of its cells (#505).
-    for kernel in [
-        harmonigraph_scene::ShadowKernel::Gaussian,
-        harmonigraph_scene::ShadowKernel::TwoScale,
-        harmonigraph_scene::ShadowKernel::Sky,
-        harmonigraph_scene::ShadowKernel::Exponential,
-    ] {
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::TwoScale]
+    {
         let terms = kernel.terms();
         let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
         // Read over the casters that darken something: one at level 0 is packed
@@ -1280,8 +1277,8 @@ fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
 /// a straight edge reads the same 2.3% of the depth at one Shadow width, so a
 /// row cannot be told from a Gaussian by how DARK it is — what parts them is
 /// where the darkness sits, and the visible end of that is the tail: a row's
-/// widest term reaches `REACH_SIGMAS` times ITS σ, which for sky is 1.45 of the
-/// picture's own against a Gaussian's 1.
+/// widest term reaches `REACH_SIGMAS` times ITS σ, which for two-scale is
+/// 1.39 of the picture's own against a Gaussian's 1.
 ///
 /// Read as the last column the shadow writes at all, which is where the
 /// shader's `INK_FLOOR` cuts it — a quantity every row is measured by the same
@@ -1290,7 +1287,7 @@ fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
 /// out reaching exactly as far as one, which is the failure this catches.
 #[test]
 fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
-    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{Gaussian, TwoScale};
     const SHADOW: f32 = 0.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -1320,14 +1317,13 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
         let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
         (last, profile[0])
     };
-    let readings: Vec<(harmonigraph_scene::ShadowKernel, usize, f64)> =
-        [Gaussian, TwoScale, Sky, Exponential]
-            .into_iter()
-            .map(|k| {
-                let (last, at_ink) = walk(k);
-                (k, last, at_ink)
-            })
-            .collect();
+    let readings: Vec<(harmonigraph_scene::ShadowKernel, usize, f64)> = [Gaussian, TwoScale]
+        .into_iter()
+        .map(|k| {
+            let (last, at_ink) = walk(k);
+            (k, last, at_ink)
+        })
+        .collect();
     for (kernel, last, at_ink) in &readings {
         eprintln!("{kernel:?} takes {at_ink:.3} at the ink and reaches {last} px");
         assert!(
@@ -1352,11 +1348,11 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
 /// The second half is the one worth having. A row costs cells, a pass over
 /// them and taps in every caster's draw, and all of that is supposed to be
 /// gone when the bar is at its bottom — the vacuity the whole atlas rests on
-/// (`neither_shadow_bar_at_its_bottom_casts_or_allocates`), asked again now
-/// that there are four ways to pack it.
+/// (`neither_shadow_bar_at_its_bottom_casts_or_allocates`), asked across every
+/// row here because each is packed differently.
 #[test]
 fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1369,12 +1365,12 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         shooter.shot_with(&scene, named)
     };
     let plain = shot(Gaussian, 0.4);
-    for kernel in [TwoScale, Sky, Exponential, Distance] {
+    for kernel in [TwoScale, Distance] {
         let moved = differing_pixels(&plain, &shot(kernel, 0.4));
         assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
     }
     let shut = shot(Gaussian, 0.0);
-    for kernel in [TwoScale, Sky, Exponential, Distance] {
+    for kernel in [TwoScale, Distance] {
         assert_eq!(
             differing_pixels(&shut, &shot(kernel, 0.0)),
             0,
