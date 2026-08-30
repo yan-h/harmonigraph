@@ -566,7 +566,6 @@ pub fn derive_scene(
         glow_shadow_shape: view
             .glow_shadow_shape
             .clamp(crate::SHADOW_SHAPE_MIN, crate::SHADOW_SHAPE_MAX),
-        glow_shadow_pocket: view.glow_shadow_pocket.clamp(0.0, crate::GLOW_SHADOW_POCKET_MAX),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),

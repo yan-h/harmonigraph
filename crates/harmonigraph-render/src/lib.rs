@@ -590,13 +590,12 @@ struct Uniforms {
     /// ([`shadow::sigma_px`]) and the reach every quad is grown by; w: how dark
     /// it lands (`Scene::glow_shadow_depth`), 1 taking the frame under a solid
     /// caster to the shader's own floor; y: the exponent a DISTANCE row's decay
-    /// is taken over (`Scene::glow_shadow_shape`); z: what that row's pocket
-    /// term is multiplied up by (`Scene::glow_shadow_pocket`). Neither is read
-    /// unless a term of the row holds a distance.
+    /// is taken over (`Scene::glow_shadow_shape`), which nothing reads unless a
+    /// term of the row holds a distance. z unused.
     ///
     /// A row of its own rather than slots scattered over the ones beside it,
     /// because they are one control: the Shadow bar, the Shadow depth bar under
-    /// it, and the two the distance family alone is drawn through.
+    /// it, and the shape the distance family alone is drawn through.
     ///
     /// NOT zeroed with `misc10`, which is where this row parts company with
     /// every other one under the glow: an item casts whether or not there is a
@@ -1504,12 +1503,7 @@ impl LatticeCallback {
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
                 // lattice has. y/z unused.
-                misc11: [
-                    scene.glow_shadow,
-                    scene.glow_shadow_shape,
-                    scene.glow_shadow_pocket,
-                    scene.glow_shadow_depth,
-                ],
+                misc11: [scene.glow_shadow, scene.glow_shadow_shape, 0.0, scene.glow_shadow_depth],
                 shadow_curve: [
                     scene.glow_shadow_gain,
                     scene.glow_shadow_curve,
@@ -4067,8 +4061,6 @@ impl CallbackTrait for LatticeCallback {
                         // (`u.shadow_curve` in lattice.wgsl).
                         shadow_gain: self.uniforms.shadow_curve[0],
                         shadow_curve: self.uniforms.shadow_curve[1],
-                        shadow_pocket: self.uniforms.misc11[2],
-                        _pad2: [0.0; 3],
                         // A lattice name paints no rim, so there is no ring for
                         // the two passes that draw one to walk. Zero samples is
                         // what says so (`ring`), and it is what keeps the fill's

@@ -216,9 +216,6 @@ pub(super) fn parity_scene() -> Scene {
         // The distance family's own bar, at the plain exponential the fresh
         // view opens on. Inert on the Gaussian row every other fixture reads.
         glow_shadow_shape: 1.0,
-        // And its pocket, at the fresh value. Inert on every row but
-        // `DistanceDensity`, which no fixture but the crease reading picks.
-        glow_shadow_pocket: 1.5,
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv

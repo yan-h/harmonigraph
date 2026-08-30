@@ -419,10 +419,9 @@ pub(crate) fn pack(
     // and a row of zeros is no shadow rather than a division.
     //
     // Over the BLUR terms alone. A distance term is not a share of a mixture —
-    // it is the shape the row draws, and the Gaussian beside it on
-    // `DistanceDensity` is measured against a straight edge rather than summed
-    // with it — so a normalization that counted both would halve that Gaussian
-    // for standing next to something that never asked for a share.
+    // it is the shape the row draws — so counting it would hand a share of the
+    // darkness to a term that never asked for one, and halve any Gaussian
+    // standing beside it.
     let total: f32 = kernel.iter().filter(|t| !is_distance(t)).map(|t| t.weight.max(0.0)).sum();
     let weight = |t: &harmonigraph_scene::KernelTerm| {
         if positive(total) && !is_distance(t) {
@@ -1198,7 +1197,7 @@ pub(crate) mod tests {
     #[test]
     fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
         use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance, DistanceDensity] {
+        for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance] {
             if kernel.floods() {
                 continue;
             }
@@ -1351,9 +1350,7 @@ pub(crate) mod tests {
     /// that limit N times sooner now).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{
-            Distance, DistanceDensity, Exponential, Gaussian, Sky, TwoScale,
-        };
+        use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1380,7 +1377,7 @@ pub(crate) mod tests {
                      row that reaches the device's texture limit rather than a row to compare",
                 );
             }
-            // The DISTANCE rows on a bound of their own, and two orders of
+            // The DISTANCE row on a bound of its own, and two orders of
             // magnitude above the blur rows' rather than beside them. A blur
             // cell shrinks with σ and a distance cell stops at
             // `DISTANCE_TEXELS_PER_POINT`, so the top of the bar is where the
@@ -1390,15 +1387,13 @@ pub(crate) mod tests {
             // thing the eight above does: a change that walks the atlas into
             // `max_side`, where a caster stops casting with nothing on screen
             // to say so.
-            for kernel in [Distance, DistanceDensity] {
-                let ratio = area(kernel) / plain;
-                eprintln!("{kernel:?} at {what}: {ratio:.2}x one Gaussian's cells");
-                assert!(
-                    ratio <= 120.0,
-                    "{kernel:?} packs {ratio:.2}x one Gaussian's cells at {what}, which is a \
-                     row that reaches the device's texture limit rather than a row to compare",
-                );
-            }
+            let ratio = area(Distance) / plain;
+            eprintln!("Distance at {what}: {ratio:.2}x one Gaussian's cells");
+            assert!(
+                ratio <= 120.0,
+                "Distance packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
+                 reaches the device's texture limit rather than a row to compare",
+            );
         }
     }
 

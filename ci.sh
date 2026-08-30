@@ -116,5 +116,38 @@ run .claude/tests/reclaim-locks.sh
 # reporting success and the DAW still drawing the previous build.
 run .claude/tests/plugin-swap.sh
 
+# The third script gate, and it guards the thing that decides whether the other
+# two run at all: the pre-push hook waves a push past this file when nothing in
+# it can change the answer. Wrong in the cheap direction it costs a build;
+# wrong in the other it reports a clean push having gated nothing, which is the
+# same silence the swap check exists for. Its inputs are git's stdin protocol
+# and a stamp file, so no cargo test reaches it.
+run .claude/tests/pre-push-skip.sh
+
 echo
-echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap)"
+echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap + pre-push skips)"
+
+# Record what passed, so the next push of the same content does not pay for it
+# again. The key is the TREE and not the commit: a rebase, an amended message
+# and a second branch all ask about source that has already been through here,
+# and the stamp lives in the common git dir so a tree one worktree cleared is
+# cleared for every worktree — which is the case this repo hits most, parallel
+# sessions pushing the same base.
+#
+# Only from a clean tree. This runs on the working tree, so with anything
+# uncommitted the run says nothing about `HEAD`'s tree and must not claim to.
+# What the key deliberately does NOT carry is the environment the two script
+# gates read (a pid, the spare pool's sockets, an inode) — those are seconds
+# and the alternative is a key that is never stale and never still.
+if [ -z "$(git status --porcelain)" ]; then
+  # Asked for absolutely, and identically to the hook: `--git-common-dir` alone
+  # may answer relative to GIT_DIR, which is set when the hook calls this file
+  # and not when a person does, and a stamp written where the hook does not
+  # look for it is a cache that never hits.
+  stamp="$(git rev-parse --path-format=absolute --git-common-dir)/ci-passed-trees"
+  tree=$(git rev-parse HEAD^{tree})
+  if ! grep -qxF "$tree" "$stamp" 2>/dev/null; then
+    echo "$tree" >>"$stamp"
+    tail -n 200 "$stamp" >"$stamp.tmp" && mv "$stamp.tmp" "$stamp"
+  fi
+fi
