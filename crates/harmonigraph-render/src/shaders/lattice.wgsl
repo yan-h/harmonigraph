@@ -1821,12 +1821,6 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // Telling them apart by radius drew it unambiguously; this does not, and the
 // alternative is a second cue that would undo the shape above.
 
-// Floor on the strip's depth (the view sets the rest, u.misc5.w), in
-// soft-band widths — about a couple of render pixels, so a thin setting
-// can't go sub-pixel on a densely packed lattice and read as nothing. A
-// thickness of exactly 0 is the off state and skips the floor.
-const MARK_RING_MIN_AA: f32 = 1.5;
-
 // Coverage of the marks in `slots`, in the strip whose radial coverage at this
 // pixel is `strip`.
 //
@@ -2097,7 +2091,14 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     let mark_thick = u.misc5.w;
-    let mark_w = select(max(mark_thick, aa * MARK_RING_MIN_AA), 0.0, mark_thick <= 0.0);
+    // The strip's depth is the bar's alone, in the node's own uv: a length in
+    // the node's space and not on the surface being drawn, so every pass that
+    // rasterizes this node paints the same strip. A screen width here would
+    // not — `fs_node_cell` draws the node into a cell packed at
+    // `min(1, SIGMA_CELL_MAX/σ)` of the target's pixels, where a fragment step
+    // is an atlas texel, so a floor in `aa` comes out σ wide however thin the
+    // strip is and the node's shadow reaches past ink it never drew. 0 is off.
+    let mark_w = max(mark_thick, 0.0);
     // The slot the STACK gave the strip (u.misc4.y): a padding out from
     // whatever layer the stack ended on — which is the band on a node that
     // draws one and whatever is inside it on a node that does not — and the
@@ -2806,10 +2807,6 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     if mark_thick > 0.0 && (in.marks.x | in.marks.y) != 0u {
         let lim = QUAD_MARGIN - 0.02;
         let mark_in = min(u.misc4.y, lim);
-        // The strip's own floor is a SCREEN width (`MARK_RING_MIN_AA` times the
-        // fragment's soft band), which is nothing the strip has: what the light
-        // reads is the depth the marks are dialled to, and a mark too thin to
-        // draw at this zoom is a mark whose colour is not in the halo either.
         let mark_out = min(mark_in + mark_thick, lim);
         let mid = 0.5 * (mark_in + mark_out);
         let p = dir * mid;

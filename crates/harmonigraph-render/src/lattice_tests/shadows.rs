@@ -881,3 +881,86 @@ fn a_names_shadow_reaches_the_bloom_and_spends_nothing_elsewhere() {
          rather than on the copy the bright pass reads",
     );
 }
+
+/// How much further a MARKED node's shadow reaches than an unmarked one's is
+/// the strip's own depth, and the Shadow bar does not move it.
+///
+/// The strip's depth is a length in the node's uv (`node_ink`), so the cell the
+/// atlas rasterizes holds the strip the pane draws, and widening the bar moves
+/// the two nodes' reach by one blur alike. A depth in SCREEN widths would not
+/// be: a cell is drawn at `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels,
+/// where a fragment step is an atlas texel rather than a pane pixel, so such a
+/// depth comes out σ wide however thin the strip is dialled, and the gap
+/// between the two nodes opens as the bar widens — the marked one casting from
+/// ink nothing painted, in the mark's wedge alone.
+///
+/// A DIFFERENCE of two reaches at each width, and the same difference twice.
+/// Each reach is read where the frame stops being darkened enough to see,
+/// which sits inside the kernel's own edge by an amount that grows with σ — so
+/// it is subtracted off rather than modelled, once between the two nodes and
+/// again between the two widths.
+#[test]
+fn a_marked_nodes_shadow_stands_off_an_unmarked_ones_by_the_strip_alone() {
+    // Both widths past `SIGMA_CELL_MAX` (asserted below), so every cell in the
+    // four shots is drawn smaller than the pane. Under it a cell is at the
+    // pane's own resolution, where a screen width IS the pane's own and there
+    // is nothing here to tell apart.
+    const NARROW: f32 = 0.4;
+    // The top of the bar, so the two ends are as far apart as the picture can
+    // put them: what separates the readings is the DIFFERENCE between the σ at
+    // each, and the whole shadow still finishes inside the pane here.
+    const WIDE: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
+    const DEPTH: f32 = 0.85;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+
+    let staged = |slots: u32, shadow: f32| -> Scene {
+        let mut scene = on_ground(shadow, DEPTH);
+        scene.nodes[0].melody_slots = slots;
+        scene.nodes[0].melody_level = f32::from(slots != 0);
+        scene.nodes[0].glow.marked = f32::from(slots != 0);
+        scene
+    };
+    // The pane with no node on it at all: what both reaches below are read
+    // against, so the two are one kind of measurement and their difference is
+    // the reach alone.
+    let bare_ground = {
+        let mut empty = staged(0, NARROW);
+        empty.nodes.clear();
+        shooter.shot(&empty)
+    };
+    let mut reach = |slots: u32, shadow: f32| -> f64 {
+        let shot = shooter.shot(&staged(slots, shadow));
+        let touched = light_about_center(&light_over(&bare_ground, &shot), SIZE);
+        assert!(touched.weight > 0.0, "the node darkened nothing at Shadow {shadow}");
+        touched.far
+    };
+    let at_narrow = reach(MIDDLE_C, NARROW) - reach(0, NARROW);
+    let at_wide = reach(MIDDLE_C, WIDE) - reach(0, WIDE);
+
+    let s = sigma(&staged(MIDDLE_C, NARROW));
+    assert!(
+        s > crate::shadow::SIGMA_CELL_MAX,
+        "σ is {s:.2} px at the narrow end, so its cell is drawn at the pane's own resolution \
+         and the four shots cannot reach the claim",
+    );
+    let marked = staged(MIDDLE_C, WIDE);
+    let strip = (marked.mark_inner + marked.mark_thickness - marked.rings_outer)
+        * marked.marker_unit
+        * points_per_world(&marked);
+    eprintln!(
+        "a marked node reaches {at_narrow:.1} px further at Shadow {NARROW} and {at_wide:.1} at \
+         {WIDE}; the strip stands {strip:.1} px past the rings",
+    );
+    // Half the strip's own depth of slack, which is the coarsest the pair can
+    // be read at and still say the standoff did not follow the bar: a depth in
+    // screen widths puts a whole σ of the WIDE end's blur in here, and σ there
+    // is wider than the strip.
+    assert!(
+        (at_wide - at_narrow).abs() < f64::from(strip) / 2.0,
+        "widening the Shadow moved a marked node's standoff from {at_narrow:.1} px to \
+         {at_wide:.1}, so the strip the atlas draws is following the bar",
+    );
+}
