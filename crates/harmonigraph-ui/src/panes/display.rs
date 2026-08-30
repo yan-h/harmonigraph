@@ -191,6 +191,9 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
             );
         }
     }
+
+    // One extra row gap keeps the strip's boundary clear of the first heading.
+    ui.add_space(ui.spacing().item_spacing.y);
 }
 
 /// The Lattice page: the whole lattice picture, read from the camera in front
@@ -321,6 +324,37 @@ mod tests {
                     && points[1].x >= active.0[1].x
             }),
             "the active stroke is detached from its row boundary",
+        );
+    }
+
+    /// The navigation boundary has enough breathing room to remain distinct
+    /// from whichever page body follows it.
+    #[test]
+    fn the_page_picker_leaves_a_clear_gap_below_its_boundary() {
+        let mut page = DisplayPage::Colors;
+        let mut content_top = 0.0;
+        let mut row_gap = 0.0;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            row_gap = ui.spacing().item_spacing.y;
+            page_picker(ui, &mut page);
+            content_top = ui.cursor().top();
+        })
+        .shapes;
+        let boundary_y = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == theme::hairline() =>
+                {
+                    Some(points[0].y)
+                }
+                _ => None,
+            })
+            .expect("the page picker drew no boundary");
+
+        assert!(
+            content_top - boundary_y >= 2.0 * row_gap - 0.01,
+            "the page content starts too close to the navigation boundary",
         );
     }
 
