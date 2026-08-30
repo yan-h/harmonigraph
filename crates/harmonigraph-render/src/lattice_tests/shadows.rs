@@ -847,26 +847,45 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
-    let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384);
-    // Read over the casters that darken something: one at level 0 is packed as
-    // no cell on purpose (`pack`), and most of this fixture's nodes project
-    // clean off the pane.
-    let casting = || cb.casters.iter().zip(&packed.boxes).filter(|(c, _)| c.level > 0.0);
-    let unfit = casting().filter(|(_, b)| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
-    assert_eq!(
-        unfit,
-        0,
-        "{unfit} of {} casters that darken something got no cell, and a zeroed cell is drawn at \
-         the atlas origin over the markers' own",
-        casting().count(),
-    );
-    assert!(
-        packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
-        "the atlas came out {:?} for a {:?} pane: a caster's box is sized off a projection the \
-         pane cannot show",
-        packed.size,
-        SIZE,
-    );
+    // At every row of the kernel table, because a row of N terms packs N cells
+    // per caster and so reaches the device's limit N times sooner. The clip
+    // that keeps a near node's box on the pane is per caster and has to hold
+    // for each of its cells (#505).
+    for kernel in [
+        harmonigraph_scene::ShadowKernel::Gaussian,
+        harmonigraph_scene::ShadowKernel::TwoScale,
+        harmonigraph_scene::ShadowKernel::Sky,
+        harmonigraph_scene::ShadowKernel::Exponential,
+    ] {
+        let terms = kernel.terms();
+        let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
+        // Read over the casters that darken something: one at level 0 is packed
+        // as no cell on purpose (`pack`), and most of this fixture's nodes
+        // project clean off the pane.
+        let casting: Vec<crate::shadow::ShadowBox> = cb
+            .casters
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.level > 0.0)
+            .flat_map(|(i, _)| (0..terms.len()).map(move |t| i * terms.len() + t))
+            .map(|i| packed.boxes[i])
+            .collect();
+        let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+        assert_eq!(
+            unfit,
+            0,
+            "{kernel:?}: {unfit} of {} cells that darken something got none, and a zeroed cell is \
+             drawn at the atlas origin over the markers' own",
+            casting.len(),
+        );
+        assert!(
+            packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
+            "{kernel:?}: the atlas came out {:?} for a {:?} pane: a caster's box is sized off a \
+             projection the pane cannot show",
+            packed.size,
+            SIZE,
+        );
+    }
 }
 
 /// A name's shadow reaches the BLOOM, and spends nothing anywhere else.
@@ -1252,4 +1271,115 @@ fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
     };
     let cast = differing_pixels(&hard, &no_shadow);
     assert!(cast > 200, "a name at no width of its own cast {cast} pixels, which is no shadow");
+}
+
+/// Every row of the kernel table draws a shadow, and the heavier-tailed rows
+/// carry further out from the ink than one Gaussian does at the same Shadow.
+///
+/// The reading that says the mixture is really a mixture. Each row is scaled so
+/// a straight edge reads the same 2.3% of the depth at one Shadow width, so a
+/// row cannot be told from a Gaussian by how DARK it is — what parts them is
+/// where the darkness sits, and the visible end of that is the tail: a row's
+/// widest term reaches `REACH_SIGMAS` times ITS σ, which for sky is 1.45 of the
+/// picture's own against a Gaussian's 1.
+///
+/// Read as the last column the shadow writes at all, which is where the
+/// shader's `INK_FLOOR` cuts it — a quantity every row is measured by the same
+/// way, and one the quad has to be grown for (`shadow_reach_uv` takes the
+/// WIDEST term). A row whose quad were still sized for one Gaussian would come
+/// out reaching exactly as far as one, which is the failure this catches.
+#[test]
+fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
+    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    const SHADOW: f32 = 0.4;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let scene_of = |kernel, depth| {
+        let mut scene = on_ground(SHADOW, depth);
+        scene.glow_shadow_kernel = kernel;
+        scene
+    };
+    let flat = shooter.shot(&scene_of(Gaussian, 0.0));
+    let edge = ink_radius(&scene_of(Gaussian, 1.0));
+    let centre = on_screen(&scene_of(Gaussian, 1.0), SIZE, glam::Vec3::ZERO);
+    let row = centre.y.round() as u32;
+    let start = (centre.x + edge).round() as u32 + 2;
+    // How far out from the ink this kernel's shadow is still writing, in
+    // pixels, and how much of the ground it takes at the ink.
+    let mut walk = |kernel| -> (usize, f64) {
+        let deep = shooter.shot(&scene_of(kernel, 0.85));
+        let profile: Vec<f64> = (start..SIZE[0])
+            .map(|x| {
+                let ground = bright_at(&flat, x, row);
+                assert!(ground > 500, "{kernel:?} leaves {ground} of ground at column {x}");
+                1.0 - bright_at(&deep, x, row) as f64 / ground as f64
+            })
+            .collect();
+        let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+        (last, profile[0])
+    };
+    let readings: Vec<(harmonigraph_scene::ShadowKernel, usize, f64)> =
+        [Gaussian, TwoScale, Sky, Exponential]
+            .into_iter()
+            .map(|k| {
+                let (last, at_ink) = walk(k);
+                (k, last, at_ink)
+            })
+            .collect();
+    for (kernel, last, at_ink) in &readings {
+        eprintln!("{kernel:?} takes {at_ink:.3} at the ink and reaches {last} px");
+        assert!(
+            *at_ink > 10.0 * INK_FLOOR && *last > 2,
+            "{kernel:?} cast {at_ink:.3} at the ink and reached {last} px, which is no shadow",
+        );
+    }
+    let plain = readings[0].1;
+    for (kernel, last, _) in readings.iter().skip(1) {
+        assert!(
+            *last > plain,
+            "{kernel:?} reaches {last} px where one Gaussian reaches {plain}, so either the \
+             mixture is not being mixed or the quad is still sized for one term",
+        );
+    }
+}
+
+/// Switching kernels moves the picture and nothing else does: a frame at each
+/// row differs from the Gaussian's, and a frame with the Shadow SHUT is
+/// byte-identical at every row.
+///
+/// The second half is the one worth having. A row costs cells, a pass over
+/// them and taps in every caster's draw, and all of that is supposed to be
+/// gone when the bar is at its bottom — the vacuity the whole atlas rests on
+/// (`neither_shadow_bar_at_its_bottom_casts_or_allocates`), asked again now
+/// that there are four ways to pack it.
+#[test]
+fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
+    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let mut shot = |kernel, shadow| {
+        let mut scene = on_ground(shadow, 0.85);
+        scene.glow_shadow_kernel = kernel;
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+        shooter.shot_with(&scene, named)
+    };
+    let plain = shot(Gaussian, 0.4);
+    for kernel in [TwoScale, Sky, Exponential] {
+        let moved = differing_pixels(&plain, &shot(kernel, 0.4));
+        assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
+    }
+    let shut = shot(Gaussian, 0.0);
+    for kernel in [TwoScale, Sky, Exponential] {
+        assert_eq!(
+            differing_pixels(&shut, &shot(kernel, 0.0)),
+            0,
+            "{kernel:?} drew something with the Shadow shut, so a row is packing cells the bar \
+             said not to",
+        );
+    }
 }

@@ -490,3 +490,111 @@ pub enum NoteNames {
     /// Only what is sounding now. The lattice at rest carries no text.
     Played,
 }
+
+/// The most terms a shadow's kernel may be built out of.
+///
+/// Four rather than three, and the fourth is the sky's far tail: three
+/// Gaussians carry that kernel's CORE and stop short of its pool, and a term at
+/// one and a half to two σ is what puts the pool back where a wide Shadow makes
+/// it the point. Nothing here hard-codes a preset's own count — a row is as
+/// long as it is, and this is only what the atlas and the sampler are built to
+/// hold.
+pub const SHADOW_TERMS_MAX: usize = 4;
+
+/// One term of a shadow's kernel: how much of the blur it is, and how wide it
+/// is against the picture's own σ.
+///
+/// `sigma` is a RATIO and not a length, so a term follows the Shadow bar
+/// wherever it is dialled and a preset is one row of numbers rather than a
+/// second width to keep in step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KernelTerm {
+    /// This term's share of the mixture. The shares of a preset are normalized
+    /// where they are read ([`ShadowKernel::terms`]), so a row that does not
+    /// sum to 1 is a rounding rather than a brightness change.
+    pub weight: f32,
+    /// This term's σ over the picture's σ. 1 is the width the Shadow bar names.
+    pub sigma: f32,
+}
+
+/// The kernel a shadow's blur is: which mixture of Gaussians every caster's ink
+/// is convolved with.
+///
+/// A MIXTURE and not a kernel of its own, because the atlas blurs separably —
+/// once along x, once along y (`blur` in shadow.wgsl) — and the shapes worth
+/// comparing here are not separable. `1/(1+(r/h)²)²` as a direct convolution is
+/// 361 taps a texel against the 38 the two passes cost; as three Gaussians it
+/// is three cells, each blurred by the chain that already exists, mixed by
+/// weight where a caster reads them. So sky, two-scale and exponential are
+/// ROWS of a table rather than three branches in a shader.
+///
+/// Every row is fitted by least squares over `r` in 0..12h on the 2-D kernel
+/// and then scaled so a straight edge reads 2.3% of the depth at one Shadow
+/// width — the same rule that puts a plain Gaussian's σ at half the bar
+/// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`), so switching rows
+/// changes the shadow's SHAPE and not how far it reaches.
+///
+/// The table is here and nowhere else. The packer sizes each term's cell off
+/// the same σ ratio the sampler mixes by, and two copies of one row is the
+/// mirror that rots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ShadowKernel {
+    /// One Gaussian at half the Shadow's width. The shape a separable blur
+    /// makes on its own, and what every reading of the Shadow bar is
+    /// calibrated against.
+    #[default]
+    Gaussian,
+    /// Two Gaussians at 1:3, 70/30 — a tight core with a wide skirt under it,
+    /// which is #521's option 6 and the cheapest departure from one Gaussian.
+    /// Exact by construction: the row IS the kernel rather than a fit to one.
+    TwoScale,
+    /// `1/(1+(r/h)²)²`, the falloff a lit sky has, as three Gaussians: a core
+    /// that holds the caster's shape and a pool that carries much further than
+    /// a Gaussian's. Fitted to 1.0% residual, which is its core; its far tail
+    /// is the term the fourth slot exists for (see [`SHADOW_TERMS_MAX`]).
+    Sky,
+    /// `e^(−r/s)`, as three Gaussians to 2.0% — a cusp at the ink and a
+    /// straight-line falloff off it, which is the other end of the family from
+    /// the Gaussian's flat middle.
+    Exponential,
+}
+
+impl ShadowKernel {
+    /// This kernel's terms, longest-lived end of the table first.
+    ///
+    /// σ is given here against the picture's own σ, which is HALF a Shadow
+    /// width: the fits are published in Shadow widths, and every number below
+    /// is twice its published one. One conversion at one site, so the packer
+    /// and the sampler cannot come to read the table differently.
+    pub fn terms(self) -> &'static [KernelTerm] {
+        const GAUSSIAN: [KernelTerm; 1] = [KernelTerm { weight: 1.0, sigma: 1.0 }];
+        const TWO_SCALE: [KernelTerm; 2] =
+            [KernelTerm { weight: 0.70, sigma: 0.465 }, KernelTerm { weight: 0.30, sigma: 1.3948 }];
+        const SKY: [KernelTerm; 3] = [
+            KernelTerm { weight: 0.195, sigma: 0.3104 },
+            KernelTerm { weight: 0.535, sigma: 0.5898 },
+            KernelTerm { weight: 0.270, sigma: 1.4486 },
+        ];
+        const EXPONENTIAL: [KernelTerm; 3] = [
+            KernelTerm { weight: 0.033, sigma: 0.1848 },
+            KernelTerm { weight: 0.342, sigma: 0.5158 },
+            KernelTerm { weight: 0.626, sigma: 1.1144 },
+        ];
+        match self {
+            ShadowKernel::Gaussian => &GAUSSIAN,
+            ShadowKernel::TwoScale => &TWO_SCALE,
+            ShadowKernel::Sky => &SKY,
+            ShadowKernel::Exponential => &EXPONENTIAL,
+        }
+    }
+
+    /// The widest σ in this kernel, as a ratio on the picture's own.
+    ///
+    /// What every QUAD is grown by and what the reach the eye reads is: a
+    /// caster billboarded on its narrow term's reach cuts the wide one off in a
+    /// straight line, which is the trap `shadow_reach_uv` exists for at one
+    /// term and is ×N here.
+    pub fn widest(self) -> f32 {
+        self.terms().iter().fold(0.0f32, |w, term| w.max(term.sigma))
+    }
+}

@@ -143,6 +143,7 @@ fn offscreen_composite_matches_direct_draw() {
         uniforms: &res.bind_group_layout,
         glow: &res.filter_layout,
         shadow: &res.shadow_layout,
+        casters: &res.caster_layout,
     };
     let (node_pipeline, plus_pipeline) =
         create_pipelines(&device, &with_common(SHADER_SRC), format, layouts, false);
@@ -171,6 +172,7 @@ fn offscreen_composite_matches_direct_draw() {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, light, &[]);
                     pass.set_bind_group(2, cells, &[]);
+                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                     pass.draw(0..4, a..b);
@@ -180,6 +182,7 @@ fn offscreen_composite_matches_direct_draw() {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, light, &[]);
                     pass.set_bind_group(2, cells, &[]);
+                    pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
                     pass.draw(0..4, a..b);
                 }
