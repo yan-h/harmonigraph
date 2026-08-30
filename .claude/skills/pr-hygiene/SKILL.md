@@ -148,3 +148,8 @@ genuinely noisy searching — not when a subsystem merely feels important.
 because nothing in the build can catch a prompt that has gone stale — and it
 checks the skills and the scripts harder, since this rule is what keeps the
 rottable facts out of the agents and puts them there instead.
+
+CLAUDE.md owns when a PR is required; this file owns what happens at the
+merge boundary after one exists. An agent without `/audit-merges` runs the
+same procedure out of `.claude/commands/audit-merges.md` rather than
+substituting a per-branch review for it.

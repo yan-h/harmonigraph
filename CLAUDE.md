@@ -4,6 +4,36 @@ A Rust CLAP/VST3 plugin that draws a harmonic pitch lattice and an audio
 spectrum, plus an offline renderer for video export. Everything below is a
 gotcha or a contract — the rest of the repo explains itself by being read.
 
+## Agent guidance has one source
+
+`AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills`
+is a symlink to `.claude/skills`. Keep shared guidance at those canonical
+Claude-facing paths rather than copying it per agent; copies drift while
+symlinks make every session read the same contract. Tool-specific hooks,
+permissions and commands stay in each tool's native configuration — except
+where a Claude path holds procedure rather than settings, which any agent
+can read directly: `.claude/commands/audit-merges.md` is the combined-merge
+audit, and `.claude/agents/merge-auditor.md` the read-only survey role it
+dispatches.
+
+## Every change runs in a worktree and ends in a draft PR
+
+A session that may change tracked files works on its own branch in a
+worktree under `.claude/worktrees/<branch>/`, never in the main checkout.
+The path is load-bearing: `reclaim-worktrees.sh` prunes and removes only
+worktrees living there, so one made anywhere else holds its `target/debug`
+forever and no tier of the script can take it back. The launcher normally
+creates it — `EnterWorktree` in Claude, which also takes the lock nothing
+here may take by hand. A session that finds itself editing the main checkout
+starts over in a worktree rather than moving into one mid-flight, and leaves
+whatever is already in the main checkout alone.
+
+A completed change is committed, pushed and opened as a **draft** PR with
+`gh pr create --draft`, documentation and configuration included; the handoff
+says it is open, draft and **not merged**, and nothing merges unless Yan
+asks. That is not the whole handoff — a change that touches the picture also
+owes the build below, and satisfying one of the two is not satisfying both.
+
 ## Lazy-loaded detail lives in `.claude/skills/`
 
 - **`build-handover`** — `load-plugin.sh` usage, the `build <branch> @<sha>`
@@ -336,7 +366,7 @@ So don't run `git worktree lock`. If a reason ever does turn up, the string
 has to carry `(pid $$ start ...)` in exactly the format above, or it never
 comes back.
 
-## Permissions a worktree session needs go in `.claude/settings.json`
+## Claude permissions a worktree session needs go in `.claude/settings.json`
 
 `.claude/settings.local.json` is gitignored, so a fresh worktree never gets a
 copy and every rule in it is inert exactly where most sessions run — a grant

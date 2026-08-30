@@ -158,3 +158,7 @@ both give plausible wrong answers rather than obvious ones:
   first undercounts by about 25x. A first value and a max are both immune to
   the repetition, which is why startup and peak context survive either
   mistake.
+
+The numbers and tool names here are Claude's, but the sizing, the
+authorization boundary and the return contract are the project's: an agent
+with different controls keeps those and substitutes its own invocation.
