@@ -854,6 +854,39 @@ impl AtlasMirror {
 
 /// egui's font atlas, on the frames the mirror needs it, and `None` on the
 /// rest — which is nearly all of them.
+/// TEMPORARY probe: what the font-atlas mirror published, for the zoom-cost
+/// measurement. Counts publications and the texels each one copied.
+#[cfg(test)]
+pub(crate) mod probe {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    pub(crate) static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static TEXELS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static MARK_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static MARK_TEXELS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static REPACKS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static PACKED: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) static SHEET_H: AtomicUsize = AtomicUsize::new(0);
+    /// Nanoseconds spent inside the atlas CLONE alone.
+    pub(crate) static CLONE_NS: AtomicUsize = AtomicUsize::new(0);
+    pub(crate) fn reset() {
+        PUBLISHES.store(0, Ordering::Relaxed);
+        TEXELS.store(0, Ordering::Relaxed);
+        MARK_PUBLISHES.store(0, Ordering::Relaxed);
+        MARK_TEXELS.store(0, Ordering::Relaxed);
+        REPACKS.store(0, Ordering::Relaxed);
+        PACKED.store(0, Ordering::Relaxed);
+        CLONE_NS.store(0, Ordering::Relaxed);
+    }
+    pub(crate) fn note(texels: usize) {
+        PUBLISHES.fetch_add(1, Ordering::Relaxed);
+        TEXELS.fetch_add(texels, Ordering::Relaxed);
+    }
+    pub(crate) fn note_marks(texels: usize) {
+        MARK_PUBLISHES.fetch_add(1, Ordering::Relaxed);
+        MARK_TEXELS.fetch_add(texels, Ordering::Relaxed);
+    }
+}
+
 fn atlas_if_changed(
     ctx: &egui::Context,
     mirror: &std::sync::Mutex<AtlasMirror>,
@@ -885,10 +918,15 @@ fn atlas_if_changed(
     mirror.size = size;
     mirror.ppp = ppp;
     mirror.key = mirror.key.wrapping_add(1);
-    Some(harmonigraph_render::FontAtlas {
-        image: std::sync::Arc::new(ctx.fonts(|fonts| fonts.image())),
-        key: mirror.key,
-    })
+    #[cfg(test)]
+    probe::note(size[0] * size[1]);
+    #[cfg(test)]
+    let started = std::time::Instant::now();
+    let image = std::sync::Arc::new(ctx.fonts(|fonts| fonts.image()));
+    #[cfg(test)]
+    probe::CLONE_NS
+        .fetch_add(started.elapsed().as_nanos() as usize, std::sync::atomic::Ordering::Relaxed);
+    Some(harmonigraph_render::FontAtlas { image, key: mirror.key })
 }
 
 /// The drawn marks' sheet, on the frames one renderer's mirror of it is
@@ -915,6 +953,8 @@ fn marks_if_changed(
         return None;
     }
     mirror.marks_key = sheet.key;
+    #[cfg(test)]
+    probe::note_marks(sheet.image.width() * sheet.image.height());
     Some(harmonigraph_render::FontAtlas { image: sheet.image.clone(), key: sheet.key })
 }
 
@@ -1030,6 +1070,8 @@ impl MarkAtlas {
         if let Some(&patch) = self.at.get(&key) {
             return patch;
         }
+        #[cfg(test)]
+        probe::PACKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let image = crate::marks::rasterize_mark(key);
         let size = [image.size[0] as u32, image.size[1] as u32];
         let at = self.claim(size);
@@ -1076,6 +1118,11 @@ impl MarkAtlas {
             self.at.insert(key, MarkPatch { at, size: patch.size });
         }
         self.key = next_sheet_key();
+        #[cfg(test)]
+        {
+            probe::REPACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            probe::SHEET_H.store(self.image.height(), std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Reserve `size` texels on the current shelf (or the next), growing the
