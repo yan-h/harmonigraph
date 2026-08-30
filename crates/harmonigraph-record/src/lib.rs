@@ -398,8 +398,8 @@ impl Recorder {
     /// no pass at all, and one played away from opens its pass with the block
     /// that fills it.
     pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
-        // Once the loop end has ended the take (AtLoopEnd), record nothing more
-        // until a fresh arm clears the latch.
+        // Once a rewind has ended the take, record nothing more until a fresh
+        // arm clears the latch.
         if self.finished {
             return false;
         }
@@ -426,8 +426,8 @@ impl Recorder {
                 // transport arriving at the loop/play start (the playhead was
                 // parked past it). Ending there would finish the take with
                 // nothing recorded — an empty file and a broken render. So
-                // instead begin the pass here: no NewPass (AtLoopEnd only ever
-                // wants one file), no end.
+                // instead begin the pass here: no NewPass (these triggers only
+                // ever want one file), no end.
                 if self.end_at_rewind.load(Ordering::Relaxed) {
                     if self.advanced {
                         self.finished = true;
@@ -471,7 +471,17 @@ impl Recorder {
         // starts empty, so every parameter must be written again or the new pass
         // replays with whatever the previous one happened to end on, and the
         // next pass's audio starts somewhere new.
-        if rolling && std::mem::take(&mut self.pending_split) {
+        //
+        // A trigger that wants one file drops the debt instead of paying it: the
+        // split can only have been owed under OnDisarm, so a trigger chosen
+        // since must not be handed a second pass — the take's notes would sit in
+        // it while the first file is the one that renders. Clearing it here as
+        // well as at a backward jump is what makes "one file" hold whichever way
+        // the debt comes due.
+        if rolling
+            && std::mem::take(&mut self.pending_split)
+            && !self.end_at_rewind.load(Ordering::Relaxed)
+        {
             self.push(Entry::NewPass);
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
@@ -619,7 +629,7 @@ impl Control {
         }
         self.recording.store(true, Ordering::Relaxed);
         self.rolling.store(false, Ordering::Relaxed);
-        // Clear a previous take's loop-end latch so it can't end this one before
+        // Clear a previous take's rewind latch so it can't end this one before
         // the transport even rolls. The audio thread also clears it on arm.
         self.hit_rewind.store(false, Ordering::Relaxed);
         self.armed.store(true, Ordering::Relaxed);
@@ -2525,6 +2535,31 @@ mod tests {
         assert!(b.rec.observe_transport(0.0, true));
         let split = b.pushed();
         assert!(split.is_empty(), "one file, so the owed split is dropped: {split:?}");
+    }
+
+    /// The same debt, coming due the other way: the take resumes FORWARD of
+    /// where it was dragged to, so no backward jump is there to drop the owed
+    /// split. A one-file trigger still has to refuse it — a second pass here
+    /// takes the notes with it and leaves the first file, the one that renders,
+    /// holding the music that came before the drag.
+    #[test]
+    fn a_one_file_trigger_refuses_an_owed_split_that_comes_due_rolling_forward() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(b.rec.observe_transport(10.0, true), "music recorded before the drag");
+        assert!(!b.rec.observe_transport(5.0, false), "dragged back with the transport stopped");
+        b.pushed();
+
+        b.end_at_rewind();
+        assert!(b.rec.observe_transport(6.0, true), "playing on from where it was dragged to");
+        let split = b.pushed();
+        assert!(split.is_empty(), "one file, so the owed split is dropped: {split:?}");
+
+        // And the debt is settled rather than merely deferred: switching back to
+        // the splitting trigger must not resurrect it.
+        b.end_at_rewind.store(false, Ordering::Relaxed);
+        assert!(b.rec.observe_transport(7.0, true));
+        assert!(b.pushed().is_empty(), "a dropped split stays dropped");
     }
 
     /// A take that ends on a pass with no notes renders the pass that has them.

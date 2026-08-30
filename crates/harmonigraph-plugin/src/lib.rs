@@ -436,9 +436,9 @@ impl Plugin for Harmonigraph {
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
                 OriginSource::Idle => None,
                 // observe_transport decides whether the transport is rolling (and
-                // splits the take on a loop wrap, or ends it at the loop end under
-                // AtLoopEnd). It is deliberately more permissive than the host's
-                // `playing` flag — see there.
+                // splits the take on a loop wrap, or ends it at a backward
+                // jump under the one-file triggers). It is deliberately more
+                // permissive than the host's `playing` flag — see there.
                 OriginSource::Transport(seconds) => {
                     self.take.observe_transport(seconds, transport.playing).then_some(seconds)
                 }
