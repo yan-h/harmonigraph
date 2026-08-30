@@ -34,7 +34,7 @@ fn drag_hud(h: &mut DockHarness, state: &mut SharedState, by: egui::Vec2) -> egu
     hud_of(&h.frame(state, vec![]))
 }
 
-/// An overlay nobody has dragged opens in the editor's bottom-right corner —
+/// An overlay nobody has dragged opens in the editor's bottom-left corner —
 /// the one placement anything but a drag decides.
 ///
 /// Read off the EDITOR, and off nothing else. What pane is where, which leaf
@@ -64,8 +64,8 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     let hud = hud_of(&output);
     assert!(screen.contains_rect(hud), "the HUD should sit inside the editor: {hud:?}");
     assert!(
-        (hud.right() - (screen.right() - 8.0)).abs() < 1.0,
-        "the HUD should hug the editor's RIGHT edge: {hud:?} in {screen:?}",
+        (hud.left() - (screen.left() + 8.0)).abs() < 1.0,
+        "the HUD should hug the editor's LEFT edge: {hud:?} in {screen:?}",
     );
     assert!(
         (hud.bottom() - (screen.bottom() - 8.0)).abs() < 1.0,
@@ -133,7 +133,7 @@ fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
         "the HUD left the corner as its rows shrank: {shallow:?} in {screen:?}",
     );
     assert!(
-        (shallow.right() - (screen.right() - 8.0)).abs() < 1.0,
+        (shallow.left() - (screen.left() + 8.0)).abs() < 1.0,
         "the HUD left the corner as its rows shrank: {shallow:?} in {screen:?}",
     );
 }
@@ -152,9 +152,9 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
     h.settle(&mut state);
 
     let before = hud_of(&h.frame(&mut state, vec![]));
-    // Up and to the left, which is into the editor from the corner the HUD
+    // Up and to the right, which is into the editor from the corner the HUD
     // opens in — a drag the containment cannot be mistaken for.
-    let by = egui::vec2(-260.0, -190.0);
+    let by = egui::vec2(260.0, -190.0);
     let after = drag_hud(&mut h, &mut state, by);
 
     assert!(

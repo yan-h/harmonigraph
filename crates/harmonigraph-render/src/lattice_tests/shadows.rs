@@ -15,6 +15,15 @@ const SIZE: [u32; 2] = [256, 256];
 /// lands on. Bright, so one multiply has the range of a channel to move in.
 const GROUND: f64 = 0.8;
 
+/// The shader's own `INK_FLOOR`: the least a caster may darken the frame by
+/// before its fragment is discarded rather than drawn, and so where every
+/// shadow read here ENDS, whatever the quad around it reaches.
+///
+/// Pinned to the shader's own declaration by
+/// [`the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar`], the
+/// one reading it bounds.
+const INK_FLOOR: f64 = 0.01;
+
 fn over_ground() -> wgpu::Color {
     wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 }
 }
@@ -699,6 +708,11 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
+    assert!(
+        SHADER_SRC.contains(&format!("const INK_FLOOR: f32 = {INK_FLOOR};")),
+        "lattice.wgsl must declare INK_FLOOR as {INK_FLOOR}, which is what the tail below is \
+         read against"
+    );
     shooter.clear = over_ground();
     // A node's rings and a cross, each with its own ink radius on the pane:
     // the two quads are built by different code and each has to hold its own
@@ -740,8 +754,15 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
                 pair[1],
             );
         }
+        // What ends a shadow is the shader's own `INK_FLOOR`: a fragment
+        // darkening under a hundredth of the frame is discarded rather than
+        // drawn, so the last column a caster writes stands just above that
+        // floor whatever the quad does. The bound is twice it — the floor,
+        // plus one column of this profile's own slope, plus the code value an
+        // 8-bit frame quantizes the reading to. A quad cut short leaves the
+        // blur's own value there, which is an order up on any of the three.
         assert!(
-            profile[last] < 0.01,
+            profile[last] < 2.0 * INK_FLOOR,
             "{what}'s shadow stops at {:.4} of the ground {last} px out: the quad ended inside \
              the blur",
             profile[last],

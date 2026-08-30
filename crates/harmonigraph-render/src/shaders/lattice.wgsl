@@ -176,10 +176,13 @@ struct Uniforms {
     plus_shadow_rect: vec4<f32>,
     // That box's cell in atlas texels: origin, then size.
     plus_shadow_cell: vec4<f32>,
-    // x: points to cell texels; y: σ in those texels; z: the cell's own level,
-    // which is 1 — a marker's own opacity is the share it spends when it READS
-    // the cell (`plus_paint`); w: one arm in points, which is what turns a
-    // fragment's place on a cross into a place in the cell.
+    // x: points to cell texels; y: σ in those texels; z: the cell's share of
+    // the target's pixels, which is the softness the cross is cut with where it
+    // is RASTERIZED (`aa_width`, `vs_plus_cell`); w: one arm in points, which
+    // is what turns a fragment's place on a cross into a place in the cell.
+    //
+    // No level among them: it is 1 for every marker, a marker's own opacity
+    // being the share it spends when it READS the cell (`plus_paint`).
     plus_shadow_terms: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
@@ -544,7 +547,8 @@ struct ShadowCell {
     @location(5) rect: vec4<f32>,
     @location(9) cell: vec4<f32>,
     // x: points to cell texels; y: σ in those texels; z: the caster's level;
-    // w: unused on a node's cell.
+    // w: the cell's share of the target's pixels, which is what a draw INTO
+    // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) terms: vec4<f32>,
 };
 
@@ -593,23 +597,29 @@ struct VsOut {
     // as a caster with no cell.
     @location(10) @interpolate(flat) shadow_cell: vec4<f32>,
     // Where this fragment reads that cell (xy, in atlas texels) and how much of
-    // the shadow lands (z).
+    // the shadow lands (z), and how coarse the surface this fragment is being
+    // rasterized ON is, as a share of the target's pixels (w) — the atlas's two
+    // ends, reading and writing, in one row, and a draw is only ever at one of
+    // them. 1 on every draw that lands on the pane, `shadow::pack`'s own scale
+    // on the draw that fills a cell, and the softness every shape edge is cut
+    // with (`aa_width`).
     //
     // LINEAR — noperspective — because the texel is an AFFINE function of the
     // pane's own pixels and nothing else: perspective-correct interpolation
     // would carry the node's depth into a quantity the packer measured flat,
-    // and the shadow would drift across a tilted billboard. The level is
-    // constant over the quad and takes any interpolation.
-    @location(12) @interpolate(linear) shadow_at: vec3<f32>,
+    // and the shadow would drift across a tilted billboard. The level and the
+    // scale are constant over the quad and take any interpolation.
+    @location(12) @interpolate(linear) shadow_at: vec4<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: ShadowCell) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     out.shadow_cell = box.cell;
-    out.shadow_at = vec3<f32>(
+    out.shadow_at = vec4<f32>(
         cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x),
         box.terms.z,
+        1.0,
     );
     return out;
 }
@@ -632,7 +642,7 @@ fn vs_node_cell(
     out.clip_pos =
         select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
     out.shadow_cell = box.cell;
-    out.shadow_at = vec3<f32>(texel, box.terms.z);
+    out.shadow_at = vec4<f32>(texel, box.terms.z, box.terms.w);
     return out;
 }
 
@@ -717,9 +727,10 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.ring = inst.ring;
     // No cell, which is the answer for every draw but the two that cast a
     // shadow ([`vs_main`], [`vs_node_cell`]) — the glow's and the ink strip's
-    // pass neither read the atlas nor write one.
+    // pass neither read the atlas nor write one. The scale beside it is the
+    // PANE's, which is where every draw that gets no further than here lands.
     out.shadow_cell = vec4<f32>(0.0);
-    out.shadow_at = vec3<f32>(0.0);
+    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
     // CORNER's world position rather than the node's center, so the field
     // varies across the quad and the interpolator hands the fragment shader
@@ -772,11 +783,31 @@ fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
 // changing how soft edges look.
 const AA_SOFTNESS_PX: f32 = 2.0;
 
-// Soft-band width in the units of a coordinate whose per-render-pixel
-// derivative is `coord_fwidth`: the softness knob, converted from screen
-// pixels to render pixels.
-fn aa_width(coord_fwidth: f32) -> f32 {
-    return max(coord_fwidth, 1e-4) * AA_SOFTNESS_PX * max(u.misc2.z, 0.01);
+// Soft-band width in the units of a coordinate whose per-FRAGMENT derivative is
+// `coord_fwidth`, on a surface drawn at `surface_scale` of the target's pixels
+// (`VsOut::shadow_at`'s w).
+//
+// Two candidates, and the LARGER is the band: the softness knob converted to
+// this surface's fragments, and one fragment of it. A surface at the target's
+// own resolution takes the first anywhere the Render scale bar reaches —
+// `AA_SOFTNESS_PX` times a scale of 0.5 is exactly a fragment, and the bar
+// stops there — and the floor is what answers for a surface drawn coarser than
+// the pane, plus the sliver of `RENDER_SCALE_RANGE` below the bar, where a
+// band finer than a fragment is no antialiasing either.
+//
+// That surface is a cell of the shadow atlas, whose fragment is a texel `σ / 3`
+// render pixels wide (`shadow::pack`). Scaling the knob is what keeps the
+// band a SCREEN width there rather than the Shadow bar times a constant: the
+// node's size and the pane's DPI cancel out of an unscaled band, leaving every
+// edge in the cell cut at 0.185 × Shadow of the node's uv — wider than the gaps
+// between its rings past a Shadow of 0.27, so the atlas would hold a smeared
+// annulus rather than a picture of the node and every shadow it cast would be a
+// blur of that smear. The floor is what stops the correction going wrong the
+// other way, a cell antialiased at a width finer than the texels it has to draw
+// in being no antialiasing at all.
+fn aa_width(coord_fwidth: f32, surface_scale: f32) -> f32 {
+    let knob = AA_SOFTNESS_PX * max(u.misc2.z, 0.01) * clamp(surface_scale, 0.0, 1.0);
+    return max(coord_fwidth, 1e-4) * max(knob, 1.0);
 }
 
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
@@ -1948,11 +1979,12 @@ struct NodeGeom {
 fn node_geom(in: VsOut) -> NodeGeom {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
 
-    // Screen-constant soft-band width: uv units per pixel (uv.x is linear
+    // Screen-constant soft-band width: uv units per fragment (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to
-    // take before any branching), scaled to the softness knob. Shape edges
-    // below use this instead of fixed-uv smoothsteps.
-    let aa = aa_width(fwidth(in.uv.x));
+    // take before any branching), scaled to the softness knob against the
+    // surface this draw is landing on (`aa_width`). Shape edges below use
+    // this instead of fixed-uv smoothsteps.
+    let aa = aa_width(fwidth(in.uv.x), in.shadow_at.w);
     // How much of the shimmer's shared field one pixel spans, in that field's
     // own world units — what tells `shimmer_terms` when a pattern has run out
     // of pixels to be drawn in. Taken here, beside `aa` and for the same
@@ -2447,10 +2479,11 @@ struct PlusVsOut {
     // The markers' shared cell of the shadow atlas, in texels: origin, then
     // size. All zero on the draw that FILLS it, which reads no atlas.
     @location(3) @interpolate(flat) shadow_cell: vec4<f32>,
-    // Where this fragment reads that cell (xy, in atlas texels) and how much of
-    // the shadow this marker lands (z, its own opacity). Linear for the reason
-    // `VsOut::shadow_at` is.
-    @location(4) @interpolate(linear) shadow_at: vec3<f32>,
+    // Where this fragment reads that cell (xy, in atlas texels), how much of
+    // the shadow this marker lands (z, its own opacity), and the surface this
+    // fragment is being rasterized on as a share of the target's pixels (w).
+    // Read exactly as `VsOut::shadow_at` is, and linear for the same reason.
+    @location(4) @interpolate(linear) shadow_at: vec4<f32>,
 };
 
 // How far a marker's billboard reaches past the tips of its arms, in arms.
@@ -2579,7 +2612,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // The marker's own opacity is the SHARE of the shadow it casts, which is
     // what makes a position handing itself back as a name fades off it grow its
     // cross and the cross's shadow on one clock (`derive_pluses`).
-    out.shadow_at = vec3<f32>(box_texel, inst.color.a);
+    out.shadow_at = vec4<f32>(box_texel, inst.color.a, 1.0);
     return out;
 }
 
@@ -2605,8 +2638,10 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     let arm_points = max(u.plus_shadow_terms.w, 1e-6);
     out.uv = (corner * 2.0 - 1.0) * (rect.z * 0.5 / arm_points);
     out.color = vec4<f32>(1.0);
+    // No cell to READ — this draw is the one that fills it — and the cell's own
+    // scale, which is what the cross is cut with here rather than the pane's.
     out.shadow_cell = vec4<f32>(0.0);
-    out.shadow_at = vec3<f32>(0.0);
+    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.plus_shadow_terms.z);
     return out;
 }
 
@@ -3152,7 +3187,7 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // that small trades softness it cannot show for a shape it can: the band
     // narrows, and the arms keep their ends instead of squaring off against
     // the quad at the bottom of the bar.
-    let aa = min(aa_width(fwidth(in.uv.x)), PLUS_QUAD_MARGIN - 1.0);
+    let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
     // The SHADOW: this cross's own blurred ink, multiplied into everything
     // already in the frame under it. A cross in front of a node darkens that
@@ -3195,7 +3230,7 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
 /// the whole field costs nothing.
 @fragment
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
-    let aa = min(aa_width(fwidth(in.uv.x)), PLUS_QUAD_MARGIN - 1.0);
+    let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
 }
 
