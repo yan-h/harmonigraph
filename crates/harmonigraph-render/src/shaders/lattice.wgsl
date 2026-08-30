@@ -168,6 +168,18 @@ struct Uniforms {
     // texels, for the draws that fill a cell — they cannot bind the texture
     // they are writing, so its size cannot be read off it.
     misc14: vec4<f32>,
+    // The shadow's CURVE — what its blur is spent through, where misc11 says
+    // how wide and how dark it is. x: the gain, how much a caster thin against
+    // σ is worth against a solid one (`Scene::glow_shadow_gain`); y: the
+    // exponent that bends where along the shadow's width the depth sits
+    // (`Scene::glow_shadow_curve`). z/w unused.
+    //
+    // A row of its own rather than misc11's spare slot, because the two rows
+    // answer different questions: up there is the shadow's SIZE, which every
+    // caster's quad and cell are built from on the CPU, and here is the
+    // arithmetic one fragment spends — nothing on this row moves a quad, a cell
+    // or the atlas. Packed on misc11's rule, whatever the light says.
+    shadow_curve: vec4<f32>,
     // The ONE cell every resting marker's shadow is read out of, as three rows
     // rather than a per-instance buffer: every cross is the same shape at the
     // same σ, and a blur is linear, so `blur(level * ink)` is `level *
@@ -311,6 +323,18 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
+// How much a caster THIN against σ is worth against a solid one
+// (`u.shadow_curve.x`), and where along the shadow's width the depth sits
+// (`u.shadow_curve.y`). The pair `shadow_transmittance` takes, read here so
+// that every caster in this module spends one number.
+fn glow_shadow_gain() -> f32 {
+    return max(u.shadow_curve.x, 0.0);
+}
+
+fn glow_shadow_curve() -> f32 {
+    return max(u.shadow_curve.y, 0.0);
+}
+
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
 // is drawn at `scale`.
 //
@@ -352,7 +376,13 @@ fn shadow_through(texel: vec2<f32>, cell: vec4<f32>, level: f32) -> f32 {
     // once σ is past `shadow::SIGMA_CELL_MAX`, and the tap is what makes a blur
     // wider than its own texels read smooth.
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
-    return shadow_transmittance(blur, glow_shadow_depth(), level);
+    return shadow_transmittance(
+        blur,
+        glow_shadow_depth(),
+        level,
+        glow_shadow_gain(),
+        glow_shadow_curve(),
+    );
 }
 
 // How much of the light a LIT slice washes over its own ink with

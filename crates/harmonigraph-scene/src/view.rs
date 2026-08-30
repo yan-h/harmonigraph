@@ -5,9 +5,10 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
-    MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX,
-    RING_WIDTH_MAX,
+    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
+    GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1206,6 +1207,65 @@ pub struct ViewConfig {
     /// hole is blurred with everything else, so the light dims around a name
     /// over a region wider than the name.
     pub glow_shadow_bloom: f32,
+    /// What a caster's blurred ink is multiplied up by before it is spent as a
+    /// shadow, 0..=[`GLOW_SHADOW_GAIN_MAX`].
+    ///
+    /// The blur of a caster's coverage is at most 1, and only deep inside a
+    /// caster far wider than σ; a hairline ring or a stroke of type is a few
+    /// pixels against a σ of several, so its blur peaks at a fraction of that
+    /// and its shadow, spent as an exponent on the depth, would land at a
+    /// fraction of the depth the bar names. This is the factor that fraction is
+    /// multiplied up by, and the `min(…, 1)` under it keeps
+    /// [`glow_shadow_depth`](Self::glow_shadow_depth) a true FLOOR: a caster
+    /// wide against σ saturates there rather than overshooting, and the gain
+    /// only deepens the thin ones.
+    ///
+    /// So it is the bar that says what the picture's THINNEST ink is worth
+    /// against its widest, which is not a thing either width or depth can say
+    /// on its own. At 0 nothing casts at all. At the top a hairline is as dark
+    /// as a solid band, which is the whole lattice reading as one silhouette.
+    pub glow_shadow_gain: f32,
+    /// The exponent the gained blur is bent by on its way to the depth,
+    /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`]. 1 is the straight
+    /// line and is what a fresh view opens on.
+    ///
+    /// The gained blur is a number in 0..=1 and the depth is spent as its
+    /// exponent, so bending it here bends where along the shadow's WIDTH the
+    /// darkness sits without moving either end: the saturated middle stays at
+    /// the depth and the far edge stays at nothing.
+    ///
+    /// Under 1 lifts the tail — the shadow reads as a broad even pool that
+    /// stops abruptly, the sky-like look the blur family is otherwise short of.
+    /// Over 1 presses the tail down and pulls the shadow in against the ink,
+    /// which is a Gaussian read as a rim. That the two halves have different
+    /// room to move is why the range is not symmetric about 1 (see
+    /// [`GLOW_SHADOW_CURVE_MAX`]).
+    ///
+    /// It is free: one `pow` in the same function that already spends the gain
+    /// (`shadow_transmittance`, common.wgsl), and no atlas, cell or quad moves
+    /// with it.
+    pub glow_shadow_curve: f32,
+    /// What a note NAME's σ takes against the rest of the picture's,
+    /// 0..=[`GLOW_SHADOW_NAME_MAX`]. 1 is one width across the whole lattice
+    /// and is what a fresh view opens on.
+    ///
+    /// The one place the lattice's "one bar, one reach" is asked to bend, and
+    /// it is asked because a name is the only ink in the picture whose SHAPE is
+    /// meant to be read. A ring and a cross want a shadow that says how thick
+    /// they are; a letterform wants one that does not fill its counters, and
+    /// the width that does the first may not be the width that does the second.
+    ///
+    /// 0 is a name's ink cast with no blur at all — a hard-edged drop of the
+    /// letterforms themselves, the cell being packed with no padding and the
+    /// kernel collapsing to its centre tap.
+    ///
+    /// Nearly free of the atlas's cost model: σ is per CASTER where the cell is
+    /// packed (`pack` in `harmonigraph-render`'s `shadow.rs`), and each cell is
+    /// drawn at `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels, so a name
+    /// at three times the width is a cell a third the size rather than a kernel
+    /// three times as wide. What it does cost is the name's own quad, which
+    /// grows with its reach like every other caster's.
+    pub glow_shadow_name: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2195,6 +2255,14 @@ impl ViewConfig {
             finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
         self.glow_shadow_bloom =
             finite_or(self.glow_shadow_bloom, fresh.glow_shadow_bloom).clamp(0.0, 1.0);
+        // The shadow's own three, none of which is a share: a gain, an exponent
+        // and a ratio, each with a ceiling of its own beside the width's.
+        self.glow_shadow_gain = finite_or(self.glow_shadow_gain, fresh.glow_shadow_gain)
+            .clamp(0.0, GLOW_SHADOW_GAIN_MAX);
+        self.glow_shadow_curve = finite_or(self.glow_shadow_curve, fresh.glow_shadow_curve)
+            .clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX);
+        self.glow_shadow_name = finite_or(self.glow_shadow_name, fresh.glow_shadow_name)
+            .clamp(0.0, GLOW_SHADOW_NAME_MAX);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2520,6 +2588,20 @@ impl Default for ViewConfig {
             // Off, so a fresh view is the picture before this bar existed and
             // the bar is an addition rather than a restyle.
             glow_shadow_bloom: 0.0,
+            // Calibrated by eye on a name at the fresh view (#498, PR B): at 1
+            // a fresh name's shadow is a faint tint beside the ring's, at 4 a
+            // hairline casts as a block. A ring and a cross take the same
+            // number, which is what makes one Shadow bar one darkness across
+            // the picture.
+            glow_shadow_gain: 2.5,
+            // The straight line, and 1 is the only value that is one: the
+            // shadow's profile is the kernel's own, which is what every reading
+            // of the Shadow bar is calibrated against.
+            glow_shadow_curve: 1.0,
+            // One width across the whole picture, a ring, a cross and a name
+            // alike. The bar exists to ask whether a letterform wants
+            // otherwise; the fresh view is the answer being no.
+            glow_shadow_name: 1.0,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own

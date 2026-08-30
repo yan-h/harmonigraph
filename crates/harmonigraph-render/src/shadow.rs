@@ -45,6 +45,11 @@ pub(crate) const REACH_SIGMAS: f32 = 3.0;
 /// what the bar says it is. One bar, one reach, across a ring, a cross and a
 /// name.
 ///
+/// The frame's one σ, which is what a caster takes a RATIO of
+/// ([`Caster::sigma_scale`]) rather than what every caster is blurred at: one
+/// bar, one reach, across a ring, a cross and a name, save where a note name is
+/// dialled off it on purpose.
+///
 /// Target pixels rather than points, because the cell is drawn at the target's
 /// own resolution and sampled back in points: `render_scale` is the term #496
 /// found missing from the field's reach, and it is here on purpose. Written as
@@ -65,21 +70,39 @@ pub(crate) fn sigma_px(
 }
 
 /// What a caster hands the packer: its ink's bounding box in the pane's points
-/// (min, then size) and how much of its shadow lands, 0..=1.
+/// (min, then size), how much of its shadow lands, 0..=1, and what its own σ
+/// takes against the frame's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Caster {
     pub rect: [f32; 4],
     pub level: f32,
+    /// A RATIO on the frame's one σ ([`sigma_px`]), so a caster that wants the
+    /// picture's own width says 1 and the bar that dials the width dials this
+    /// caster with it.
+    ///
+    /// It is per caster because a note NAME is dialled against the rest of the
+    /// lattice (`ViewConfig::glow_shadow_name`): a letterform is the only ink
+    /// here whose shape is meant to be read, and the blur that says how thick a
+    /// ring is may not be the blur that leaves an `e` an `e`. Every other
+    /// caster passes 1.
+    ///
+    /// Each cell's own scale, pad and σ in texels come off this, so a caster at
+    /// three times the width is a cell drawn a third the size rather than a
+    /// kernel three times as wide: the blur's tap count is flat in this exactly
+    /// as it is in the bar.
+    pub sigma_scale: f32,
 }
 
-/// The caster a name's glyphs make: the box round every glyph's rect, and the
+/// The caster a name's glyphs make: the box round every glyph's rect, the
 /// strength the name's rim colour carries — the one number a lattice name's
 /// `rim` holds (`LABEL_SHADOW` in harmonigraph_ui), so a name easing in as the
-/// marker under it eases out grows its shadow on the clock its ink arrives on.
+/// marker under it eases out grows its shadow on the clock its ink arrives on —
+/// and `sigma_scale`, which is a name's alone to be other than 1
+/// (`ViewConfig::glow_shadow_name`).
 ///
 /// A run with no ink in it — every rect empty — is a caster of nothing, with
 /// its level zeroed rather than a box of infinities for the packer to size.
-pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance]) -> Caster {
+pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Caster {
     let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in glyphs {
         for axis in 0..2 {
@@ -88,10 +111,10 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance]) -> Caster {
         }
     }
     if !(max[0] > min[0] && max[1] > min[1]) {
-        return Caster { rect: [0.0; 4], level: 0.0 };
+        return Caster { rect: [0.0; 4], level: 0.0, sigma_scale };
     }
     let level = glyphs.iter().map(|g| f32::from(g.rim[3]) / 255.0).fold(0.0, f32::max);
-    Caster { rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]], level }
+    Caster { rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]], level, sigma_scale }
 }
 
 /// One caster's cell, as every draw that touches it takes it: the cell's
@@ -182,14 +205,29 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
     if casters.is_empty() || !positive(sigma_px) || !positive(px_per_point) {
         return Packed::default();
     }
-    let scale = (SIGMA_CELL_MAX / sigma_px).min(1.0);
-    // Points to cell texels, and σ in the same texels.
-    let k = scale * px_per_point;
-    let sigma_cell = sigma_px * scale;
-    // The kernel's reach, plus one texel so the scene pass's bilinear tap at
-    // the box's own edge still lands inside the cell.
-    let pad_cell = (REACH_SIGMAS * sigma_cell).ceil() + 1.0;
-    let pad = pad_cell / k;
+    // One caster's own σ in the target's pixels: the frame's, scaled by what
+    // that caster asked for. `max` and not a branch, so a NaN out of a corrupt
+    // blob comes out as 0 — a hard-edged shadow of the caster's own ink, which
+    // is the bottom of the name bar rather than a kernel of nothing.
+    let sigma_of = |c: &Caster| (sigma_px * c.sigma_scale).max(0.0);
+    // A caster's cell, sized off ITS σ: drawn at `min(1, SIGMA_CELL_MAX / σ)`
+    // of the target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever
+    // the caster asked for, and padded by the kernel's reach in those same
+    // texels, plus one so the scene pass's bilinear tap at the box's own edge
+    // still lands inside the cell. Every term inside the loop, where one σ
+    // would have put them outside it: what holds the blur's cost flat is the
+    // cap on σ IN TEXELS, and that is per cell.
+    let terms_of = |c: &Caster| {
+        let sigma = sigma_of(c);
+        // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
+        // infinity the `min` answers: the cell is at the target's own
+        // resolution and its kernel collapses to the centre tap.
+        let scale = (SIGMA_CELL_MAX / sigma).min(1.0);
+        let k = scale * px_per_point;
+        let sigma_cell = sigma * scale;
+        let pad = ((REACH_SIGMAS * sigma_cell).ceil() + 1.0) / k;
+        (scale, k, sigma_cell, pad)
+    };
     // What a caster's level comes to where it is spent (`terms.z` below): a
     // level at zero, or a NaN out of the same corrupt blob, darkens nothing.
     let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0;
@@ -206,6 +244,7 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
             if !casts(c) {
                 return ([0.0; 4], [0, 0]);
             }
+            let (_, k, _, pad) = terms_of(c);
             let rect =
                 [c.rect[0] - pad, c.rect[1] - pad, c.rect[2] + 2.0 * pad, c.rect[3] + 2.0 * pad];
             let texels = |points: f32| ((points * k).ceil() as u32).max(1);
@@ -243,6 +282,7 @@ pub(crate) fn pack(casters: &[Caster], sigma_px: f32, px_per_point: f32, max_sid
         .zip(&placed)
         .map(|((caster, &(rect, [w, h])), &[x, y])| {
             let fits = w > 0 && h > 0 && x + w <= width && y + h <= height;
+            let (scale, k, sigma_cell, _) = terms_of(caster);
             ShadowBox {
                 rect,
                 cell: if fits { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] },
@@ -498,8 +538,10 @@ pub(crate) mod tests {
         }
     }
 
+    /// A caster at the picture's own width, which is what every caster but a
+    /// note name is. The tests that ask about the RATIO name it themselves.
     fn caster(x: f32, y: f32, w: f32, h: f32) -> Caster {
-        Caster { rect: [x, y, w, h], level: 1.0 }
+        Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0 }
     }
 
     /// The shader's kernel and the packer's padding reach the same number of

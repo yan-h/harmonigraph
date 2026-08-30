@@ -250,13 +250,60 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// [`ViewConfig::glow_shadow`]), in the quad UV units the layer sizes above are
 /// in — the far end of the Glow section's Shadow bar.
 ///
-/// A whole node radius, where the two paddings above stop at [`GAP_MAX`]: a
+/// Three node radii, where the two paddings above stop at [`GAP_MAX`]: a
 /// padding is room between two layers of one node and has no business being
-/// wider than a layer, but a shadow is a blur of an item's whole ink, and what
-/// stops it reading as a black rim is a σ broad enough to come off at the rate
-/// the skirt does. Half a radius of σ past every ring is a band wider than the
-/// whole ring stack casting it, past which there is no more shape to soften.
-pub const GLOW_SHADOW_MAX: f32 = 1.0;
+/// wider than a layer, but a shadow is a blur of an item's whole ink, and a
+/// blur says which KERNEL it is only where σ is wide against the ink casting
+/// it. A 3 pt stroke of type under a σ of two points is one blob whatever the
+/// kernel; the same stroke under a σ of six is the kernel's own profile drawn
+/// large, which is the comparison the Shadow section is for.
+///
+/// It is the cheap direction of the two the bar moves in. A cell is drawn at
+/// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack`), so the
+/// atlas SHRINKS as this opens and the blur's tap count is flat; what grows is
+/// the quad every caster is billboarded onto, each one reaching
+/// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
+/// so the fill the scene pass pays. `timing.rs` is what reads that back.
+pub const GLOW_SHADOW_MAX: f32 = 3.0;
+
+/// The most a caster's blurred ink may be multiplied up by before it is spent
+/// as a shadow (see [`ViewConfig::glow_shadow_gain`]).
+///
+/// Six, which is a hairline ring reaching the depth bar's own floor at about a
+/// sixth of the blur's peak: past that the `min(…, 1)` under it has every
+/// caster in the picture saturated and the bar's last stretch moves nothing.
+pub const GLOW_SHADOW_GAIN_MAX: f32 = 6.0;
+
+/// The flattest a shadow's falloff may be bent (see
+/// [`ViewConfig::glow_shadow_curve`]), and the one bar in the Glow section
+/// whose bottom is not an off switch.
+///
+/// The exponent acts on a number in 0..=1, so at 0 every fragment the blur
+/// touched at all goes to the full depth and the shadow is a black rectangle
+/// over the caster's padded box. A quarter is where the pool has flattened as
+/// far as it can while the profile is still the caster's shape; the shader
+/// holds its own floor under this (`SHADOW_CURVE_FLOOR` in common.wgsl) for a
+/// value that arrives from anywhere but the bar.
+pub const GLOW_SHADOW_CURVE_MIN: f32 = 0.25;
+
+/// The steepest a shadow's falloff may be bent (see
+/// [`ViewConfig::glow_shadow_curve`]).
+///
+/// Four either way about the neutral 1 would be the symmetric range, and the
+/// bar is NOT symmetric: the exponent acts on a number under 1, so γ below 1
+/// lifts the whole tail toward the depth and γ above it pushes the tail down
+/// while leaving the saturated middle exactly where it is. The half that has
+/// room to move is the one that goes further.
+pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
+
+/// The widest a note name's own shadow may be dialled against the rest of the
+/// picture's (see [`ViewConfig::glow_shadow_name`]).
+///
+/// Three, this being a RATIO on the one Shadow width rather than a width: a
+/// name's strokes are the thinnest ink in the lattice and the only ink whose
+/// shape is meant to be read, so the question the bar asks is whether the
+/// letterforms want a blur their neighbours do not.
+pub const GLOW_SHADOW_NAME_MAX: f32 = 3.0;
 
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
@@ -898,6 +945,18 @@ pub struct Scene {
     /// bloom reads than on the picture itself (see
     /// [`ViewConfig::glow_shadow_bloom`]); already clamped to 0..=1.
     pub glow_shadow_bloom: f32,
+    /// What a caster's blurred ink is multiplied up by before it is spent as a
+    /// shadow (see [`ViewConfig::glow_shadow_gain`]); already clamped to
+    /// 0..=[`GLOW_SHADOW_GAIN_MAX`].
+    pub glow_shadow_gain: f32,
+    /// The exponent the gained blur is bent by on its way to the depth (see
+    /// [`ViewConfig::glow_shadow_curve`]); already clamped to
+    /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`].
+    pub glow_shadow_curve: f32,
+    /// What a note NAME's σ takes against the rest of the picture's (see
+    /// [`ViewConfig::glow_shadow_name`]); already clamped to
+    /// 0..=[`GLOW_SHADOW_NAME_MAX`].
+    pub glow_shadow_name: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///

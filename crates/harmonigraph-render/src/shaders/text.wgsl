@@ -55,8 +55,15 @@ struct Locals {
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
     shadow_atlas_size: vec2<f32>,
-    /// And the gap before the rings, which a `vec4<f32>` aligns to 16.
-    _pad2: vec2<f32>,
+    /// The lattice's shadow CURVE, in the two slots that were the gap before
+    /// the rings: how much a caster thin against σ is worth against a solid
+    /// one, and the exponent that bends where along the shadow's width the
+    /// depth sits. The pair `shadow_transmittance` takes beside the depth, so a
+    /// name's shadow and a ring's are shaped by one number each. Read by
+    /// [`fs_shadow_box`] alone; every other surface casts no shadow and leaves
+    /// both at 0.
+    shadow_gain: f32,
+    shadow_curve: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
@@ -608,12 +615,24 @@ fn vs_shadow_box(
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let uv = in.texel / vec2<f32>(textureDimensions(shadow_atlas));
     let blur = textureSampleLevel(shadow_atlas, shadow_sampler, uv, 0.0).r;
-    let t = shadow_transmittance(blur, locals.shadow_depth, in.level);
+    let t = shadow_transmittance(
+        blur,
+        locals.shadow_depth,
+        in.level,
+        locals.shadow_gain,
+        locals.shadow_curve,
+    );
     // The bright pass's copy, at its own depth. The SAME function over the same
     // blur and the same level, so what differs between the two pictures is one
     // number and never the shape of the shadow.
     let deeper = mix(locals.shadow_depth, 1.0, clamp(locals.shadow_bloom, 0.0, 1.0));
-    let lit = shadow_transmittance(blur, deeper, in.level);
+    let lit = shadow_transmittance(
+        blur,
+        deeper,
+        in.level,
+        locals.shadow_gain,
+        locals.shadow_curve,
+    );
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
