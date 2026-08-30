@@ -47,7 +47,7 @@ prescribes, because that is the dialect the runtime is tuned for:
   What is wrong or missing, at <path>:<line>, and what done looks like.
 </task>
 <completeness_contract>
-  ./ci.sh green. If the picture changed:
+  ./ci.sh green. If anything plugin-affecting changed:
   cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 </completeness_contract>
 <verification_loop>
@@ -82,11 +82,17 @@ Resolve the path rather than hardcoding it: the plugin installs under its own
 version number, so a literal path breaks silently on the next update and the
 failure looks like Codex being missing.
 
+Re-resolve it in **every** call. A Bash call keeps the working directory of
+the one before it but not its shell variables, so a `$CC` inherited from the
+dispatch is empty by the time anything polls — and `node "" status` fails in
+a way that reads as Codex being gone rather than as a typo here.
+
 `--background` unless `--wait` was passed or the task is small and bounded;
 an implementation run at `xhigh` is not quick. Poll with `status`, collect
 with `result`:
 
 ```sh
+CC="$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)"
 node "$CC" status --all
 node "$CC" result <job-id>
 ```
@@ -108,9 +114,21 @@ ends up costing more than an undelegated one.
 Then, before anything else:
 
 ```sh
-git status                    # nothing outside the worktree
-cat target/bundled/.loaded    # the slot is whatever it was
+git status                            # nothing outside the worktree
+cat ../../../target/bundled/.loaded   # the live slot is whatever it was
 ```
+
+The slot is the **main checkout's**, not this worktree's — a bare
+`target/bundled/.loaded` reads a private directory that usually does not
+exist here, so the check fails to find anything and that is indistinguishable
+from finding nothing wrong. Three levels up is the main checkout because
+`.claude/worktrees/<branch>/` is a fixed depth, which is one more thing the
+load-bearing path buys.
+
+Count the levels rather than deriving them. A worktree-isolated session
+refuses a command whose reach it cannot verify statically, and a
+`$(git rev-parse --git-common-dir)` inside the path is exactly that shape —
+it gets declined, not answered.
 
 Verification stays here because `ci.sh` passing is not the same claim as the
 change being right, and Codex has no memory of why the code is weird. What a
