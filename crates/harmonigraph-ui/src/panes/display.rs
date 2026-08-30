@@ -123,13 +123,23 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
 fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
     let selected = *page;
     let scale = theme::ui_scale(ui.ctx());
+    let font = egui::TextStyle::Button.resolve(ui.style());
     let row = ui.horizontal_wrapped(|ui| {
         let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
             let title = choice.title();
-            let font = egui::TextStyle::Button.resolve(ui.style());
-            let width = ui.painter().layout_no_wrap(title.to_owned(), font, theme::text()).size().x;
-            let size = egui::vec2(width + 12.0 * scale, theme::row_height(scale));
+            // The name is laid out once and kept: the box is sized from the
+            // galley that ends up drawn, so a name can never be measured at one
+            // width and painted at another. Laid out in
+            // [`Color32::PLACEHOLDER`] because the color is not known until the
+            // response says whether this name is hovered, and a placeholder is
+            // what lets the paint below choose it.
+            let galley = ui.painter().layout_no_wrap(
+                title.to_owned(),
+                font.clone(),
+                egui::Color32::PLACEHOLDER,
+            );
+            let size = egui::vec2(galley.size().x + 12.0 * scale, theme::row_height(scale));
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
@@ -139,12 +149,12 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
                     title,
                 )
             });
-            tabs.push((choice, response, rect));
+            tabs.push((choice, response, rect, galley));
         }
         tabs
     });
 
-    for (choice, response, _) in &row.inner {
+    for (choice, response, _, _) in &row.inner {
         if response.clicked() {
             *page = *choice;
         }
@@ -152,7 +162,7 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
 
     // Match the dock tabs' hover without giving an inactive destination the
     // persistent fill that makes option controls read as selected.
-    for (choice, response, rect) in &row.inner {
+    for (choice, response, rect, _) in &row.inner {
         if *choice != *page && response.hovered() {
             ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, theme::surface_faint());
         }
@@ -161,7 +171,7 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
     // Each wrapped line is a strip of its own. One boundary under the whole
     // block leaves an active page on any earlier line floating between rows.
     let mut boundaries: Vec<(egui::Rangef, f32)> = Vec::new();
-    for (_, _, rect) in &row.inner {
+    for (_, _, rect, _) in &row.inner {
         match boundaries.last_mut() {
             Some((range, bottom)) if (*bottom - rect.bottom()).abs() < 0.5 => {
                 range.max = rect.right();
@@ -169,21 +179,16 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
             _ => boundaries.push((rect.x_range(), rect.bottom())),
         }
     }
-    // Preserve the full strip boundary when the picker fits on one line.
-    if boundaries.len() == 1 {
-        boundaries[0].0 = row.response.rect.x_range();
-    }
     for (range, bottom) in boundaries {
         ui.painter().hline(range, bottom, egui::Stroke::new(1.0, theme::hairline()));
     }
 
-    for (choice, response, rect) in row.inner {
+    for (choice, response, rect, galley) in row.inner {
         let active = choice == *page;
-        let font = egui::TextStyle::Button.resolve(ui.style());
         let highlighted = active || response.hovered() || response.has_focus();
         let color = if highlighted { theme::text() } else { theme::text_dim() };
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, choice.title(), font, color);
-        if choice == *page {
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+        if active {
             ui.painter().hline(
                 rect.x_range(),
                 rect.bottom(),
@@ -378,7 +383,7 @@ mod tests {
                     egui::Shape::Text(text) if text.galley.text() == title => {
                         let format = &text.galley.job.sections[0].format;
                         let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
-                        Some((format.font_id.clone(), format.color, rect.center()))
+                        Some((format.font_id.clone(), text.fallback_color, rect.center()))
                     }
                     _ => None,
                 })
