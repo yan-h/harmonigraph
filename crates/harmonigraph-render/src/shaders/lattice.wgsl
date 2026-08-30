@@ -547,7 +547,8 @@ struct ShadowCell {
     @location(5) rect: vec4<f32>,
     @location(9) cell: vec4<f32>,
     // x: points to cell texels; y: σ in those texels; z: the caster's level;
-    // w: unused on a node's cell.
+    // w: the cell's share of the target's pixels, which is what a draw INTO
+    // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) terms: vec4<f32>,
 };
 
@@ -788,9 +789,11 @@ const AA_SOFTNESS_PX: f32 = 2.0;
 //
 // Two candidates, and the LARGER is the band: the softness knob converted to
 // this surface's fragments, and one fragment of it. A surface at the target's
-// own resolution takes the first every time — `AA_SOFTNESS_PX` times a render
-// scale of at least 0.5 is a fragment or wider — and the floor is what answers
-// for a surface drawn coarser than the pane.
+// own resolution takes the first anywhere the Render scale bar reaches —
+// `AA_SOFTNESS_PX` times a scale of 0.5 is exactly a fragment, and the bar
+// stops there — and the floor is what answers for a surface drawn coarser than
+// the pane, plus the sliver of `RENDER_SCALE_RANGE` below the bar, where a
+// band finer than a fragment is no antialiasing either.
 //
 // That surface is a cell of the shadow atlas, whose fragment is a texel `σ / 3`
 // render pixels wide (`shadow::pack`). Scaling the knob is what keeps the
