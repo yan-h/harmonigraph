@@ -98,12 +98,21 @@ is on and the transport is moving, the take is captured, offline render or
 not. Set **When** to *Transport stops* and the video renders itself when
 the export finishes.
 
-One subtlety that was worth getting right: whether the transport counts as
-rolling is the **union** of "the position advanced" and the host's
-`playing` flag, not the flag alone. Some hosts report `playing = false`
-throughout an offline render — nothing is being *played*, after all — and
-trusting the flag would have silently recorded nothing for the whole
+Two subtleties are what make it land on the right file.
+
+Whether the transport counts as rolling is the **union** of "the position
+advanced" and the host's `playing` flag, not the flag alone. Some hosts report
+`playing = false` throughout an offline render — nothing is being *played*,
+after all — and trusting the flag would silently record nothing for the whole
 export.
+
+And the take ends where the host puts the playhead BACK, not merely where the
+transport goes quiet. Bitwig restores it the moment an export finishes, which
+lands in the plugin as one backward block; a take still armed at that point goes
+on to record whatever plays next into a fresh pass, and it is the last pass that
+renders. That is how an 82-second export came out as a 63 KB video of a
+0.1-second fragment. Under *On stop* and *At loop end* the backward block ends
+the take instead, so the pass holding the piece is the one that renders.
 
 #### Rendering automatically when the take ends
 
@@ -127,7 +136,7 @@ by hand, which has completion, `--help`, and real error messages.
 | setting | what ends the take |
 |---|---|
 | On disarm | you switch Record take off — predictable, and it works however the transport behaves |
-| On stop | the transport stops after something was recorded; recording disarms at the same moment |
+| On stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
 | At loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
 
 *On stop* is what makes **exporting audio produce a video with nothing

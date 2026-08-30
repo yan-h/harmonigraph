@@ -33,9 +33,15 @@ pub enum RenderTrigger {
     /// play-through, or an audio export, produces a video with nothing
     /// further to click. Recording disarms itself at the same moment.
     ///
+    /// Or when the transport goes BACKWARDS, whichever comes first — see
+    /// [`ends_at_rewind`](Self::ends_at_rewind). A host puts the playhead back
+    /// when an export finishes, and it does so within the few frames the stop is
+    /// counted over, so the rewind is the earlier and the surer of the two
+    /// signals. The cost is that rewinding mid-take ends it here.
+    ///
     /// Falls back gracefully: if a host stops calling `process` the
-    /// instant a render finishes, the stop is never observed and the take
-    /// simply waits for you to disarm it, as before.
+    /// instant a render finishes AND leaves the playhead where it stopped,
+    /// neither signal arrives and the take simply waits for you to disarm it.
     OnTransportStop,
     /// When the arranger loop first repeats: exactly one loop is recorded, the
     /// take ends at the loop's end, and that pass renders — no catching the
@@ -48,6 +54,39 @@ pub enum RenderTrigger {
     /// with looping off there is nothing to wrap on and it waits for you to
     /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
+}
+
+impl RenderTrigger {
+    /// Whether the transport going BACKWARDS ends the take rather than splitting
+    /// it into another pass.
+    ///
+    /// [`OnDisarm`](Self::OnDisarm) is the one trigger that has to survive a
+    /// looping transport, so it keeps splitting. The other two want a single
+    /// file, and a backward jump is where it ends: the loop repeating for
+    /// [`AtLoopEnd`](Self::AtLoopEnd), and the host putting the playhead back
+    /// for [`OnTransportStop`](Self::OnTransportStop) — which is what finishing
+    /// an audio export looks like from inside the plugin, and arrives before a
+    /// stop counted in GUI frames can be sure of it.
+    pub fn ends_at_rewind(self) -> bool {
+        match self {
+            RenderTrigger::OnDisarm => false,
+            RenderTrigger::OnTransportStop | RenderTrigger::AtLoopEnd => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::RenderTrigger;
+
+    /// Which triggers hand the take's end to the audio thread. Written out one
+    /// by one rather than as `!= OnDisarm`, so adding a variant has to decide.
+    #[test]
+    fn only_the_trigger_that_survives_a_loop_keeps_splitting() {
+        assert!(!RenderTrigger::OnDisarm.ends_at_rewind());
+        assert!(RenderTrigger::OnTransportStop.ends_at_rewind());
+        assert!(RenderTrigger::AtLoopEnd.ends_at_rewind());
+    }
 }
 
 /// How a finished take gets turned into a video, edited in the Video
