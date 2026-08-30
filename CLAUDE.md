@@ -13,8 +13,9 @@ symlinks make every session read the same contract. Tool-specific hooks,
 permissions and commands stay in each tool's native configuration — except
 where a Claude path holds procedure rather than settings, which any agent
 can read directly: `.claude/commands/audit-merges.md` is the combined-merge
-audit, and `.claude/agents/merge-auditor.md` the read-only survey role it
-dispatches.
+audit, `.claude/agents/merge-auditor.md` the read-only survey role it
+dispatches, and `.claude/commands/implement-with-codex.md` the handoff that
+sends an edit to Codex while the brief and the verification stay here.
 
 ## Every change runs in a worktree and ends in a draft PR
 
@@ -27,6 +28,13 @@ creates it — `EnterWorktree` in Claude, which also takes the lock nothing
 here may take by hand. A session that finds itself editing the main checkout
 starts over in a worktree rather than moving into one mid-flight, and leaves
 whatever is already in the main checkout alone.
+
+The rule reaches agents this repo does not run. Codex inherits the cwd of the
+session that dispatches it, so a write-capable handoff from the main checkout
+edits the main checkout — and unlike a Claude session it cannot correct for
+that, because the lock is not something it can take. Enter the worktree
+before dispatching, never after; `.claude/commands/implement-with-codex.md`
+makes that its first step.
 
 A completed change is committed, pushed and opened as a **draft** PR with
 `gh pr create --draft`, documentation and configuration included; the handoff
