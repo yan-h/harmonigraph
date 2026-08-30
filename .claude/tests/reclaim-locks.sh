@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Does reclaim-worktrees.sh tell a live session's lock from an abandoned one?
+# Does reclaim-worktrees.sh keep its ownership boundary and tell a live
+# session's lock from an abandoned one?
 #
-# This is the one decision in that script that DELETES a directory, and it is
-# the only one whose inputs live outside the repo — a pid, its argv, and the
-# spare pool's socket files — so nothing else in the tree can catch it going
-# wrong. It has gone wrong in both directions: too conservative (a returned
-# spare kept its lock forever and 36.6G of cache with it), then too eager (a
+# These are the decisions in that script that can DELETE a directory: whether
+# the worktree belongs to Claude, and whether a Claude lock is live. Their
+# inputs live outside the repo — a path, a pid, its argv, and the spare pool's
+# socket files — so nothing else in the tree can catch them going wrong. The
+# lock has gone wrong in both directions: too conservative (a returned spare
+# kept its lock forever and 36.6G of cache with it), then too eager (a
 # discriminator that matched every live session, so a paused session's whole
 # worktree was removable out from under it).
 #
@@ -103,6 +105,49 @@ SHIM
   fi
 }
 
+# A Codex Worktree root is configurable. If it is placed below
+# `.claude/worktrees`, the app still creates its own `<id>/<repo>` level below
+# that root; a prefix-only ownership check mistakes the nested worktree for a
+# Claude one and removes it. Run the reclaimer for real in a throwaway repo and
+# prove both the worktree and its prunable cache survive.
+check_codex_ownership() {
+  work="$TMP/ownership"
+  main="$work/main"
+  codex_wt="$main/.claude/worktrees/codex-id/harmonigraph"
+  mkdir -p "$main" "$(dirname "$codex_wt")"
+
+  (
+    cd "$main" || exit 1
+    git init -q . 2>/dev/null
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    printf '/.claude/worktrees/\n/target/\n' > .gitignore
+    git add .gitignore
+    git commit -q -m base
+    git worktree add -q -b codex/app "$codex_wt" HEAD 2>/dev/null
+    mkdir -p "$codex_wt/target/debug"
+    : > "$codex_wt/target/debug/sentinel"
+  ) || {
+    echo "✗ a Codex-managed worktree: could not build the fixture" >&2
+    failures=$((failures + 1))
+    return
+  }
+
+  out="$work/run.log"
+  (cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_FORCE=1 \
+    RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    RECLAIM_PRUNE_IDLE_MINUTES=0 "$SCRIPT" </dev/null) >"$out" 2>&1
+  status=$?
+
+  if [ "$status" -eq 0 ] && [ -f "$codex_wt/target/debug/sentinel" ]; then
+    echo "✓ a Codex-managed worktree stays app-owned"
+  else
+    echo "✗ a Codex-managed worktree was reclaimed by the Claude hook" >&2
+    sed 's/^/    /' "$out" >&2
+    failures=$((failures + 1))
+  fi
+}
+
 case_n=0
 
 # A CLAIMED spare is a live session. Its argv is fixed at exec and still names
@@ -126,9 +171,11 @@ check "an unrecognised holder's lock is live" \
   "some-other-program --with args" 0 \
   "locked by live pid"
 
+check_codex_ownership
+
 echo
 if [ "$failures" -gt 0 ]; then
   echo "✗ $failures lock case(s) failed" >&2
   exit 1
 fi
-echo "✅ reclaim-worktrees.sh reads every lock case correctly"
+echo "✅ reclaim-worktrees.sh keeps ownership and lock boundaries"

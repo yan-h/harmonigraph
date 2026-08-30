@@ -47,7 +47,8 @@ echo "Building $PKG + harmonigraph-offline (release) from $HERE ..."
 BRANCH="$(git -C "$HERE" symbolic-ref --short -q HEAD || true)"
 if [ -z "$BRANCH" ]; then
   echo "ERROR: $HERE is on a detached HEAD, which load-plugin.sh matches by" >&2
-  echo "       branch name. Check out a branch, or run:" >&2
+  echo "       branch name. Create a branch here in Codex or check one out, then" >&2
+  echo "       rerun this command. To inspect existing named builds instead:" >&2
   echo "       $LOADER --list" >&2
   exit 1
 fi

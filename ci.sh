@@ -2,8 +2,8 @@
 # Local mirror of .github/workflows/ci.yml: the formatting check, clippy across
 # all targets with warnings denied, the full test suite, the plugin package
 # check, baseview's own tests, the doc-link check, the harmonigraph-core
-# dependency guard, then the two script gates — the worktree-reclaim lock cases
-# and the bundle swap.
+# dependency guard, then the script gates — worktree-reclaim ownership and lock
+# cases, the registered-worktree bundle swap, and pre-push skips.
 # Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
 # so a green run here means a green run there.
 #
@@ -102,18 +102,20 @@ if [ -n "$deps" ]; then
 fi
 echo "  ok — no dependencies"
 
-# The only gate here that guards a script rather than the crates. Its subject
-# — which worktree locks are live — is the one decision in the tree that
-# deletes a directory, and its inputs (a pid, its argv, the spare pool's
-# sockets) are all outside the repo, so no cargo test can reach it. It has
-# been wrong in both directions, most recently eagerly enough to make a live
-# session's worktree removable, which is why it is a gate and not a habit.
+# The only gate here that guards a script rather than the crates. Its subjects
+# — which worktrees Claude owns and which of their locks are live — decide
+# whether the tree can delete a directory, and their inputs (a path, a pid, its
+# argv, and the spare pool's sockets) are outside the repo, so no cargo test can
+# reach them. The lock has been wrong in both directions, most recently eagerly
+# enough to make a live session's worktree removable, which is why this is a
+# gate and not a habit.
 run .claude/tests/reclaim-locks.sh
 
-# The other gate that guards a script, and for the same reason: its subject is
-# an inode and an ad-hoc signature, both outside the repo, so no cargo test can
-# reach it — and getting it wrong is silent in the worst way, with every step
-# reporting success and the DAW still drawing the previous build.
+# The other gate that guards a script, and for the same reason: its subjects
+# are Git's registered worktree paths, an inode and an ad-hoc signature, all
+# outside the repo. Getting any one wrong is silent in the worst way: a branch
+# build is absent from the menu, or every swap step reports success while the
+# DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
 
 # The third script gate, and it guards the thing that decides whether the other
@@ -125,7 +127,7 @@ run .claude/tests/plugin-swap.sh
 run .claude/tests/pre-push-skip.sh
 
 echo
-echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap + pre-push skips)"
+echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap + pre-push skips)"
 
 # Record what passed, so the next push of the same content does not pay for it
 # again. The key is the TREE and not the commit: a rebase, an amended message

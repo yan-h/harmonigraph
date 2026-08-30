@@ -9,9 +9,10 @@ Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
 repo and branch protection is not available on this plan, so `ci.sh` via
 the `.githooks/pre-push` hook is the only automatic gate, and it checks
 formatting, clippy, the tests, the plugin package check, baseview's own tests,
-the rustdoc doc links, the `harmonigraph-core` dependency guard, the
-worktree-reclaim lock cases and the bundle swap — not judgement. `ci.sh`'s own header is the
-list to copy when this one looks stale.
+the rustdoc doc links, the `harmonigraph-core` dependency guard,
+worktree-reclaim ownership and lock cases, and the registered-worktree bundle
+swap, and pre-push skip cases — not judgement. `ci.sh`'s own header is the list
+to copy when this one looks stale.
 
 **No session reviews its own branch, and it has no command to do it with.**
 `/code-review` is a built-in whose frontmatter sets

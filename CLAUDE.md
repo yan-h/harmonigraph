@@ -17,24 +17,35 @@ audit, `.claude/agents/merge-auditor.md` the read-only survey role it
 dispatches, and `.claude/commands/implement-with-codex.md` the handoff that
 sends an edit to Codex while the brief and the verification stay here.
 
-## Every change runs in a worktree and ends in a draft PR
+## Every change runs in an owner-managed worktree and ends in a draft PR
 
-A session that may change tracked files works on its own branch in a
-worktree under `.claude/worktrees/<branch>/`, never in the main checkout.
-The path is load-bearing: `reclaim-worktrees.sh` prunes and removes only
-worktrees living there, so one made anywhere else holds its `target/debug`
-forever and no tier of the script can take it back. The launcher normally
-creates it — `EnterWorktree` in Claude, which also takes the lock nothing
-here may take by hand. A session that finds itself editing the main checkout
-starts over in a worktree rather than moving into one mid-flight, and leaves
-whatever is already in the main checkout alone.
+A session that may change tracked files works in its own worktree, never in
+the main checkout. A read-only coordinator may stay in main, but every task it
+asks to write gets a separate worktree. The owner determines the path and the
+lifecycle:
 
-The rule reaches agents this repo does not run. Codex inherits the cwd of the
-session that dispatches it, so a write-capable handoff from the main checkout
-edits the main checkout — and unlike a Claude session it cannot correct for
-that, because the lock is not something it can take. Enter the worktree
-before dispatching, never after; `.claude/commands/implement-with-codex.md`
-makes that its first step.
+- **Claude:** `.claude/worktrees/<branch>/`. `EnterWorktree` creates it and
+  takes the lock nothing here may take by hand; `reclaim-worktrees.sh` prunes
+  and removes it.
+- **Codex app:** the app's managed worktree, under `$CODEX_HOME/worktrees` by
+  default or its configured Worktree root. Start from the requested committed
+  base, normally `main`, and create the requested branch (`codex/<slug>` by
+  default) before the first edit because a managed worktree begins detached.
+  Stay there through commit, push and draft PR, using the app's approval flow
+  for Git metadata and network access. Codex owns its cleanup and snapshots,
+  so the Claude reclaimer deliberately leaves it alone.
+
+Keep those ownership domains separate: do not point Codex's Worktree root at
+`.claude/worktrees`. A hand-made worktree outside either owner has no automatic
+cleanup and is not a supported session workspace. A write-capable session
+that finds itself in main leaves whatever is there alone: Claude starts over
+through `EnterWorktree`, while a Codex coordinator sends the edit to a
+worktree task.
+
+The Claude Companion handoff is not a Codex-managed task: Codex inherits the
+dispatching Claude session's cwd. Claude therefore enters its worktree before
+dispatching, never after; `.claude/commands/implement-with-codex.md` makes
+that its first step.
 
 A completed change is committed, pushed and opened as a **draft** PR with
 `gh pr create --draft`, documentation and configuration included; the handoff
@@ -110,7 +121,7 @@ touching the shared slot yourself would just evict whatever he is currently
 testing. Skip the build only when nothing plugin-visible changed (docs,
 backlog, pure-test edits).
 
-**Don't use `cargo xtask bundle` from a nested worktree** — nice-plug-xtask's
+**Don't use `cargo xtask bundle` from a nested Claude worktree** — nice-plug-xtask's
 `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml`
 (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is
 the main repo root, so it silently builds main. The bundle looks fresh and
@@ -347,13 +358,19 @@ work is better run in sequence, and variants of a single decision (three
 takes on one fade) are better as one session producing several builds to
 compare than as three branches to reconcile.
 
-## Never lock your own worktree by hand
+A Codex coordinator creates a separate top-level app task, and therefore a
+separate managed worktree, for each mutating stream. Subagents inside one task
+share its worktree; use them for read-only exploration or review, not parallel
+edits.
 
-The harness locks a worktree when a session enters it and unlocks it when
-the session exits, so there is nothing for a session to do here. Every
-releaser in the system — both harness exit paths, the startup sweep, and
-`.claude/reclaim-worktrees.sh` — recognises a lock only by the shape of
-its reason string:
+## Never lock an agent-owned worktree by hand
+
+The Claude harness locks its worktree when a session enters it and unlocks it
+when the session exits, while Codex owns the lifecycle of its managed
+worktree. There is nothing for either session to do here. Every Claude
+releaser — both harness exit paths, the startup sweep, and
+`.claude/reclaim-worktrees.sh` — recognises a lock only by the shape of its
+reason string:
 
 ```
 claude session <name> (pid <n> start <date>)
