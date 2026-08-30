@@ -494,11 +494,27 @@ fn frame(
     // effect on the next tick rather than the one after it. The lock is
     // released first because what is armed is a fact about the WINDOW rather
     // than about the state behind it (see [`WindowState::frame_interval`]).
-    let target = target_frame_interval(shared.ui.fps_cap, queue.display_max_fps());
+    let fps_cap = shared.ui.fps_cap;
+    let display_max_fps = queue.display_max_fps();
     drop(guard);
-    if let Some(interval) = state.arm(target) {
+    if let Some(interval) = pace(state, fps_cap, display_max_fps) {
         queue.set_frame_interval(interval);
     }
+}
+
+/// What the window's frame timer has to be told this frame: the interval the
+/// cap and the display ask for, or `None` when it already ticks at that.
+///
+/// Split out of [`frame`] because it is the whole of the pacing decision and
+/// the only part of it a test can reach: a `Queue` — which is where the real
+/// frame reads the display and arms the timer — borrows window internals that
+/// exist only inside a running window.
+fn pace(
+    state: &mut WindowState,
+    fps_cap: Option<f32>,
+    display_max_fps: Option<f64>,
+) -> Option<f64> {
+    state.arm(target_frame_interval(fps_cap, display_max_fps))
 }
 
 /// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
@@ -996,7 +1012,7 @@ impl Drop for LatticeEditorHandle {
 #[cfg(test)]
 mod tests {
     use super::{
-        target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
+        pace, target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
         DISPLAY_OVERSAMPLE, FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
     use harmonigraph_core::notes::NoteEvent;
@@ -1133,39 +1149,55 @@ mod tests {
     }
 
     /// A window opens at baseview's `DEFAULT_FRAME_INTERVAL` whatever the
-    /// window before it was running at, so the record of what is armed cannot
-    /// outlive one window: the reopened editor's first frame computes the same
-    /// target the closed one ended on, and a carried-over record would match
-    /// it, skip the arming, and leave the timer at the ~67 Hz default until a
-    /// cap change happened to move the target.
+    /// window before it was running at, so what is armed cannot be remembered
+    /// anywhere that outlives one window: the reopened editor's first frame
+    /// asks for the same interval the closed one ended on, and a carried-over
+    /// record would match it, skip the arming, and leave the timer at the
+    /// ~67 Hz default until a cap change happened to move the target.
+    ///
+    /// The guarantee being measured is that [`WindowState`] — built once per
+    /// [`Editor::spawn`] — is where that record lives, so two of them stand
+    /// for two openings of the editor over one plugin.
     #[test]
     fn a_reopened_window_arms_its_own_timer() {
-        let (_producer, consumer) = rtrb::RingBuffer::new(64);
-        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
-        let (_recorder, take_control) = harmonigraph_record::channel();
-        let shared = Arc::new(super::Mutex::new(EditorShared::new(
-            consumer,
-            audio_consumer,
-            Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            Arc::new(super::AtomicU32::new(1)),
-            take_control,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        )));
-        let params = Arc::new(HarmonigraphParams::default());
         // Uncapped on a 144 Hz panel, which is where the stuck rate showed.
-        let target = target_frame_interval(None, Some(144.0));
+        let (cap, display) = (None, Some(144.0));
+        let target = target_frame_interval(cap, display);
 
-        let mut first = WindowState::new(shared.clone(), params.clone());
-        assert_eq!(first.arm(target), Some(target), "the first frame has to arm the window");
-        assert_eq!(first.arm(target), None, "an unchanged cadence rebuilt the timer anyway");
+        let mut first = a_window();
+        assert_eq!(pace(&mut first, cap, display), Some(target), "the first frame arms nothing");
+        assert_eq!(pace(&mut first, cap, display), None, "an unchanged cadence rebuilt the timer");
 
-        // That window closes and the editor opens again over the same state.
-        let mut second = WindowState::new(shared, params);
+        // That window closes and the editor opens again over the same plugin.
+        let mut second = a_window();
         assert_eq!(
-            second.arm(target),
+            pace(&mut second, cap, display),
             Some(target),
             "a reopened window was left ticking at baseview's default",
         );
+    }
+
+    /// A `WindowState` standing for one opened window.
+    ///
+    /// What it is built over is not what any pacing test measures — the
+    /// decision reads the cap and the display and touches neither the rings
+    /// nor the params — so this exists only to satisfy the constructor, in one
+    /// place rather than once per test.
+    fn a_window() -> WindowState {
+        let (_producer, consumer) = rtrb::RingBuffer::new(1);
+        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(1);
+        let (_recorder, take_control) = harmonigraph_record::channel();
+        WindowState::new(
+            Arc::new(super::Mutex::new(EditorShared::new(
+                consumer,
+                audio_consumer,
+                Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+                Arc::new(super::AtomicU32::new(1)),
+                take_control,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            ))),
+            Arc::new(HarmonigraphParams::default()),
+        )
     }
 
     #[test]
