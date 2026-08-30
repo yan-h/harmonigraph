@@ -26,3 +26,4 @@ mod settings;
 mod shell;
 mod spectral;
 mod spectrum;
+mod zoomcost;
