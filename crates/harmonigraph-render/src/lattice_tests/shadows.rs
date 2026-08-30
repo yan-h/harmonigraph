@@ -961,26 +961,37 @@ fn a_nodes_own_shadow_reaches_the_bloom() {
 /// be the only caster in a frame: the node it stands beside paints the light it
 /// stands in and casts its own shadow into both. What the bar moves with the
 /// cross present, less what it moves with the cross gone, is the cross's own
-/// half — the node's being the same picture in both.
+/// half.
+///
+/// The LIGHT is the whole of what makes that subtraction a reading of the
+/// cross. The bar takes bloom away and can take none where there is none, so a
+/// cross standing in a faint tail of the halo moves a hundred pixels of its
+/// own while the ink it adds moves five times that many by changing how the
+/// NODE's shadow reads under it — a difference that clears a small threshold
+/// with the cross's own term switched off. Dialled to carry to the cross
+/// (`REACH`, `STRENGTH`) the cross's own term is thousands of pixels and the
+/// cross-ink term is tens, which is what the margin below is sized against.
 ///
 /// The cross stands at 3 world units, clear of the node's outermost ring at
-/// 1.57 and of the reach of that ring's blur, and inside a light dialled to
-/// carry well past it. So the pixels this counts are the cross's own and not a
-/// second reading of the node's.
+/// 1.57 and of the reach of that ring's blur.
 #[test]
 fn a_resting_crosss_shadow_reaches_the_bloom_too() {
     const SHADOW: f32 = 0.6;
     const DEPTH: f32 = 0.85;
+    /// A light that carries past the cross at 3, so the cross's shadow has
+    /// bloom under it to take away.
+    const REACH: f32 = 5.0;
+    const STRENGTH: f32 = 4.0;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     let mut shot = |cross: bool, on_bloom: f32| -> Vec<u8> {
-        let mut scene = lit_node_and_a_name(1.6, SHADOW, DEPTH);
+        let mut scene = lit_node_and_a_name(REACH, SHADOW, DEPTH);
+        scene.glow_strength = STRENGTH;
         scene.bloom_strength = 1.0;
         scene.glow_shadow_bloom = on_bloom;
         if cross {
-            scene.pluses =
-                vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];
+            scene.pluses = vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, CROSS_INK, 1.0)];
         }
         shooter.shot(&scene)
     };
@@ -988,7 +999,7 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
     let alone = differing_pixels(&shot(false, 0.0), &shot(false, 1.0));
     let with_cross = differing_pixels(&shot(true, 0.0), &shot(true, 1.0));
     assert!(
-        with_cross > alone + 100,
+        with_cross > alone + 1000,
         "the bar moved {with_cross} pixels with a cross in the frame and {alone} without, so a \
          resting marker's shadow is not reaching the bloom's copy",
     );
