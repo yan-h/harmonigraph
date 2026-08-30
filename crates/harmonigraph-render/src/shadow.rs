@@ -37,7 +37,7 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Flo
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 
-/// The least of the target's pixels a DISTANCE cell may be drawn at.
+/// The fewest texels of a DISTANCE cell one POINT of the pane may be drawn at.
 ///
 /// A blur cell shrinks without limit as σ grows (`SIGMA_CELL_MAX / σ`), because
 /// a blur needs no more texels than its own width. A distance cell cannot: FORM
@@ -46,17 +46,28 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 ///
 /// Two texels of it. The lattice's thinnest ink is a stroke of type, and a name
 /// is set at `NAME_SIZE` 30 points (`harmonigraph-ui`'s `marks.rs`) whose
-/// monospace stem is about a twelfth of the em — five of the target's pixels at
-/// the default framing's 2 pixels per point. Two texels of that is 0.4, and
-/// under it a stem is one texel or none: the flood's seeds come off a coverage
-/// contour (`INK_FLOOR`), and a stroke that covers no texel to half seeds
-/// nothing at all, so its shadow does not thin — it disappears.
+/// monospace stem is about a twelfth of the em — two and a half POINTS. Two
+/// texels of that is 0.8 a point, and under it a stem is one texel or none: the
+/// flood's seeds come off a coverage contour (`INK_FLOOR`), and a stroke that
+/// covers no texel to half seeds nothing at all, so its shadow does not thin —
+/// it disappears.
+///
+/// In the pane's POINTS and not in the target's pixels, which is the whole
+/// reason it is written this way round: a stem is a fixed number of points and
+/// a varying number of pixels, so a floor on the fraction of the target would
+/// hold two texels only at the framing it was fitted to. The editor runs at 2
+/// pixels a point and the offline renderer at 1 to 4 (`default_scale` in
+/// harmonigraph-offline's `main.rs`, 1.5 for a 1080p export), so a fraction
+/// fitted to the editor is a name whose shadow is present on screen and gone
+/// from the mp4. The cell's cost is unchanged by the swap: what it decides is
+/// `k`, and `k` is this number.
 ///
 /// Above the floor a distance cell shrinks with the Shadow bar exactly as a
 /// blur cell does, so the widest settings cost no more atlas per cell than the
 /// floor allows. What it does NOT bound is the cell's area, which grows with
-/// the pad: `timing.rs` is what reads that back at the top of the bar.
-pub(crate) const DISTANCE_SCALE_FLOOR: f32 = 0.4;
+/// the pad: `timing.rs` is what reads that back at the top of the bar, and
+/// `a_kernel_row_costs_this_much_atlas_against_one_gaussian` bounds it.
+pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
 /// What the flood's ping-pong pair is kept in: one texel's nearest seed, as a
 /// pair of ABSOLUTE atlas coordinates.
@@ -438,9 +449,9 @@ pub(crate) fn pack(
     // taps to that cell's rect, so N terms are N cells the existing pass sweeps
     // rather than N kernels any one of them is blurred by.
     // A DISTANCE cell parts from that in both numbers, and each for its own
-    // reason. Its resolution is floored ([`DISTANCE_SCALE_FLOOR`]) because form
-    // is what the family draws and a stroke under two texels seeds nothing at
-    // all; its pad is the standoff's own stop rather than the kernel's reach,
+    // reason. Its resolution is floored ([`DISTANCE_TEXELS_PER_POINT`]) because
+    // form is what the family draws and a stroke under two texels seeds nothing
+    // at all; its pad is the standoff's own stop rather than the kernel's reach,
     // that being where the curve is windowed to zero
     // (`KernelTerm::reach_sigmas`, which is the one place the two are written
     // down). σ in the CELL is zero: what the blur chain does to such a cell is
@@ -451,7 +462,10 @@ pub(crate) fn pack(
         // infinity the `min` answers: the cell is at the target's own
         // resolution and its kernel collapses to the centre tap.
         let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
-        let scale = if is_distance(t) { fit.max(DISTANCE_SCALE_FLOOR) } else { fit };
+        // The floor is a `k` and not a fraction of the target, so it holds two
+        // texels of a stem at every framing rather than at one.
+        let floor = (DISTANCE_TEXELS_PER_POINT / px_per_point).min(1.0);
+        let scale = if is_distance(t) { fit.max(floor) } else { fit };
         let k = scale * px_per_point;
         // This term's σ in the cell's own texels, which is what the PADDING is
         // in whatever the kind — the two families reach different multiples of
@@ -1175,10 +1189,19 @@ pub(crate) mod tests {
     /// error. Its σ ratios straddle 1, that being what "scaled to the same
     /// reach" means for a mixture: a row entirely under 1 is a shadow narrower
     /// than the bar says. And it fits in what a caster carries.
+    ///
+    /// Walked off the ENUM and not off a list, so a row added to the table is
+    /// checked by having been added. The rows the claims are about are the ones
+    /// that carry a blur term, and `floods` is what parts them — a distance row
+    /// has no mixture to sum and is measured by the two readings in
+    /// `lattice_tests::shadows` instead.
     #[test]
     fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
         use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Sky, Exponential] {
+        for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance] {
+            if kernel.floods() {
+                continue;
+            }
             let terms = kernel.terms();
             assert!(
                 !terms.is_empty() && terms.len() <= harmonigraph_scene::SHADOW_TERMS_MAX,
@@ -1328,7 +1351,7 @@ pub(crate) mod tests {
     /// that limit N times sooner now).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+        use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1355,6 +1378,23 @@ pub(crate) mod tests {
                      row that reaches the device's texture limit rather than a row to compare",
                 );
             }
+            // The DISTANCE row on a bound of its own, and two orders of
+            // magnitude above the blur rows' rather than beside them. A blur
+            // cell shrinks with σ and a distance cell stops at
+            // `DISTANCE_TEXELS_PER_POINT`, so the top of the bar is where the
+            // two families' costs part company by construction — the number
+            // measures 87x there, and the bound is a CEILING on that rather
+            // than a claim it should be smaller. What it catches is the same
+            // thing the eight above does: a change that walks the atlas into
+            // `max_side`, where a caster stops casting with nothing on screen
+            // to say so.
+            let ratio = area(Distance) / plain;
+            eprintln!("Distance at {what}: {ratio:.2}x one Gaussian's cells");
+            assert!(
+                ratio <= 120.0,
+                "Distance packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
+                 reaches the device's texture limit rather than a row to compare",
+            );
         }
     }
 
@@ -1703,7 +1743,14 @@ pub(crate) mod tests {
         let bits = v.to_bits();
         let exp = ((bits >> 23) & 0xff) as i32 - 127;
         let mant = ((bits >> 13) & 0x3ff) as u16;
-        if v <= 0.0 {
+        // Zero, and everything a half cannot hold as a NORMAL number. Only the
+        // normal range is written out — a subnormal is under 6e-5 and every
+        // caller here is coverage, where that is zero — and the guard is what
+        // keeps the shortcut honest: `exp + 15` below -14 goes NEGATIVE, and a
+        // negative exponent shifted into place wraps to a large negative half,
+        // which is a fixture writing garbage rather than the small number it
+        // meant.
+        if !v.is_finite() || v < 6.104e-5 {
             return 0;
         }
         (((exp + 15) as u16) << 10) | mant
@@ -1943,10 +1990,20 @@ pub(crate) mod tests {
         let out = pack(&[caster], sigma, 1.0, 4096, packed);
         let cell = out.boxes[0];
         let scale = cell.terms[3];
-        assert!(
-            (scale - DISTANCE_SCALE_FLOOR).abs() < 1e-5,
-            "a distance cell at σ {sigma} is drawn at {scale} of the target, not at its floor",
-        );
+        // At EVERY framing, which is the half a fraction of the target cannot
+        // hold: the editor draws at 2 pixels a point and an export at 1 to 4
+        // (`default_scale` in harmonigraph-offline), so a floor fitted to one
+        // of them is a shadow present on screen and gone from the mp4. What has
+        // to hold still is the texels a POINT is drawn at.
+        for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
+            let held = pack(&[caster], sigma * px_per_point, px_per_point, 8192, packed).boxes[0];
+            let k = held.terms[0];
+            assert!(
+                k >= DISTANCE_TEXELS_PER_POINT - 1e-5,
+                "at {px_per_point} pixels a point a distance cell draws a point across {k} \
+                 texels, so a stem of type is under two of them and seeds nothing",
+            );
+        }
         assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ, so the chain blurs it");
         assert_eq!(cell.who[1], DISTANCE_KIND, "the box does not say it holds a distance");
         // The pad is the stop in points, plus the one texel the sampler's

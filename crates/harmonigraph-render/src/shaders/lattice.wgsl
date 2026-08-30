@@ -131,13 +131,14 @@ struct Uniforms {
     misc10: vec4<f32>,
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
-    // the reach every quad is grown by (`shadow_reach_uv`); y: how much deeper
-    // a NAME's shadow lands on the copy of the picture the bloom's bright pass
-    // reads, which is a text.wgsl dial and read nowhere in this file; y: the
-    // exponent a DISTANCE row's decay is taken over
-    // (`Scene::glow_shadow_shape`); w: how dark it lands, 1 taking the frame
-    // under a solid caster down to `SHADOW_KEEP_FLOOR`. z unused and zeroed by
-    // the CPU.
+    // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
+    // DISTANCE row's decay is taken over (`Scene::glow_shadow_shape`); w: how
+    // dark it lands, 1 taking the frame under a solid caster down to
+    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
+    //
+    // Every number on it is the FRAME's, one Shadow across the picture: what a
+    // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
+    // where its cells are packed.
     //
     // The shape sits HERE and not on the curve row beside it because it belongs
     // to a ROW rather than to the depth: it is not read at all unless a term of
@@ -687,7 +688,7 @@ struct VsOut {
     // rest is 0. Zero throughout on the draws that do neither.
     @location(10) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment stands on the PANE, in points (xy) — the space every
-    // term's cell is mapped from (`shadow_blur`) — how much of the shadow lands
+    // term's cell is mapped from (`shadow_kernel`) — how much of the shadow lands
     // (z), and how coarse the surface being rasterized ON is, as a share of the
     // target's pixels (w). 1 on every draw that lands on the pane,
     // `shadow::pack`'s own scale on the draw that fills a cell, and the

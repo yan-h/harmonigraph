@@ -756,20 +756,29 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // The two that shape the depth rather than set it, under the pair they
         // act on: how much of it the picture's THINNEST ink gets, and where
         // along the shadow's width it sits.
-        ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
-            .display(|v| format!("{v:.2}x"))
-            .show(ui)
-            .on_hover_text(
-                "How much of the Shadow depth the picture's THINNEST ink gets. \
-                 A shadow is a blur of the thing casting it, so a wide band \
-                 blurs to a solid pool and a hairline ring or a stroke of type \
-                 blurs to a faint smudge — and without this they would land at \
-                 wildly different darknesses from one depth. Turning it up \
-                 brings the thin ink up toward the depth the bar names and \
-                 leaves the wide ink exactly where it is, until at the top \
-                 everything in the lattice is one flat silhouette. 0x is the \
-                 picture with no shadow at all.",
-            );
+        // The gain is the BLUR family's, on the same rule the two bars below it
+        // are gated by: a distance field gives a hairline the whole depth at
+        // its own edge by construction, so `shadow_kernel` returns before the
+        // gain is ever read on a distance row and the bar moves nothing there.
+        ui.add_enabled_ui(!view.glow_shadow_kernel.floods(), |ui| {
+            ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
+                .display(|v| format!("{v:.2}x"))
+                .show(ui)
+                .on_hover_text(
+                    "How much of the Shadow depth the picture's THINNEST ink \
+                     gets, on the blur rows of the Kernel picker. A shadow is \
+                     a blur of the thing casting it, so a wide band blurs to a \
+                     solid pool and a hairline ring or a stroke of type blurs \
+                     to a faint smudge — and without this they would land at \
+                     wildly different darknesses from one depth. Turning it up \
+                     brings the thin ink up toward the depth the bar names and \
+                     leaves the wide ink exactly where it is, until at the top \
+                     everything in the lattice is one flat silhouette. 0x is \
+                     the picture with no shadow at all. A Distance row needs \
+                     none of it: a hairline already stands at the whole depth \
+                     against its own ink.",
+                );
+        });
         ValueBar::new(
             &mut view.glow_shadow_curve,
             GLOW_SHADOW_CURVE_MIN..=GLOW_SHADOW_CURVE_MAX,

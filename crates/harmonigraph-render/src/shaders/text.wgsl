@@ -538,7 +538,7 @@ fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
 struct BoxOut {
     @builtin(position) position: vec4<f32>,
     /// Where this fragment stands on the pane, in points — the space every
-    /// term's cell is mapped from (`shadow_blur`).
+    /// term's cell is mapped from (`shadow_kernel`).
     @location(0) at: vec2<f32>,
     /// The caster's level, 0..1.
     @location(1) @interpolate(flat) level: f32,
@@ -593,7 +593,7 @@ fn vs_shadow_box(
 /// easing in as its marker eases out casts.
 ///
 /// One bilinear tap PER TERM of the kernel, each in its own cell at its own
-/// resolution (`shadow_blur` in common.wgsl), summed by weight before the
+/// resolution (`shadow_kernel` in common.wgsl), summed by weight before the
 /// transmittance is taken: a sum of transmittances is a different picture from
 /// the transmittance of a sum, and the second is the one a kernel means.
 ///
