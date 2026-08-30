@@ -1498,8 +1498,8 @@ impl LatticeCallback {
                 },
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
-                // lattice has.
-                misc11: [scene.glow_shadow, scene.glow_shadow_bloom, 0.0, scene.glow_shadow_depth],
+                // lattice has. y/z unused.
+                misc11: [scene.glow_shadow, 0.0, 0.0, scene.glow_shadow_depth],
                 shadow_curve: [
                     scene.glow_shadow_gain,
                     scene.glow_shadow_curve,
@@ -4017,12 +4017,7 @@ impl CallbackTrait for LatticeCallback {
                         // Shadow's WIDTH is not here: it is σ, spent on the
                         // CPU where the cells are packed.
                         shadow_depth: self.uniforms.misc11[3],
-                        // And how much deeper that same shadow lands on the
-                        // copy the bloom's bright pass reads — again the number
-                        // the nodes and markers take, read off the same row
-                        // they read it from (`glow_shadow_bloom` in
-                        // lattice.wgsl).
-                        shadow_bloom: self.uniforms.misc11[1],
+                        _pad: 0.0,
                         // How many taps a name's box makes, which is the
                         // kernel's own term count: a term past it carries
                         // weight 0 and would cost a tap for nothing.

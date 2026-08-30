@@ -1175,40 +1175,6 @@ pub struct ViewConfig {
     /// draw multiplies by 1. Independent of
     /// [`glow_reach`](Self::glow_reach).
     pub glow_shadow_depth: f32,
-    /// How much deeper EVERY caster's shadow lands on the copy of the picture
-    /// the bloom reads than on the picture a person sees, 0..=1.
-    ///
-    /// 0 is the two identical — one shadow written to both attachments — and is
-    /// what this opens on. 1 takes the bloom's copy under a ring, a mark, a
-    /// resting cross or a name to a whole shadow while leaving the visible one
-    /// exactly where [`glow_shadow_depth`](Self::glow_shadow_depth) put it.
-    ///
-    /// It exists because a shadow is a MULTIPLY and the bloom is an ADD. The
-    /// composite is `scene + bloom * `[`bloom_strength`](Self::bloom_strength)
-    /// into an eight-bit target, so over a bright halo the pixel beside a name
-    /// is already past 1 and pins to white — and a shadow that does not carry
-    /// the sum back under 1 lands as nothing whatever its depth. A name over an
-    /// unlit node keeps its shadow; the same item over a sounding one loses it,
-    /// and turning the Shadow up to answer that darkens the whole picture for
-    /// the sake of one node.
-    ///
-    /// This spends the depth where it is not seen. The bright pass reads the
-    /// second attachment of the scene pass, so a deeper shadow THERE takes away
-    /// the light being added rather than adding darkness to the picture, and
-    /// over an unlit item — where there is no bloom to take — it does nothing at
-    /// all. That is what makes it an answer to the bright case alone rather
-    /// than a second Shadow depth.
-    ///
-    /// One bar for every caster, which is the rule
-    /// [`glow_shadow_depth`](Self::glow_shadow_depth) is already under: a ring,
-    /// a mark, a resting cross and a name all read it, so what the bright pass
-    /// sees is the whole lattice's shadow rather than the labels' share of it.
-    /// The ink is untouched in either picture — the alpha a premultiplied
-    /// fragment carries is what it takes off the frame UNDER it — so the two
-    /// attachments part in the frame and never in the item. What it buys is
-    /// paid for in the halo: the hole is blurred with everything else, so the
-    /// light dims around a caster over a region wider than the caster.
-    pub glow_shadow_bloom: f32,
     /// What a caster's blurred ink is multiplied up by before it is spent as a
     /// shadow, 0..=[`GLOW_SHADOW_GAIN_MAX`].
     ///
@@ -2272,8 +2238,6 @@ impl ViewConfig {
         // is the unit interval.
         self.glow_shadow_depth =
             finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
-        self.glow_shadow_bloom =
-            finite_or(self.glow_shadow_bloom, fresh.glow_shadow_bloom).clamp(0.0, 1.0);
         // The shadow's own three, none of which is a share: a gain, an exponent
         // and a ratio, each with a ceiling of its own beside the width's.
         self.glow_shadow_gain = finite_or(self.glow_shadow_gain, fresh.glow_shadow_gain)
@@ -2604,9 +2568,6 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_shadow_depth: 0.85,
-            // Off, so a fresh view is the picture before this bar existed and
-            // the bar is an addition rather than a restyle.
-            glow_shadow_bloom: 0.0,
             // Calibrated by eye on a name at the fresh view (#498, PR B): at 1
             // a fresh name's shadow is a faint tint beside the ring's, at 4 a
             // hairline casts as a block. A ring and a cross take the same

@@ -44,13 +44,6 @@ struct Locals {
     /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
-    /// How much DEEPER the same shadow lands on the picture the bloom's bright
-    /// pass reads than on the picture a person sees, 0..1 — the lattice's
-    /// `glow_shadow_bloom`, mixed from `shadow_depth` toward a whole 1. Read by
-    /// [`fs_shadow_box`] alone; the ring and the cross spend the same number
-    /// off the same uniform in their own module (`shadow_through`), so one bar
-    /// is one darkness on the bright pass's copy as it is on the picture.
-    shadow_bloom: f32,
     /// How many terms the lattice's kernel has, and so how many cells a caster
     /// carries and how many taps its box takes (`ShadowKernel::terms`). Read by
     /// [`fs_shadow_box`] alone, and 0 everywhere else — which is a surface that
@@ -616,11 +609,11 @@ fn vs_shadow_box(
 /// target, so over a bright halo the unshadowed pixel is already past 1 and
 /// pins to white, and a shadow that does not carry the sum back under 1 lands
 /// as nothing at all. Modelled at a halo of 0.9 and a name's `T` of 0.62, the
-/// darkening that reaches the screen is 0.1% at `shadow_bloom` 0 and 38% by the
-/// time the bloom's own copy is taken to depth 1 — with the visible shadow left
-/// exactly as light as it was. Over an unlit node there is no bloom to take
-/// away and the bar does nothing, which is what makes it an answer to the
-/// bright case alone.
+/// darkening that reaches the screen is 38% once the bloom's own copy is taken
+/// to a whole shadow — with the visible shadow left exactly as light as
+/// `shadow_depth` says. Over an unlit node there is no bloom to take away and
+/// this does nothing, which is what makes it an answer to the bright case
+/// alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let blur = shadow_blur(in.who, in.at, u32(max(locals.shadow_terms, 0.0)));
@@ -631,13 +624,12 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
         locals.shadow_gain,
         locals.shadow_curve,
     );
-    // The bright pass's copy, at its own depth. The SAME function over the same
-    // blur and the same level, so what differs between the two pictures is one
-    // number and never the shape of the shadow.
-    let deeper = mix(locals.shadow_depth, 1.0, clamp(locals.shadow_bloom, 0.0, 1.0));
+    // The bright pass's copy, always at a WHOLE shadow (1) rather than at
+    // `shadow_depth`: the copy the bright pass reads takes every caster's
+    // shadow to the shader's own floor, whatever the visible one is left at.
     let lit = shadow_transmittance(
         blur,
-        deeper,
+        1.0,
         in.level,
         locals.shadow_gain,
         locals.shadow_curve,

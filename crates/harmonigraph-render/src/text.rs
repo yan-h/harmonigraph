@@ -205,15 +205,12 @@ pub(crate) struct TextUniforms {
     /// whatever stands under it (`fs_shadow_box`). Every other surface casts
     /// none and leaves it at 0.
     pub(crate) shadow_depth: f32,
-    /// How much deeper a name's shadow lands on the bright pass's copy of the
-    /// picture than on the picture itself, 0..=1 — the lattice's
-    /// `glow_shadow_bloom` (`fs_shadow_box`). 0 leaves the two identical, which
-    /// is what every other surface writes.
-    pub(crate) shadow_bloom: f32,
     /// How many terms the lattice's kernel has, and so how many cells a caster
     /// carries and how many taps its box takes (`fs_shadow_box`). 0 on every
     /// other surface, which samples the atlas not at all.
     pub(crate) shadow_terms: f32,
+    /// WGSL aligns a `vec2<f32>` to 8 bytes: the gap before the atlas size.
+    pub(crate) _pad: f32,
     /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
     /// a name's cell into. 0 everywhere else, where nothing draws into one.
     pub(crate) shadow_atlas_size: [f32; 2],
@@ -1000,8 +997,8 @@ impl CallbackTrait for TextCallback {
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
             shadow_depth: 0.0,
-            shadow_bloom: 0.0,
             shadow_terms: 0.0,
+            _pad: 0.0,
             shadow_atlas_size: [0.0; 2],
             shadow_gain: 0.0,
             shadow_curve: 0.0,

@@ -943,10 +943,6 @@ pub struct Scene {
     /// How dark a shadow lands where it is whole (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
-    /// How much deeper EVERY caster's shadow lands on the copy of the picture
-    /// the bloom reads than on the picture itself (see
-    /// [`ViewConfig::glow_shadow_bloom`]); already clamped to 0..=1.
-    pub glow_shadow_bloom: f32,
     /// What a caster's blurred ink is multiplied up by before it is spent as a
     /// shadow (see [`ViewConfig::glow_shadow_gain`]); already clamped to
     /// 0..=[`GLOW_SHADOW_GAIN_MAX`].

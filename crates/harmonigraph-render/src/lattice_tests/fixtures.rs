@@ -205,9 +205,6 @@ pub(super) fn parity_scene() -> Scene {
         // picture.
         glow_shadow: 0.16,
         glow_shadow_depth: 0.85,
-        // Off, as a fresh view has it: the two attachments carry the
-        // same shadow unless a fixture says otherwise.
-        glow_shadow_bloom: 0.0,
         // The shadow's curve at the fresh view's own: the gain that a name was
         // calibrated on, an unbent falloff, and one width for a name as for
         // everything else. A test that says nothing about the three reads the
