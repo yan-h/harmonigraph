@@ -705,8 +705,22 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
 fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
     const ARM: f32 = 0.5;
+    // The camera far enough back that the whole blur lands on the pane, which
+    // at the top of the bar it does not from where the other fixtures here
+    // stand: σ is 42 px there against 87 px of pane from the ink to the edge,
+    // and a reading that runs off the side reports the PANE's width where it
+    // means the quad's. Pulling back is the move that keeps the claim exactly —
+    // a caster's quad is sized in the node's own uv (`shadow_reach_uv`) and so
+    // is the reach it has to hold, so the two scale together and the ratio
+    // under test does not move. At half the size it is 21 px of σ under 106 px
+    // of room, which holds the kernel's whole three σ with a third to spare.
+    const PULL_BACK: f32 = 2.0;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
+    };
+    let far = |mut scene: Scene| -> Scene {
+        scene.camera.distance *= PULL_BACK;
+        scene
     };
     assert!(
         SHADER_SRC.contains(&format!("const INK_FLOOR: f32 = {INK_FLOOR};")),
@@ -717,14 +731,14 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     // A node's rings and a cross, each with its own ink radius on the pane:
     // the two quads are built by different code and each has to hold its own
     // blur.
-    let node = (on_ground(SHADOW, 1.0), on_ground(SHADOW, 0.0));
+    let node = (far(on_ground(SHADOW, 1.0)), far(on_ground(SHADOW, 0.0)));
     let cross = (
-        crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0),
-        crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0),
+        far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
+        far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
     );
     for (what, (deep_scene, flat_scene), edge) in [
-        ("a node's rings", node, ink_radius(&on_ground(SHADOW, 1.0))),
-        ("a cross", cross, ARM * points_per_world(&crosses_on_ground(&[], ARM, SHADOW, 1.0))),
+        ("a node's rings", node, ink_radius(&far(on_ground(SHADOW, 1.0)))),
+        ("a cross", cross, ARM * points_per_world(&far(crosses_on_ground(&[], ARM, SHADOW, 1.0)))),
     ] {
         let flat = shooter.shot(&flat_scene);
         let deep = shooter.shot(&deep_scene);
@@ -740,8 +754,17 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
             profile.push(1.0 - bright_at(&deep, x, row) as f64 / ground as f64);
         }
         let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+        // A DECADE above the floor the walk has to arrive at, so that `last`
+        // is the end of a descent rather than the one column a faint caster
+        // wrote. Not a fixed half of the ground: the two casters here are
+        // deliberately different thicknesses against σ, and at the top of the
+        // bar a cross an arm wide is thin enough that the gain leaves its
+        // shadow at a quarter of the ground where a ring stack's is at three
+        // quarters. That difference is the Shadow depth being a FLOOR and is
+        // what this fixture stands on; a bound that ruled it out would be
+        // asking the cross to be a node.
         assert!(
-            profile[0] > 0.5 && last as f32 > 2.0 * sigma(&deep_scene),
+            profile[0] > 10.0 * INK_FLOOR && last as f32 > 2.0 * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {last} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -824,26 +847,45 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
-    let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384);
-    // Read over the casters that darken something: one at level 0 is packed as
-    // no cell on purpose (`pack`), and most of this fixture's nodes project
-    // clean off the pane.
-    let casting = || cb.casters.iter().zip(&packed.boxes).filter(|(c, _)| c.level > 0.0);
-    let unfit = casting().filter(|(_, b)| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
-    assert_eq!(
-        unfit,
-        0,
-        "{unfit} of {} casters that darken something got no cell, and a zeroed cell is drawn at \
-         the atlas origin over the markers' own",
-        casting().count(),
-    );
-    assert!(
-        packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
-        "the atlas came out {:?} for a {:?} pane: a caster's box is sized off a projection the \
-         pane cannot show",
-        packed.size,
-        SIZE,
-    );
+    // At every row of the kernel table, because a row of N terms packs N cells
+    // per caster and so reaches the device's limit N times sooner. The clip
+    // that keeps a near node's box on the pane is per caster and has to hold
+    // for each of its cells (#505).
+    for kernel in [
+        harmonigraph_scene::ShadowKernel::Gaussian,
+        harmonigraph_scene::ShadowKernel::TwoScale,
+        harmonigraph_scene::ShadowKernel::Sky,
+        harmonigraph_scene::ShadowKernel::Exponential,
+    ] {
+        let terms = kernel.terms();
+        let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
+        // Read over the casters that darken something: one at level 0 is packed
+        // as no cell on purpose (`pack`), and most of this fixture's nodes
+        // project clean off the pane.
+        let casting: Vec<crate::shadow::ShadowBox> = cb
+            .casters
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.level > 0.0)
+            .flat_map(|(i, _)| (0..terms.len()).map(move |t| i * terms.len() + t))
+            .map(|i| packed.boxes[i])
+            .collect();
+        let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+        assert_eq!(
+            unfit,
+            0,
+            "{kernel:?}: {unfit} of {} cells that darken something got none, and a zeroed cell is \
+             drawn at the atlas origin over the markers' own",
+            casting.len(),
+        );
+        assert!(
+            packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
+            "{kernel:?}: the atlas came out {:?} for a {:?} pane: a caster's box is sized off a \
+             projection the pane cannot show",
+            packed.size,
+            SIZE,
+        );
+    }
 }
 
 /// A name's shadow reaches the BLOOM.
@@ -852,6 +894,9 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
 /// depth every caster's shadow lands at on the bright pass's copy being a
 /// WHOLE one (see [`ShadowThrough`] in lattice.wgsl) rather than a name's
 /// alone.
+///
+/// One of three: the ring and the cross make the same claim just below, the bar
+/// being one number every caster reads.
 ///
 /// The composite is `scene + bloom * strength` into an eight-bit target, so
 /// over a bright halo the pixel beside a name is already past 1 and pins to
@@ -1068,4 +1113,258 @@ fn a_marked_nodes_shadow_stands_off_an_unmarked_ones_by_the_strip_alone() {
         "widening the Shadow moved a marked node's standoff from {at_narrow:.1} px to \
          {at_wide:.1}, so the strip the atlas draws is following the bar",
     );
+}
+
+/// Every quarter of the Shadow gain bar and every quarter of the Shadow curve
+/// bar moves the picture, so neither ships with a dead end.
+///
+/// #520's rule, which is what took the Feather and Meld bars out: a bar whose
+/// travel is spent in one corner is a constant with a widget on it, and the way
+/// to know is to walk it in quarters rather than to compare its ends. The two
+/// walked together because they are one control read two ways — the gain says
+/// how much of the depth the thin ink gets, the curve says where along the
+/// width it sits — and a fixture that reached one and not the other would pass
+/// for the wrong reason.
+///
+/// The frame carries all three thicknesses the lattice has: a node's ring
+/// stack, a cross an arm wide, and a name's strokes. That is the fixture's
+/// whole job. The gain acts on `min(gain · blur, 1)`, so ink already saturated
+/// at the bottom of the bar cannot move at the top of it — a frame of nodes
+/// alone would report the gain's upper half dead, and would be measuring what
+/// is in the frame rather than what the bar does.
+#[test]
+fn every_quarter_of_the_gain_and_curve_bars_moves_the_picture() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    // A Shadow wide enough that the blur is plainly a blur and not a rim, and
+    // the depth the fresh view opens on: the bars are read where a person would
+    // be dialling them.
+    let mut shot = |gain: f32, curve: f32| -> Vec<u8> {
+        let mut scene = on_ground(0.4, 0.85);
+        scene.glow_shadow_gain = gain;
+        scene.glow_shadow_curve = curve;
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+        shooter.shot_with(&scene, named)
+    };
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    for (what, lo, hi, at) in [
+        (
+            "gain",
+            0.0,
+            harmonigraph_scene::GLOW_SHADOW_GAIN_MAX,
+            Box::new(|g| (g, fresh.glow_shadow_curve)) as Box<dyn Fn(f32) -> (f32, f32)>,
+        ),
+        (
+            "curve",
+            harmonigraph_scene::GLOW_SHADOW_CURVE_MIN,
+            harmonigraph_scene::GLOW_SHADOW_CURVE_MAX,
+            Box::new(|c| (fresh.glow_shadow_gain, c)),
+        ),
+    ] {
+        let steps: Vec<Vec<u8>> = (0..=4)
+            .map(|q| {
+                let (gain, curve) = at(lo + (hi - lo) * q as f32 / 4.0);
+                shot(gain, curve)
+            })
+            .collect();
+        let moved: Vec<usize> =
+            steps.windows(2).map(|pair| differing_pixels(&pair[0], &pair[1])).collect();
+        eprintln!("the {what} bar moves {moved:?} pixels across its four quarters");
+        // A hundred pixels is a shadow visibly moving rather than a rounding
+        // edge: the casters here darken some four thousand between the bar's
+        // ends, so a quarter worth keeping carries a few percent of that.
+        assert!(
+            moved.iter().all(|&m| m > 100),
+            "the {what} bar moved {moved:?} pixels across its quarters, so one of them is a \
+             stretch of bar that does nothing",
+        );
+    }
+}
+
+/// The Name shadow bar moves a NAME's shadow and leaves every other caster's
+/// exactly as it was, byte for byte.
+///
+/// The one place the lattice's one reach is dialled per caster, so the thing to
+/// prove is that it is per caster and not per frame: σ moved inside `pack`'s
+/// loop, and a term left outside it would take the ring stack and the cross
+/// with it. A frame with no name in it is the control, and it has to be
+/// IDENTICAL rather than close — the bar reaches it through no code path at
+/// all.
+///
+/// Read at the two ends and at the bottom, the bottom being the one value with
+/// a shape of its own: at 0 a name's cell is packed with no padding and the
+/// kernel collapses to its centre tap, which is the letterforms dropped as a
+/// hard-edged copy of themselves. That it still casts is what says the zero is
+/// a look rather than an off switch.
+#[test]
+fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let scene_of = |name: f32| -> Scene {
+        let mut scene = on_ground(0.4, 0.85);
+        scene.glow_shadow_name = name;
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        scene
+    };
+    // The name clear of the node under it, so what the bar widens lands on bare
+    // ground and is read against the ground alone.
+    let named = |scene: &Scene| name_at(scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+    let with_name = |shooter: &mut Shooter, name: f32| {
+        let scene = scene_of(name);
+        let labels = named(&scene);
+        shooter.shot_with(&scene, labels)
+    };
+    let without_name =
+        |shooter: &mut Shooter, name: f32| shooter.shot_with(&scene_of(name), a_name(Vec::new()));
+
+    let one = with_name(&mut shooter, 1.0);
+    let wide = with_name(&mut shooter, harmonigraph_scene::GLOW_SHADOW_NAME_MAX);
+    let hard = with_name(&mut shooter, 0.0);
+    let moved = differing_pixels(&one, &wide);
+    assert!(moved > 200, "the whole Name shadow bar moved {moved} pixels, which is no bar at all");
+    let sharpened = differing_pixels(&one, &hard);
+    assert!(
+        sharpened > 200,
+        "the bottom of the Name shadow bar moved {sharpened} pixels off the fresh width",
+    );
+
+    // The control: the same three widths with the name's glyphs taken out.
+    let bare = without_name(&mut shooter, 1.0);
+    for name in [0.0, harmonigraph_scene::GLOW_SHADOW_NAME_MAX] {
+        let other = without_name(&mut shooter, name);
+        assert_eq!(
+            differing_pixels(&bare, &other),
+            0,
+            "the Name shadow bar at {name} moved a frame with no name in it, so σ is still one \
+             number for every caster",
+        );
+    }
+
+    // And that the bar's bottom is a SHADOW rather than none: a name at no
+    // width still darkens what it stands on, the cell being its own ink at the
+    // target's resolution.
+    let no_shadow = {
+        let mut scene = scene_of(1.0);
+        scene.glow_shadow_depth = 0.0;
+        let labels = named(&scene);
+        shooter.shot_with(&scene, labels)
+    };
+    let cast = differing_pixels(&hard, &no_shadow);
+    assert!(cast > 200, "a name at no width of its own cast {cast} pixels, which is no shadow");
+}
+
+/// Every row of the kernel table draws a shadow, and the heavier-tailed rows
+/// carry further out from the ink than one Gaussian does at the same Shadow.
+///
+/// The reading that says the mixture is really a mixture. Each row is scaled so
+/// a straight edge reads the same 2.3% of the depth at one Shadow width, so a
+/// row cannot be told from a Gaussian by how DARK it is — what parts them is
+/// where the darkness sits, and the visible end of that is the tail: a row's
+/// widest term reaches `REACH_SIGMAS` times ITS σ, which for sky is 1.45 of the
+/// picture's own against a Gaussian's 1.
+///
+/// Read as the last column the shadow writes at all, which is where the
+/// shader's `INK_FLOOR` cuts it — a quantity every row is measured by the same
+/// way, and one the quad has to be grown for (`shadow_reach_uv` takes the
+/// WIDEST term). A row whose quad were still sized for one Gaussian would come
+/// out reaching exactly as far as one, which is the failure this catches.
+#[test]
+fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
+    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    const SHADOW: f32 = 0.4;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let scene_of = |kernel, depth| {
+        let mut scene = on_ground(SHADOW, depth);
+        scene.glow_shadow_kernel = kernel;
+        scene
+    };
+    let flat = shooter.shot(&scene_of(Gaussian, 0.0));
+    let edge = ink_radius(&scene_of(Gaussian, 1.0));
+    let centre = on_screen(&scene_of(Gaussian, 1.0), SIZE, glam::Vec3::ZERO);
+    let row = centre.y.round() as u32;
+    let start = (centre.x + edge).round() as u32 + 2;
+    // How far out from the ink this kernel's shadow is still writing, in
+    // pixels, and how much of the ground it takes at the ink.
+    let mut walk = |kernel| -> (usize, f64) {
+        let deep = shooter.shot(&scene_of(kernel, 0.85));
+        let profile: Vec<f64> = (start..SIZE[0])
+            .map(|x| {
+                let ground = bright_at(&flat, x, row);
+                assert!(ground > 500, "{kernel:?} leaves {ground} of ground at column {x}");
+                1.0 - bright_at(&deep, x, row) as f64 / ground as f64
+            })
+            .collect();
+        let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+        (last, profile[0])
+    };
+    let readings: Vec<(harmonigraph_scene::ShadowKernel, usize, f64)> =
+        [Gaussian, TwoScale, Sky, Exponential]
+            .into_iter()
+            .map(|k| {
+                let (last, at_ink) = walk(k);
+                (k, last, at_ink)
+            })
+            .collect();
+    for (kernel, last, at_ink) in &readings {
+        eprintln!("{kernel:?} takes {at_ink:.3} at the ink and reaches {last} px");
+        assert!(
+            *at_ink > 10.0 * INK_FLOOR && *last > 2,
+            "{kernel:?} cast {at_ink:.3} at the ink and reached {last} px, which is no shadow",
+        );
+    }
+    let plain = readings[0].1;
+    for (kernel, last, _) in readings.iter().skip(1) {
+        assert!(
+            *last > plain,
+            "{kernel:?} reaches {last} px where one Gaussian reaches {plain}, so either the \
+             mixture is not being mixed or the quad is still sized for one term",
+        );
+    }
+}
+
+/// Switching kernels moves the picture and nothing else does: a frame at each
+/// row differs from the Gaussian's, and a frame with the Shadow SHUT is
+/// byte-identical at every row.
+///
+/// The second half is the one worth having. A row costs cells, a pass over
+/// them and taps in every caster's draw, and all of that is supposed to be
+/// gone when the bar is at its bottom — the vacuity the whole atlas rests on
+/// (`neither_shadow_bar_at_its_bottom_casts_or_allocates`), asked again now
+/// that there are four ways to pack it.
+#[test]
+fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
+    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let mut shot = |kernel, shadow| {
+        let mut scene = on_ground(shadow, 0.85);
+        scene.glow_shadow_kernel = kernel;
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+        shooter.shot_with(&scene, named)
+    };
+    let plain = shot(Gaussian, 0.4);
+    for kernel in [TwoScale, Sky, Exponential] {
+        let moved = differing_pixels(&plain, &shot(kernel, 0.4));
+        assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
+    }
+    let shut = shot(Gaussian, 0.0);
+    for kernel in [TwoScale, Sky, Exponential] {
+        assert_eq!(
+            differing_pixels(&shut, &shot(kernel, 0.0)),
+            0,
+            "{kernel:?} drew something with the Shadow shut, so a row is packing cells the bar \
+             said not to",
+        );
+    }
 }

@@ -146,6 +146,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             uniforms: &res.bind_group_layout,
             glow: &res.filter_layout,
             shadow: &res.shadow_layout,
+            casters: &res.caster_layout,
         };
         let build =
             |src: &str| create_pipelines(&device, &with_common(src), format, layouts, false);
@@ -221,6 +222,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 // outside a node's ink are exactly the ones its early-out
                 // decides, and they are the ones the shadow lives on.
                 pass.set_bind_group(2, cells, &[]);
+                // And every caster's kernel at group 3, which is where the
+                // shadow this comparison is taken over is read from.
+                pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
