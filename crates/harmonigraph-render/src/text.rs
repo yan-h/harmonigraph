@@ -210,10 +210,10 @@ pub(crate) struct TextUniforms {
     /// `glow_shadow_bloom` (`fs_shadow_box`). 0 leaves the two identical, which
     /// is what every other surface writes.
     pub(crate) shadow_bloom: f32,
-    /// WGSL aligns a `vec2<f32>` to 8 bytes and a `vec4<f32>` to 16: the two
-    /// gaps, named rather than derived because a mismatch is a validation
-    /// error at first paint, not a compile one.
-    pub(crate) _pad: f32,
+    /// How many terms the lattice's kernel has, and so how many cells a caster
+    /// carries and how many taps its box takes (`fs_shadow_box`). 0 on every
+    /// other surface, which samples the atlas not at all.
+    pub(crate) shadow_terms: f32,
     /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
     /// a name's cell into. 0 everywhere else, where nothing draws into one.
     pub(crate) shadow_atlas_size: [f32; 2],
@@ -512,14 +512,19 @@ pub(crate) fn create_glyph_cell_pipeline(
 /// ([`create_text_pipeline`]), which is what keeps the name itself out of the
 /// bloom.
 ///
-/// Three groups, the middle one empty: the pane's uniforms, and the atlas at
-/// group 2 where the shader declares it — the light at group 1 is the fill's
-/// and this draw reads none.
+/// Four groups, the second empty: the pane's uniforms, the atlas at group 2 and
+/// the casters' kernels at group 3, where the shader declares each — the light
+/// at group 1 is the fill's and this draw reads none.
+///
+/// NO VERTEX BUFFER. The draw is one instance at the caster's own index, and
+/// every number the quad and the mix need is in the array at group 3
+/// (`vs_shadow_box`).
 pub(crate) fn create_shadow_box_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
     atlas: &wgpu::BindGroupLayout,
+    casters: &wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
     depth: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
@@ -532,9 +537,9 @@ pub(crate) fn create_shadow_box_pipeline(
         device,
         shader,
         "fs_shadow_box",
-        &[Some(layout), None, Some(atlas)],
+        &[Some(layout), None, Some(atlas), Some(casters)],
         ("vs_shadow_box", "fs_shadow_box"),
-        &[crate::shadow::ShadowBox::LAYOUT],
+        &[],
         &[target.clone(), target],
         Some(depth),
     )
@@ -996,7 +1001,7 @@ impl CallbackTrait for TextCallback {
             pixels_per_point: ppp,
             shadow_depth: 0.0,
             shadow_bloom: 0.0,
-            _pad: 0.0,
+            shadow_terms: 0.0,
             shadow_atlas_size: [0.0; 2],
             shadow_gain: 0.0,
             shadow_curve: 0.0,

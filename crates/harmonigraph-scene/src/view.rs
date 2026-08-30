@@ -5,7 +5,7 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
+    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
     GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
     GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
     RING_INNER_MAX, RING_WIDTH_MAX,
@@ -1266,6 +1266,23 @@ pub struct ViewConfig {
     /// three times as wide. What it does cost is the name's own quad, which
     /// grows with its reach like every other caster's.
     pub glow_shadow_name: f32,
+    /// Which mixture of Gaussians every caster's ink is blurred with — the
+    /// SHAPE of a shadow's falloff, where [`glow_shadow`](Self::glow_shadow) is
+    /// how far it reaches and [`glow_shadow_depth`](Self::glow_shadow_depth)
+    /// how dark it lands.
+    ///
+    /// Every row is scaled to the same reach, so switching one does not move
+    /// the Shadow bar under it: what changes is where the darkness sits between
+    /// the ink and the edge. See [`ShadowKernel`] for why the shapes worth
+    /// comparing arrive as mixtures rather than as kernels of their own.
+    ///
+    /// It is the one setting in the Shadow section that costs ATLAS: a row of
+    /// N terms packs N cells for every caster, each at the resolution its own σ
+    /// asks for. The blur chain over them is unchanged — every cell's σ is
+    /// still capped at `SIGMA_CELL_MAX` texels by construction — so what grows
+    /// is the area packed and the taps a caster's draw takes, not the kernel
+    /// any one cell is blurred by.
+    pub glow_shadow_kernel: ShadowKernel,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2602,6 +2619,9 @@ impl Default for ViewConfig {
             // alike. The bar exists to ask whether a letterform wants
             // otherwise; the fresh view is the answer being no.
             glow_shadow_name: 1.0,
+            // One Gaussian, which is one cell per caster and the picture the
+            // rest of the Shadow section is calibrated on.
+            glow_shadow_kernel: ShadowKernel::Gaussian,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own
