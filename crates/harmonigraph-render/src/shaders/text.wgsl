@@ -66,6 +66,13 @@ struct Locals {
     /// both at 0.
     shadow_gain: f32,
     shadow_curve: f32,
+    /// And what that row's POCKET term is multiplied up by (the lattice's
+    /// `u.misc11.z`), on the same terms.
+    shadow_pocket: f32,
+    /// WGSL aligns a `vec4<f32>` to 16 bytes: the gap before the rim's rings.
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
@@ -627,6 +634,7 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
         u32(max(locals.shadow_terms, 0.0)),
         locals.shadow_gain,
         locals.shadow_shape,
+        locals.shadow_pocket,
     );
     let t = shadow_transmittance(full, locals.shadow_depth, in.level, locals.shadow_curve);
     // The bright pass's copy, always at a WHOLE shadow (1) rather than at

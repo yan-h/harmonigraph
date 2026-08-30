@@ -1356,7 +1356,9 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
 /// that there are four ways to pack it.
 #[test]
 fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{
+        Distance, DistanceDensity, Exponential, Gaussian, Sky, TwoScale,
+    };
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1369,12 +1371,12 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         shooter.shot_with(&scene, named)
     };
     let plain = shot(Gaussian, 0.4);
-    for kernel in [TwoScale, Sky, Exponential, Distance] {
+    for kernel in [TwoScale, Sky, Exponential, Distance, DistanceDensity] {
         let moved = differing_pixels(&plain, &shot(kernel, 0.4));
         assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
     }
     let shut = shot(Gaussian, 0.0);
-    for kernel in [TwoScale, Sky, Exponential, Distance] {
+    for kernel in [TwoScale, Sky, Exponential, Distance, DistanceDensity] {
         assert_eq!(
             differing_pixels(&shut, &shot(kernel, 0.0)),
             0,
@@ -1549,5 +1551,100 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         distance > blurred + 0.2,
         "the distance row holds {distance:.2} of the gap's form against the Gaussian's \
          {blurred:.2}, so the counter has closed on both",
+    );
+}
+
+/// The CREASE, both ways round: `Distance` darkens the gap between two slabs
+/// no more than it darkens the open side of one of them at the same distance,
+/// and `Distance + density` darkens it more.
+///
+/// Both directions, or the test pins nothing. The first is what the distance
+/// family gives up — a distance field answers with the NEAREST ink and nothing
+/// else, so a crease reads exactly as a lone edge at the same distance does.
+/// That is documented behaviour rather than a bug, and a test asserting only
+/// the second would pass on a row that had quietly started SUMMING its terms.
+/// The second is what the pocket term is for, and it is #490's crease filled
+/// without #493's pair-walk.
+///
+/// Two points in ONE frame rather than two frames, which is what makes the
+/// reading survive its own quantisation. The flood answers in whole texels and
+/// a distance cell is drawn at a fraction of the target's pixels, so a texel is
+/// a couple of points and a reading carries up to that much of a phase error;
+/// two frames would carry two different cell origins and two different phases,
+/// where one frame carries one cell and the difference between two points in it.
+/// The bound below is set against a SUM — which is 2x — rather than against the
+/// quantisation, for the same reason.
+///
+/// SLABS and not hairlines, and that is the fixture's other half. The excess
+/// the pocket scales is over a lone straight EDGE, and a stroke thin against σ
+/// blurs to less than a half-plane does however many of them there are — so two
+/// hairlines have no excess at all and would pass the first claim while saying
+/// nothing about the second. Ink with body on both sides of a gap is what a
+/// bowl's inside is, and it is where the term is meant to fire.
+#[test]
+fn a_distance_rows_crease_is_flat_and_the_pocket_fills_it() {
+    use harmonigraph_scene::ShadowKernel::{Distance, DistanceDensity};
+    /// Wide enough that the distance cell's own texel is a small share of the
+    /// Shadow's width: the cell's scale floors at `DISTANCE_SCALE_FLOOR`, so a
+    /// texel is a fixed 2.5 points here and what shrinks against it is σ.
+    const SHADOW: f32 = 2.0;
+    const DEPTH: f32 = 0.85;
+    const GREY: f32 = 0.55;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    // Two slabs facing each other across a gap of σ, each 2σ wide — 98% of a
+    // half-plane's own blur at the gap's midpoint, so the pair has an excess
+    // over one edge and a lone edge has none.
+    let mut read = |kernel| {
+        let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+        scene.glow_shadow_kernel = kernel;
+        scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+        let s = sigma(&scene);
+        let (gap, wide, tall) = (s, 2.0 * s, 2.0 * s);
+        let at = on_screen(&scene, SIZE, name_on_the_band(&scene));
+        let (x, row) = (at.x.round() as u32, at.y.round() as u32);
+        let mid = x as f32 + 0.5;
+        let slab = |x: f32| name_glyph(&scene, [x, at.y - tall / 2.0, wide, tall]);
+        let left = mid - gap / 2.0 - wide;
+        let bare = shooter.shot(&scene);
+        let cast = shooter.shot_with(&scene, a_name(vec![slab(left), slab(mid + gap / 2.0)]));
+        let dark = |x: f32| {
+            let x = x.round() as u32;
+            bright_at(&bare, x, row) - bright_at(&cast, x, row)
+        };
+        // The CREASE, and the same distance on the pair's open side — half the
+        // gap out from the left slab's far edge, where the other slab is three
+        // and a half σ away and contributes nothing.
+        (dark(mid), dark(left - gap / 2.0))
+    };
+    let (crease, edge) = read(Distance);
+    assert!(
+        edge > 20,
+        "the open side darkens by {edge}, which is too little to compare a crease against",
+    );
+    // A sum would be 2x. What stands between this bound and that is the cell's
+    // own texel, which is 9% of the Shadow's width here and so a fifth of a
+    // stop of the reading.
+    assert!(
+        (crease as f64) < 1.5 * edge as f64,
+        "the distance row leaves {crease} in the crease against {edge} at the same distance on \
+         the open side, so a distance term is summing rather than answering with the nearest ink",
+    );
+    let (filled, edge_filled) = read(DistanceDensity);
+    assert!(
+        filled > crease + 8,
+        "the pocket leaves {filled} in the crease where the plain distance row leaves {crease}, \
+         so the density term is not filling it",
+    );
+    // And SILENT on the open side, which is the whole of what makes it a pocket
+    // rather than more shadow: a lone straight edge's excess over a lone
+    // straight edge is zero by construction.
+    assert!(
+        (edge_filled - edge).abs() <= 3,
+        "the pocket moves the open side from {edge} to {edge_filled}, so it is adding shadow \
+         rather than filling a crease",
     );
 }

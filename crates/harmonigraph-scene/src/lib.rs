@@ -299,6 +299,17 @@ pub const GLOW_SHADOW_CURVE_MIN: f32 = 0.25;
 /// room to move is the one that goes further.
 pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
 
+/// The most a distance row's pocket term may be multiplied up by (see
+/// [`ViewConfig::glow_shadow_pocket`]).
+///
+/// Three, because the quantity it scales is an EXCESS and a small one: a
+/// Gaussian's own value over what a lone straight edge would give at the same
+/// distance is a few percent between two strokes a σ apart and exactly zero at
+/// a lone stem, so a share of 1 barely reads and the useful range runs above
+/// it. Past three the `min(…, 1)` over it has the pocket saturated wherever it
+/// exists at all and the bar's last stretch moves nothing.
+pub const GLOW_SHADOW_POCKET_MAX: f32 = 3.0;
+
 /// The widest a note name's own shadow may be dialled against the rest of the
 /// picture's (see [`ViewConfig::glow_shadow_name`]).
 ///
@@ -964,6 +975,11 @@ pub struct Scene {
     /// [`ViewConfig::glow_shadow_shape`]); already clamped to
     /// [`SHADOW_SHAPE_MIN`]..=[`SHADOW_SHAPE_MAX`]. Inert on a blur row.
     pub glow_shadow_shape: f32,
+    /// What a distance row's POCKET term is multiplied up by (see
+    /// [`ViewConfig::glow_shadow_pocket`]); already clamped to
+    /// 0..=[`GLOW_SHADOW_POCKET_MAX`]. Inert on every row but
+    /// [`ShadowKernel::DistanceDensity`].
+    pub glow_shadow_pocket: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///
