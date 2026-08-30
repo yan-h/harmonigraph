@@ -267,6 +267,20 @@ pub(super) fn the_live_view() -> Scene {
     lattice(&view, near_camera())
 }
 
+/// The same live view drawn by the DISTANCE row.
+///
+/// The frame the second family is judged on, and the reason it is the live view
+/// rather than a fixture: the two families are calibrated to the same reach and
+/// differ in SHAPE, so what a row is worth is a question about the picture Yan
+/// is actually looking at. A diff here on a later PR is the distance row moving
+/// — which is what a freeze PR is for — and the Gaussian frames beside it stay
+/// still, that being the contract this family arrived under.
+fn the_live_view_on_the_distance_row() -> Scene {
+    let mut scene = the_live_view();
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    scene
+}
+
 /// A sevens sheet standing behind the home one.
 ///
 /// The depth ordering the whole design turns on: a sheet is not a plane the
@@ -561,6 +575,12 @@ fn a_chord_at_a_wide_reach_draws_the_frame_on_record() {
 #[test]
 fn the_live_view_draws_the_frame_on_record() {
     check("live-view", on_the_ground_it_clears_to(the_live_view()));
+}
+
+/// The same view drawn by the distance row.
+#[test]
+fn the_live_view_on_the_distance_row_draws_the_frame_on_record() {
+    check("live-view-distance", on_the_ground_it_clears_to(the_live_view_on_the_distance_row()));
 }
 
 /// A sevens sheet behind the home one.

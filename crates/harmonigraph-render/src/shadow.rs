@@ -37,10 +37,74 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Flo
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 
-/// How many σ out a cell is padded, which is how far the kernel reaches —
-/// `REACH` in shadow.wgsl, and the two have to agree or a blur is cut off in a
-/// straight line at the cell's edge.
-pub(crate) const REACH_SIGMAS: f32 = 3.0;
+/// The least of the target's pixels a DISTANCE cell may be drawn at.
+///
+/// A blur cell shrinks without limit as σ grows (`SIGMA_CELL_MAX / σ`), because
+/// a blur needs no more texels than its own width. A distance cell cannot: FORM
+/// is the point of the family, and form lives at the ink's own resolution, so
+/// what has to survive is the thinnest stroke in the picture.
+///
+/// Two texels of it. The lattice's thinnest ink is a stroke of type, and a name
+/// is set at `NAME_SIZE` 30 points (`harmonigraph-ui`'s `marks.rs`) whose
+/// monospace stem is about a twelfth of the em — five of the target's pixels at
+/// the default framing's 2 pixels per point. Two texels of that is 0.4, and
+/// under it a stem is one texel or none: the flood's seeds come off a coverage
+/// contour (`INK_FLOOR`), and a stroke that covers no texel to half seeds
+/// nothing at all, so its shadow does not thin — it disappears.
+///
+/// Above the floor a distance cell shrinks with the Shadow bar exactly as a
+/// blur cell does, so the widest settings cost no more atlas per cell than the
+/// floor allows. What it does NOT bound is the cell's area, which grows with
+/// the pad: `timing.rs` is what reads that back at the top of the bar.
+pub(crate) const DISTANCE_SCALE_FLOOR: f32 = 0.4;
+
+/// What the flood's ping-pong pair is kept in: one texel's nearest seed, as a
+/// pair of ABSOLUTE atlas coordinates.
+///
+/// Sixteen bits an axis, so shadow.wgsl's `NO_SEED` is the format's own top
+/// value and no atlas can address it — a texture 65535 texels across is past
+/// every limit wgpu reports. That is what lets one sentinel stand for "no ink
+/// within reach" with no third channel to say so.
+pub(crate) const SEED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Uint;
+
+/// The largest jump the chain starts from, as a power of two in texels.
+///
+/// A bound on the PASS COUNT rather than on the Shadow: 2^14 is 16384 texels,
+/// past the widest atlas any device here reports, so the cap is unreachable in
+/// the picture and is here to keep a nonsense reach — a NaN out of a corrupt
+/// blob — from asking for an unbounded chain.
+const MAX_LOG_STEP: u32 = 14;
+
+/// The jumps the flood takes, largest first, halving to 1.
+///
+/// A jump flood carries a seed `2^k + 2^(k-1) + ... + 1` texels, one short of
+/// `2^(k+1)`, so starting at the first power of two at or above `reach` reaches
+/// every seed within it with the whole of the top jump to spare.
+///
+/// The tail is doubled when the count comes out ODD, which buys two things at
+/// the price of one pass. It is the standard extra step-of-1 refinement — the
+/// flood is exact for a single seed and approximate for many, and the errors it
+/// makes are all within a texel or two of a territory boundary, which one more
+/// local pass mops up. And it lands the answer in a FIXED one of the two
+/// textures, so the resolve binds one bind group rather than choosing by
+/// parity. Written as the POSITIVE test so a NaN reach takes the empty schedule
+/// rather than `log2`'s answer for one.
+///
+/// A reach under a texel runs no chain at all: the only texels such a shadow
+/// speaks for are the inked ones, and what those are owed comes off the
+/// coverage directly (`fs_flood_resolve`). Empty is even, which is the property
+/// the resolve depends on.
+pub(crate) fn steps(reach: f32) -> Vec<i32> {
+    if reach >= 1.0 {
+        let top = (reach.log2().ceil() as u32).min(MAX_LOG_STEP);
+        let mut out: Vec<i32> = (0..=top).rev().map(|k| 1i32 << k).collect();
+        if out.len() % 2 == 1 {
+            out.push(1);
+        }
+        return out;
+    }
+    Vec::new()
+}
 
 /// σ of a caster's blur in the target's pixels, for a Shadow of `shadow` node
 /// radii over a node of `node_points` points, on a pane at `pixels_per_point`
@@ -145,15 +209,30 @@ pub(crate) struct ShadowBox {
     /// Shadow bar times a constant rather than a screen width.
     pub terms: [f32; 4],
     /// x: which caster this box belongs to, as an index into
-    /// [`Packed::casters`]. y/z/w unused.
+    /// [`Packed::casters`]; y: what this cell HOLDS, 0 blurred ink and 1 a
+    /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
+    /// reaches, in the pane's points — the pad the rect was grown by, which is
+    /// where the standoff's curve is windowed to nothing and so the value a
+    /// texel out of every seed's reach is resolved to; w unused.
     ///
-    /// Read by the node's SCENE draw alone, which needs every term at once and
-    /// so reaches the array rather than the box. Carried on the box rather than
-    /// in a buffer of its own because the node's two draws — the one that fills
-    /// a cell and the one that reads the atlas — bind the same stream, and one
-    /// row is cheaper than a second binding.
+    /// x is read by the node's SCENE draw, which needs every term at once and
+    /// so reaches the array rather than the box; y and z by the passes that
+    /// sweep the CELLS, which take one at a time and have to know which chain
+    /// this one belongs to. Carried on the box rather than in a buffer of its
+    /// own because the node's two draws — the one that fills a cell and the one
+    /// that reads the atlas — bind the same stream, and one row is cheaper than
+    /// a second binding.
     pub who: [f32; 4],
 }
+
+/// What `ShadowBox::who`'s y and `ShadowCaster::kind` hold for a term whose
+/// cell is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
+/// and common.wgsl, pinned by `the_shaders_distance_kind_is_the_packers`.
+///
+/// A float and not a flag because it rides in a vertex attribute and a storage
+/// array that are floats already; compared with a `> 0.5` wherever it is read,
+/// so nothing turns on the exact bits surviving an interpolator.
+pub(crate) const DISTANCE_KIND: f32 = 1.0;
 
 impl ShadowBox {
     pub(crate) const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -211,6 +290,18 @@ pub(crate) struct Packed {
     pub boxes: Vec<ShadowBox>,
     pub casters: Vec<ShadowCaster>,
     pub size: [u32; 2],
+    /// How far the flood has to carry a seed, in texels: the widest distance
+    /// cell's own pad, and 0 where this frame packed no distance cell at all.
+    ///
+    /// ONE chain over every distance cell in the atlas, so the schedule is the
+    /// widest cell's and a narrower one pays passes whose every tap lands
+    /// outside its own rect and is dropped. The alternative — a chain per cell
+    /// — is a render pass per cell per step, which is the cost this design
+    /// exists to not pay.
+    ///
+    /// A pure function of the frame, like the rest of the packing, which is
+    /// what the offline renderer's determinism rests on.
+    pub flood: f32,
 }
 
 /// One caster's whole kernel, as the scene pass reads it: the quad to draw over
@@ -233,12 +324,32 @@ pub(crate) struct ShadowCaster {
     /// could not hold every one of its cells, which is a caster that darkens
     /// nothing rather than one that darkens by part of its kernel. y/z/w unused.
     pub level: [f32; 4],
+    /// What each term's cell HOLDS: 0 blurred ink, [`DISTANCE_KIND`] a
+    /// distance. Zeroed past the kernel's own term count.
+    ///
+    /// Per caster rather than in a uniform, though every caster in a frame is
+    /// packed off one row and so carries the same kinds: the two shader modules
+    /// that read a kernel declare this struct once between them (common.wgsl)
+    /// and their uniforms separately, so a term's own properties riding here
+    /// are written down once and a copy in each `Locals` would be two.
+    pub kind: [f32; harmonigraph_scene::SHADOW_TERMS_MAX],
+    /// Each term's σ in the pane's POINTS — what a distance read out of a cell
+    /// is measured against, one Shadow width being 2σ.
+    ///
+    /// In points because that is what the cell holds
+    /// (`fs_flood_resolve`): the sampler divides one by the other and the
+    /// target's own pixel scale never enters, so a Render scale moves neither.
+    /// Per caster because [`Caster::sigma_scale`] is.
+    pub sigma: [f32; harmonigraph_scene::SHADOW_TERMS_MAX],
     /// Each term's cell in atlas texels: origin, then size. Zeroed past the
     /// kernel's own term count, and zeroed whole where the caster casts
     /// nothing.
     pub cell: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
     /// Each term's map from a point of the pane to a texel of its cell: x/y the
-    /// origin, z the scale, so a texel is `xy + points * z`. w unused.
+    /// origin, z the scale, so a texel is `xy + points * z`; w this term's
+    /// share of the mixture, which is 0 on a distance term — normalized over
+    /// the BLUR terms alone, so a lone Gaussian standing beside a distance term
+    /// arrives whole.
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
     /// scale) for the shader to combine: the three differ per TERM, and a
@@ -252,6 +363,8 @@ pub(crate) struct ShadowCaster {
 pub(crate) const NO_CASTER: ShadowCaster = ShadowCaster {
     rect: [0.0; 4],
     level: [0.0; 4],
+    kind: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
+    sigma: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
     cell: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
     map: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
 };
@@ -288,12 +401,20 @@ pub(crate) fn pack(
     // added to the table draws its first four terms rather than reading past
     // the array a caster carries.
     let kernel = &kernel[..kernel.len().min(harmonigraph_scene::SHADOW_TERMS_MAX)];
+    let is_distance =
+        |t: &harmonigraph_scene::KernelTerm| t.kind == harmonigraph_scene::TermKind::Distance;
     // NORMALIZED where the row is read, so a table that sums to 1.001 is a
     // rounding in the fit rather than a tenth of a percent of extra darkness,
     // and a row of zeros is no shadow rather than a division.
-    let total: f32 = kernel.iter().map(|t| t.weight.max(0.0)).sum();
+    //
+    // Over the BLUR terms alone. A distance term is not a share of a mixture —
+    // it is the shape the row draws, and the Gaussian beside it on
+    // `DistanceDensity` is measured against a straight edge rather than summed
+    // with it — so a normalization that counted both would halve that Gaussian
+    // for standing next to something that never asked for a share.
+    let total: f32 = kernel.iter().filter(|t| !is_distance(t)).map(|t| t.weight.max(0.0)).sum();
     let weight = |t: &harmonigraph_scene::KernelTerm| {
-        if positive(total) {
+        if positive(total) && !is_distance(t) {
             t.weight.max(0.0) / total
         } else {
             0.0
@@ -316,16 +437,33 @@ pub(crate) fn pack(
     // across the whole table: the chain reads σ off each cell and clamps its
     // taps to that cell's rect, so N terms are N cells the existing pass sweeps
     // rather than N kernels any one of them is blurred by.
+    // A DISTANCE cell parts from that in both numbers, and each for its own
+    // reason. Its resolution is floored ([`DISTANCE_SCALE_FLOOR`]) because form
+    // is what the family draws and a stroke under two texels seeds nothing at
+    // all; its pad is the standoff's own stop rather than the kernel's reach,
+    // that being where the curve is windowed to zero
+    // (`KernelTerm::reach_sigmas`, which is the one place the two are written
+    // down). σ in the CELL is zero: what the blur chain does to such a cell is
+    // a pass-through, which is what carries its coverage to the resolve.
     let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
         let sigma = sigma_of(c, t);
         // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
         // infinity the `min` answers: the cell is at the target's own
         // resolution and its kernel collapses to the centre tap.
-        let scale = (SIGMA_CELL_MAX / sigma).min(1.0);
+        let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
+        let scale = if is_distance(t) { fit.max(DISTANCE_SCALE_FLOOR) } else { fit };
         let k = scale * px_per_point;
-        let sigma_cell = sigma * scale;
-        let pad = ((REACH_SIGMAS * sigma_cell).ceil() + 1.0) / k;
-        (scale, k, sigma_cell, pad)
+        // This term's σ in the cell's own texels, which is what the PADDING is
+        // in whatever the kind — the two families reach different multiples of
+        // it and `KernelTerm::reach_sigmas` is the one place that is written
+        // down.
+        let texels = sigma * scale;
+        let pad = ((t.kind.reach_sigmas() * texels).ceil() + 1.0) / k;
+        // The BLUR chain's σ, which a distance cell has none of: the chain
+        // sweeps every cell and a σ of zero makes it a pass-through, which is
+        // what carries the coverage a distance cell was filled with through to
+        // the resolve.
+        (scale, k, if is_distance(t) { 0.0 } else { texels }, pad)
     };
     // What a caster's level comes to where it is spent: a level at zero, or a
     // NaN out of the same corrupt blob, darkens nothing.
@@ -395,6 +533,11 @@ pub(crate) fn pack(
     let n = kernel.len();
     let mut boxes = Vec::with_capacity(rects.len());
     let mut packed_casters = Vec::with_capacity(casters.len());
+    // How far the one chain has to carry a seed: the widest PACKED distance
+    // cell's pad in its own texels. Taken over the cells that made it into the
+    // atlas alone — a caster whose cells did not fit casts nothing, so a chain
+    // sized for it would be passes over a cell nothing samples.
+    let mut flood = 0.0f32;
     for (c, caster) in casters.iter().enumerate() {
         let whole = (0..n).all(|t| fits(c * n + t));
         let level = if whole { caster.level.clamp(0.0, 1.0) } else { 0.0 };
@@ -403,7 +546,8 @@ pub(crate) fn pack(
         let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
         for (t, term) in kernel.iter().enumerate() {
             let i = c * n + t;
-            let (scale, k, sigma_cell, _) = shape(caster, term);
+            let (scale, k, sigma_cell, pad) = shape(caster, term);
+            let kind = if is_distance(term) { DISTANCE_KIND } else { 0.0 };
             let rect = rects[i];
             let [w, h] = sizes[i];
             let [x, y] = placed[i];
@@ -412,11 +556,16 @@ pub(crate) fn pack(
                 rect,
                 cell,
                 terms: [k, sigma_cell, level, scale],
-                who: [c as f32, 0.0, 0.0, 0.0],
+                who: [c as f32, kind, pad, 0.0],
             });
             if !whole {
                 continue;
             }
+            if is_distance(term) {
+                flood = flood.max(pad * k);
+            }
+            entry.kind[t] = kind;
+            entry.sigma[t] = sigma_of(caster, term) / px_per_point;
             entry.cell[t] = cell;
             entry.map[t] = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, weight(term)];
             for axis in 0..2 {
@@ -429,7 +578,7 @@ pub(crate) fn pack(
         }
         packed_casters.push(entry);
     }
-    Packed { boxes, casters: packed_casters, size: [width, height] }
+    Packed { boxes, casters: packed_casters, size: [width, height], flood }
 }
 
 /// One pane's atlas: the two textures the blur ping-pongs between, and a bind
@@ -451,7 +600,51 @@ pub(crate) struct ShadowTarget {
     /// Reading `views[i]`, as every consumer of the atlas takes it
     /// ([`read_layout`]).
     pub(crate) reads: [wgpu::BindGroup; 2],
+    /// The jump flood's own pair, present exactly while a frame packs a
+    /// DISTANCE cell ([`ensure_flood`](Self::ensure_flood)).
+    ///
+    /// Two more textures the size of the atlas, at four bytes a texel against
+    /// the atlas's two — so a blur row does not carry them, which is what keeps
+    /// the distance family free in a frame that does not draw one.
+    pub(crate) flood: Option<FloodTarget>,
 }
+
+/// The jump flood's ping-pong pair, over one atlas.
+///
+/// `views[0]` holds the finished field: [`steps`] always runs an EVEN number of
+/// passes, so the resolve binds one group rather than choosing by parity.
+pub(crate) struct FloodTarget {
+    /// The pair the chain ping-pongs between. Not read back directly by any
+    /// test: what a test wants is the DISTANCE the resolve wrote, which is a
+    /// texel of the atlas beside this and is the number the picture is drawn
+    /// from — a field whose only check is a picture is a field whose errors go
+    /// unnoticed, which is how #487's SPIKE lasted.
+    views: [wgpu::TextureView; 2],
+    /// Reading `views[i]`, for the pass that writes `views[i ^ 1]`.
+    chain: [wgpu::BindGroup; 2],
+    /// One [`Jump`] per step, at dynamic-offset stride. Rewritten every frame
+    /// the chain runs: it is at most seventeen aligned cells against two
+    /// atlas-sized textures beside it.
+    jumps: wgpu::Buffer,
+}
+
+/// What one step's uniform holds: the jump, in `x`.
+///
+/// A whole `vec4<i32>` because that is what the uniform address space lays a
+/// struct out on — `Jump` in shadow.wgsl, which has to be the same 16 bytes or
+/// the pipeline is rejected at first paint for a `min_binding_size` it cannot
+/// meet. Written [`JUMP_STRIDE`] apart, which is the alignment the BINDING
+/// wants and a different number entirely.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Jump {
+    step: [i32; 4],
+}
+
+/// The stride the jump buffer's dynamic offsets step by:
+/// `min_uniform_buffer_offset_alignment`'s own guaranteed value, which every
+/// backend wgpu targets meets. Sixteen bytes of [`Jump`] in each.
+const JUMP_STRIDE: u64 = 256;
 
 impl ShadowTarget {
     pub(crate) fn new(
@@ -504,12 +697,35 @@ impl ShadowTarget {
             textures,
             views,
             reads,
+            flood: None,
         }
     }
 
     /// Whether this atlas can hold a layout of `size`.
     pub(crate) fn holds(&self, size: [u32; 2]) -> bool {
         self.size[0] >= size[0] && self.size[1] >= size[1]
+    }
+
+    /// Hold the flood's pair while `want`, and drop it when not.
+    ///
+    /// Kept off the atlas's own allocation because a blur row never runs the
+    /// chain and the pair is twice the atlas's bytes a texel: a frame on the
+    /// Gaussian row pays exactly what it paid before this family existed, which
+    /// is what makes the second family free to have in the tree.
+    ///
+    /// Sized to the atlas it belongs to, so it is rebuilt with the atlas and
+    /// never separately — the two ping-pong over the same coordinates.
+    pub(crate) fn ensure_flood(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        want: bool,
+    ) {
+        match (want, self.flood.is_some()) {
+            (true, false) => self.flood = Some(FloodTarget::new(device, layout, self.size)),
+            (false, true) => self.flood = None,
+            _ => {}
+        }
     }
 
     /// The pass that fills `views[0]` with the casters' ink: cleared, then the
@@ -521,26 +737,109 @@ impl ShadowTarget {
         Self::pass(encoder, "lattice_shadow_ink_pass", &self.views[0])
     }
 
+    /// The jump flood over this frame's DISTANCE cells, carrying a seed
+    /// `reach` texels and leaving the nearest-seed field in the pair's
+    /// `views[0]`.
+    ///
+    /// Run between the ink pass and the blur, off the atlas's `views[0]`, which
+    /// holds the casters' raw coverage until the blur's y pass overwrites it.
+    /// Every draw here is over the cells and collapses a blur cell's quad, so a
+    /// mixture of kinds costs the chain only what its distance cells are.
+    ///
+    /// A no-op with no pair held, which is a frame that packed no distance cell
+    /// (`ensure_flood`).
+    pub(crate) fn flood(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: (&wgpu::RenderPipeline, &wgpu::RenderPipeline),
+        boxes: &wgpu::Buffer,
+        count: u32,
+        reach: f32,
+    ) {
+        let Some(flood) = self.flood.as_ref() else {
+            return;
+        };
+        let (seed, step) = pipelines;
+        let schedule = steps(reach);
+        let jumps: Vec<u8> = schedule
+            .iter()
+            .flat_map(|&step| {
+                let mut cell = [0u8; JUMP_STRIDE as usize];
+                let jump = Jump { step: [step, 0, 0, 0] };
+                cell[..std::mem::size_of::<Jump>()].copy_from_slice(bytemuck::bytes_of(&jump));
+                cell
+            })
+            .collect();
+        if !jumps.is_empty() {
+            queue.write_buffer(&flood.jumps, 0, &jumps);
+        }
+        // The seed pass reads the atlas at group 0 and binds the chain's own
+        // group only to satisfy the layout — it takes nothing out of it, and
+        // naming the texture it is about to write would be a pass sampling its
+        // own attachment.
+        {
+            let mut pass = Self::pass(encoder, "lattice_shadow_flood_seed", &flood.views[0]);
+            pass.set_pipeline(seed);
+            pass.set_bind_group(0, &self.reads[0], &[]);
+            pass.set_bind_group(1, &flood.chain[1], &[0]);
+            pass.set_vertex_buffer(0, boxes.slice(..));
+            pass.draw(0..4, 0..count);
+        }
+        let mut src = 0usize;
+        for (i, _) in schedule.iter().enumerate() {
+            let mut pass = Self::pass(encoder, "lattice_shadow_flood_step", &flood.views[src ^ 1]);
+            pass.set_pipeline(step);
+            pass.set_bind_group(0, &self.reads[0], &[]);
+            pass.set_bind_group(1, &flood.chain[src], &[(i as u64 * JUMP_STRIDE) as u32]);
+            pass.set_vertex_buffer(0, boxes.slice(..));
+            pass.draw(0..4, 0..count);
+            src ^= 1;
+        }
+        debug_assert_eq!(src, 0, "the schedule is even, so the field lands in views[0]");
+    }
+
     /// The two blur passes over `count` cells of `boxes`, leaving the finished
     /// atlas in `views[0]`.
     ///
     /// Both targets are cleared first: a cell's quad writes its own texels and
     /// no others, and what a fragment of the y pass reads beside its cell has
     /// to be nothing rather than last frame's cell there.
+    ///
+    /// THREE draws over two passes, and the third is what a distance cell's
+    /// answer arrives by. The x pass sweeps every cell — a distance cell's σ is
+    /// zero, so what it does there is copy the coverage into `views[1]`, which
+    /// is where the resolve then reads the seed's own coverage from. The second
+    /// pass then splits by kind: the y pass finishes the blur cells, and the
+    /// resolve turns each distance cell's field into a distance in points.
+    /// Both write `views[0]` and the two never touch one texel, the kinds being
+    /// disjoint by construction.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: (&wgpu::RenderPipeline, &wgpu::RenderPipeline),
+        resolve: &wgpu::RenderPipeline,
         boxes: &wgpu::Buffer,
         count: u32,
     ) {
         let (blur_x, blur_y) = pipelines;
-        for (target, read, pipeline) in
-            [(&self.views[1], &self.reads[0], blur_x), (&self.views[0], &self.reads[1], blur_y)]
         {
-            let mut pass = Self::pass(encoder, "lattice_shadow_blur_pass", target);
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, read, &[]);
+            let mut pass = Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[1]);
+            pass.set_pipeline(blur_x);
+            pass.set_bind_group(0, &self.reads[0], &[]);
+            pass.set_vertex_buffer(0, boxes.slice(..));
+            pass.draw(0..4, 0..count);
+        }
+        let mut pass = Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[0]);
+        pass.set_pipeline(blur_y);
+        pass.set_bind_group(0, &self.reads[1], &[]);
+        pass.set_vertex_buffer(0, boxes.slice(..));
+        pass.draw(0..4, 0..count);
+        if let Some(flood) = self.flood.as_ref() {
+            pass.set_pipeline(resolve);
+            pass.set_bind_group(0, &self.reads[1], &[]);
+            // The FINISHED field, which the even schedule leaves in `views[0]`.
+            pass.set_bind_group(1, &flood.chain[0], &[0]);
             pass.set_vertex_buffer(0, boxes.slice(..));
             pass.draw(0..4, 0..count);
         }
@@ -568,6 +867,98 @@ impl ShadowTarget {
             multiview_mask: None,
         })
     }
+}
+
+impl FloodTarget {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: [u32; 2]) -> Self {
+        let texture = |label| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size[0].max(1),
+                    height: size[1].max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: SEED_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let textures = [texture("lattice_shadow_flood_0"), texture("lattice_shadow_flood_1")];
+        let views = [
+            textures[0].create_view(&Default::default()),
+            textures[1].create_view(&Default::default()),
+        ];
+        let jumps = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lattice_shadow_flood_jumps"),
+            size: JUMP_STRIDE * (MAX_LOG_STEP as u64 + 3),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = |src: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lattice_shadow_flood_chain"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &jumps,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(std::mem::size_of::<Jump>() as u64),
+                        }),
+                    },
+                ],
+            })
+        };
+        let chain = [group(&views[0]), group(&views[1])];
+        FloodTarget { views, chain, jumps }
+    }
+}
+
+/// The bindings a flood pass takes at GROUP 1: the field it reads and the jump
+/// it takes.
+///
+/// A group of its own beside the atlas's rather than one layout carrying both,
+/// because the three passes read different halves — the seed takes the atlas
+/// alone, the step the field alone, the resolve both — and a slot cannot hold a
+/// float texture and a uint one at once. One layout for the three, each reading
+/// what it reads: what an entry point does not read is pruned before the
+/// pipeline is built, so the seed carries the field at no cost.
+pub(crate) fn flood_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lattice_shadow_flood_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<Jump>() as u64),
+                },
+                count: None,
+            },
+        ],
+    })
 }
 
 /// How the atlas is read, by the blur and by the scene pass alike: the
@@ -652,28 +1043,53 @@ pub(crate) fn caster_buffer(
     (buffer, bind_group)
 }
 
-/// The blur's two pipelines, x then y. No blend: each writes its cell's texels
-/// outright over a cleared target.
-pub(crate) fn create_blur_pipelines(
+/// Every pipeline that sweeps the CELLS: the blur's two, the resolve that turns
+/// a flooded cell into a distance, and the flood's own seed and step.
+///
+/// One module and one function for the five because they share the vertex
+/// shader — a cell's quad, off the same box stream — and differ only in what
+/// they read and what they write. No blend anywhere here: each writes its
+/// cell's texels outright over a cleared target, a later answer being simply
+/// the better one rather than something to mix.
+pub(crate) struct CellPipelines {
+    pub(crate) blur_x: wgpu::RenderPipeline,
+    pub(crate) blur_y: wgpu::RenderPipeline,
+    pub(crate) resolve: wgpu::RenderPipeline,
+    pub(crate) seed: wgpu::RenderPipeline,
+    pub(crate) step: wgpu::RenderPipeline,
+}
+
+pub(crate) fn create_cell_pipelines(
     device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    atlas: &wgpu::BindGroupLayout,
+    flood: &wgpu::BindGroupLayout,
+) -> CellPipelines {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("shadow_shader"),
         source: wgpu::ShaderSource::Wgsl(SHADOW_SRC.into()),
     });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lattice_shadow_blur_pipeline_layout"),
-        bind_group_layouts: &[Some(layout)],
-        ..Default::default()
-    });
-    let pipeline = |entry: &str| {
+    let layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(label),
+            bind_group_layouts: groups,
+            ..Default::default()
+        })
+    };
+    // The atlas alone for the blur, both for the resolve, and the chain alone
+    // for the step — which still declares group 0 so the chain sits at 1 in
+    // every one of them and the shader spells one set of `@group` numbers.
+    let blur_layout = layout("lattice_shadow_blur_pipeline_layout", &[Some(atlas)]);
+    let both_layout = layout("lattice_shadow_resolve_pipeline_layout", &[Some(atlas), Some(flood)]);
+    let pipeline = |entry: &str,
+                    vertex: &str,
+                    pipeline_layout: &wgpu::PipelineLayout,
+                    format: wgpu::TextureFormat| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(entry),
-            layout: Some(&pipeline_layout),
+            layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_cell"),
+                entry_point: Some(vertex),
                 compilation_options: Default::default(),
                 buffers: &[ShadowBox::LAYOUT],
             },
@@ -682,7 +1098,7 @@ pub(crate) fn create_blur_pipelines(
                 entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: ATLAS_FORMAT,
+                    format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -697,12 +1113,21 @@ pub(crate) fn create_blur_pipelines(
             cache: None,
         })
     };
-    (pipeline("fs_blur_x"), pipeline("fs_blur_y"))
+    CellPipelines {
+        // Every cell: a distance cell's σ is 0 and this copies its coverage
+        // into the half-blur target, which is where the resolve reads it.
+        blur_x: pipeline("fs_blur_x", "vs_cell", &blur_layout, ATLAS_FORMAT),
+        blur_y: pipeline("fs_blur_y", "vs_cell_blur", &blur_layout, ATLAS_FORMAT),
+        resolve: pipeline("fs_flood_resolve", "vs_cell_distance", &both_layout, ATLAS_FORMAT),
+        seed: pipeline("fs_flood_seed", "vs_cell_distance", &both_layout, SEED_FORMAT),
+        step: pipeline("fs_flood_step", "vs_cell_distance", &both_layout, SEED_FORMAT),
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use harmonigraph_scene::REACH_SIGMAS;
 
     /// A shader's `const NAME: T = value;`, as text.
     pub(crate) fn shader_const(src: &str, name: &str) -> String {
@@ -770,17 +1195,21 @@ pub(crate) mod tests {
                 terms.iter().all(|t| t.weight > 0.0 && t.sigma > 0.0),
                 "{kernel:?} carries a term that draws nothing: {terms:?}",
             );
+            let widest = terms.iter().fold(0.0f32, |w, t| w.max(t.sigma));
             let narrowest = terms.iter().fold(f32::INFINITY, |w, t| w.min(t.sigma));
             assert!(
-                narrowest <= 1.0 && kernel.widest() >= 1.0,
-                "{kernel:?} spans {narrowest}..{}, which does not straddle the width the Shadow \
-                 bar names",
-                kernel.widest(),
+                narrowest <= 1.0 && widest >= 1.0,
+                "{kernel:?} spans {narrowest}..{widest}, which does not straddle the width the \
+                 Shadow bar names",
             );
         }
         assert_eq!(
             Gaussian.terms(),
-            &[harmonigraph_scene::KernelTerm { weight: 1.0, sigma: 1.0 }],
+            &[harmonigraph_scene::KernelTerm {
+                weight: 1.0,
+                sigma: 1.0,
+                kind: harmonigraph_scene::TermKind::Blur,
+            }],
             "the fresh row is not one Gaussian at the bar's own width, so every other reading \
              in this suite is against a different picture",
         );
@@ -955,7 +1384,11 @@ pub(crate) mod tests {
     #[test]
     fn the_blurs_reach_and_loop_bound_are_the_packers_own() {
         let reach: f32 = shader_const(SHADOW_SRC, "REACH").parse().expect("a number");
-        assert_eq!(reach, REACH_SIGMAS, "the kernel reaches a different distance than the padding");
+        assert_eq!(
+            reach,
+            harmonigraph_scene::REACH_SIGMAS,
+            "the kernel reaches a different distance than the padding"
+        );
         let radius: i32 = shader_const(SHADOW_SRC, "MAX_RADIUS").parse().expect("a number");
         assert_eq!(
             radius,
@@ -1147,7 +1580,7 @@ pub(crate) mod tests {
         let layout = read_layout(&device);
         let sampler = device.create_sampler(&Default::default());
         let target = ShadowTarget::new(&device, &layout, &sampler, size);
-        let pipelines = create_blur_pipelines(&device, &layout);
+        let pipelines = create_cell_pipelines(&device, &layout, &flood_layout(&device));
 
         // The block: cell A's ink region — everything inside its padding —
         // filled solid, as a caster wider than the blur is.
@@ -1187,7 +1620,13 @@ pub(crate) mod tests {
         });
         queue.write_buffer(&boxes, 0, bytemuck::cast_slice(&packed.boxes));
         let mut encoder = device.create_command_encoder(&Default::default());
-        target.blur(&mut encoder, (&pipelines.0, &pipelines.1), &boxes, 2);
+        target.blur(
+            &mut encoder,
+            (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.resolve,
+            &boxes,
+            2,
+        );
         queue.submit([encoder.finish()]);
         let bytes = crate::gpu_harness::readback(&device, &queue, &target.textures[0], size);
         let at = |x: u32, y: u32| -> f32 {
@@ -1226,5 +1665,302 @@ pub(crate) mod tests {
             (0.5 * (edge + inside) - 0.5).abs() < 0.03,
             "the blur reads {edge} and {inside} either side of the block's edge, not half",
         );
+    }
+
+    /// One distance cell filling a whole texture at one texel per point, with
+    /// the flood's pair beside it — the fixture both readings below are taken
+    /// on.
+    fn one_distance_cell(
+        device: &wgpu::Device,
+        size: [u32; 2],
+        pad: f32,
+    ) -> (ShadowTarget, CellPipelines, wgpu::Buffer, ShadowBox) {
+        let atlas_layout = read_layout(device);
+        let chain_layout = flood_layout(device);
+        let sampler = device.create_sampler(&Default::default());
+        let mut target = ShadowTarget::new(device, &atlas_layout, &sampler, size);
+        target.ensure_flood(device, &chain_layout, true);
+        let pipelines = create_cell_pipelines(device, &atlas_layout, &chain_layout);
+        let cell = ShadowBox {
+            rect: [0.0, 0.0, size[0] as f32, size[1] as f32],
+            cell: [0.0, 0.0, size[0] as f32, size[1] as f32],
+            // One texel per point, no blur, level 1, full resolution: what the
+            // resolve writes is then in the units the fixtures measure in.
+            terms: [1.0, 0.0, 1.0, 1.0],
+            who: [0.0, DISTANCE_KIND, pad, 0.0],
+        };
+        let boxes = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test_boxes"),
+            size: std::mem::size_of::<ShadowBox>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        (target, pipelines, boxes, cell)
+    }
+
+    /// A float as the atlas holds it, which is [`half`] the other way round.
+    fn half_bits(v: f32) -> u16 {
+        let bits = v.to_bits();
+        let exp = ((bits >> 23) & 0xff) as i32 - 127;
+        let mant = ((bits >> 13) & 0x3ff) as u16;
+        if v <= 0.0 {
+            return 0;
+        }
+        (((exp + 15) as u16) << 10) | mant
+    }
+
+    /// The flood answers the TRUE distance, everywhere inside its reach, for a
+    /// pair of DIAGONAL strokes as far apart as two letters of a name.
+    ///
+    /// The measurement a sampled dilation could not pass, and one an
+    /// axis-aligned fixture cannot make. A dilation sampled at N offsets is a
+    /// binary dilation by a disc wherever the coverage is flat, and N taps on a
+    /// spiral sit about `R / sqrt(N)` apart — at a reach of 32 texels, 48 of
+    /// them leave gaps four texels wide between the copies of a two-texel
+    /// stroke, and the shortfall draws the letters again inside their own
+    /// shadow. What is asserted is what makes that impossible: an exact
+    /// distance at every texel, at a cost that does not move with the reach.
+    ///
+    /// DIAGONAL, and that is the fixture's whole point. #487's SPIKE was a
+    /// seed's coverage spent on the profile's HEIGHT rather than on the
+    /// distance, and coverage is constant along an axis-aligned edge — so the
+    /// same test on an upright stroke reads alike either way and passes for the
+    /// wrong reason (#450). Along a diagonal the coverage runs the whole of
+    /// `[INK_FLOOR, 1]` and the two readings part.
+    ///
+    /// Half a texel of tolerance, which is what the correction buys: the flood
+    /// answers in whole texels, and the seed's own coverage puts the profile's
+    /// origin back on the contour to within that.
+    #[test]
+    fn the_flood_answers_the_true_distance_between_two_strokes() {
+        const SIZE: [u32; 2] = [256, 128];
+        // Two diagonals, `SPLIT` apart along x and `2 * HALF` wide across it —
+        // a name's two stems, and the gap a sampled dilation could not fill.
+        const SPLIT: f32 = 40.0;
+        const HALF: f32 = 1.0;
+        const REACH: f32 = 32.0;
+
+        let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+            return;
+        };
+        let (target, pipelines, boxes, cell) = one_distance_cell(&device, SIZE, 1.0e4);
+        // The SIGNED distance to the nearer diagonal, each at 45° — negative
+        // inside a stroke, which is what makes the coverage below a
+        // rasterizer's rather than a half everywhere the ink is solid.
+        let signed = |x: f32, y: f32| {
+            let arm = |at: f32| (x - y - at).abs() / std::f32::consts::SQRT_2 - HALF;
+            arm(0.0).min(arm(SPLIT))
+        };
+        let truth = |x: f32, y: f32| signed(x, y).max(0.0);
+        // The coverage a rasterizer writes: the straight-edge approximation the
+        // seed's own correction is derived against, one texel of ramp across
+        // the contour.
+        let mut ink = vec![0u8; (SIZE[0] * SIZE[1] * 2) as usize];
+        for y in 0..SIZE[1] {
+            for x in 0..SIZE[0] {
+                let cov = (0.5 - signed(x as f32 + 0.5, y as f32 + 0.5)).clamp(0.0, 1.0);
+                let at = ((y * SIZE[0] + x) * 2) as usize;
+                ink[at..at + 2].copy_from_slice(&half_bits(cov).to_le_bytes());
+            }
+        }
+        queue.write_texture(
+            target.textures[0].as_image_copy(),
+            &ink,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE[0] * 2),
+                rows_per_image: Some(SIZE[1]),
+            },
+            wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+        );
+        queue.write_buffer(&boxes, 0, bytemuck::bytes_of(&cell));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        target.flood(&queue, &mut encoder, (&pipelines.seed, &pipelines.step), &boxes, 1, REACH);
+        target.blur(
+            &mut encoder,
+            (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.resolve,
+            &boxes,
+            1,
+        );
+        queue.submit([encoder.finish()]);
+        let bytes = crate::gpu_harness::readback(&device, &queue, &target.textures[0], SIZE);
+        let at = |x: u32, y: u32| -> f32 {
+            let i = ((y * SIZE[0]) * 4 + x * 2) as usize;
+            half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
+        };
+
+        // A margin of the reach off every edge. `truth` is the distance to an
+        // ENDLESS diagonal, and a texel nearer the border than that has its
+        // perpendicular foot outside the cell — where the flood is right and
+        // the reference is not, the nearest ink actually present being further.
+        let margin = REACH as u32 + 2;
+        let (mut checked, mut worst, mut worst_at) = (0, 0.0f32, (0u32, 0u32));
+        for y in margin..SIZE[1] - margin {
+            for x in margin..SIZE[0] - margin {
+                let want = truth(x as f32 + 0.5, y as f32 + 0.5);
+                if want > REACH {
+                    continue;
+                }
+                let err = (at(x, y) - want).abs();
+                if err > worst {
+                    worst = err;
+                    worst_at = (x, y);
+                }
+                checked += 1;
+            }
+        }
+        // The loop is the assertion, so a loop that ran over nothing is a green
+        // test measuring an empty field.
+        assert!(checked > 5000, "only {checked} texels stood inside the reach");
+        assert!(
+            worst <= 0.5,
+            "the flood is off by {worst} texels at {worst_at:?}, inside its own reach",
+        );
+    }
+
+    /// A texel out of every seed's reach resolves to the cell's own pad, which
+    /// is where the standoff's curve is windowed to nothing.
+    ///
+    /// The claim is that "no ink within reach" and "further out than the shadow
+    /// goes" are ONE answer. A sentinel of its own would be a value the
+    /// sampler's bilinear tap interpolates toward, and a step in a distance
+    /// field is a contour in the picture.
+    #[test]
+    fn a_texel_no_seed_reaches_resolves_to_the_cells_own_pad() {
+        const SIZE: [u32; 2] = [64, 64];
+        const PAD: f32 = 7.0;
+
+        let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+            return;
+        };
+        let (target, pipelines, boxes, cell) = one_distance_cell(&device, SIZE, PAD);
+        queue.write_buffer(&boxes, 0, bytemuck::bytes_of(&cell));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        // The ink pass clears the atlas and nothing draws into it: a cell whose
+        // coverage never reaches `INK_FLOOR` seeds nowhere at all.
+        drop(target.ink_pass(&mut encoder));
+        target.flood(&queue, &mut encoder, (&pipelines.seed, &pipelines.step), &boxes, 1, 8.0);
+        target.blur(
+            &mut encoder,
+            (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.resolve,
+            &boxes,
+            1,
+        );
+        queue.submit([encoder.finish()]);
+        let bytes = crate::gpu_harness::readback(&device, &queue, &target.textures[0], SIZE);
+        for (x, y) in [(1u32, 1u32), (32u32, 32u32), (62u32, 62u32)] {
+            let i = ((y * SIZE[0]) * 4 + x * 2) as usize;
+            let held = half(u16::from_le_bytes([bytes[i], bytes[i + 1]]));
+            assert!(
+                (held - PAD).abs() < 1e-3,
+                "an unseeded texel at ({x}, {y}) holds {held}, not the cell's pad of {PAD}",
+            );
+        }
+    }
+
+    /// The schedule reaches at least as far as it is asked to, and lands on an
+    /// even number of passes so the resolve can name one texture.
+    ///
+    /// The reach is what a jump flood actually carries — the SUM of its jumps —
+    /// rather than the first of them, which is the number it is easy to check
+    /// and the wrong one: a chain starting at 32 with no tail carries 32, and
+    /// the same chain down to 1 carries 63.
+    #[test]
+    fn a_floods_jumps_reach_past_the_cell_they_are_built_for() {
+        for reach in [1.0f32, 2.0, 3.0, 31.0, 32.0, 33.0, 200.0, 4000.0] {
+            let schedule = steps(reach);
+            let carried: i32 = schedule.iter().sum();
+            assert!(
+                carried as f32 >= reach,
+                "a chain {schedule:?} carries {carried} and is asked for {reach}",
+            );
+            assert_eq!(schedule.len() % 2, 0, "an odd chain lands the field in views[1]");
+            assert_eq!(*schedule.last().expect("a step"), 1, "the tail is a local pass");
+        }
+    }
+
+    /// A reach under a texel runs no flood, and a nonsense one stops at the cap
+    /// rather than looping on a number no `log2` can answer for.
+    #[test]
+    fn a_reach_under_a_texel_or_past_every_atlas_runs_a_bounded_chain() {
+        for reach in [0.0f32, 0.5, 0.999] {
+            assert!(steps(reach).is_empty(), "a reach of {reach} asked for a flood");
+        }
+        for reach in [f32::INFINITY, f32::NAN, 1.0e30, -5.0] {
+            let schedule = steps(reach);
+            assert!(
+                schedule.len() <= MAX_LOG_STEP as usize + 2,
+                "a reach of {reach} asks for {} passes",
+                schedule.len(),
+            );
+            assert_eq!(schedule.len() % 2, 0, "an odd chain lands the field in views[1]");
+        }
+    }
+
+    /// The three modules that spell a distance term's kind agree on it, and the
+    /// two that spell the standoff's window agree on that.
+    ///
+    /// Each has to be written more than once — there is no linkage between
+    /// shader modules here, and the scene crate has no shader at all — and each
+    /// fails SILENTLY if the copies part. A kind that has drifted collapses
+    /// every distance cell's quad and draws no shadow at all; a window that has
+    /// drifted pads a cell to one radius and cuts its curve off at another,
+    /// which is a screen-aligned step in the halo.
+    #[test]
+    fn the_shaders_distance_kind_and_window_are_the_packers() {
+        let common = crate::with_common("");
+        for src in [SHADOW_SRC, common.as_str()] {
+            let kind: f32 = shader_const(src, "DISTANCE_KIND").parse().expect("a number");
+            assert_eq!(kind, DISTANCE_KIND, "a module reads a different kind than the packer");
+        }
+        for (name, want) in [
+            ("SHADOW_TAIL", harmonigraph_scene::SHADOW_TAIL),
+            ("SHADOW_STOP", harmonigraph_scene::SHADOW_STOP),
+        ] {
+            let held: f32 = shader_const(&common, name).parse().expect("a number");
+            assert_eq!(held, want, "common.wgsl's {name} and the scene's have parted");
+        }
+    }
+
+    /// A distance term's cell is padded to exactly where its curve is windowed
+    /// to nothing, and floored in resolution so a stroke of type survives it.
+    ///
+    /// The pair the family's cost is decided by, and the two are opposite
+    /// claims. The pad has to REACH the stop or the shadow ends in a straight
+    /// line at the cell's edge; the scale has to stop shrinking or the ink the
+    /// flood seeds off thins to nothing. A blur cell keeps neither property,
+    /// which is what makes this the branch worth pinning.
+    #[test]
+    fn a_distance_cell_reaches_the_stop_and_holds_its_resolution() {
+        use harmonigraph_scene::ShadowKernel;
+        let caster = Caster { rect: [40.0, 40.0, 20.0, 20.0], level: 1.0, sigma_scale: 1.0 };
+        // A σ well past `SIGMA_CELL_MAX`, which is where a blur cell shrinks
+        // without limit and a distance cell stops.
+        let sigma = 40.0;
+        let packed = ShadowKernel::Distance.terms();
+        let out = pack(&[caster], sigma, 1.0, 4096, packed);
+        let cell = out.boxes[0];
+        let scale = cell.terms[3];
+        assert!(
+            (scale - DISTANCE_SCALE_FLOOR).abs() < 1e-5,
+            "a distance cell at σ {sigma} is drawn at {scale} of the target, not at its floor",
+        );
+        assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ, so the chain blurs it");
+        assert_eq!(cell.who[1], DISTANCE_KIND, "the box does not say it holds a distance");
+        // The pad is the stop in points, plus the one texel the sampler's
+        // bilinear tap at the box's own edge needs.
+        let want = 2.0 * harmonigraph_scene::SHADOW_STOP * sigma;
+        let pad = cell.who[2];
+        assert!(
+            pad >= want && pad <= want + 1.0 / scale + 1.0,
+            "a distance cell is padded {pad} points where its curve reaches {want}",
+        );
+        assert!(out.flood >= want * scale, "the chain is sized {} for a pad of {pad}", out.flood);
+        // And the same row on the Gaussian's own terms floods nothing.
+        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian.terms());
+        assert_eq!(blur.flood, 0.0, "a blur row asked for a flood chain");
+        assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
     }
 }

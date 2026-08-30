@@ -51,11 +51,18 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
 /// capped in texels. The two ends of the bar are here for the same reason the
 /// two probes above are: the atlas SHRINKS as the bar opens and the quads grow,
 /// so a row's cost is not one number.
+///
+/// A DISTANCE row is the expensive one, and is why this probe is run before a
+/// merge rather than after (#536). Its cell does not shrink past
+/// `DISTANCE_SCALE_FLOOR`, so the atlas grows with the bar instead of shrinking;
+/// its fill is the whole node shader at near-target resolution, per node
+/// (#507); and the flood is `log2(pad)` passes over those cells on top. What is
+/// wanted here is whether that floor is affordable at the top of the bar.
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_each_kernel_costs_this_much() {
-    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
-    for kernel in [Gaussian, TwoScale, Sky, Exponential] {
+    use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
+    for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance] {
         for (shadow, where_) in [
             (the_live_view().glow_shadow, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),

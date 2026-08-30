@@ -589,11 +589,13 @@ struct Uniforms {
     /// (`Scene::glow_shadow`) — the σ every caster's ink is blurred at
     /// ([`shadow::sigma_px`]) and the reach every quad is grown by; w: how dark
     /// it lands (`Scene::glow_shadow_depth`), 1 taking the frame under a solid
-    /// caster to the shader's own floor. y/z unused.
+    /// caster to the shader's own floor; y: the exponent a DISTANCE row's decay
+    /// is taken over (`Scene::glow_shadow_shape`), which nothing reads unless a
+    /// term of the row holds a distance. z unused.
     ///
-    /// A row of its own rather than two slots scattered over the ones beside
-    /// it, because the two are one control: the Shadow bar and the Shadow depth
-    /// bar under it.
+    /// A row of its own rather than slots scattered over the ones beside it,
+    /// because they are one control: the Shadow bar, the Shadow depth bar under
+    /// it, and the shape the distance family alone is drawn through.
     ///
     /// NOT zeroed with `misc10`, which is where this row parts company with
     /// every other one under the glow: an item casts whether or not there is a
@@ -646,8 +648,11 @@ struct Uniforms {
     /// exponent that bends where along the shadow's width the depth sits
     /// (`Scene::glow_shadow_curve`); z: how many terms the kernel has
     /// (`ShadowKernel::terms`), which is how many cells a caster carries and
-    /// how many taps its draw makes; w: the WIDEST of those terms' σ against
-    /// the picture's own, which every caster's quad is grown by.
+    /// how many taps its draw makes; w: how far the widest of them reaches past
+    /// a caster's ink in the picture's own σ (`ShadowKernel::reach_sigmas`),
+    /// which every caster's quad is grown by — a REACH and not a σ ratio,
+    /// because a blur row and a distance row end at different multiples of
+    /// their own width.
     ///
     /// A row of its own rather than `misc11`'s spare slot, because the two
     /// answer different questions: that row is the shadow's SIZE, which every
@@ -1302,10 +1307,9 @@ impl LatticeCallback {
         // term's σ and every quad is grown by the WIDEST of them, so the table
         // is consulted here and nowhere else in this walk.
         let kernel = scene.glow_shadow_kernel.terms();
-        let shadow_reach = shadow::REACH_SIGMAS
-            * 0.5
+        let shadow_reach = 0.5
             * scene.glow_shadow.max(0.0)
-            * scene.glow_shadow_kernel.widest()
+            * scene.glow_shadow_kernel.reach_sigmas()
             * node_points.max(0.0);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
@@ -1499,12 +1503,12 @@ impl LatticeCallback {
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
                 // lattice has. y/z unused.
-                misc11: [scene.glow_shadow, 0.0, 0.0, scene.glow_shadow_depth],
+                misc11: [scene.glow_shadow, scene.glow_shadow_shape, 0.0, scene.glow_shadow_depth],
                 shadow_curve: [
                     scene.glow_shadow_gain,
                     scene.glow_shadow_curve,
                     kernel.len() as f32,
-                    scene.glow_shadow_kernel.widest(),
+                    scene.glow_shadow_kernel.reach_sigmas(),
                 ],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
@@ -1656,10 +1660,11 @@ struct LatticeResources {
     /// is its shadow, the draw before it (`shadow_box_pipeline`).
     glyph_fill_pipeline: wgpu::RenderPipeline,
     /// The shadow atlas's three stages (`crate::shadow`): every name's glyphs
-    /// into its cell, the blur over the cells along each axis, and the box
+    /// into its cell, the passes that sweep the cells — the blur along each
+    /// axis, and the jump flood a DISTANCE cell is answered by — and the box
     /// each name multiplies the scene by off its finished cell.
     glyph_cell_pipeline: wgpu::RenderPipeline,
-    shadow_blur_pipelines: (wgpu::RenderPipeline, wgpu::RenderPipeline),
+    shadow_cell_pipelines: shadow::CellPipelines,
     shadow_box_pipeline: wgpu::RenderPipeline,
     /// The other two rasterizers of a cell: a node's ink into its own, and one
     /// cross into the markers' shared one (see [`create_cell_pipelines`]).
@@ -1677,6 +1682,9 @@ struct LatticeResources {
     /// Every caster's kernel, at group 3 of the scene pipelines; see
     /// [`shadow::caster_layout`].
     caster_layout: wgpu::BindGroupLayout,
+    /// The flood's ping-pong field and its jump, at group 1 of the three passes
+    /// that answer a distance cell; see [`shadow::flood_layout`].
+    flood_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
     /// This renderer's copies of the two sheets a glyph can be cut from —
     /// egui's font atlas and the drawn marks'. Its own, not the text
@@ -2097,6 +2105,8 @@ struct OffscreenShared<'a> {
     /// The shadow atlas as its readers take it; see
     /// [`LatticeResources::shadow_layout`].
     shadow_layout: &'a wgpu::BindGroupLayout,
+    /// The flood's own field and jump; see [`LatticeResources::flood_layout`].
+    flood_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
 }
 
@@ -2398,6 +2408,7 @@ impl Offscreen {
         device: &wgpu::Device,
         shared: &OffscreenShared<'_>,
         want: Option<[u32; 2]>,
+        flood: bool,
     ) {
         match want {
             Some(size) => {
@@ -2409,6 +2420,12 @@ impl Offscreen {
                         shared.sampler,
                         [size[0].max(held[0]), size[1].max(held[1])],
                     ));
+                }
+                // After the size check, so a target rebuilt just above and one
+                // kept from last frame arrive at the same answer: the flood's
+                // pair is the atlas's own size and a rebuild drops it.
+                if let Some(atlas) = self.shadow.as_mut() {
+                    atlas.ensure_flood(device, shared.flood_layout, flood);
                 }
             }
             None => self.shadow = None,
@@ -3132,6 +3149,7 @@ impl LatticeResources {
         // atlas.
         let shadow_layout = shadow::read_layout(device);
         let caster_layout = shadow::caster_layout(device);
+        let flood_layout = shadow::flood_layout(device);
         // The whole module, common half and all, built once for the four
         // pipelines cut from it.
         let shader_src = with_common(SHADER_SRC);
@@ -3227,7 +3245,8 @@ impl LatticeResources {
         );
         let glyph_cell_pipeline =
             text::create_glyph_cell_pipeline(device, &glyph_shader, &glyph_layout);
-        let shadow_blur_pipelines = shadow::create_blur_pipelines(device, &shadow_layout);
+        let shadow_cell_pipelines =
+            shadow::create_cell_pipelines(device, &shadow_layout, &flood_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
             device,
             &glyph_shader,
@@ -3321,13 +3340,14 @@ impl LatticeResources {
             strip_layout,
             sampler,
             glyph_cell_pipeline,
-            shadow_blur_pipelines,
+            shadow_cell_pipelines,
             shadow_box_pipeline,
             node_cell_pipeline,
             plus_cell_pipeline,
             shadow_dummy_bind_group,
             shadow_layout,
             caster_layout,
+            flood_layout,
             glyph_fill_pipeline,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
@@ -3416,6 +3436,7 @@ impl LatticeResources {
             filter_layout: &self.filter_layout,
             strip_layout: &self.strip_layout,
             shadow_layout: &self.shadow_layout,
+            flood_layout: &self.flood_layout,
             sampler: &self.sampler,
         };
         let want_casters = wants.casters;
@@ -3544,7 +3565,7 @@ impl LatticeResources {
             // wrong answer. This settles both.
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow, wants.rows);
-                offscreen.ensure_shadow(device, &shared, wants.shadow);
+                offscreen.ensure_shadow(device, &shared, wants.shadow, wants.flood);
             }
         }
         // The casters' kernels, whose buffer and bind group are one object:
@@ -3584,6 +3605,10 @@ struct PaneTargets {
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
+    /// Whether this frame packed a DISTANCE cell, and so whether the flood's
+    /// ping-pong pair is held beside the atlas. A blur row leaves it `false`
+    /// and pays none of it (`ShadowTarget::ensure_flood`).
+    flood: bool,
     /// The ink strip's height: the row map's own capacity.
     rows: u32,
     /// How many casters this frame's kernels are packed for — the storage
@@ -3836,6 +3861,9 @@ impl CallbackTrait for LatticeCallback {
             PaneTargets {
                 glow,
                 shadow: shadow_wanted,
+                // The chain is empty when no distance cell is packed, so a blur
+                // row carries neither the pair nor the passes.
+                flood: packed.flood > 0.0,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
@@ -4017,7 +4045,10 @@ impl CallbackTrait for LatticeCallback {
                         // Shadow's WIDTH is not here: it is σ, spent on the
                         // CPU where the cells are packed.
                         shadow_depth: self.uniforms.misc11[3],
-                        _pad: 0.0,
+                        // The exponent a DISTANCE row's decay is taken over,
+                        // off the same row the lattice's own draws take it from
+                        // (`u.misc11`): one row, one shape, whatever the caster.
+                        shadow_shape: self.uniforms.misc11[1],
                         // How many taps a name's box makes, which is the
                         // kernel's own term count: a term past it carries
                         // weight 0 and would cost a tap for nothing.
@@ -4157,8 +4188,28 @@ impl CallbackTrait for LatticeCallback {
                     }
                 }
                 drop(pass);
-                let (blur_x, blur_y) = &resources.shadow_blur_pipelines;
-                atlas.blur(egui_encoder, (blur_x, blur_y), &pane.box_buffer, pane.box_count);
+                let cells = &resources.shadow_cell_pipelines;
+                // The FLOOD, between the ink and the blur: it reads the raw
+                // coverage out of the atlas's first texture, which the blur's y
+                // pass is the first thing to overwrite. Every draw in it
+                // collapses a blur cell's quad, so a frame on a blur row
+                // encodes three passes of nothing at all and a frame that
+                // packed no distance cell holds no pair to run them over.
+                atlas.flood(
+                    queue,
+                    egui_encoder,
+                    (&cells.seed, &cells.step),
+                    &pane.box_buffer,
+                    pane.box_count,
+                    packed.flood,
+                );
+                atlas.blur(
+                    egui_encoder,
+                    (&cells.blur_x, &cells.blur_y),
+                    &cells.resolve,
+                    &pane.box_buffer,
+                    pane.box_count,
+                );
             }
 
             // The node glow, into a target of its own and BEFORE the scene

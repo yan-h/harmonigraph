@@ -49,6 +49,11 @@ struct Locals {
     /// [`fs_shadow_box`] alone, and 0 everywhere else — which is a surface that
     /// samples the atlas not at all.
     shadow_terms: f32,
+    /// The exponent a DISTANCE row's decay is taken over (the lattice's
+    /// `u.misc11.y`), in the slot that was the gap before the atlas size. Read
+    /// by [`fs_shadow_box`] alone, and only where a term of the row holds a
+    /// distance; 0 everywhere else.
+    shadow_shape: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
     shadow_atlas_size: vec2<f32>,
@@ -616,24 +621,18 @@ fn vs_shadow_box(
 /// alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
-    let blur = shadow_blur(in.who, in.at, u32(max(locals.shadow_terms, 0.0)));
-    let t = shadow_transmittance(
-        blur,
-        locals.shadow_depth,
-        in.level,
+    let full = shadow_kernel(
+        in.who,
+        in.at,
+        u32(max(locals.shadow_terms, 0.0)),
         locals.shadow_gain,
-        locals.shadow_curve,
+        locals.shadow_shape,
     );
+    let t = shadow_transmittance(full, locals.shadow_depth, in.level, locals.shadow_curve);
     // The bright pass's copy, always at a WHOLE shadow (1) rather than at
     // `shadow_depth`: the copy the bright pass reads takes every caster's
     // shadow to the shader's own floor, whatever the visible one is left at.
-    let lit = shadow_transmittance(
-        blur,
-        1.0,
-        in.level,
-        locals.shadow_gain,
-        locals.shadow_curve,
-    );
+    let lit = shadow_transmittance(full, 1.0, in.level, locals.shadow_curve);
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),

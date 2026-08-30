@@ -1,43 +1,104 @@
-// The shadow atlas's blur: every caster's ink, drawn into a cell of its own
-// (`vs_glyph_cell` in text.wgsl), convolved with a Gaussian of that cell's σ —
-// once along x into the atlas's second texture, once along y back into the
-// first, which the scene pass then samples (`fs_shadow_box`).
+// What turns every caster's ink, drawn into a cell of its own (`vs_glyph_cell`
+// in text.wgsl), into what that cell HOLDS — which is one of two things.
 //
-// A pass here is a draw over the CELLS rather than one quad over the atlas,
-// and that is what lets every cell carry its own σ: a cell's quad reads σ off
-// its instance, and a tap that falls outside the cell's own rect reads nothing,
-// so a cell never sees its neighbour's ink whatever either is blurred by. The
-// padding a cell is packed with (`pack` in shadow.rs) is what puts the whole of
-// its blur inside the rect the taps are clamped to.
+// A BLUR cell holds the ink convolved with a Gaussian of that cell's σ, once
+// along x into the atlas's second texture and once along y back into the first.
+// A DISTANCE cell holds how far each of its texels stands from the caster's
+// nearest ink, in the pane's points, answered by a jump flood: seed every inked
+// texel with its own coordinate, pass those coordinates outward in halving
+// steps, then resolve the field into a distance. Either way the scene pass
+// samples one texel of one cell and spends it (`fs_shadow_box`).
+//
+// A pass here is a draw over the CELLS rather than one quad over the atlas, and
+// that is what lets every cell carry its own σ, its own resolution and its own
+// kind: a cell's quad reads them off its instance, a tap that falls outside the
+// cell's own rect reads nothing, and a cell of the wrong kind collapses its
+// quad off the viewport. So one chain serves every distance cell in the atlas
+// at once, no seed crosses into the neighbour packed beside it, and a frame on
+// a blur row draws none of the flood at all. The padding a cell is packed with
+// (`pack` in shadow.rs) is what puts the whole of its blur — or the whole of
+// the reach its curve is windowed to — inside the rect the taps are clamped to.
+//
+// Why a flood rather than sampling a dilation at N offsets: a dilation sampled
+// at N offsets is a binary dilation by a disc wherever the coverage is flat, and
+// N discrete taps cannot fill a disc unless they sit closer together than a
+// stroke is wide — under which N goes as the square of the reach and the
+// shortfall reads as shifted copies of the letters. The flood costs `log2` of
+// the reach in passes and answers with a distance, so the shadow at a name is
+// the same one-line expression it is at a ring.
 
 @group(0) @binding(0) var src: texture_2d<f32>;
-// The layout's sampler slot, which the scene pass's one tap takes and the blur
-// does not: a blur tap is a texel by construction (`textureLoad`).
+// The layout's sampler slot, which the scene pass's one tap takes and nothing
+// here does: every tap in this module is a texel by construction
+// (`textureLoad`).
 @group(0) @binding(1) var src_sampler: sampler;
+
+// The flood's own group. The three passes read different halves of it — the
+// seed takes the atlas alone, the step the field alone, the resolve both — and
+// what an entry point does not read is pruned before its pipeline is built.
+@group(1) @binding(0) var seeds: texture_2d<u32>;
+@group(1) @binding(1) var<uniform> jump: Jump;
+
+/// The jump this step takes, in texels, in `x`. Halves from a power of two at
+/// or above the widest distance cell's own reach down to 1 (`steps` in
+/// shadow.rs, which is where the sequence is decided).
+///
+/// A whole `vec4<i32>` for one number, which is what the uniform address space
+/// costs: a struct there is laid out on 16-byte alignment, so three explicit pad
+/// words and a `vec3` beside the `i32` come to the same 16 bytes with more ways
+/// to get the Rust side's size wrong.
+struct Jump {
+    step: vec4<i32>,
+};
+
+/// What `ShadowBox::who.y` holds for a cell that is a DISTANCE rather than
+/// blurred ink — `shadow::DISTANCE_KIND`, and spelled again in common.wgsl
+/// because there is no linkage between shader modules here.
+const DISTANCE_KIND: f32 = 1.0;
 
 struct CellOut {
     @builtin(position) position: vec4<f32>,
     /// The cell's own rect in atlas texels — min, then max, the max exclusive.
     @location(0) @interpolate(flat) bounds: vec4<f32>,
-    /// σ in atlas texels.
+    /// σ in atlas texels. Zero on a distance cell, which is what makes the blur
+    /// chain a pass-through over one.
     @location(1) @interpolate(flat) sigma: f32,
+    /// How many of this cell's texels one point of the pane spans
+    /// (`ShadowBox::terms.x`) — what turns the flood's answer, which is in
+    /// texels, into the points the cell is read back in.
+    @location(2) @interpolate(flat) k: f32,
+    /// How far past the caster's ink this cell reaches, in points
+    /// (`ShadowBox::who.z`). The distance resolved where no seed is within
+    /// reach: the standoff's curve is windowed to exactly zero there, so a
+    /// texel the flood says nothing about and one at the very edge of the reach
+    /// carry the same coverage and the bilinear tap between them has no step to
+    /// cross.
+    @location(3) @interpolate(flat) pad: f32,
 };
 
-/// One cell's quad, over exactly the texels its packer gave it. The
-/// attributes are `ShadowBox`'s three rows (shadow.rs).
-@vertex
-fn vs_cell(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
+/// A quad with no area, off the viewport: what a pass emits for a cell of the
+/// other kind. `no_quad` in common.wgsl is the same value, spelled there for
+/// the draws that FILL a cell.
+fn no_quad() -> vec4<f32> {
+    return vec4<f32>(2.0, 2.0, 0.0, 1.0);
+}
+
+/// One cell's quad, over exactly the texels its packer gave it — or nothing at
+/// all where `draws` is false. The attributes are `ShadowBox`'s four rows
+/// (shadow.rs).
+fn cell_quad(
+    vertex: u32,
+    cell: vec4<f32>,
+    terms: vec4<f32>,
+    who: vec4<f32>,
+    draws: bool,
 ) -> CellOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
-    // The texture being read is the atlas's other half, at the same size as
-    // the one being written.
+    // The atlas's size, off the texture at group 0 — which every pass here
+    // binds, and which is the same size as the seed pair the flood writes.
     let atlas = vec2<f32>(textureDimensions(src));
     let texel = cell.xy + corner * cell.zw;
     var out: CellOut;
@@ -47,9 +108,53 @@ fn vs_cell(
         0.0,
         1.0,
     );
+    if !draws {
+        out.position = no_quad();
+    }
     out.bounds = vec4<f32>(cell.xy, cell.xy + cell.zw);
     out.sigma = terms.y;
+    out.k = terms.x;
+    out.pad = who.z;
     return out;
+}
+
+/// EVERY cell, whatever it holds — the x blur, whose pass-through over a
+/// distance cell is what carries that cell's coverage to the resolve.
+@vertex
+fn vs_cell(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) cell: vec4<f32>,
+    @location(2) terms: vec4<f32>,
+    @location(3) who: vec4<f32>,
+) -> CellOut {
+    return cell_quad(vertex, cell, terms, who, true);
+}
+
+/// The BLUR cells alone: the y pass, which shares its target with the resolve
+/// and must not write a texel the resolve is about to.
+@vertex
+fn vs_cell_blur(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) cell: vec4<f32>,
+    @location(2) terms: vec4<f32>,
+    @location(3) who: vec4<f32>,
+) -> CellOut {
+    return cell_quad(vertex, cell, terms, who, who.y < 0.5);
+}
+
+/// The DISTANCE cells alone: the flood's three passes, so a frame whose row is
+/// a mixture of kinds floods only the cells that hold one.
+@vertex
+fn vs_cell_distance(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) cell: vec4<f32>,
+    @location(2) terms: vec4<f32>,
+    @location(3) who: vec4<f32>,
+) -> CellOut {
+    return cell_quad(vertex, cell, terms, who, who.y >= 0.5);
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is
@@ -129,4 +234,124 @@ fn fs_blur_x(in: CellOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
     return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 0.0, 1.0);
+}
+
+/// A coordinate no seed occupies, in both channels — what a texel out of reach
+/// of every stroke carries.
+///
+/// The pair is `Rg16Uint`, so this is the format's own top value and no atlas
+/// can address it: a texture 65535 texels across is past every limit wgpu
+/// reports. That is what lets one sentinel stand for "no ink within reach" with
+/// no third channel to say so.
+const NO_SEED: u32 = 65535u;
+
+/// How much of a texel must be inked for it to seed the field.
+///
+/// The half-coverage contour, which is where a rasterizer puts a shape's edge:
+/// a stroke's own texels read near 1 and the texels its antialiased edge falls
+/// across read between, so this reconstructs the shape the eye sees rather than
+/// the shape plus its fringe. Lower and every glyph and every ring grows a texel
+/// of bogus ink all round, which the shadow would then stand off from.
+const INK_FLOOR: f32 = 0.5;
+
+/// The chain's first pass: every inked texel of a distance cell becomes its own
+/// seed, and every other texel becomes [`NO_SEED`].
+///
+/// Its own entry point rather than a step over an initialised target, because
+/// what it reads is the coverage (one float channel) and what every pass after
+/// it reads is a field of coordinates (two uint channels).
+@fragment
+fn fs_flood_seed(in: CellOut) -> @location(0) vec2<u32> {
+    let at = vec2<i32>(in.position.xy);
+    if textureLoad(src, at, 0).r < INK_FLOOR {
+        return vec2<u32>(NO_SEED, NO_SEED);
+    }
+    return vec2<u32>(u32(at.x), u32(at.y));
+}
+
+/// One flood step: keep the nearest of this texel's own seed and the nine
+/// candidates a jump of [`Jump::step`] reaches.
+///
+/// Nine and not eight, the centre being one of them: a texel that already holds
+/// a seed has to defend it against the ring, or a step landing on a nearer
+/// stroke's territory would overwrite a closer answer with a further one.
+///
+/// The taps are clamped to this CELL's own rect exactly as [`blur`]'s are. A
+/// candidate outside it belongs to whichever caster was packed beside this one,
+/// and a seed that crossed would draw the neighbour's letters inside this
+/// caster's shadow.
+///
+/// Squared distances throughout — the comparison is all this makes, and a square
+/// root is monotone, so the ordering is the same and one per candidate is saved.
+/// The `f32` they are computed in holds an atlas's squared diagonal exactly: at
+/// 8192 across it is under 2^27, well inside the 24 bits an f32 mantissa carries
+/// whole, so two candidates never tie by rounding.
+@fragment
+fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
+    let at = vec2<i32>(in.position.xy);
+    var best = vec2<u32>(NO_SEED, NO_SEED);
+    var best_d = 3.4e38;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let tap = at + vec2<i32>(dx, dy) * jump.step.x;
+            let centre = vec2<f32>(tap) + vec2<f32>(0.5);
+            if centre.x < in.bounds.x || centre.y < in.bounds.y
+                || centre.x >= in.bounds.z || centre.y >= in.bounds.w {
+                continue;
+            }
+            let cand = textureLoad(seeds, tap, 0).xy;
+            if cand.x == NO_SEED {
+                continue;
+            }
+            let d = vec2<f32>(at - vec2<i32>(cand));
+            let dist = dot(d, d);
+            if dist < best_d {
+                best_d = dist;
+                best = cand;
+            }
+        }
+    }
+    return best;
+}
+
+/// The field turned into what the cell holds: the distance from this texel to
+/// the caster's nearest ink, in the pane's POINTS.
+///
+/// Points and not texels because a cell's resolution is its own (`pack`) and
+/// what reads it back is a fragment of the pane: one division here, at the one
+/// site that knows both, against a scale the sampler would otherwise have to
+/// carry per term.
+///
+/// The seed's own coverage is spent on the DISTANCE, never on the profile's
+/// height. A seed is a whole texel, and the contour the eye reads the shape by
+/// crosses it: a texel covered `c` has its centre `c - INK_FLOOR` INSIDE that
+/// contour, to within the straight-edge approximation a rasterizer's coverage
+/// already is, so subtracting it puts the profile's origin on the shape's edge
+/// rather than on the grid. That is a correction of at most half a texel.
+///
+/// A HEIGHT scaled by that coverage is the one thing it must not be, and #487
+/// hit it as the SPIKE. Coverage runs the whole of `[INK_FLOOR, 1]` along any
+/// contour not parallel to the grid, so neighbouring seeds differ by up to a
+/// factor of two — and each seed owns a wedge of the plane that widens with
+/// distance, so the pair reads as bright and dark rays fanning out of every
+/// curve and as a hard seam wherever two wedges meet. An axis-aligned test
+/// fixture is blind to all of it.
+///
+/// Clamped to the cell's own pad, which is where the curve is windowed to zero:
+/// past it the coverage is 0 whatever the number, so this is the value that
+/// makes "no seed within reach" and "further than the shadow goes" one answer.
+@fragment
+fn fs_flood_resolve(in: CellOut) -> @location(0) vec4<f32> {
+    let at = vec2<i32>(in.position.xy);
+    let seed = textureLoad(seeds, at, 0).xy;
+    if seed.x == NO_SEED {
+        return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
+    }
+    let ink = vec2<i32>(seed);
+    // The coverage as the x pass left it in the half-blur target: a distance
+    // cell's σ is zero there, so what stands at the seed is the coverage the
+    // caster's own rasterizer wrote.
+    let contour = clamp(textureLoad(src, ink, 0).r, 0.0, 1.0) - INK_FLOOR;
+    let texels = max(length(vec2<f32>(at - ink)) - contour, 0.0);
+    return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
 }

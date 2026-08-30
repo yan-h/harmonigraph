@@ -275,7 +275,7 @@ fn two_nodes_crossing_shadows_multiply_rather_than_take_the_deeper() {
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     let gap = APART * points_per_world(&scene) - ink_radius(&scene);
     assert!(
-        gap > 0.0 && gap < crate::shadow::REACH_SIGMAS * sigma(&scene),
+        gap > 0.0 && gap < harmonigraph_scene::REACH_SIGMAS * sigma(&scene),
         "the probe stands {gap} px from each node's rings, which is not inside both blurs",
     );
 
@@ -736,9 +736,24 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
         far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
     );
+    // And a node on the DISTANCE row, whose quad is grown to a reach of its
+    // own: the window that ends the standoff's decay shuts at `SHADOW_STOP`
+    // widths where a Gaussian's pedestal lands at `REACH_SIGMAS` σ, so a quad
+    // sized off the wrong one of the two cuts a whole family's tail off in a
+    // straight line at the box.
+    let distant = |mut scene: Scene| -> Scene {
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        far(scene)
+    };
+    let flooded = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
     for (what, (deep_scene, flat_scene), edge) in [
         ("a node's rings", node, ink_radius(&far(on_ground(SHADOW, 1.0)))),
         ("a cross", cross, ARM * points_per_world(&far(crosses_on_ground(&[], ARM, SHADOW, 1.0)))),
+        (
+            "a node's rings on the distance row",
+            flooded,
+            ink_radius(&distant(on_ground(SHADOW, 1.0))),
+        ),
     ] {
         let flat = shooter.shot(&flat_scene);
         let deep = shooter.shot(&deep_scene);
@@ -1341,7 +1356,7 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
 /// that there are four ways to pack it.
 #[test]
 fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Exponential, Gaussian, Sky, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1354,12 +1369,12 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         shooter.shot_with(&scene, named)
     };
     let plain = shot(Gaussian, 0.4);
-    for kernel in [TwoScale, Sky, Exponential] {
+    for kernel in [TwoScale, Sky, Exponential, Distance] {
         let moved = differing_pixels(&plain, &shot(kernel, 0.4));
         assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
     }
     let shut = shot(Gaussian, 0.0);
-    for kernel in [TwoScale, Sky, Exponential] {
+    for kernel in [TwoScale, Sky, Exponential, Distance] {
         assert_eq!(
             differing_pixels(&shut, &shot(kernel, 0.0)),
             0,
@@ -1367,4 +1382,172 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
              said not to",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The distance family
+// ---------------------------------------------------------------------------
+
+/// A block of ink standing on grey, well clear of the node the fixture's name
+/// belongs to: the square caster the two readings below are taken off.
+///
+/// A GLYPH and not a node, because a node is round and the claim is about a
+/// convex CORNER — and because a name is the one caster whose ink is a shape a
+/// fixture can choose.
+fn block_on_grey(
+    shooter: &mut Shooter,
+    kernel: harmonigraph_scene::ShadowKernel,
+    shadow: f32,
+    depth: f32,
+    side: f32,
+) -> (Vec<u8>, Vec<u8>, glam::Vec2) {
+    const GREY: f32 = 0.55;
+    let mut scene = lit_node_and_a_name(0.0, shadow, depth);
+    scene.glow_shadow_kernel = kernel;
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    // Off to the +x side, where the node's own shadow does not reach: the
+    // readings below are differences at two points, and a gradient common to
+    // neither would land on one of them alone.
+    let at = on_screen(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
+    let rect = [at.x - side / 2.0, at.y - side / 2.0, side, side];
+    let bare = shooter.shot(&scene);
+    let cast = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
+    (bare, cast, glam::Vec2::new(rect[0], rect[1]))
+}
+
+/// A convex CORNER's shadow hugs it on a distance row, where a blur retreats
+/// from it.
+///
+/// The reading is the RATIO between two points at the same distance from the
+/// ink — one diagonally off a corner, one square off the middle of an edge —
+/// and the claim is about how that ratio differs between the two rows. A blur
+/// of a quarter-plane is the product of two half-plane blurs, so a corner is
+/// systematically lighter than an edge at the same distance; a distance field
+/// knows only the distance, so the two are the same number. That difference IS
+/// the family, expressed at the one place a shape has curvature.
+///
+/// A ratio between rows and not a brightness bound, which is #524's lesson: an
+/// absolute bound on either point passes with the bug in place, because both
+/// move together with the depth, the gain and the ground.
+#[test]
+fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    const SHADOW: f32 = 0.5;
+    const DEPTH: f32 = 0.85;
+    const SIDE: f32 = 26.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let mut ratio = |kernel| {
+        let (bare, cast, min) = block_on_grey(&mut shooter, kernel, SHADOW, DEPTH, SIDE);
+        // One σ out, which is half a Shadow width: far enough off the ink for
+        // the two geometries to have parted and well inside either row's reach.
+        let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+        scene.glow_shadow_kernel = kernel;
+        let d = sigma(&scene);
+        let diag = d / std::f32::consts::SQRT_2;
+        let dark = |p: glam::Vec2| {
+            let (x, y) = (p.x.round() as u32, p.y.round() as u32);
+            bright_at(&bare, x, y) - bright_at(&cast, x, y)
+        };
+        let corner = dark(glam::Vec2::new(min.x + SIDE + diag, min.y + SIDE + diag));
+        let edge = dark(glam::Vec2::new(min.x + SIDE / 2.0, min.y + SIDE + d));
+        assert!(
+            edge > 20,
+            "{kernel:?} darkens the edge point by {edge}, which is too little to take a ratio of",
+        );
+        corner as f64 / edge as f64
+    };
+    let blurred = ratio(Gaussian);
+    let distance = ratio(Distance);
+    assert!(
+        blurred < 0.7,
+        "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
+         do not part the two geometries at all",
+    );
+    assert!(
+        distance > blurred + 0.2,
+        "the distance row darkens the corner by {distance:.2} of the edge against the Gaussian's \
+         {blurred:.2}, so it is retreating from the corner as a blur does",
+    );
+}
+
+/// A distance row's shadow still has the letterform's own STRUCTURE in it at a
+/// Shadow wide enough to erase it from a blur.
+///
+/// #521's form metric, which is what a distance row is in the tree for: how
+/// much darker the shadow is beside a stroke than midway between two strokes,
+/// as a share of the first. The table there gives a Gaussian 100% at the fresh
+/// Shadow and 0% at the top of the bar — one slab under the whole word — and
+/// the reason is that a blur is a low-pass filter, so detail finer than σ is
+/// gone whatever the depth. A distance is not a filter and has no such scale.
+///
+/// The reading is beside a stroke rather than UNDER one, and it has to be: a
+/// caster's own ink is the one thing its shadow never darkens, so the shadow
+/// under a stem is covered by the stem. Two texels off the inner edge is what
+/// the eye reads as that stroke's shadow, and it is the same point on both
+/// rows.
+///
+/// The fixture stands the pair on a NODE's band and not on bare ground (#450):
+/// a shadow with nothing under it to darken is a green test measuring an empty
+/// frame.
+#[test]
+fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    const SHADOW: f32 = 0.8;
+    const DEPTH: f32 = 0.85;
+    /// Two strokes, and the counter between them, in points — a 30pt
+    /// monospace stem and the gap inside a letter, at the scale the fixture's
+    /// own glyphs are drawn.
+    const STROKE: [f32; 2] = [6.0, 24.0];
+    const GAP: f32 = 24.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    const GREY: f32 = 0.55;
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    let mut form = |kernel| {
+        let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+        scene.glow_shadow_kernel = kernel;
+        // Grey under the whole counter, and the name still standing on the
+        // node's band: a shadow with nothing beneath it to darken measures an
+        // empty frame (#450), and a counter this wide runs past the band's own
+        // edge at one end.
+        scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+        let at = on_screen(&scene, SIZE, name_on_the_band(&scene));
+        let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
+        let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));
+        let bare = shooter.shot(&scene);
+        let cast = shooter.shot_with(&scene, a_name(vec![left, right]));
+        let row = at.y.round() as u32;
+        let dark = |x: f32| {
+            let x = x.round() as u32;
+            bright_at(&bare, x, row) - bright_at(&cast, x, row)
+        };
+        // Two points along the counter: hard against the left stroke's inner
+        // edge, and the middle of the gap.
+        let beside = dark(at.x - GAP / 2.0 + 2.0);
+        let middle = dark(at.x);
+        assert!(
+            beside > 20,
+            "{kernel:?} darkens the point beside the stroke by {beside}, which is too little to \
+             take a share of — the fixture is not reaching the shadow",
+        );
+        (beside - middle) as f64 / beside as f64
+    };
+    let blurred = form(Gaussian);
+    let distance = form(Distance);
+    assert!(
+        blurred < 0.1,
+        "at Shadow {SHADOW} a Gaussian holds {blurred:.2} of the gap's form, so the fixture's \
+         Shadow is not wide enough for the claim to mean anything",
+    );
+    assert!(
+        distance > blurred + 0.2,
+        "the distance row holds {distance:.2} of the gap's form against the Gaussian's \
+         {blurred:.2}, so the counter has closed on both",
+    );
 }

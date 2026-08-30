@@ -18,9 +18,9 @@ use harmonigraph_scene::{
     Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
     GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
     GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    PITCH_FLOOR, SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
+    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -738,6 +738,19 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Gaussian's flat middle: darkest right against the ink and \
                      giving way steadily rather than easing in and out.",
                 ),
+                (
+                    ShadowKernel::Distance,
+                    "Distance",
+                    "Not a blur at all: how far each point stands from the \
+                     nearest ink, spent through the Shadow shape bar. A blur \
+                     of a hairline is a smudge whose width is the hairline's, \
+                     so at a wide Shadow the whole lattice reads as one soft \
+                     blob; a distance is the same at a hairline as at a slab, \
+                     so a letter's counters, a cross's arms and a corner all \
+                     keep their shape however wide this is dialled. What it \
+                     gives up is the pocket between two strokes standing \
+                     close.",
+                ),
             ],
         );
         // The two that shape the depth rather than set it, under the pair they
@@ -774,6 +787,30 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              rim. 1 is the plain blur, and the shadow is exactly the shape of \
              the blur that made it.",
         );
+        // The distance family's own profile bar, live only where a distance
+        // row is picked: a blur row reads it not at all, and a bar that moves
+        // nothing is worse than one that is plainly not for this row. Grayed
+        // rather than hidden, so the section does not change height under the
+        // picker and the hover text is there to say what would switch it on.
+        ui.add_enabled_ui(view.glow_shadow_kernel.floods(), |ui| {
+            ValueBar::new(
+                &mut view.glow_shadow_shape,
+                SHADOW_SHAPE_MIN..=SHADOW_SHAPE_MAX,
+                "Shadow shape",
+            )
+            .display(|v| format!("{v:.2}"))
+            .show(ui)
+            .on_hover_text(
+                "How a distance shadow gives way as it leaves the ink, on the \
+                 Distance rows of the Kernel picker. 1 spends the darkness \
+                 evenly across the whole width — the shadow eases off the way \
+                 a blur does. Lower steepens it right against the ink and \
+                 leaves the rest of the width carrying a faint haze, which \
+                 reads as a thin dark skin on the shape rather than a pool \
+                 around it. Both ends stay put: solid at the ink, nothing at \
+                 the far edge.",
+            );
+        });
         // The one bar in the section a single caster keeps to itself, and the
         // one that breaks "one Shadow width across the picture" — see
         // `ViewConfig::glow_shadow_name` for why a letterform is the ink
