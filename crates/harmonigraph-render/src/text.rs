@@ -217,7 +217,13 @@ pub(crate) struct TextUniforms {
     /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
     /// a name's cell into. 0 everywhere else, where nothing draws into one.
     pub(crate) shadow_atlas_size: [f32; 2],
-    pub(crate) _pad2: [f32; 2],
+    /// The lattice's shadow CURVE, in the two slots that were the gap before
+    /// `ring0`: how much a name thin against σ is worth against a solid caster,
+    /// and the exponent that bends where along the shadow's width the depth
+    /// sits (`fs_shadow_box`). Both 0 on every other surface, which casts no
+    /// shadow.
+    pub(crate) shadow_gain: f32,
+    pub(crate) shadow_curve: f32,
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
 }
@@ -992,7 +998,8 @@ impl CallbackTrait for TextCallback {
             shadow_bloom: 0.0,
             _pad: 0.0,
             shadow_atlas_size: [0.0; 2],
-            _pad2: [0.0; 2],
+            shadow_gain: 0.0,
+            shadow_curve: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };
