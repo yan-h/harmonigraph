@@ -5,15 +5,6 @@ description: How review, squashing, and agent definitions work in this repo. Use
 
 # Review happens at the merge boundary, not on the branch
 
-The slash-command and tool-lock details below describe Claude's surface.
-Other agents preserve the review boundary instead of inventing replacements
-for unavailable commands; the shared `audit-merges` skill is the portable
-entry point for the combined-merge audit.
-
-The root project guidance owns when a PR is required: every session that
-changes tracked files hands back a pushed draft PR. This skill owns the review
-and merge boundary after that handoff.
-
 Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
 repo and branch protection is not available on this plan, so `ci.sh` via
 the `.githooks/pre-push` hook is the only automatic gate, and it checks
@@ -60,14 +51,13 @@ silently left on its old frames — and read the contact sheet the failure names
 before you do: a bless nobody looked at is the failure the gate exists to
 catch, not a step on the way past it.
 
-**Yan: run the `audit-merges` workflow after a batch of merges lands.** It is
-`/audit-merges` in Claude and the `audit-merges` skill on other agents.
-Parallel sessions produce branches that are each correct against the `main`
-they started from, so the interesting bugs are the ones that do not exist
-until two of them are combined — and a per-branch review is structurally blind
-to those. PR #85 is the worked example: 12 PRs merged in one night, two real
+**Yan: run `/audit-merges` after a batch of merges lands.** Parallel
+sessions produce branches that are each correct against the `main` they
+started from, so the interesting bugs are the ones that do not exist until
+two of them are combined — and a per-branch review is structurally blind to
+those. PR #85 is the worked example: 12 PRs merged in one night, two real
 bugs, both of them a cache whose missing input arrived in a *different* PR.
-The workflow reads the combined diff and keeps a `last-merge-audit` tag so
+The command reads the combined diff and keeps a `last-merge-audit` tag so
 consecutive audits do not re-read the same range.
 
 ## Squash by default; merge-commit the exception
@@ -158,3 +148,8 @@ genuinely noisy searching — not when a subsystem merely feels important.
 because nothing in the build can catch a prompt that has gone stale — and it
 checks the skills and the scripts harder, since this rule is what keeps the
 rottable facts out of the agents and puts them there instead.
+
+CLAUDE.md owns when a PR is required; this file owns what happens at the
+merge boundary after one exists. An agent without `/audit-merges` runs the
+same procedure out of `.claude/commands/audit-merges.md` rather than
+substituting a per-branch review for it.

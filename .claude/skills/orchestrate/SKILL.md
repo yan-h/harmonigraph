@@ -5,11 +5,6 @@ description: Decide what to delegate to a subagent and what to just do, and size
 
 # Delegation costs more than doing it. Know what you are buying.
 
-The measured names below (`Agent`, `Workflow`, fable and opus) describe the
-Claude harness that produced the data. Other agents use their native
-subagent controls while preserving the sizing rules, authorization boundary,
-and return contract; the invocation syntax is not part of the workflow.
-
 Measured over 434 subagent transcripts in this project:
 
 | | median | p75 | p95 |
@@ -163,3 +158,7 @@ both give plausible wrong answers rather than obvious ones:
   first undercounts by about 25x. A first value and a max are both immune to
   the repetition, which is why startup and peak context survive either
   mistake.
+
+The numbers and tool names here are Claude's, but the sizing, the
+authorization boundary and the return contract are the project's: an agent
+with different controls keeps those and substitutes its own invocation.
