@@ -223,6 +223,11 @@ pub(crate) struct TextUniforms {
     /// shadow.
     pub(crate) shadow_gain: f32,
     pub(crate) shadow_curve: f32,
+    /// What a DISTANCE row's pocket term is multiplied up by
+    /// (`fs_shadow_box`). 0 on every other surface, which casts no shadow.
+    pub(crate) shadow_pocket: f32,
+    /// WGSL aligns a `vec4<f32>` to 16 bytes: the gap before `ring0`.
+    pub(crate) _pad2: [f32; 3],
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
 }
@@ -1004,6 +1009,8 @@ impl CallbackTrait for TextCallback {
             shadow_atlas_size: [0.0; 2],
             shadow_gain: 0.0,
             shadow_curve: 0.0,
+            shadow_pocket: 0.0,
+            _pad2: [0.0; 3],
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };

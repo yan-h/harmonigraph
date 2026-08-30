@@ -17,10 +17,10 @@ use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
     GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
-    GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
-    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    GLOW_SHADOW_NAME_MAX, GLOW_SHADOW_POCKET_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX,
+    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -751,6 +751,17 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      gives up is the pocket between two strokes standing \
                      close.",
                 ),
+                (
+                    ShadowKernel::DistanceDensity,
+                    "Distance + density",
+                    "The distance shadow with the pocket put back. A blur \
+                     standing beside it says where two strokes are close \
+                     enough for their shadows to overlap — inside a G's bowl, \
+                     between two rings — and deepens the shadow there and \
+                     nowhere else: a lone edge and a lone stroke are left \
+                     exactly as the Distance row draws them. The Pocket bar is \
+                     how much. Two cells per item.",
+                ),
             ],
         );
         // The two that shape the depth rather than set it, under the pair they
@@ -819,6 +830,25 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  around it. Both ends stay put: solid at the ink, nothing at \
                  the far edge.",
             );
+        });
+        // And the pocket, which one row alone reads: gated on that row rather
+        // than on the family, because on Distance the term is not merely
+        // neutral — there is no blur beside the distance for it to scale.
+        ui.add_enabled_ui(view.glow_shadow_kernel == ShadowKernel::DistanceDensity, |ui| {
+            ValueBar::new(&mut view.glow_shadow_pocket, 0.0..=GLOW_SHADOW_POCKET_MAX, "Pocket")
+                .display(|v| format!("{v:.2}x"))
+                .show(ui)
+                .on_hover_text(
+                    "How much deeper the shadow goes where two strokes stand \
+                     close, on the Distance + density row. A distance shadow \
+                     knows only how far the nearest ink is, so between two \
+                     strokes it is no darker than beside one of them alone — \
+                     and a blur is, which is what makes the counters of a \
+                     letter and the space between two rings read as pockets. \
+                     This is how much of that difference is put back. 0x is \
+                     the plain Distance row, and a lone edge is untouched at \
+                     every setting.",
+                );
         });
         // The one bar in the section a single caster keeps to itself, and the
         // one that breaks "one Shadow width across the picture" — see
