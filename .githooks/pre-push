@@ -24,9 +24,11 @@
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-common=$(git rev-parse --git-common-dir)
-case "$common" in /*) ;; *) common="$root/$common" ;; esac
-stamp="$common/ci-passed-trees"
+# The COMMON dir, so every worktree reads and writes one stamp, and asked for
+# absolutely: `--git-common-dir` alone may answer relative to GIT_DIR, which is
+# set here and not when a person runs ci.sh, and the two callers have to agree
+# on the path or the stamp is written where it is never looked for.
+stamp="$(git rev-parse --path-format=absolute --git-common-dir)/ci-passed-trees"
 
 is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
 

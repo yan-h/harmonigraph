@@ -158,6 +158,35 @@ sha=$(commit_change crates/a.rs "fn main() { let _ = 4; }")
 check yes "a stamped ancestor does not clear its descendant" \
   "refs/heads/b $sha refs/heads/b $base"
 
+# Every case above invokes the hook the way a person tests it: from a repo
+# root, with no GIT_DIR. Git runs it the other way — cwd in the pushing
+# worktree, GIT_DIR exported — and almost every push here comes from a linked
+# worktree, whose GIT_DIR is not the common dir the stamp lives in. This is the
+# shape that ships, so it is the shape worth pinning.
+new_repo
+base=$(git -C "$tmp/r" rev-parse HEAD)
+git -C "$tmp/r" worktree add -q "$tmp/wt" -b wt HEAD
+echo "fn main() { let _ = 9; }" >"$tmp/wt/crates/a.rs"
+git -C "$tmp/wt" add -A
+git -C "$tmp/wt" commit -qm "code, in a linked worktree"
+sha=$(git -C "$tmp/wt" rev-parse HEAD)
+git -C "$tmp/wt" rev-parse "$sha^{tree}" >"$tmp/r/.git/ci-passed-trees"
+
+rm -f "$tmp/wt/CI_RAN"
+gitdir=$(git -C "$tmp/wt" rev-parse --absolute-git-dir)
+echo "refs/heads/wt $sha refs/heads/wt $base" |
+  (cd "$tmp/wt" && GIT_DIR=$gitdir "$HOOK" >/dev/null 2>&1)
+rc=$?
+if [ -f "$tmp/wt/CI_RAN" ]; then
+  echo "✗ a stamped tree pushed from a linked worktree still ran the gate" >&2
+  fail=1
+elif [ "$rc" != 0 ]; then
+  echo "✗ the linked-worktree push was rejected with exit $rc" >&2
+  fail=1
+else
+  echo "✓ the stamp is found from a linked worktree, with GIT_DIR set"
+fi
+
 echo
 if [ "$fail" = 0 ]; then
   echo "✅ pre-push skips only pushes that cannot change ci.sh's answer"

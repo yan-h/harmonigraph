@@ -140,9 +140,11 @@ echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc 
 # gates read (a pid, the spare pool's sockets, an inode) — those are seconds
 # and the alternative is a key that is never stale and never still.
 if [ -z "$(git status --porcelain)" ]; then
-  common=$(git rev-parse --git-common-dir)
-  case "$common" in /*) ;; *) common="$PWD/$common" ;; esac
-  stamp="$common/ci-passed-trees"
+  # Asked for absolutely, and identically to the hook: `--git-common-dir` alone
+  # may answer relative to GIT_DIR, which is set when the hook calls this file
+  # and not when a person does, and a stamp written where the hook does not
+  # look for it is a cache that never hits.
+  stamp="$(git rev-parse --path-format=absolute --git-common-dir)/ci-passed-trees"
   tree=$(git rev-parse HEAD^{tree})
   if ! grep -qxF "$tree" "$stamp" 2>/dev/null; then
     echo "$tree" >>"$stamp"
