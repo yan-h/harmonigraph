@@ -207,9 +207,16 @@ fn cell_clip(texel: vec2<f32>, size: vec2<f32>, w: f32) -> vec4<f32> {
 // `picture` is everything, and is what the composite puts on screen. `nodes` is
 // the same picture with the node LABELS left out — the bright pass reads it, so
 // a name neither glows nor takes a bite out of the halo of the node it covers.
-// Every draw that is not a label's INK writes the same fragment to both, so the
-// two differ in exactly one thing; a name's SHADOW lands on both, the halo it
-// darkens having to bloom at the brightness the name left it.
+//
+// A label's ink reaches `picture` alone, its pipeline writing that attachment
+// and no other; every other draw writes the same INK to both, so the ink of a
+// name is the one thing the two pictures hold different amounts of. What they
+// are otherwise allowed to differ in is a caster's SHADOW: a premultiplied
+// fragment's alpha is what it takes off the frame UNDER it, so a deeper alpha
+// here is the same item over a darker copy of the frame rather than a different
+// item (`glow_shadow_bloom` — lattice.wgsl's `Painted`, text.wgsl's
+// `fs_shadow_box`). With that bar at 0 every draw that reaches both writes one
+// identical fragment to them.
 struct SceneOut {
     @location(0) picture: vec4<f32>,
     @location(1) nodes: vec4<f32>,
