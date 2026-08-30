@@ -111,7 +111,7 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f
 
 // The most terms a caster's kernel is built out of — `SHADOW_TERMS_MAX` in
 // harmonigraph_scene, pinned to it by `the_shaders_term_count_is_the_scenes`.
-const SHADOW_TERMS: u32 = 4u;
+const SHADOW_TERMS: u32 = 2u;
 
 // One caster's whole kernel, as the scene pass reads it (`ShadowCaster` in
 // shadow.rs).

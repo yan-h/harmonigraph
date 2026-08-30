@@ -320,10 +320,11 @@ pub(crate) struct Packed {
 ///
 /// In a STORAGE BUFFER rather than beside the instance, which is the one place
 /// this design departs from #527's sketch. A node's own rows reach location 15
-/// and leave five free; four terms need eight, so the cells cannot ride the
-/// node's vertex stream at all. Indexed by the caster's own index — the order
-/// `pack` was handed — so a node, a name and the marker field all reach it the
-/// same way and nothing carries a second copy.
+/// and leave five free; two terms consume four of those rows for their cells
+/// and maps before the caster's rect and term metadata have been carried.
+/// Indexed by the caster's own index — the order `pack` was handed — so a node,
+/// a name and the marker field all reach it the same way and nothing carries a
+/// second copy.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct ShadowCaster {
@@ -364,8 +365,8 @@ pub(crate) struct ShadowCaster {
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
     /// scale) for the shader to combine: the three differ per TERM, and a
-    /// fragment mixing four of them would do the same subtraction four times
-    /// for a number that never changes within a frame.
+    /// fragment would otherwise repeat the subtraction for every term for a
+    /// number that never changes within a frame.
     pub map: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
 }
 
@@ -409,8 +410,8 @@ pub(crate) fn pack(
         return Packed::default();
     }
     // Held to what the atlas and the sampler are built for, so a longer row
-    // added to the table draws its first four terms rather than reading past
-    // the array a caster carries.
+    // added to the table stops at the representation's bound rather than
+    // reading past the array a caster carries.
     let kernel = &kernel[..kernel.len().min(harmonigraph_scene::SHADOW_TERMS_MAX)];
     let is_distance =
         |t: &harmonigraph_scene::KernelTerm| t.kind == harmonigraph_scene::TermKind::Distance;
@@ -1197,7 +1198,7 @@ pub(crate) mod tests {
     #[test]
     fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
         use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Sky, Exponential, Distance] {
+        for kernel in [Gaussian, TwoScale, Distance] {
             if kernel.floods() {
                 continue;
             }
@@ -1249,7 +1250,7 @@ pub(crate) mod tests {
     /// holds the blur's tap count flat.
     #[test]
     fn a_mixtures_cells_are_each_at_their_own_terms_resolution() {
-        let terms = harmonigraph_scene::ShadowKernel::Sky.terms();
+        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
         // Past the cap at every term, so each cell is really drawn smaller than
         // the pane and the resolutions below are the packer's own choice rather
         // than the pane's.
@@ -1311,11 +1312,11 @@ pub(crate) mod tests {
     /// shelves — a different kernel, chosen by the packing order.
     #[test]
     fn a_caster_the_atlas_cannot_hold_every_term_of_casts_none_of_it() {
-        let terms = harmonigraph_scene::ShadowKernel::Sky.terms();
-        // Small enough that the narrow term's cell — the biggest, its
-        // resolution being the highest — cannot be shelved, while the wide
-        // term's still could.
-        let packed = pack(&[caster(0.0, 0.0, 300.0, 300.0)], 40.0, 1.0, 128, terms);
+        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
+        // Each term's cell fits alone, while the pair cannot both be shelved in
+        // this atlas. That reaches the partial-kernel branch rather than the
+        // simpler case where the whole row fits.
+        let packed = pack(&[caster(0.0, 0.0, 300.0, 300.0)], 40.0, 1.0, 96, terms);
         assert_eq!(packed.casters.len(), 1);
         assert_eq!(
             packed.casters[0].level[0], 0.0,
@@ -1344,13 +1345,13 @@ pub(crate) mod tests {
     /// Gaussian; at a wide one each cell is scaled down by its own σ and the
     /// narrow term — the finest, and so the biggest — is what the row costs.
     ///
-    /// The bound is eight, which is where a three-term row stops being a lab
-    /// setting and starts being a reason the atlas hits `max_side` (see
-    /// `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`, which reaches
-    /// that limit N times sooner now).
+    /// The bound is four, just above the core-and-skirt row at both ends of the
+    /// bar. Past it the row is a reason the atlas hits `max_side` rather than a
+    /// shape to compare (see
+    /// `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{Distance, Exponential, Gaussian, Sky, TwoScale};
+        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1368,15 +1369,13 @@ pub(crate) mod tests {
             };
             let plain = area(Gaussian);
             assert!(plain > 0.0, "one Gaussian packed nothing at {what}");
-            for kernel in [TwoScale, Sky, Exponential] {
-                let ratio = area(kernel) / plain;
-                eprintln!("{kernel:?} at {what}: {ratio:.2}x one Gaussian's cells");
-                assert!(
-                    ratio <= 8.0,
-                    "{kernel:?} packs {ratio:.2}x one Gaussian's cells at {what}, which is a \
-                     row that reaches the device's texture limit rather than a row to compare",
-                );
-            }
+            let ratio = area(TwoScale) / plain;
+            eprintln!("TwoScale at {what}: {ratio:.2}x one Gaussian's cells");
+            assert!(
+                ratio <= 4.0,
+                "TwoScale packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
+                 reaches the device's texture limit rather than a row to compare",
+            );
             // The DISTANCE row on a bound of its own, and two orders of
             // magnitude above the blur rows' rather than beside them. A blur
             // cell shrinks with σ and a distance cell stops at
