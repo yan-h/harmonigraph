@@ -4,8 +4,35 @@ A Rust CLAP/VST3 plugin that draws a harmonic pitch lattice and an audio
 spectrum, plus an offline renderer for video export. Everything below is a
 gotcha or a contract — the rest of the repo explains itself by being read.
 
+## Agent guidance has one source
+
+`AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills`
+is a symlink to `.claude/skills`. Keep shared project guidance and workflows
+at those canonical Claude-facing paths rather than copying them per agent;
+copies drift while symlinks make every session read the same contract.
+Tool-specific hooks, permissions and commands remain in each tool's native
+configuration.
+
+## Every change runs in a worktree and ends in a draft PR
+
+A session that may change tracked files works on its own branch in an isolated
+worktree, never in the main checkout. The session launcher should create that
+worktree before work starts. If it did not, verify the current branch and
+top-level path before editing, create a worktree from the current `origin/main`,
+and continue there. Do not move, stash, or erase changes already present in the
+main checkout; they belong to the person or session that made them.
+
+A completed change is committed, pushed, and opened as a **draft** pull request
+with `gh pr create --draft`. This applies to documentation and configuration as
+well as code. Run the verification appropriate to the change before pushing,
+and let the pre-push hook run `ci.sh` where it applies. Do not stop with work
+only in a local branch, and do not merge the PR unless Yan asks. The handoff
+states explicitly that the PR is draft/open and **not merged**.
+
 ## Lazy-loaded detail lives in `.claude/skills/`
 
+- **`audit-merges`** — the cross-agent entry point for the combined-merge
+  audit; it reuses the Claude command and `merge-auditor` definition.
 - **`build-handover`** — `load-plugin.sh` usage, the `build <branch> @<sha>`
   overlay tag, recovering an evicted build.
 - **`capture-daw-state`** — recovering live settings out of a Bitwig project
@@ -306,10 +333,10 @@ are what a future session needs; the symptom it can see for itself.
 
 Parallelism buys wall-clock only when the work is disjoint; when three
 sessions converge on `harmonigraph-ui/src/lib.rs` it buys merge-order bugs
-instead, and `/audit-merges` is what pays for them afterwards. Overlapping
-work is better run in sequence, and variants of a single decision (three
-takes on one fade) are better as one session producing several builds to
-compare than as three branches to reconcile.
+instead, and the `audit-merges` workflow is what pays for them afterwards.
+Overlapping work is better run in sequence, and variants of a single decision
+(three takes on one fade) are better as one session producing several builds
+to compare than as three branches to reconcile.
 
 ## Never lock your own worktree by hand
 
@@ -336,10 +363,12 @@ So don't run `git worktree lock`. If a reason ever does turn up, the string
 has to carry `(pid $$ start ...)` in exactly the format above, or it never
 comes back.
 
-## Permissions a worktree session needs go in `.claude/settings.json`
+## Claude permissions a worktree session needs go in `.claude/settings.json`
 
 `.claude/settings.local.json` is gitignored, so a fresh worktree never gets a
 copy and every rule in it is inert exactly where most sessions run — a grant
 that works in the main checkout still prompts on the branch. Rules that hold
 everywhere, the `cargo`/`git`/`gh` workflow, live in the checked-in
 `.claude/settings.json`; per-machine paths and one-off grants stay local.
+Other agents keep tool-specific permissions in their own native configuration;
+Claude's permission syntax is not a portable project contract.
