@@ -35,7 +35,7 @@ use super::spectral::spectrum_settings_pane;
 use super::system::system_pane;
 use super::view::view_pane;
 use crate::params::ParamBackend;
-use crate::widgets::button_row;
+use crate::theme;
 use crate::SharedState;
 
 /// Display's pages, in the order the picker lists them: the colors every
@@ -69,7 +69,7 @@ impl DisplayPage {
         [Colors, Lattice, Analyzer, System]
     };
 
-    /// The page's name, on its picker button and nowhere else.
+    /// The page's name, on its picker label and nowhere else.
     pub fn title(self) -> &'static str {
         match self {
             DisplayPage::Colors => "Colors",
@@ -103,24 +103,102 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
     }
 }
 
-/// The row of page names at the top of the tab, and the whole of its
+/// The strip of page names at the top of the tab, and the whole of its
 /// navigation.
 ///
 /// No label in front of it, unlike the choice rows inside the pages: one of
 /// those names a setting and then offers its values, where this row IS what the
 /// tab holds — a word in front of it would read as a setting called Page.
 ///
-/// A [`button_row`], so a narrow column wraps the names onto a second line
-/// instead of running the last of them off the edge. A page is reached by
-/// clicking its name and by nothing else, so a name past the pane edge is a
-/// page with no way into it: horizontal scrolling is off in the dock (see
-/// [`Viewer::scroll_bars`](super::Viewer)).
+/// Text and an underline rather than selectable buttons: this row NAVIGATES to
+/// another body, while a filled selectable button inside that body CHANGES a
+/// setting. Giving both jobs one resting shape makes the page names read as
+/// another enum setting. The hairline under the whole strip ties its names
+/// together, and the accent stroke ties the active name to that boundary.
+///
+/// The row still wraps when the column is too narrow to hold every name. A
+/// page is reached by clicking its name and by nothing else, so a name past the
+/// pane edge is a page with no way into it: horizontal scrolling is off in the
+/// dock (see [`Viewer::scroll_bars`](super::Viewer)).
 fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
-    button_row(ui, |ui| {
+    let selected = *page;
+    let scale = theme::ui_scale(ui.ctx());
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let row = ui.horizontal_wrapped(|ui| {
+        let mut tabs = Vec::with_capacity(DisplayPage::ALL.len());
         for choice in DisplayPage::ALL {
-            ui.selectable_value(page, choice, choice.title());
+            let title = choice.title();
+            // The name is laid out once and kept: the box is sized from the
+            // galley that ends up drawn, so a name can never be measured at one
+            // width and painted at another. Laid out in
+            // [`Color32::PLACEHOLDER`] because the color is not known until the
+            // response says whether this name is hovered, and a placeholder is
+            // what lets the paint below choose it.
+            let galley = ui.painter().layout_no_wrap(
+                title.to_owned(),
+                font.clone(),
+                egui::Color32::PLACEHOLDER,
+            );
+            let size = egui::vec2(galley.size().x + 12.0 * scale, theme::row_height(scale));
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::SelectableLabel,
+                    ui.is_enabled(),
+                    choice == selected,
+                    title,
+                )
+            });
+            tabs.push((choice, response, rect, galley));
         }
+        tabs
     });
+
+    for (choice, response, _, _) in &row.inner {
+        if response.clicked() {
+            *page = *choice;
+        }
+    }
+
+    // Match the dock tabs' hover without giving an inactive destination the
+    // persistent fill that makes option controls read as selected.
+    for (choice, response, rect, _) in &row.inner {
+        if *choice != *page && response.hovered() {
+            ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, theme::surface_faint());
+        }
+    }
+
+    // Each wrapped line is a strip of its own. One boundary under the whole
+    // block leaves an active page on any earlier line floating between rows.
+    let mut boundaries: Vec<(egui::Rangef, f32)> = Vec::new();
+    for (_, _, rect, _) in &row.inner {
+        match boundaries.last_mut() {
+            Some((range, bottom)) if (*bottom - rect.bottom()).abs() < 0.5 => {
+                range.max = rect.right();
+            }
+            _ => boundaries.push((rect.x_range(), rect.bottom())),
+        }
+    }
+    for (range, bottom) in boundaries {
+        ui.painter().hline(range, bottom, egui::Stroke::new(1.0, theme::hairline()));
+    }
+
+    for (choice, response, rect, galley) in row.inner {
+        let active = choice == *page;
+        let highlighted = active || response.hovered() || response.has_focus();
+        let color = if highlighted { theme::text() } else { theme::text_dim() };
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+        if active {
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom(),
+                egui::Stroke::new(2.0 * scale, theme::accent()),
+            );
+        }
+    }
+
+    // One extra row gap keeps the strip's boundary clear of the first heading.
+    ui.add_space(ui.spacing().item_spacing.y);
 }
 
 /// The Lattice page: the whole lattice picture, read from the camera in front
@@ -136,4 +214,195 @@ fn lattice_page(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBa
     nodes_pane(ui, state, params);
     labels_pane(ui, state);
     plus_pane(ui, state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Page navigation is text on one shared boundary, while an enum setting
+    /// is a row of filled controls. The distinction is the whole reason this
+    /// picker has its own widget instead of `selectable_value`.
+    #[test]
+    fn the_page_picker_does_not_read_as_an_option_row() {
+        let mut page = DisplayPage::Analyzer;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+
+        let fills: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill != egui::Color32::TRANSPARENT => {
+                    Some(rect.fill)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(fills.is_empty(), "the page picker drew filled option buttons: {fills:?}");
+
+        let lines: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                _ => None,
+            })
+            .collect();
+        let boundary = lines.iter().find(|(_, stroke)| stroke.color == theme::hairline());
+        let active = lines.iter().find(|(_, stroke)| stroke.color == theme::accent());
+        let (boundary, active) = (
+            boundary.expect("the page names have no common boundary"),
+            active.expect("the active page has no accent underline"),
+        );
+        let width = |points: &[egui::Pos2; 2]| (points[1].x - points[0].x).abs();
+        assert!(
+            width(active.0) < width(boundary.0),
+            "the active stroke does not identify one page",
+        );
+    }
+
+    /// The underline and color identify the current page without changing its
+    /// letterforms. The Display pages use the same weight behavior as tabs.
+    #[test]
+    fn selecting_a_page_does_not_bold_its_label() {
+        let mut page = DisplayPage::Analyzer;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+        let font = |title: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == title => {
+                        Some(text.galley.job.sections[0].format.font_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the picker drew no {title:?}"))
+        };
+
+        assert_eq!(font("Analyzer"), font("Colors"));
+    }
+
+    /// Every wrapped line is a complete navigation strip, so its selected
+    /// page replaces the boundary directly beneath that line.
+    #[test]
+    fn a_wrapped_picker_keeps_the_active_stroke_on_its_row_boundary() {
+        let mut page = DisplayPage::Colors;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(120.0, 160.0), |ui| {
+            page_picker(ui, &mut page)
+        })
+        .shapes;
+        let lines: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                _ => None,
+            })
+            .collect();
+        let active = lines
+            .iter()
+            .find(|(_, stroke)| stroke.color == theme::accent())
+            .expect("the active page has no accent underline");
+        let boundaries: Vec<_> =
+            lines.iter().filter(|(_, stroke)| stroke.color == theme::hairline()).collect();
+        let labels: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                _ => None,
+            })
+            .collect();
+        let selected_label_y = labels
+            .iter()
+            .find_map(|(title, y)| (*title == "Colors").then_some(*y))
+            .expect("the picker drew no Colors label");
+        let last_label_y = labels.iter().map(|(_, y)| *y).reduce(f32::max).unwrap();
+        assert!(selected_label_y < last_label_y, "the fixture selected a page on the final row");
+        let active_y = active.0[0].y;
+        assert!(
+            boundaries.iter().any(|(points, _)| {
+                (points[0].y - active_y).abs() < 0.01
+                    && points[0].x <= active.0[0].x
+                    && points[1].x >= active.0[1].x
+            }),
+            "the active stroke is detached from its row boundary",
+        );
+    }
+
+    /// The navigation boundary has enough breathing room to remain distinct
+    /// from whichever page body follows it.
+    #[test]
+    fn the_page_picker_leaves_a_clear_gap_below_its_boundary() {
+        let mut page = DisplayPage::Colors;
+        let mut content_top = 0.0;
+        let mut row_gap = 0.0;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(400.0, 100.0), |ui| {
+            row_gap = ui.spacing().item_spacing.y;
+            page_picker(ui, &mut page);
+            content_top = ui.cursor().top();
+        })
+        .shapes;
+        let boundary_y = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == theme::hairline() =>
+                {
+                    Some(points[0].y)
+                }
+                _ => None,
+            })
+            .expect("the page picker drew no boundary");
+
+        assert!(
+            content_top - boundary_y >= 2.0 * row_gap - 0.01,
+            "the page content starts too close to the navigation boundary",
+        );
+    }
+
+    /// Hover borrows the dock tabs' highlight without changing weight. A face
+    /// change under the pointer makes the letterforms twitch.
+    #[test]
+    fn hovering_a_page_highlights_it_without_bolding_it() {
+        let ctx = crate::tests::probe::themed();
+        let size = egui::vec2(400.0, 100.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut page = DisplayPage::Analyzer;
+        let mut draw = |events| {
+            crate::tests::probe::events_into(&ctx, size, rect, events, |ui| {
+                page_picker(ui, &mut page)
+            })
+        };
+        let style = |out: &egui::FullOutput, title: &str| {
+            out.shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == title => {
+                        let format = &text.galley.job.sections[0].format;
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        Some((format.font_id.clone(), text.fallback_color, rect.center()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("the picker drew no {title:?}"))
+        };
+
+        let resting = draw(vec![]);
+        let (resting_font, resting_color, target) = style(&resting, "Colors");
+        let hovered = draw(vec![egui::Event::PointerMoved(target)]);
+        let (hovered_font, hovered_color, _) = style(&hovered, "Colors");
+        assert_eq!(resting_color, theme::text_dim());
+        assert_eq!(hovered_color, theme::text());
+        assert_eq!(hovered_font, resting_font, "hover changed the label's weight");
+        assert!(
+            hovered.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::Shape::Rect(rect) if rect.fill == theme::surface_faint()
+            )),
+            "hover drew no tab highlight",
+        );
+    }
 }

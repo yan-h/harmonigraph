@@ -435,7 +435,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// scroll-to rather than a switch, which is exactly the arrangement pages
 /// replaced.
 ///
-/// A text out of each BODY rather than the picker button over it. All four
+/// A text out of each BODY rather than the picker label over it. All four
 /// names are drawn whichever page is up — that is what the picker is — so they
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
