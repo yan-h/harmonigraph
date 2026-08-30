@@ -25,9 +25,9 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
     // A floor, not a target, measured against the node's whole lit
     // footprint (glow included). A mark is ONE octave's slice continued
     // outward, so it claims a wedge rather than a ring — a fifth of the turn
-    // on the fresh five-octave wheel. The floor exists because an early
-    // version drew a sub-pixel arc that read as nothing at all in the DAW
-    // (well under 1%), which is what this catches. Current: ~8%.
+    // on the fresh five-octave wheel. What it catches is a strip that draws as
+    // nothing at all, which is a hairline in the DAW: well under 1% against
+    // the 15% the fresh thickness comes to here.
     assert!(
         melody_px * 32 > node_px,
         "the mark covers too little of the node to find: \
@@ -561,9 +561,10 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
     let changed = off.chunks(4).zip(on.chunks(4)).filter(|(a, b)| a != b).count();
     eprintln!("chord: {lit} lit px, {changed} changed by the marks");
-    // Same reasoning as the by-hand test above; at this node density the
-    // ring's screen-space minimum (MARK_RING_MIN_AA) is what keeps it from
-    // going sub-pixel.
+    // Same reasoning as the by-hand test above, at a density where a node is
+    // tens of pixels across rather than hundreds: the strip is dialled in the
+    // node's uv, so it shrinks with the node and the share it claims does not.
+    // Current: 53% of the lit pixels, against the 5% asked for.
     assert!(
         changed * 20 > lit,
         "turning the marks on barely changed a real chord: \
