@@ -533,8 +533,8 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     }
 }
 
-/// A late render window pays for that window and its analyzer pre-roll, while
-/// keeping the same absolute sample grid as a full-take analysis.
+/// A late render window pays for that window and its analyzer input margins,
+/// while keeping the same absolute sample grid as a full-take analysis.
 ///
 /// The nonzero audio origin and a start four seconds into a six-second take are
 /// both load-bearing: a fixture starting at zero would never enter the trimmed
@@ -586,7 +586,7 @@ fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
         late.columns.len(),
     );
     assert!(
-        full.columns.len() > late.columns.len() * 4,
+        full.columns.len() > late.columns.len() * 3,
         "the fixture did not distinguish a late slice ({} columns) from the full take ({})",
         late.columns.len(),
         full.columns.len(),
@@ -606,6 +606,12 @@ fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
         (drawn[0].time - start).abs() < hop * 0.25,
         "the first drawable column is stamped {} instead of absolute take time {start}",
         drawn[0].time,
+    );
+    assert!(
+        (drawn.last().unwrap().time - (start + span)).abs() < hop * 0.25,
+        "the last drawable column is stamped {} instead of reaching {}",
+        drawn.last().unwrap().time,
+        start + span,
     );
     for column in &late.columns {
         let reference = full

@@ -89,8 +89,9 @@ pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
 /// The offline renderer's whole-song playhead data: the whole note roll, plus
 /// the raw spectrogram columns needed for the requested render window. The
-/// columns include the analyzer's pre-roll before [`start`](Self::start), but
-/// not audio after [`start + span`](Self::span) or the rest of a longer take.
+/// analyzer reads input around the drawn window: pre-roll before
+/// [`start`](Self::start), plus the half-window needed to center a measurement
+/// on its far edge. It does not analyze the rest of a longer take.
 /// `Some` only in the offline renderer — the live ring
 /// ([`AudioSpectrum::history`]) is bounded and scrolls with `now` instead.
 /// Runtime-only, never persisted (like
@@ -118,11 +119,12 @@ impl WholeSong {
     /// much regardless, so the picture reaches past what was asked for.
     pub const MIN_WINDOW: f64 = 0.05;
 
-    /// Analyze the part of `samples` needed by `[start, start + span]`, one raw
-    /// column per hop, `time`-stamped in take time (`time_origin` is the take
-    /// time of sample 0). One FFT window before `start` is fed as history; the
-    /// analyzer is backward-looking, so without it the first drawable columns
-    /// would measure an incomplete window. Raw, exactly like the live store:
+    /// Analyze the part of `samples` needed by the drawn window, one raw column
+    /// per hop, `time`-stamped in take time (`time_origin` is the take time of
+    /// sample 0). One FFT window before `start` is fed as history, and half a
+    /// window after the far edge lets the last measurement be centered on that
+    /// edge. The analyzer is backward-looking, so those input margins are what
+    /// keep the drawable columns complete. Raw, exactly like the live store:
     /// the heatmap reads what was measured, without blurring adjacent columns.
     ///
     /// The hop is the live one, EXCEPT that a long render window stretches it:
@@ -171,7 +173,8 @@ impl WholeSong {
         // take timestamps independent of where the slice begins.
         let frame_at = |time: f64| ((time - time_origin) * sr).clamp(0.0, total as f64);
         let first = frame_at(start - analyzer.window_seconds()).floor() as usize;
-        let last = frame_at(start + span.max(0.0)).ceil() as usize;
+        let drawn_span = span.max(Self::MIN_WINDOW);
+        let last = frame_at(start + drawn_span + analyzer.window_center_offset()).ceil() as usize;
         let hop_frames = hop * sr;
         let mut fed = first;
         let mut k = (first as f64 / hop_frames).floor() as usize + 1;
