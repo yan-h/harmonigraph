@@ -433,6 +433,44 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     );
 }
 
+// Which term a marker evaluates from the exact field in its scene draw, or the
+// array's length when every active term is read from a cell.
+fn plus_distance_term(who: f32) -> u32 {
+    let caster = u32(max(who, 0.0));
+    if caster >= arrayLength(&shadow_casters) {
+        return SHADOW_TERMS;
+    }
+    for (var t = 0u; t < min(glow_shadow_terms(), SHADOW_TERMS); t = t + 1u) {
+        if shadow_casters[caster].kind[t] >= 0.5 * DISTANCE_KIND {
+            return t;
+        }
+    }
+    return SHADOW_TERMS;
+}
+
+// A marker's shadow, with a distance term evaluated from the exact field its
+// scene draw already holds. Blur rows keep the shared cell and take the path
+// above unchanged.
+fn plus_shadow_through(who: f32, d_points: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
+    if level <= 0.0 {
+        return ShadowThrough(1.0, 1.0);
+    }
+    let caster = u32(max(who, 0.0));
+    let term = plus_distance_term(who);
+    if term >= SHADOW_TERMS {
+        return shadow_through(who, points, level);
+    }
+    let full = standoff_coverage(
+        d_points,
+        2.0 * shadow_casters[caster].sigma[term],
+        glow_shadow_shape(),
+    );
+    return ShadowThrough(
+        shadow_transmittance(full, glow_shadow_depth(), level, glow_shadow_curve()),
+        shadow_transmittance(full, 1.0, level, glow_shadow_curve()),
+    );
+}
+
 // How much of the light a LIT slice washes over its own ink with
 // (`u.misc13.x`): 1 is the whole field over it, the slice melting into its own
 // halo, and 0 is the slice drawn exactly as it is with the glow off.
@@ -2596,9 +2634,10 @@ struct PlusVsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     // x: which caster this marker's shadow is, in `shadow_casters` — 0, the
-    // marker field being one caster and the first the frame packs. Zero on the
-    // draw that FILLS the cells, which reads no atlas and no array. y/z/w
-    // unused.
+    // marker field being one caster and the first the frame packs; y: one arm's
+    // on-screen length in points, which turns the exact field into the distance
+    // profile's units. Zero on the draw that FILLS the cells, which reads no
+    // atlas and no array. z/w unused.
     @location(3) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment reads that cell (xy, in atlas texels), how much of
     // the shadow this marker lands (z, its own opacity), and the surface this
@@ -2636,9 +2675,9 @@ fn marker_unit() -> f32 {
     return max(u.misc13.y, 1e-6);
 }
 
-// How much of the marker this fragment is inside, `uv` measured in the arm's
-// own length and `aa` the soft band the whole shape is cut with.
-fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
+// The exact signed distance to the folded box a marker's two arms make, `uv`
+// and `end` measured in one arm's length.
+fn plus_box_sd(uv: vec2<f32>, end: f32) -> f32 {
     // The cross, as the union of two bars — but folded into one. Reflecting
     // into the octant where x >= y maps the upright bar onto the flat one, so
     // a single box's distance field answers for both and there is no union to
@@ -2651,12 +2690,32 @@ fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
     // it, because what the fold measures is the distance out from the arm's
     // own centre line. At 1 the box covers the octant and the cross is a filled
     // square, which is the top of that bar and not an accident of the field.
-    let corner = vec2<f32>(q.x - 1.0, q.y - u.misc5.x);
+    let corner = vec2<f32>(q.x - end, q.y - u.misc5.x);
     // The exact signed distance to that box: outside, the distance to its
     // nearest point; inside, how far in. Exact rather than approximate is what
     // makes the arms' inner corners as clean as their ends — an approximation
     // rounds them off at exactly the four places the shape is doing its work.
-    let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
+    return length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
+}
+
+fn plus_sd(uv: vec2<f32>) -> f32 {
+    return plus_box_sd(uv, 1.0);
+}
+
+// Where the taper's alpha crosses the flood's contour threshold. The flood
+// seeds from coverage >= 1/2 (`shadow.wgsl`'s `INK_FLOOR`), and a smoothstep
+// reaches 1/2 halfway through its interval, so this is the same arm the
+// distance cell treated as ink.
+fn plus_shadow_sd(uv: vec2<f32>) -> f32 {
+    let start = min(u.misc5.y, 1.0 - 1e-3);
+    return plus_box_sd(uv, mix(start, 1.0, 0.5));
+}
+
+// How much of the marker this fragment is inside, `uv` measured in the arm's
+// own length and `aa` the soft band the whole shape is cut with.
+fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
+    let p = abs(uv);
+    let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
     // The four ends taper: an arm is solid out to `misc5.y` of its length and
     // fades to nothing by its tip, the way a line drawn into a node arrives at
     // nothing rather than stopping at something. `q.x` is the distance along
@@ -2681,7 +2740,7 @@ fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
     // this is the one line that would have to give it.
     let start = min(u.misc5.y, 1.0 - 1e-3);
     let taper = 1.0 - smoothstep(start, 1.0, q.x);
-    return aa_inside(0.0, sd, aa) * taper;
+    return aa_inside(0.0, plus_sd(uv), aa) * taper;
 }
 
 @vertex
@@ -2698,17 +2757,28 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // whatever the glow says, so this is the marker's own test and not the
     // light's.
     let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.misc13.y > 0.0);
-    // Grown to hold the SHADOW as well as the ink, in arms: the blur reaches
-    // `SHADOW_REACH_SIGMAS` σ out from the cross, and that is a node's length
-    // where this quad's is an arm, so the ratio is the conversion between them.
-    // The markers stand on the home sheet, which has no size factor of its own.
+    let centre_clip = u.view_proj * vec4<f32>(inst.pos_radius.xyz, 1.0);
+    let arm_clip = u.view_proj
+        * vec4<f32>(inst.pos_radius.xyz + u.cam_right.xyz * inst.pos_radius.w, 1.0);
+    let arm_points = distance(pane_points(centre_clip), pane_points(arm_clip));
+    // Grown to hold the SHADOW as well as the ink, in arms. A blur row's shared
+    // cell is measured at the focus plane and keeps the matching world ratio.
+    // A direct distance is measured in this marker's own screen points, so its
+    // quad takes the packed reach in those same points; under perspective the
+    // field and its window then scale together instead of the quad shrinking
+    // around a screen-constant shadow.
     // The ink's own margin is the floor rather than a term — a marker at no
     // Shadow draws the quad it always did, and the band it caps is the same
     // width in pixels at either size (`plus_paint`).
     //
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
-    let stand = select(0.0, shadow_reach_uv(1.0) / arm, arm > 0.0);
+    var stand = select(0.0, shadow_reach_uv(1.0) / arm, arm > 0.0);
+    let distance_term = plus_distance_term(0.0);
+    if distance_term < SHADOW_TERMS {
+        stand = glow_shadow_reach() * shadow_casters[0].sigma[distance_term]
+            / max(arm_points, 1e-6);
+    }
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON
     // the lattice rather than an object standing in it, so it keeps its shape
@@ -2723,21 +2793,22 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     out.color = inst.color;
     // The whole marker field is ONE caster, and it is the first the frame packs
     // (`from_scene`), so its terms sit at index 0 of the array.
-    out.shadow_box = vec4<f32>(0.0);
-    // The shared cells are a picture of one cross CENTRED in its box, so the
-    // "pane point" a marker reads them at is its own place on that cross rather
-    // than its place on the pane: `uv` arms out from the crossing is
-    // `uv * arm_points` points out from a box centred on nothing.
-    let arm_points = u.plus_shadow_terms[0].w;
+    out.shadow_box = vec4<f32>(0.0, arm_points, 0.0, 0.0);
+    // A blur row's shared cells are a picture of one cross CENTRED in its box,
+    // so the "pane point" a marker reads them at is its own place on that cross
+    // rather than its place on the pane. A distance row has no cell and uses
+    // the projected arm carried beside the caster index instead.
+    let shared_arm_points = u.plus_shadow_terms[0].w;
     // The marker's own opacity is the SHARE of the shadow it casts, which is
     // what makes a position handing itself back as a name fades off it grow its
     // cross and the cross's shadow on one clock (`derive_pluses`).
-    out.shadow_at = vec4<f32>(out.uv * arm_points, inst.color.a, 1.0);
+    out.shadow_at = vec4<f32>(out.uv * shared_arm_points, inst.color.a, 1.0);
     return out;
 }
 
-/// The one cross every resting marker's shadow is a blur of, drawn into the
-/// shared cells (`u.plus_shadow_*`) rather than onto the pane.
+/// The one cross every resting marker's BLUR term is taken from, drawn into the
+/// shared cells (`u.plus_shadow_*`) rather than onto the pane. A distance term
+/// collapses this draw because its exact field is evaluated in [`plus_paint`].
 ///
 /// ONE INSTANCE PER TERM, and the instance index is the term: a mixture's cells
 /// are at different resolutions, so the same cross is rasterized into each at
@@ -3329,12 +3400,15 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // the quad at the bottom of the bar.
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
-    // The SHADOW: this cross's own blurred ink, multiplied into everything
-    // already in the frame under it. A cross in front of a node darkens that
-    // node's rings wherever it reaches them, and a node drawn after it darkens
-    // the cross the same way — the painter's order the pass already has is the
-    // whole of what decides which.
-    let t = shadow_through(in.shadow_box.x, in.shadow_at.xy, in.shadow_at.z);
+    // The SHADOW, multiplied into everything already in the frame under it. A
+    // blur row reads the field's shared cell; a distance row spends this
+    // fragment's exact folded-box distance, measured by this marker's own arm
+    // on screen. A cross in front of a node darkens that node's rings wherever
+    // it reaches them, and a node drawn after it darkens the cross the same way
+    // — the painter's order the pass already has is the whole of what decides
+    // which.
+    let d_points = plus_shadow_sd(in.uv) * in.shadow_box.y;
+    let t = plus_shadow_through(in.shadow_box.x, d_points, in.shadow_at.xy, in.shadow_at.z);
     let final_alpha = 1.0 - (1.0 - alpha) * t.seen;
     // The bloom's copy takes the deeper of the two, and the discard reads that
     // one — the larger alpha, so a shadow only the bright pass can show is not
@@ -3366,8 +3440,8 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     return Painted(washed, final_alpha, bloom_alpha);
 }
 
-/// One cross's coverage, into the markers' shared cell of the shadow atlas —
-/// what every resting marker's shadow is a blur of.
+/// One cross's coverage, into the markers' shared BLUR cell of the shadow
+/// atlas.
 ///
 /// At level 1, the coverage alone: each marker spends its own opacity as a
 /// SHARE where it reads the cell ([`plus_paint`]), which is what one cell for

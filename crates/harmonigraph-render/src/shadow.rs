@@ -147,6 +147,14 @@ pub(crate) struct Caster {
     /// kernel three times as wide: the blur's tap count is flat in this exactly
     /// as it is in the bar.
     pub sigma_scale: f32,
+    /// Whether a distance term is evaluated by the caster's scene draw instead
+    /// of read out of a cell.
+    ///
+    /// The marker already has its exact field in `plus_paint`, so rasterizing
+    /// it into a cell and flooding it would throw that field away only to
+    /// approximate it again. Blur terms still need the shared cell that holds
+    /// their convolution.
+    pub direct_distance: bool,
 }
 
 /// The caster a name's glyphs make: the box round every glyph's rect, the
@@ -167,10 +175,15 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Ca
         }
     }
     if !(max[0] > min[0] && max[1] > min[1]) {
-        return Caster { rect: [0.0; 4], level: 0.0, sigma_scale };
+        return Caster { rect: [0.0; 4], level: 0.0, sigma_scale, direct_distance: false };
     }
     let level = glyphs.iter().map(|g| f32::from(g.rim[3]) / 255.0).fold(0.0, f32::max);
-    Caster { rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]], level, sigma_scale }
+    Caster {
+        rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]],
+        level,
+        sigma_scale,
+        direct_distance: false,
+    }
 }
 
 /// One caster's cell, as every draw that touches it takes it: the cell's
@@ -464,7 +477,8 @@ pub(crate) fn pack(
     let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0;
 
     // One entry per (caster, term), the terms consecutive inside each caster —
-    // the order every index below is in.
+    // the order every index below is in. A direct distance term keeps an empty
+    // entry to preserve those indices, but asks for no shelf space.
     let mut rects: Vec<[f32; 4]> = Vec::with_capacity(casters.len() * kernel.len());
     let mut sizes: Vec<[u32; 2]> = Vec::with_capacity(casters.len() * kernel.len());
     for caster in casters {
@@ -476,7 +490,7 @@ pub(crate) fn pack(
             // (`node_caster`), and N cells each would widen the atlas every
             // blur pass sweeps and be rasterized by the whole node shader for
             // no picture at all.
-            if !casts(caster) {
+            if !casts(caster) || (caster.direct_distance && is_distance(term)) {
                 rects.push([0.0; 4]);
                 sizes.push([0, 0]);
                 continue;
@@ -518,7 +532,8 @@ pub(crate) fn pack(
     // ALL of a caster's cells or none of them. A kernel is mixed before it is
     // spent, so a caster drawn with one term missing is not a fainter shadow —
     // it is a different kernel, and a narrow one at that, drawn on whichever
-    // casters happened to fall off the end of the atlas.
+    // casters happened to fall off the end of the atlas. A direct distance
+    // term is not missing: its scene draw owns that term and needs no cell.
     let fits = |i: usize| {
         let [w, h] = sizes[i];
         let [x, y] = placed[i];
@@ -533,19 +548,30 @@ pub(crate) fn pack(
     // sized for it would be passes over a cell nothing samples.
     let mut flood = 0.0f32;
     for (c, caster) in casters.iter().enumerate() {
-        let whole = (0..n).all(|t| fits(c * n + t));
+        let whole = casts(caster)
+            && kernel
+                .iter()
+                .enumerate()
+                .all(|(t, term)| caster.direct_distance && is_distance(term) || fits(c * n + t));
         let level = if whole { caster.level.clamp(0.0, 1.0) } else { 0.0 };
         let mut entry = NO_CASTER;
         entry.level[0] = level;
         let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
         for (t, term) in kernel.iter().enumerate() {
             let i = c * n + t;
-            let (scale, k, sigma_cell, pad) = shape(caster, term);
+            let direct = caster.direct_distance && is_distance(term);
+            // A direct term has no cell, so it also has no cell-resolution or
+            // padding metadata. Keeping either here would make the packed frame
+            // churn when an atlas-only setting changes even though the scene
+            // draw cannot read it.
+            let (scale, k, sigma_cell, pad) =
+                if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster, term) };
             let kind = if is_distance(term) { DISTANCE_KIND } else { 0.0 };
             let rect = rects[i];
             let [w, h] = sizes[i];
             let [x, y] = placed[i];
-            let cell = if whole { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
+            let cell =
+                if whole && !direct { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
             boxes.push(ShadowBox {
                 rect,
                 cell,
@@ -555,12 +581,15 @@ pub(crate) fn pack(
             if !whole {
                 continue;
             }
-            if is_distance(term) {
+            if is_distance(term) && !direct {
                 flood = flood.max(pad * k);
             }
             entry.kind[t] = kind;
             entry.sigma[t] = sigma_of(caster, term) / px_per_point;
             entry.cell[t] = cell;
+            if direct {
+                continue;
+            }
             entry.map[t] = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, weight(term)];
             for axis in 0..2 {
                 lo[axis] = lo[axis].min(rect[axis]);
@@ -1147,7 +1176,7 @@ pub(crate) mod tests {
     /// A caster at the picture's own width, which is what every caster but a
     /// note name is. The tests that ask about the RATIO name it themselves.
     fn caster(x: f32, y: f32, w: f32, h: f32) -> Caster {
-        Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0 }
+        Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0, direct_distance: false }
     }
 
     /// One Gaussian: one cell per caster, which is what every claim about the
@@ -2099,7 +2128,12 @@ pub(crate) mod tests {
     #[test]
     fn a_distance_cell_reaches_the_stop_and_holds_its_resolution() {
         use harmonigraph_scene::ShadowKernel;
-        let caster = Caster { rect: [40.0, 40.0, 20.0, 20.0], level: 1.0, sigma_scale: 1.0 };
+        let caster = Caster {
+            rect: [40.0, 40.0, 20.0, 20.0],
+            level: 1.0,
+            sigma_scale: 1.0,
+            direct_distance: false,
+        };
         // A σ well past `SIGMA_CELL_MAX`, which is where a blur cell shrinks
         // without limit and a distance cell stops.
         let sigma = 40.0;
@@ -2145,6 +2179,54 @@ pub(crate) mod tests {
         let blur = pack(&[caster], sigma, 1.0, resolution, 4096, ShadowKernel::Gaussian.terms());
         assert_eq!(blur.flood, 0.0, "a blur row asked for a flood chain");
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
+    }
+
+    /// A caster that owns its exact distance keeps the term's profile metadata
+    /// without occupying an atlas cell or widening the flood schedule. Its blur
+    /// row remains a real cell because the scene draw does not hold that
+    /// convolution.
+    #[test]
+    fn a_direct_distance_keeps_the_blur_cell_and_drops_the_flood_cell() {
+        use harmonigraph_scene::ShadowKernel;
+        let caster = Caster {
+            rect: [40.0, 40.0, 20.0, 20.0],
+            level: 1.0,
+            sigma_scale: 1.0,
+            direct_distance: true,
+        };
+        let low = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
+        let high = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX;
+        let distance = pack(&[caster], 40.0, 2.0, low, 4096, ShadowKernel::Distance.terms());
+        assert_eq!(distance.boxes[0].cell, [0.0; 4], "the direct term packed an atlas cell");
+        assert_eq!(distance.flood, 0.0, "the direct term widened the flood schedule");
+        assert_eq!(distance.casters[0].kind[0], DISTANCE_KIND);
+        assert_eq!(distance.casters[0].sigma[0], 20.0);
+        assert_eq!(distance.casters[0].level[0], 1.0);
+        assert_eq!(
+            distance,
+            pack(&[caster], 40.0, 2.0, high, 4096, ShadowKernel::Distance.terms()),
+            "a direct distance read the atlas resolution even though it has no cell",
+        );
+
+        let blur = pack(&[caster], 40.0, 2.0, low, 4096, ShadowKernel::Gaussian.terms());
+        assert!(blur.boxes[0].cell[2] > 0.0 && blur.boxes[0].cell[3] > 0.0);
+
+        let mixed = [
+            harmonigraph_scene::KernelTerm {
+                weight: 1.0,
+                sigma: 1.0,
+                kind: harmonigraph_scene::TermKind::Blur,
+            },
+            harmonigraph_scene::KernelTerm {
+                weight: 0.0,
+                sigma: 1.0,
+                kind: harmonigraph_scene::TermKind::Distance,
+            },
+        ];
+        let mixed = pack(&[caster], 40.0, 2.0, low, 4096, &mixed);
+        assert!(mixed.boxes[0].cell[2] > 0.0 && mixed.boxes[0].cell[3] > 0.0);
+        assert_eq!(mixed.boxes[1].cell, [0.0; 4]);
+        assert_eq!(mixed.casters[0].kind[1], DISTANCE_KIND);
     }
 
     /// Raising the Distance resolution buys more source samples and only that

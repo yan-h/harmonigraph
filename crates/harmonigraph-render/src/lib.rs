@@ -275,7 +275,7 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// down, once for the nodes and once for the resting markers; the `ink` four
 /// are the strip the nodes' light is coloured out of, read and then blurred
 /// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
-/// and the markers' one cross into the shadow atlas (`shadow.rs`).
+/// and the blur rows' one marker cross into the shadow atlas (`shadow.rs`).
 #[cfg(any(test, feature = "hot-reload"))]
 const LATTICE_ENTRY_POINTS: &[&str] = &[
     "vs_main",
@@ -667,11 +667,10 @@ struct Uniforms {
     ///
     /// [`misc11`]: Uniforms::misc11
     shadow_curve: [f32; 4],
-    /// The cells every resting marker's shadow is read out of — one per term of
-    /// the kernel, as rows rather than a buffer: every cross is the same shape
-    /// at the same σ and a blur is linear, so one set serves the whole field and
-    /// each marker spends its own opacity as a share where it reads them
-    /// (`plus_paint`). The boxes in the pane's points, centred on a crossing.
+    /// The cells a resting marker's BLUR terms are read out of, as rows rather
+    /// than a buffer: every cross is the same shape at the same σ and a blur is
+    /// linear, so one set serves the whole field. A direct distance term leaves
+    /// its row empty. The boxes are in the pane's points, centred on a crossing.
     ///
     /// The marker field is also the FIRST caster the frame packs, so its terms
     /// sit at index 0 of the array the scene draws read; these rows are what
@@ -1331,7 +1330,12 @@ impl LatticeCallback {
             // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
             let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
-            let empty = shadow::Caster { rect: [0.0; 4], level: 0.0, sigma_scale: 1.0 };
+            let empty = shadow::Caster {
+                rect: [0.0; 4],
+                level: 0.0,
+                sigma_scale: 1.0,
+                direct_distance: false,
+            };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
                 to_points(n.world_pos + right * reach),
@@ -1369,6 +1373,7 @@ impl LatticeCallback {
                 rect: [min.x, min.y, max.x - min.x, max.y - min.y],
                 level: 1.0,
                 sigma_scale: 1.0,
+                direct_distance: false,
             }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
@@ -1389,17 +1394,17 @@ impl LatticeCallback {
         // for every name in the frame.
         let name_sigma_scale = scene.glow_shadow_name.max(0.0);
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
-        // The markers' ONE cell, ahead of everything the walk pushes: every
-        // cross is the same shape at the same σ and a blur is linear, so the
-        // field needs one cell and each marker spends its own opacity as a
-        // share where it reads it (`plus_paint`). Centred on a crossing, which
-        // is what lets a marker map its own uv into a cell it did not place.
+        // The marker field's caster, ahead of everything the walk pushes. A
+        // blur row gives it one shared cell centred on a crossing; a distance
+        // row keeps only the profile metadata and evaluates the exact field in
+        // `plus_paint`.
         if marker_arm_points > 0.0 {
             let a = marker_arm_points;
             casters.push(shadow::Caster {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
                 sigma_scale: 1.0,
+                direct_distance: true,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -3854,14 +3859,13 @@ impl CallbackTrait for LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        // Every caster's cell, packed for this frame (`shadow::pack`): the
-        // markers' one cross, one per node and one per name. None where the
+        // Every caster's cell, packed for this frame (`shadow::pack`): the blur
+        // rows' one marker cross, one per node and one per name. None where the
         // Shadow's width or depth is at the bottom of its bar, or where nothing
-        // in the frame casts — a frame with no caster allocates no cell and
-        // every draw multiplies by exactly 1. A resting lattice pays one cell
-        // for its whole marker field. σ is in the TARGET's pixels, which is
-        // where the cells are drawn and what #496 found the field's reach
-        // missing.
+        // in the frame casts — a frame with no cell allocates no atlas and
+        // every cell reader multiplies by exactly 1. σ is in the TARGET's
+        // pixels, which is where the cells are drawn and what #496 found the
+        // field's reach missing.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let sigma =
             shadow::sigma_px(self.uniforms.misc11[0], self.node_points, ppp, self.render_scale);
@@ -3887,7 +3891,12 @@ impl CallbackTrait for LatticeCallback {
             shadow::Packed::default()
         };
         let terms = kernel.len().min(harmonigraph_scene::SHADOW_TERMS_MAX);
-        let shadow_wanted = (!packed.boxes.is_empty()).then_some(packed.size);
+        // Placeholder boxes preserve caster/term indices for a distance field
+        // evaluated directly by its scene draw. Only a real cell asks for the
+        // atlas; a markers-only Distance frame therefore allocates no atlas
+        // and has no flood target to schedule.
+        let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
+        let shadow_wanted = has_shadow_cells.then_some(packed.size);
         let pane = resources.pane_buffers(
             device,
             self.pane_id,
@@ -4126,7 +4135,7 @@ impl CallbackTrait for LatticeCallback {
         // What the shader is told about the atlas, settled HERE because the
         // atlas is sized here: its texels, for the two draws that fill a cell
         // and so cannot read the texture they are writing, and the markers'
-        // shared cell, which is `casters[0]` wherever the field casts at all.
+        // shared blur cell, which is `casters[0]` wherever that row casts.
         //
         // The arm in points is the one term `pack` has no way to know, and it
         // is what maps a fragment's place on a cross into a cell no cross
@@ -4205,7 +4214,9 @@ impl CallbackTrait for LatticeCallback {
                 // at level 1: every marker reads these same cells and spends
                 // its own opacity where it reads them. The instance index is
                 // the term (`vs_plus_cell`).
-                if pane.plus_count > 0 && self.marker_arm_points > 0.0 {
+                let marker_has_cells =
+                    packed.boxes.iter().take(terms).any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
+                if pane.plus_count > 0 && self.marker_arm_points > 0.0 && marker_has_cells {
                     pass.set_pipeline(&resources.plus_cell_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.draw(0..4, 0..terms as u32);

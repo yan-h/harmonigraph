@@ -1,4 +1,4 @@
-//! The shadow a resting cross casts: a blur of its own ink, multiplied into
+//! The shadow a resting cross casts from its own ink, multiplied into
 //! everything already in the frame under it.
 
 use super::fixtures::*;
