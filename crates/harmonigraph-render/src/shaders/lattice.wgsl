@@ -666,8 +666,10 @@ struct ShadowCell {
     // w: the cell's share of the target's pixels, which is what a draw INTO
     // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) terms: vec4<f32>,
-    // x: this box's caster index in `shadow_casters`, which is where the draw
-    // that READS the atlas finds every term at once. y/z/w unused.
+    // x: this box's caster index in `shadow_casters`; y: whether this is a
+    // distance cell; z: its padding in pane points; w: whether the distance is
+    // already analytic. The scene draw reads x, while the cell and atlas passes
+    // consume the rest one term at a time.
     @location(13) who: vec4<f32>,
 };
 
@@ -718,11 +720,13 @@ struct VsOut {
     // rest is 0. Zero throughout on the draws that do neither.
     @location(10) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment stands on the PANE, in points (xy) — the space every
-    // term's cell is mapped from (`shadow_kernel`) — how much of the shadow lands
-    // (z), and how coarse the surface being rasterized ON is, as a share of the
-    // target's pixels (w). 1 on every draw that lands on the pane,
-    // `shadow::pack`'s own scale on the draw that fills a cell, and the
-    // softness every shape edge is cut with (`aa_width`).
+    // term's cell is mapped from (`shadow_kernel`) — and how coarse the surface
+    // being rasterized ON is, as a share of the target's pixels (w). z is the
+    // caster's level on the pane draw; on a cell draw its magnitude is one node
+    // uv in pane points and its sign selects coverage (+) or analytic distance
+    // (-). w is 1 on every draw that lands on the pane and `shadow::pack`'s own
+    // scale on a draw that fills a cell, which is the softness every shape edge
+    // is cut with (`aa_width`).
     //
     // LINEAR — noperspective — because a pane point is an AFFINE function of
     // the pane's own pixels and nothing else: perspective-correct interpolation
@@ -743,10 +747,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: Shadow
 /// The same node, drawn into its own cell of the shadow atlas rather than onto
 /// the pane — [`fs_node_cell`]'s quad, and what its shadow is a blur of.
 ///
-/// The corner's place on the pane is mapped straight onto the cell, so the
-/// quad lands there exactly where it lands on the pane and everything a
-/// fragment reads — the uv, the shimmer's field, the node's own rows — is
-/// interpolated across it without knowing which of the two surfaces it is on.
+/// An analytic cell's own corners are mapped back into pane points, so every
+/// texel the packer reserved is written — including the one-texel sampling
+/// guard beyond the shadow's reach. A blur cell keeps the pane quad's mapping
+/// exactly, which is the coverage the Gaussian path convolves.
 @vertex
 fn vs_node_cell(
     @builtin(vertex_index) vertex_index: u32,
@@ -754,11 +758,51 @@ fn vs_node_cell(
     box: ShadowCell,
 ) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
-    let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
+    let centre_clip = u.view_proj * vec4<f32>(inst.world_pos, 1.0);
+    let uv_world = u.misc.y * 0.90 * 2.0 * max(inst.scale, 0.05);
+    let right_clip =
+        u.view_proj * vec4<f32>(inst.world_pos + u.cam_right.xyz * uv_world, 1.0);
+    let centre = pane_points(centre_clip);
+    let right = pane_points(right_clip) - centre;
+    let uv_points = length(right);
+    if box.who.w < 0.5 {
+        let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
+        out.clip_pos =
+            select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
+        out.shadow_box = box.cell;
+        out.shadow_at = vec4<f32>(texel, uv_points, box.terms.w);
+        return out;
+    }
+
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex_index & 1u) == 1u),
+        select(0.0, 1.0, (vertex_index & 2u) == 2u),
+    );
+    let texel = box.cell.xy + corner * box.cell.zw;
+    let points = box.rect.xy + (texel - box.cell.xy) / max(box.terms.x, 1e-6);
+
+    // One uv in pane points. The billboard lies in the camera's right/up plane,
+    // so both endpoints have one projection depth and the two projected basis
+    // vectors span the cell. Inverting that basis reconstructs the node uv at
+    // a cell corner even when the camera tilts the sheet.
+    let up_clip = u.view_proj * vec4<f32>(inst.world_pos + u.cam_up.xyz * uv_world, 1.0);
+    let up = pane_points(up_clip) - centre;
+    let delta = points - centre;
+    let det = right.x * up.y - right.y * up.x;
+    let stable_det = select(-max(abs(det), 1e-6), max(abs(det), 1e-6), det >= 0.0);
+    out.uv = vec2<f32>(
+        delta.x * up.y - delta.y * up.x,
+        right.x * delta.y - right.y * delta.x,
+    ) / stable_det;
+    out.field = vec2<f32>(dot(inst.world_pos, u.cam_right.xyz), dot(inst.world_pos, u.cam_up.xyz))
+        + out.uv * uv_world;
+
     out.clip_pos =
-        select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
+        select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
-    out.shadow_at = vec4<f32>(texel, box.terms.z, box.terms.w);
+    // The negative sign carries the analytic kind without consuming another
+    // interpolator; coverage cells return above with the positive scale.
+    out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
     return out;
 }
 
@@ -779,10 +823,11 @@ fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// One node's billboard, with `extra` uv of headroom past what the node itself
 /// needs — 0 for the node draw and the Reach for the glow draw (see
 /// [`vs_glow`]). The margin below grows the quad by whichever of `extra` and
-/// the Shadow's own reach is the larger, for both draws alike, since a shadow
-/// lands past the ink whichever one is drawing. `light` says which of the two
-/// rims sizes the quad ([`glow_rim`]); both are handed on either way, since the
-/// fragment stages of one draw never read the other's.
+/// the Shadow's own reach is the larger, for both PANE draws alike, since a
+/// shadow lands past the ink whichever one is drawing. The cell draw replaces
+/// this position with the packed cell's corners (`vs_node_cell`). `light` says
+/// which of the two rims sizes the quad ([`glow_rim`]); both are handed on
+/// either way, since the fragment stages of one draw never read the other's.
 fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
@@ -816,11 +861,11 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     // ahead of the light's for the whole of the light's attack. What that
     // costs while it lasts is the ring of discarded fragments between them,
     // which is what a bound is for.
-    // The SHADOW's own reach is in every quad, the node draw's included: a node
-    // multiplies the frame by its blurred ink out to `SHADOW_REACH_SIGMAS` σ
+    // The SHADOW's own reach is in every pane quad, the node draw's included: a
+    // node multiplies the frame by its blurred ink out to `SHADOW_REACH_SIGMAS` σ
     // past its rings (`shadow_reach_uv`), and a quad that stopped at the ink
     // would cut that Gaussian off in a straight line. `extra` is the glow's on
-    // top of it.
+    // top of it. The cell draw writes the packer's one-texel sampling guard too.
     let margin = quad_margin(select(rim, max(rim, lit_rim), light), max(shadow_reach_uv(scale), extra));
     let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
@@ -1511,22 +1556,39 @@ fn slice_gap_half() -> f32 {
 // number in the view (Ground), and the fade to it rides the ACTIVATION, so the
 // whole ring still fades in and out with the pitch class.
 
-// How much of the glyph BAND this pixel is inside, which every slot's glyph
-// is scaled by. It asks only about the radius, so it is the same answer for
-// every slot on the node — hoisted out of [`outer_glyph`] so the caller can
-// take it once and, where it is zero, skip the whole per-slot loop. The band
-// is a narrow annulus (0.64..0.85 by default) and the glyph layer is done
-// with by GLYPH_FADE_LIMIT, inside a billboard reaching QUAD_MARGIN or more,
-// so most of a lit node's fragments are outside the band, and running the
-// loop there is `span` sectors of work for an answer of zero.
-// A collapsed band is the caller's to skip, and every caller does (the mark
-// strip and the audio ring by a test of their own, the octave band by the
-// `select` below). It cannot be answered here: at inner == outer the two soft
-// edges do not cancel, they cross, and the product peaks at a quarter — a
-// screen-constant hairline ring of a quarter coverage, which is exactly what a
-// layer dialled to nothing must not draw.
-fn glyph_band(d: f32, inner: f32, outer: f32, aa: f32) -> f32 {
-    return aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
+// One node layer's geometry and its two readouts: signed distance in node uv,
+// negative inside; the opacity the layer lands with; and the antialiased
+// coverage cached from the same radial and angular constraints. The cached
+// readout preserves the Gaussian control exactly while the distance path keeps
+// the unsoftened field — there is no `aa` in a distance cell.
+struct NodeLayer {
+    sd: f32,
+    level: f32,
+    coverage: f32,
+}
+
+// The flood's contour threshold (`shadow.wgsl::INK_FLOOR`). The modules have
+// no linkage, so this copy is pinned from Rust beside `DISTANCE_KIND`.
+const DISTANCE_LEVEL_FLOOR: f32 = 0.5;
+const EMPTY_DISTANCE: f32 = 65504.0;
+
+fn layer_coverage(layer: NodeLayer) -> f32 {
+    return layer.coverage * layer.level;
+}
+
+fn layer_distance(field: f32, layer: NodeLayer) -> f32 {
+    return select(field, min(field, layer.sd), layer.level >= DISTANCE_LEVEL_FLOOR);
+}
+
+// The signed distance to an annulus. A collapsed pair is the caller's to skip:
+// it is no layer rather than a zero-width contour.
+fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer {
+    let mid = 0.5 * (inner + outer);
+    return NodeLayer(
+        abs(d - mid) - 0.5 * (outer - inner),
+        level,
+        aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa)),
+    );
 }
 
 // One slice of the octave band: the colour it paints and how opaque it is,
@@ -1612,52 +1674,38 @@ fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
     return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(in.octaves, slot));
 }
 
-// Coverage (0..1) of the outer glyph for octave slot `s` on the node whose
-// ring is `ring`, drawn in the uniform band. Reads nothing from the ring
-// inside it — the outer glyphs are independent of it. `aa` is the caller's
-// per-pixel soft-band width, giving the shape screen-constant edges.
-//
-// `band` is this pixel's radial coverage, from [`glyph_band`]: the caller
-// holds it because it is the one term here that does not depend on `s`.
+// The signed field and level of one annular sector. The radial field arrives
+// from [`glyph_band`], so every slot shares one construction of the annulus;
+// this intersects it with the slot's pie and its constant-width side gaps.
+// `max` keeps the exact zero contour but is a conservative distance where a
+// radial and angular boundary meet. That continuous bound is the field this
+// layer defines; the cell test separately pins its transform and storage.
 fn outer_glyph(
     s: i32, ring: OctRing,
-    uv: vec2<f32>, band: f32, aa: f32,
-) -> f32 {
-    // Annular sectors, screen-constant edges. The directions b1/b2 are this
-    // sector's two edges; the cross products against them give BOTH the
-    // side-of-line tests (which wedge owns the pixel) and the Euclidean
-    // distance to each edge line, thresholded at half the gap width, for a
-    // gap of constant thickness at every radius.
+    uv: vec2<f32>, band: NodeLayer, outer: f32, aa: f32,
+) -> NodeLayer {
     let edges = oct_sector(s, ring);
+    let fold = sector_fold(uv, edges);
+    // The gap offsets the edge only along its forward ray. Extending the line
+    // through the node would cut a second slit across a sector wider than half
+    // a turn, where that far half-line is not a boundary at all.
+    let gap = select(0.0, slice_gap_half(), dot(fold.q, fold.e) > 0.0);
+    let side = sector_side(fold) + gap;
+    let pie = sector_pie(fold, outer);
+    // The control readout is the existing rasterization exactly: softened
+    // ownership and two forward-ray gap cuts, multiplied by the radial band.
+    // These are the same constraints the signed field above carries, read at
+    // the surface's AA width rather than used as a second geometry.
     let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
     let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
-    // Ownership softened over `aa`: a hard step would show as a straight
-    // cut down the slice's sides wherever the gap doesn't reach zero at the
-    // wedge boundary — an Octave gap of 0, which closes the sectors into a
-    // solid annulus, is exactly that case. Soft ownership lets adjacent slices
-    // cross-fade (the loop keeps the max), so the sector edges stay clean.
-    //
-    // A wedge under a half turn is the INTERSECTION of its two half-planes;
-    // one PAST a half turn is their union, and reading it as an intersection
-    // would empty the sector instead of filling it. Both cases are real here:
-    // one full-size octave flanked by an extra either side, at the thinnest
-    // size, pins those two at a tenth of an even slice each and leaves the one
-    // between them 336 degrees.
-    // That extreme, and the floor that keeps it under a whole turn, are
-    // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` and `MIN_SPAN`
-    // in harmonigraph-scene. (The test itself is `oct_arc_coverage`.)
     let own = oct_arc_coverage(edges, uv, aa);
-    // Each edge's gap is cut only on the side the edge actually runs to. The
-    // boundary LINE passes just as close on the far side of the node, which
-    // falls outside a narrow wedge and so does not matter there, but lands
-    // inside a wide one — where it would read as a slit across an indicator
-    // that has no boundary at all in that direction.
     let gap_half = slice_gap_half();
-    let g = (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
+    let gaps =
+        (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
         * (1.0 - aa_inside(gap_half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)));
-    return band * own * g;
+    return NodeLayer(max(max(band.sd, pie), side), band.level, band.coverage * own * gaps);
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
@@ -1827,6 +1875,8 @@ struct RingInk {
     /// instead is bright ink the bar treats as ground: painted off the ramp,
     /// wearing the whole light, blazing beside the wedges the bar has washed.
     lit: f32,
+    /// The union of every wedge's analytic field at the ring's own level.
+    layer: NodeLayer,
 };
 
 /// Coverage and color of the audio ring at this fragment.
@@ -1834,11 +1884,18 @@ struct RingInk {
 /// `band` is the fragment's RADIAL coverage, held by the caller exactly as
 /// [`outer_glyph`]'s is: the walk below is angular, so the one edge crossing a
 /// radius is taken once, outside it, with [`glyph_band`].
-fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> RingInk {
+fn spectral_ring(
+    in: VsOut,
+    oct: OctRing,
+    uv: vec2<f32>,
+    band: NodeLayer,
+    aa: f32,
+    analytic: bool,
+) -> RingInk {
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
@@ -1849,13 +1906,13 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // wedge of it — and it could not be rediscovered here in any case, that
     // window never reaching the GPU.
     if in.ring <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
-    if EARLY_OUT && band <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+    if EARLY_OUT && !analytic && layer_coverage(band) <= 0.0 {
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
     }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
@@ -1863,19 +1920,22 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // times to throw all but one away.
     var cov = 0.0;
     var owner = oct.base;
+    var sd = EMPTY_DISTANCE;
     for (var i = 0u; i < oct_span(); i = i + 1u) {
         let slot = oct.base + i32(i);
         // `outer_glyph` whole: the sector's own edges and the same constant
         // gap between neighbours, so one rhythm of slices runs through both
         // rings instead of each drawing its own.
-        let c = outer_glyph(slot, oct, uv, band, aa);
+        let layer = outer_glyph(slot, oct, uv, band, radii.y, aa);
+        let c = layer_coverage(layer);
+        sd = min(sd, layer.sd);
         if c > cov {
             cov = c;
             owner = slot;
         }
     }
     if cov <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(sd, in.ring, cov));
     }
     // WHERE in the wedge the grid is read, which is the whole of what the two
     // readings differ by. The fold answers one number for the octave, so every
@@ -1901,6 +1961,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
         spectral_lut_color(color_level),
         cov * in.ring,
         clamp(color_level, 0.0, 1.0),
+        NodeLayer(sd, in.ring, cov),
     );
 }
 
@@ -1969,8 +2030,7 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // Telling them apart by radius drew it unambiguously; this does not, and the
 // alternative is a second cue that would undo the shape above.
 
-// Coverage of the marks in `slots`, in the strip whose radial coverage at this
-// pixel is `strip`.
+// Field of the marks in `slots`, in the strip whose radial field is `strip`.
 //
 // The sector geometry is `outer_glyph`'s, called on the mark strip's coverage
 // where the octave layer calls it on the band's -- one body, so an extension
@@ -1983,24 +2043,35 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // and both are the melody for as long as that lasts. Slots the ring has no room
 // for are skipped — a mark reaches for octaves the packing may not show, and
 // `oct_sector` has no angle to put one at.
-fn mark_extension(slots: u32, ring: OctRing, uv: vec2<f32>, strip: f32, aa: f32) -> f32 {
+fn mark_extension(
+    slots: u32,
+    ring: OctRing,
+    uv: vec2<f32>,
+    strip: NodeLayer,
+    outer: f32,
+    aa: f32,
+    analytic: bool,
+) -> NodeLayer {
     // Off the strip entirely: the sectors below only ever scale this coverage,
     // so walking the slots for them would be an 11-iteration answer to a pixel
     // that is already zero. The strip is a thin annulus in a billboard reaching
     // QUAD_MARGIN — the margin it lives in is the one the marks are the reason
     // for — so that is nearly all of them.
-    if EARLY_OUT && strip <= 0.0 {
-        return 0.0;
+    if EARLY_OUT && !analytic && layer_coverage(strip) <= 0.0 {
+        return NodeLayer(EMPTY_DISTANCE, strip.level, 0.0);
     }
     let top = ring.base + i32(oct_span()) - 1;
-    var cov = 0.0;
+    var sd = EMPTY_DISTANCE;
+    var coverage = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
-            cov = max(cov, outer_glyph(s, ring, uv, strip, aa));
+            let layer = outer_glyph(s, ring, uv, strip, outer, aa);
+            sd = min(sd, layer.sd);
+            coverage = max(coverage, layer.coverage);
         }
     }
-    return cov;
+    return NodeLayer(sd, strip.level, coverage);
 }
 
 // Distance from `uv` to the filled wedge between `edges` (`oct_sector`'s pair,
@@ -2066,7 +2137,8 @@ fn sector_side(f: SectorFold) -> f32 {
 }
 
 /// The three derivatives-and-geometry answers every layer of a node is drawn
-/// against, and the two early-outs that decide there is no node here at all.
+/// against, and the two coverage-only early-outs that decide there is no
+/// visible node here at all.
 ///
 /// One function because the SCENE pass and the GLOW pass both start here, and
 /// what they must agree on exactly is where a node paints nothing: the glow is
@@ -2093,7 +2165,7 @@ struct NodeGeom {
     paints: bool,
 }
 
-fn node_geom(in: VsOut) -> NodeGeom {
+fn node_geom(in: VsOut, analytic: bool) -> NodeGeom {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
 
     // Screen-constant soft-band width: uv units per fragment (uv.x is linear
@@ -2115,7 +2187,7 @@ fn node_geom(in: VsOut) -> NodeGeom {
     // Outside everything this node can paint. `fwidth` above is taken first
     // and in uniform control flow, as its comment requires; from here on the
     // shader is free to leave.
-    if EARLY_OUT && d > paint_reach(in, aa) {
+    if EARLY_OUT && !analytic && d > paint_reach(in, aa) {
         return NodeGeom(d, aa, field_step, OctRing(0, 0.0), false);
     }
 
@@ -2149,6 +2221,7 @@ fn node_geom(in: VsOut) -> NodeGeom {
         && d >= audio_annulus.x - aa
         && d <= audio_annulus.y + aa;
     if EARLY_OUT
+        && !analytic
         && !in_audio_ring
         && in.params.x <= 0.0
         && in.params.y <= 0.0
@@ -2183,17 +2256,25 @@ struct NodeInk {
     // A share and not a switch, so a slice fading in carries its wash in with
     // it and no seam appears at a threshold nothing else in the picture has.
     lit: f32,
+    // The nearest layer whose level reaches the distance contour.
+    sd: f32,
 };
 
-/// What a node paints OF ITSELF at this fragment: every layer's ink,
-/// premultiplied, how much of the fragment it covers, and how much of that ink
-/// is a LIT slice.
+/// What every node layer answers at this fragment: its visible ink and the
+/// nearest half-level signed field the Distance cell stores.
 ///
 /// Split from [`node_paint`] so that what the layers paint and what the
 /// fragment does with it are two readable pieces rather than one function of
 /// three hundred lines: the ink is decided here, and the node's own shadow is
 /// spent once, at the end, over whatever the layers came to.
-fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeInk {
+fn node_ink(
+    in: VsOut,
+    d: f32,
+    aa: f32,
+    field_step: f32,
+    oct: OctRing,
+    analytic: bool,
+) -> NodeInk {
     let activation = in.params.x;
 
     // A node is its RINGS and nothing else: the stack starts at the node's own
@@ -2229,6 +2310,7 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // thing in the picture that asks a node's ink what it is rather than only
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
+    var node_sd = EMPTY_DISTANCE;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2282,7 +2364,10 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // it takes the whole layer with it: the slot loop below only ever scales
     // this coverage, the backdrop rides it, and the shimmer reaches the
     // slices through it.
-    let band = select(glyph_band(d, band_in, band_out, aa), 0.0, band_out <= band_in);
+    var band = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    if band_out > band_in {
+        band = glyph_band(d, band_in, band_out, 1.0, aa);
+    }
     // How much of this pixel is a slice some note currently lights, and how
     // strongly: the weight the shimmer reaches the octave glyphs with, below.
     // The slice's own shape, so the sweep fades in exactly with the wedge's
@@ -2291,13 +2376,16 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // at -- a released note stops shimmering as its own level goes, and a
     // mark still extending it keeps the slice lit until the mark itself is.
     var lit_slice = 0.0;
-    for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
+    for (var i = 0u;
+        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0);
+        i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
         if level <= 0.0 && presence <= 0.0 {
             continue;
         }
-        let shape = outer_glyph(slot, oct, in.uv, band, aa);
+        let shape_layer = outer_glyph(slot, oct, in.uv, band, band_out, aa);
+        let shape = layer_coverage(shape_layer);
         // This slot's bit in the mark masks, or none at all where the ring
         // names an octave the packing has no room for. The shift is CLAMPED
         // into the word rather than guarded by the range test alone: `select`
@@ -2314,6 +2402,10 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
         // place of the other.
         let ink = oct_slot_ink(in, slot);
         let opacity = ink.w;
+        node_sd = layer_distance(
+            node_sd,
+            NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
+        );
         let slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED
@@ -2396,8 +2488,15 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // marks and the slices they point at, and light crossing a measurement
     // would be a brightness nobody asked the analyzer for.
     let audio_radii = spectral_radii();
-    let audio =
-        spectral_ring(in, oct, in.uv, glyph_band(d, audio_radii.x, audio_radii.y, aa), aa);
+    let audio = spectral_ring(
+        in,
+        oct,
+        in.uv,
+        glyph_band(d, audio_radii.x, audio_radii.y, 1.0, aa),
+        aa,
+        analytic,
+    );
+    node_sd = layer_distance(node_sd, audio.layer);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
     // The wedge's own reading is its lit share, on the composite the coverage
@@ -2418,10 +2517,32 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // the edge in and the edge out are the same smoothstep, and the product of
     // one with the other's complement peaks at a quarter halfway through it.
     // That is a quarter-covered mark on a node whose marks are switched off.
-    let mark_strip =
-        select(0.0, glyph_band(d, mark_in, mark_out, aa), mark_out > mark_in);
-    let melody_cov = mark_extension(in.marks.x, oct, in.uv, mark_strip, aa) * in.params.y;
-    let bass_cov = mark_extension(in.marks.y, oct, in.uv, mark_strip, aa) * in.params.z;
+    var mark_strip = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    if mark_out > mark_in {
+        mark_strip = glyph_band(d, mark_in, mark_out, 1.0, aa);
+    }
+    let melody_layer = mark_extension(
+        in.marks.x,
+        oct,
+        in.uv,
+        NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
+        mark_out,
+        aa,
+        analytic,
+    );
+    let bass_layer = mark_extension(
+        in.marks.y,
+        oct,
+        in.uv,
+        NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
+        mark_out,
+        aa,
+        analytic,
+    );
+    let melody_cov = layer_coverage(melody_layer);
+    let bass_cov = layer_coverage(bass_layer);
+    node_sd = layer_distance(node_sd, melody_layer);
+    node_sd = layer_distance(node_sd, bass_layer);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2463,7 +2584,7 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> NodeIn
     // is as lit as a whole one. The floor is the discard's own threshold read
     // from the other side — at no ink there is no share to take, and the
     // caller multiplies the answer by that same nothing.
-    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4));
+    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_sd);
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that
@@ -2518,7 +2639,7 @@ fn seen_of(paint: Painted) -> vec4<f32> {
 /// being under everything, which is what makes a shadow land on ink at the
 /// depth it lands on ground.
 fn node_paint(in: VsOut) -> Painted {
-    let g = node_geom(in);
+    let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
     // never reaches is the shadow by itself, and that is most of the quad.
     let t = shadow_through(in.shadow_box.x, in.shadow_at.xy, in.shadow_at.z);
@@ -2540,9 +2661,9 @@ fn node_paint(in: VsOut) -> Painted {
         }
         return Painted(vec3<f32>(0.0), shadow, bloom);
     }
-    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
+    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd);
     }
     let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
     let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
@@ -2571,13 +2692,10 @@ fn node_paint(in: VsOut) -> Painted {
     return Painted(washed, final_alpha, bloom_alpha);
 }
 
-/// A node's coverage, into its own cell of the shadow atlas (`shadow.rs`) —
-/// what its shadow is a blur of.
-///
-/// The coverage ALONE: the node's level is applied where the cell is READ
-/// (`shadow_through`), as a share of the shadow rather than as a scale on the
-/// ink it is blurred from. That the coverage already carries every layer's own
-/// envelope is what makes a released node's shadow fade with its ink.
+/// A node's shadow source, into its own cell of the atlas (`shadow.rs`). A blur
+/// term stores the byte-identical coverage it convolves. A Distance term stores
+/// the analytic union in pane points, with only layers at the flood's half-level
+/// contour included.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2596,14 +2714,26 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     if any(at < cell.xy) || any(at > cell.xy + cell.zw) {
         discard;
     }
-    let g = node_geom(in);
+    let analytic = in.shadow_at.z < 0.0;
+    let g = node_geom(in, analytic);
     if !g.paints {
         return vec4<f32>(0.0);
     }
-    let alpha = node_ink(in, g.d, g.aa, g.field_step, g.oct).alpha;
+    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic);
+    if analytic {
+        // Stabilize the value before the R16 attachment rounds it. The fast
+        // and reference builds carry different dead coverage branches and a
+        // last f32 ulp may otherwise land on opposite sides of an f16 tie.
+        // 1/32 point is far below both the cell's texel and the numeric
+        // reference's tolerance, so this decides representation rather than
+        // geometry.
+        let points = clamp(ink.sd * abs(in.shadow_at.z), -EMPTY_DISTANCE, EMPTY_DISTANCE);
+        let stable = round(points * 32.0) / 32.0;
+        return vec4<f32>(stable, 0.0, 0.0, 0.0);
+    }
     // The same floor the scene draw takes, so a cell holds the ink that draw
     // paints rather than a hair more of it.
-    return vec4<f32>(select(alpha, 0.0, alpha < INK_FLOOR), 0.0, 0.0, 0.0);
+    return vec4<f32>(select(ink.alpha, 0.0, ink.alpha < INK_FLOOR), 0.0, 0.0, 0.0);
 }
 
 // ---- Resting markers -------------------------------------------------------
@@ -3015,7 +3145,16 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
         var owner = oct.base;
         for (var i = 0u; i < oct_span(); i = i + 1u) {
             let slot = oct.base + i32(i);
-            let shape = outer_glyph(slot, oct, p, 1.0, arc);
+            let shape = layer_coverage(
+                outer_glyph(
+                    slot,
+                    oct,
+                    p,
+                    NodeLayer(-EMPTY_DISTANCE, 1.0, 1.0),
+                    EMPTY_DISTANCE,
+                    arc,
+                ),
+            );
             if shape > cov {
                 cov = shape;
                 owner = slot;
@@ -3044,8 +3183,28 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
         let mid = 0.5 * (mark_in + mark_out);
         let p = dir * mid;
         let arc = ink_arc(mid);
-        let melody = mark_extension(in.marks.x, oct, p, 1.0, arc) * clamp(in.params.y, 0.0, 1.0);
-        let bass = mark_extension(in.marks.y, oct, p, 1.0, arc) * clamp(in.params.z, 0.0, 1.0);
+        let melody = layer_coverage(
+            mark_extension(
+                in.marks.x,
+                oct,
+                p,
+                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.y, 0.0, 1.0), 1.0),
+                EMPTY_DISTANCE,
+                arc,
+                false,
+            ),
+        );
+        let bass = layer_coverage(
+            mark_extension(
+                in.marks.y,
+                oct,
+                p,
+                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.z, 0.0, 1.0), 1.0),
+                EMPTY_DISTANCE,
+                arc,
+                false,
+            ),
+        );
         let cov = max(melody, bass);
         if cov > 0.0 && mark_out > mark_in {
             let w = cov * (mark_out - mark_in);

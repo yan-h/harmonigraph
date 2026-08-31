@@ -107,3 +107,45 @@ pub(crate) fn readback(
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     slice.get_mapped_range().to_vec()
 }
+
+/// Read an `R16Float` texture without row padding in the returned bytes.
+#[cfg(test)]
+pub(crate) fn readback_r16(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    size: [u32; 2],
+) -> Vec<u8> {
+    let row_bytes = size[0] * 2;
+    let padded = row_bytes.div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("r16_readback"),
+        size: u64::from(padded * size[1]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(size[1]),
+            },
+        },
+        wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+    );
+    queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map R16 readback"));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    let mapped = slice.get_mapped_range();
+    (0..size[1])
+        .flat_map(|y| {
+            let begin = (y * padded) as usize;
+            mapped[begin..begin + row_bytes as usize].to_vec()
+        })
+        .collect()
+}

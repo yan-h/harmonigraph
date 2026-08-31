@@ -3,11 +3,11 @@
 //
 // A BLUR cell holds the ink convolved with a Gaussian of that cell's σ, once
 // along x into the atlas's second texture and once along y back into the first.
-// A DISTANCE cell holds how far each of its texels stands from the caster's
-// nearest ink, in the pane's points, answered by a jump flood: seed every inked
-// texel with its own coordinate, pass those coordinates outward in halving
-// steps, then resolve the field into a distance. Either way the scene pass
-// samples one texel of one cell and spends it (`fs_shadow_box`).
+// A DISTANCE cell holds how far each texel stands from the caster's nearest
+// ink, in pane points. Nodes write that field analytically. Names still arrive
+// as coverage and use the jump flood: seed every inked texel with its own
+// coordinate, pass those coordinates outward in halving steps, then resolve.
+// Either way the scene pass samples one texel and spends it (`fs_shadow_box`).
 //
 // A pass here is a draw over the CELLS rather than one quad over the atlas, and
 // that is what lets every cell carry its own σ, its own resolution and its own
@@ -24,8 +24,8 @@
 // N discrete taps cannot fill a disc unless they sit closer together than a
 // stroke is wide — under which N goes as the square of the reach and the
 // shortfall reads as shifted copies of the letters. The flood costs `log2` of
-// the reach in passes and answers with a distance, so the shadow at a name is
-// the same one-line expression it is at a ring.
+// the reach in passes and answers with a distance, so a name can share the
+// consumer an analytic node reaches directly until the font SDF replaces it.
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 // The layout's sampler slot, which the scene pass's one tap takes and nothing
@@ -60,8 +60,8 @@ struct CellOut {
     @builtin(position) position: vec4<f32>,
     /// The cell's own rect in atlas texels — min, then max, the max exclusive.
     @location(0) @interpolate(flat) bounds: vec4<f32>,
-    /// σ in atlas texels. Zero on a distance cell, which is what makes the blur
-    /// chain a pass-through over one.
+    /// σ in atlas texels. Zero on a distance cell, which makes the x pass copy
+    /// either its coverage or its analytic field unchanged.
     @location(1) @interpolate(flat) sigma: f32,
     /// How many of this cell's texels one point of the pane spans
     /// (`ShadowBox::terms.x`) — what turns the flood's answer, which is in
@@ -144,8 +144,9 @@ fn vs_cell_blur(
     return cell_quad(vertex, cell, terms, who, who.y < 0.5);
 }
 
-/// The DISTANCE cells alone: the flood's three passes, so a frame whose row is
-/// a mixture of kinds floods only the cells that hold one.
+/// The flooded DISTANCE cells alone: names still arrive as coverage and take
+/// the three reconstruction passes. A node writes its field directly and is
+/// excluded here so it cannot allocate or run a flood it has already answered.
 @vertex
 fn vs_cell_distance(
     @builtin(vertex_index) vertex: u32,
@@ -154,7 +155,21 @@ fn vs_cell_distance(
     @location(2) terms: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who, who.y >= 0.5);
+    return cell_quad(vertex, cell, terms, who, who.y >= 0.5 && who.w < 0.5);
+}
+
+/// The analytic DISTANCE cells alone. The x pass copies every distance cell
+/// to the half target; this selects the node fields for the copy back that
+/// shares the final target with the disjoint blur and flood resolves.
+@vertex
+fn vs_cell_analytic(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) cell: vec4<f32>,
+    @location(2) terms: vec4<f32>,
+    @location(3) who: vec4<f32>,
+) -> CellOut {
+    return cell_quad(vertex, cell, terms, who, who.y >= 0.5 && who.w >= 0.5);
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is
@@ -234,6 +249,13 @@ fn fs_blur_x(in: CellOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
     return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 0.0, 1.0);
+}
+
+/// One exact texel from the half target. Analytic distance cells need no
+/// convolution or reconstruction; this only survives the atlas ping-pong.
+@fragment
+fn fs_copy(in: CellOut) -> @location(0) vec4<f32> {
+    return textureLoad(src, vec2<i32>(in.position.xy), 0);
 }
 
 /// A coordinate no seed occupies — what a texel out of reach of every stroke

@@ -1,7 +1,7 @@
 //! Which instances reach the GPU at all, and the early-outs that drop them.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::gpu_harness::{headless_device, readback, readback_r16, render_to_texture};
 use crate::*;
 
 /// The fragment shader's early-outs — skipping the fragments outside
@@ -261,6 +261,65 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the {name} scene changed when the early-outs were enabled: byte {:?}",
             differing.map(|(i, (a, b))| (i, *a, *b)),
         );
+
+        // #508's third finding lives in the CELL shader, not either scene
+        // attachment. This fixture reaches its branch with a real angular gap,
+        // a marked sector, and diagonal sector edges; rendering its analytic
+        // distance atlas through both compiled switches makes every texel of
+        // that geometry part of the parity claim.
+        if name == "a distance row" {
+            let atlas_size = pane
+                .offscreen
+                .as_ref()
+                .and_then(|o| o.shadow.as_ref())
+                .map(|a| a.size)
+                .expect("the distance fixture packed an atlas");
+            assert!(scene.octave_gap > 0.0, "the fixture has no angular gap");
+            assert!(
+                scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
+                "the fixture has no marked sector",
+            );
+            let draw_cells = |src: &str| {
+                let (pipeline, _) =
+                    create_cell_pipelines(&device, &with_common(src), &res.bind_group_layout);
+                let target = render_to_texture(
+                    &device,
+                    &queue,
+                    atlas_size,
+                    shadow::ATLAS_FORMAT,
+                    wgpu::Color::TRANSPARENT,
+                    |pass| {
+                        pass.set_pipeline(&pipeline);
+                        pass.set_bind_group(0, &pane.bind_group, &[]);
+                        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                        pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
+                        pass.draw(0..4, 0..pane.instance_count);
+                    },
+                );
+                readback_r16(&device, &queue, &target, atlas_size)
+            };
+            let cell_fast = draw_cells(SHADER_SRC);
+            let cell_slow = draw_cells(&reference_src);
+            assert!(
+                cell_slow.chunks_exact(2).any(|p| {
+                    let bits = u16::from_le_bytes([p[0], p[1]]);
+                    bits & 0x8000 != 0 && bits != 0x8000
+                }),
+                "the distance fixture wrote no negative node interior",
+            );
+            let differing = cell_fast
+                .chunks_exact(2)
+                .zip(cell_slow.chunks_exact(2))
+                .enumerate()
+                .find(|(_, (a, b))| a != b)
+                .map(|(i, (a, b))| {
+                    (i, u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]))
+                });
+            assert!(
+                differing.is_none(),
+                "the node cell changed when the early-outs were enabled: texel {differing:?}",
+            );
+        }
 
         // The LIGHT's own draw, compared the same way and for the same reason.
         // `fs_glow`'s own early-out is reachable here and nowhere else — the

@@ -1335,6 +1335,7 @@ impl LatticeCallback {
                 level: 0.0,
                 sigma_scale: 1.0,
                 direct_distance: false,
+                analytic_distance: true,
             };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
@@ -1374,6 +1375,7 @@ impl LatticeCallback {
                 level: 1.0,
                 sigma_scale: 1.0,
                 direct_distance: false,
+                analytic_distance: true,
             }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
@@ -1405,6 +1407,7 @@ impl LatticeCallback {
                 level: 1.0,
                 sigma_scale: 1.0,
                 direct_distance: true,
+                analytic_distance: false,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -2724,10 +2727,10 @@ fn create_pipelines(
 /// instead, and neither reads the light: what a cell holds is coverage, and the
 /// colour it is laid down in is settled where the cell is READ.
 ///
-/// MAX-blended over a cleared target, which is what the glyph pass beside them
-/// takes (`text::create_glyph_cell_pipeline`): a cell holds the union of
-/// whatever is drawn into it, and the order the draws arrive in decides
-/// nothing.
+/// The node pipeline overwrites its cell so a negative analytic interior
+/// survives the target's zero clear; one node owns one cell. The marker
+/// pipeline is MAX-blended like the glyph pass beside it
+/// (`text::create_glyph_cell_pipeline`) so repeated ink forms one union.
 fn create_cell_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
@@ -2744,7 +2747,9 @@ fn create_cell_pipelines(
         bind_group_layouts: &[Some(uniforms)],
         ..Default::default()
     });
-    let pipeline = |entries: (&str, &str), buffers: &[wgpu::VertexBufferLayout<'_>]| {
+    let pipeline = |entries: (&str, &str),
+                    buffers: &[wgpu::VertexBufferLayout<'_>],
+                    blend: Option<wgpu::BlendState>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(entries.0),
             layout: Some(&layout),
@@ -2760,7 +2765,7 @@ fn create_cell_pipelines(
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: shadow::ATLAS_FORMAT,
-                    blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
+                    blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -2778,10 +2783,18 @@ fn create_cell_pipelines(
         pipeline(
             ("vs_node_cell", "fs_node_cell"),
             &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
+            // One node owns one cell. Overwrite lets an analytic distance keep
+            // its negative interior; MAX against the clear value would clamp
+            // every inside texel back to zero.
+            None,
         ),
         // No instance data at all: the cell is one cross at the home sheet's
         // size, and what varies between markers is spent where it is read.
-        pipeline(("vs_plus_cell", "fs_plus_cell"), &[]),
+        pipeline(
+            ("vs_plus_cell", "fs_plus_cell"),
+            &[],
+            Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
+        ),
     )
 }
 
@@ -4186,8 +4199,8 @@ impl CallbackTrait for LatticeCallback {
             // none of it and its draws multiply by 1.
             //
             // THREE draws into one cleared target, in the order the buffers sit
-            // in rather than the picture's: the cells are disjoint, and the
-            // blend is a max, so nothing here decides anything.
+            // in rather than the picture's. Their cells are disjoint, so this
+            // order decides nothing.
             //
             // Each of the three ONCE PER TERM of the kernel. A mixture's cells
             // are at different resolutions, so the same ink is rasterized into
@@ -4238,9 +4251,9 @@ impl CallbackTrait for LatticeCallback {
                 // The FLOOD, between the ink and the blur: it reads the raw
                 // coverage out of the atlas's first texture, which the blur's y
                 // pass is the first thing to overwrite. Every draw in it
-                // collapses a blur cell's quad, so a frame on a blur row
-                // encodes three passes of nothing at all and a frame that
-                // packed no distance cell holds no pair to run them over.
+                // collapses blur and analytic cells, so a node-only Distance
+                // frame holds no pair and names remain on the flood until their
+                // own SDF lands.
                 atlas.flood(
                     queue,
                     egui_encoder,
@@ -4252,6 +4265,7 @@ impl CallbackTrait for LatticeCallback {
                 atlas.blur(
                     egui_encoder,
                     (&cells.blur_x, &cells.blur_y),
+                    &cells.analytic,
                     &cells.resolve,
                     &pane.box_buffer,
                     pane.box_count,
