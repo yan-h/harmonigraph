@@ -236,14 +236,16 @@ fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
     return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 0.0, 1.0);
 }
 
-/// A coordinate no seed occupies, in both channels — what a texel out of reach
-/// of every stroke carries.
+/// A coordinate no seed occupies — what a texel out of reach of every stroke
+/// carries in both channels.
 ///
-/// The pair is `Rg16Uint`, so this is the format's own top value and no atlas
-/// can address it: a texture 65535 texels across is past every limit wgpu
-/// reports. That is what lets one sentinel stand for "no ink within reach" with
-/// no third channel to say so.
+/// Atlas coordinates take the low fourteen bits, enough for every 2D texture
+/// wgpu exposes here. One spare bit in x and two in y carry the contour's
+/// undirected normal. X's top bit marks a point whose coverage has no gradient
+/// direction; an all-ones x remains distinct from every line and point seed.
+const SEED_POINT_BIT: u32 = 32768u;
 const NO_SEED: u32 = 65535u;
+const SEED_COORD_MASK: u32 = 16383u;
 
 /// How much of a texel must be inked for it to seed the field.
 ///
@@ -254,6 +256,94 @@ const NO_SEED: u32 = 65535u;
 /// of bogus ink all round, which the shadow would then stand off from.
 const INK_FLOOR: f32 = 0.5;
 
+/// How far one seed's local contour may reach along its tangent, in texels.
+///
+/// Two spans one missing seed between covered texels. Keeping it at that
+/// immediate neighbourhood stops a tangent at a corner standing in for a
+/// distant edge.
+const CONTOUR_TANGENT_REACH: f32 = 2.0;
+
+/// How far seed selection may look along a candidate's tangent, in texels.
+///
+/// Three eighths lets overlapping contour pieces compete before resolve.
+/// A quarter retains the point field's visible wedges, while half a texel lets
+/// a tangent win far enough from its seed to thicken a narrow curved shadow.
+const FLOOD_TANGENT_REACH: f32 = 0.375;
+
+/// Coverage at `at`, or no ink for a tap outside this cell.
+///
+/// The atlas packs unrelated casters beside each other, so the gradient used
+/// to place a contour seed must not read the neighbour as part of this one.
+fn cell_coverage(in: CellOut, at: vec2<i32>) -> f32 {
+    let centre = vec2<f32>(at) + vec2<f32>(0.5);
+    if centre.x < in.bounds.x || centre.y < in.bounds.y
+        || centre.x >= in.bounds.z || centre.y >= in.bounds.w {
+        return 0.0;
+    }
+    return clamp(textureLoad(src, at, 0).r, 0.0, 1.0);
+}
+
+/// A seed coordinate with the coverage gradient's line direction in its spare
+/// high bits. Eight directions over half a turn keep the normal within 11.25°
+/// of the rasterizer's while leaving x's point flag distinct.
+fn pack_seed(at: vec2<i32>, gradient: vec2<f32>) -> vec2<u32> {
+    let ax = abs(gradient.x);
+    let ay = abs(gradient.y);
+    let coord = vec2<u32>(at);
+    // A symmetric thin stroke and an isolated texel have no direction to
+    // quantize. Giving either an arbitrary tangent stretches its contour along
+    // one axis, so they retain the point metric the field is seeded from.
+    if ax + ay < 1.0e-6 {
+        return vec2<u32>(coord.x | SEED_POINT_BIT, coord.y);
+    }
+    // Tangents of 11.25°, 33.75°, 56.25° and 78.75° split a quadrant around
+    // its five candidate directions. Comparisons keep this pass off `atan2`,
+    // whose cost would be paid at every texel of the distance atlas.
+    var octant = 0u;
+    if ay >= 0.19891237 * ax {
+        octant = 1u;
+    }
+    if ay >= 0.66817864 * ax {
+        octant = 2u;
+    }
+    if ay >= 1.49660576 * ax {
+        octant = 3u;
+    }
+    if ay >= 5.02733949 * ax {
+        octant = 4u;
+    }
+    let direction = select(octant & 7u, (8u - octant) & 7u, gradient.x * gradient.y < 0.0);
+    return vec2<u32>(
+        coord.x | ((direction & 1u) << 14u),
+        coord.y | (((direction >> 1u) & 3u) << 14u),
+    );
+}
+
+/// The absolute atlas texel a packed seed names.
+fn seed_texel(seed: vec2<u32>) -> vec2<i32> {
+    return vec2<i32>(seed & vec2<u32>(SEED_COORD_MASK));
+}
+
+/// Whether a seed carries a contour normal rather than the point fallback.
+fn seed_has_normal(seed: vec2<u32>) -> bool {
+    return (seed.x & SEED_POINT_BIT) == 0u;
+}
+
+/// The undirected normal a packed seed carries.
+fn seed_normal(seed: vec2<u32>) -> vec2<f32> {
+    let direction = ((seed.x >> 14u) & 1u) | (((seed.y >> 14u) & 3u) << 1u);
+    switch direction {
+        case 0u: { return vec2<f32>(1.0, 0.0); }
+        case 1u: { return vec2<f32>(0.92387953, 0.38268343); }
+        case 2u: { return vec2<f32>(0.70710678, 0.70710678); }
+        case 3u: { return vec2<f32>(0.38268343, 0.92387953); }
+        case 4u: { return vec2<f32>(0.0, 1.0); }
+        case 5u: { return vec2<f32>(-0.38268343, 0.92387953); }
+        case 6u: { return vec2<f32>(-0.70710678, 0.70710678); }
+        default: { return vec2<f32>(-0.92387953, 0.38268343); }
+    }
+}
+
 /// The chain's first pass: every inked texel of a distance cell becomes its own
 /// seed, and every other texel becomes [`NO_SEED`].
 ///
@@ -263,10 +353,20 @@ const INK_FLOOR: f32 = 0.5;
 @fragment
 fn fs_flood_seed(in: CellOut) -> @location(0) vec2<u32> {
     let at = vec2<i32>(in.position.xy);
-    if textureLoad(src, at, 0).r < INK_FLOOR {
+    let coverage = cell_coverage(in, at);
+    if coverage < INK_FLOOR {
         return vec2<u32>(NO_SEED, NO_SEED);
     }
-    return vec2<u32>(u32(at.x), u32(at.y));
+    // Only inked texels need a normal. The padding is most of a wide distance
+    // cell, so four local reads here cost less than evaluating the direction
+    // over every empty texel in the pass.
+    let gradient = 0.5 * vec2<f32>(
+        cell_coverage(in, at + vec2<i32>(1, 0))
+            - cell_coverage(in, at - vec2<i32>(1, 0)),
+        cell_coverage(in, at + vec2<i32>(0, 1))
+            - cell_coverage(in, at - vec2<i32>(0, 1)),
+    );
+    return pack_seed(at, gradient);
 }
 
 /// One flood step: keep the nearest of this texel's own seed and the nine
@@ -303,7 +403,17 @@ fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
             if cand.x == NO_SEED {
                 continue;
             }
-            let d = vec2<f32>(at - vec2<i32>(cand));
+            var d = vec2<f32>(at - seed_texel(cand));
+            // A local refinement chooses a short piece of the segment the
+            // resolve will measure, rather than only its texel centre. Long
+            // jumps retain the point metric so a remote tangent cannot win.
+            if jump.step.x == 1 && seed_has_normal(cand) {
+                let normal = seed_normal(cand);
+                let tangent = vec2<f32>(-normal.y, normal.x);
+                let along =
+                    clamp(dot(d, tangent), -FLOOD_TANGENT_REACH, FLOOD_TANGENT_REACH);
+                d = d - along * tangent;
+            }
             let dist = dot(d, d);
             if dist < best_d {
                 best_d = dist;
@@ -322,20 +432,17 @@ fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
 /// site that knows both, against a scale the sampler would otherwise have to
 /// carry per term.
 ///
-/// The seed's own coverage is spent on the DISTANCE, never on the profile's
-/// height. A seed is a whole texel, and the contour the eye reads the shape by
-/// crosses it: a texel covered `c` has its centre `c - INK_FLOOR` INSIDE that
-/// contour, to within the straight-edge approximation a rasterizer's coverage
-/// already is, so subtracting it puts the profile's origin on the shape's edge
-/// rather than on the grid. That is a correction of at most half a texel.
+/// One seed represents the short, straight contour segment crossing its texel.
+/// The coverage gradient supplies the segment's normal, and the covered share
+/// past [`INK_FLOOR`] moves it from the texel centre onto the rasterizer's
+/// contour. The bounded tangent bridges a one-texel diagonal gap between seed
+/// texels and stays inside the seed's immediate neighbourhood, so a tangent at
+/// a corner does not claim a distant edge.
 ///
-/// A HEIGHT scaled by that coverage is the one thing it must not be, and #487
-/// hit it as the SPIKE. Coverage runs the whole of `[INK_FLOOR, 1]` along any
-/// contour not parallel to the grid, so neighbouring seeds differ by up to a
-/// factor of two — and each seed owns a wedge of the plane that widens with
-/// distance, so the pair reads as bright and dark rays fanning out of every
-/// curve and as a hard seam wherever two wedges meet. An axis-aligned test
-/// fixture is blind to all of it.
+/// A single contour POINT is not enough. Its position remains quantized along
+/// the tangent, so a diagonal edge is still up to half a texel away from the
+/// closest point it actually contains. The segment supplies that missing
+/// degree of freedom without making the seed texture or any flood pass larger.
 ///
 /// Clamped to the cell's own pad, which is where the curve is windowed to zero:
 /// past it the coverage is 0 whatever the number, so this is the value that
@@ -347,11 +454,28 @@ fn fs_flood_resolve(in: CellOut) -> @location(0) vec4<f32> {
     if seed.x == NO_SEED {
         return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
     }
-    let ink = vec2<i32>(seed);
-    // The coverage as the x pass left it in the half-blur target: a distance
-    // cell's σ is zero there, so what stands at the seed is the coverage the
-    // caster's own rasterizer wrote.
-    let contour = clamp(textureLoad(src, ink, 0).r, 0.0, 1.0) - INK_FLOOR;
-    let texels = max(length(vec2<f32>(at - ink)) - contour, 0.0);
+    let coverage = cell_coverage(in, at);
+    if coverage >= INK_FLOOR {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let ink = seed_texel(seed);
+    let seed_coverage = cell_coverage(in, ink);
+    let to_sample = vec2<f32>(at - ink);
+    if !seed_has_normal(seed) {
+        let texels = max(length(to_sample) - (seed_coverage - INK_FLOOR), 0.0);
+        return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
+    }
+    var normal = seed_normal(seed);
+    // The packed normal is a LINE direction. The sample is outside the ink,
+    // so whichever sign points toward it is the contour's outward one.
+    if dot(to_sample, normal) < 0.0 {
+        normal = -normal;
+    }
+    let offset = (seed_coverage - INK_FLOOR) * normal;
+    let contour = vec2<f32>(ink) + offset;
+    let tangent = vec2<f32>(-normal.y, normal.x);
+    let delta = vec2<f32>(at) - contour;
+    let along = clamp(dot(delta, tangent), -CONTOUR_TANGENT_REACH, CONTOUR_TANGENT_REACH);
+    let texels = length(delta - along * tangent);
     return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
 }

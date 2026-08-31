@@ -3866,8 +3866,12 @@ impl CallbackTrait for LatticeCallback {
         // single Gaussian took: every cell's σ is capped in TEXELS, so what N
         // terms cost is atlas area and taps, never a wider kernel.
         let kernel = self.kernel.terms();
+        // A flood seed spends its high coordinate bits on the contour normal.
+        // A blur row has no seed field and may use the device's whole limit.
+        let atlas_max =
+            if self.kernel.floods() { max_dim.min(shadow::SEED_COORD_LIMIT) } else { max_dim };
         let packed = if self.uniforms.misc11[3] > 0.0 {
-            shadow::pack(&self.casters, sigma, ppp * self.render_scale, max_dim, kernel)
+            shadow::pack(&self.casters, sigma, ppp * self.render_scale, atlas_max, kernel)
         } else {
             shadow::Packed::default()
         };
