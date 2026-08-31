@@ -114,24 +114,44 @@ check_codex_ownership() {
   work="$TMP/ownership"
   main="$work/main"
   codex_wt="$main/.claude/worktrees/codex-id/harmonigraph"
+  claude_wt="$main/.claude/worktrees/claude-w"
   mkdir -p "$main" "$(dirname "$codex_wt")"
 
   (
     cd "$main" || exit 1
-    git init -q . 2>/dev/null
+    git init -q . 2>/dev/null || exit 1
+    # This case runs the reclaimer without DRY_RUN, so prove every git command
+    # resolves inside the disposable repo before creating removable worktrees.
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
     git checkout -q -b main 2>/dev/null || true
     git config user.email t@t; git config user.name t
     printf '/.claude/worktrees/\n/target/\n' > .gitignore
     git add .gitignore
-    git commit -q -m base
-    git worktree add -q -b codex/app "$codex_wt" HEAD 2>/dev/null
-    mkdir -p "$codex_wt/target/debug"
+    git commit -q -m base || exit 1
+    git worktree add -q -b codex/app "$codex_wt" HEAD 2>/dev/null || exit 1
+    git worktree add -q -b claude/w "$claude_wt" HEAD 2>/dev/null || exit 1
+    mkdir -p "$codex_wt/target/debug" "$claude_wt/target/debug" || exit 1
     : > "$codex_wt/target/debug/sentinel"
+    : > "$claude_wt/target/debug/sentinel"
+    # The direct child is the positive control: make it unambiguously idle so
+    # both zero-minute cutoffs reach the removal decision on every `find`.
+    find "$claude_wt" -depth -exec touch -t 200001010000 {} \; || exit 1
   ) || {
     echo "✗ a Codex-managed worktree: could not build the fixture" >&2
     failures=$((failures + 1))
     return
   }
+
+  if [ ! -e "$codex_wt/.git" ] || [ ! -e "$claude_wt/.git" ]; then
+    echo "✗ a Codex-managed worktree: fixture worktrees are not registered" >&2
+    failures=$((failures + 1))
+    return
+  fi
 
   out="$work/run.log"
   (cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_FORCE=1 \
@@ -139,10 +159,11 @@ check_codex_ownership() {
     RECLAIM_PRUNE_IDLE_MINUTES=0 "$SCRIPT" </dev/null) >"$out" 2>&1
   status=$?
 
-  if [ "$status" -eq 0 ] && [ -f "$codex_wt/target/debug/sentinel" ]; then
+  if [ "$status" -eq 0 ] && [ -f "$codex_wt/target/debug/sentinel" ] &&
+    [ ! -d "$claude_wt" ]; then
     echo "✓ a Codex-managed worktree stays app-owned"
   else
-    echo "✗ a Codex-managed worktree was reclaimed by the Claude hook" >&2
+    echo "✗ the reclaimer did not distinguish Codex and Claude ownership" >&2
     sed 's/^/    /' "$out" >&2
     failures=$((failures + 1))
   fi
