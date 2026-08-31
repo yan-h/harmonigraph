@@ -39,6 +39,24 @@
 
 use harmonigraph_render::{GlyphInstance, TextRing};
 
+/// Tell this context that its shell publishes egui's font texture to wgpu
+/// paint callbacks after applying the current frame's texture deltas.
+///
+/// The timing is the contract: a shell that can only expose the previous
+/// frame's texture must leave the fallback mirror enabled, or a glyph first
+/// rasterized this frame will point into texels the callback cannot read yet.
+pub fn use_renderer_font_texture(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("harmonigraph_renderer_font_texture"), true);
+    });
+}
+
+fn renderer_font_texture_is_current(ctx: &egui::Context) -> bool {
+    ctx.data(|data| {
+        data.get_temp::<bool>(egui::Id::new("harmonigraph_renderer_font_texture")).unwrap_or(false)
+    })
+}
+
 /// The halo's two rings, as (radius in points, stamp alpha, samples).
 ///
 /// The sample counts are a cost, not a look: each is one more evaluation of
@@ -78,12 +96,11 @@ fn ring_radius(radius: f32, ppp: f32) -> f32 {
 ///
 /// Every distinct size a pane asks for is one more entry in egui's font atlas:
 /// epaint rasterizes and caches a glyph per exact size, and rebuilds the whole
-/// font store once the atlas passes 80% full — throwing away the UVs this
-/// module's mirror is holding. That cost nothing while label sizes were
-/// constants. It is not nothing now that they follow a zoom: unsnapped, the
-/// scale takes a new value on every frame of a drag, so one gesture asks for
-/// dozens of sizes, each rasterizing its own copy of every glyph on screen and
-/// re-uploading the mirror behind it (see [`AtlasMirror`]).
+/// font store once the atlas passes 80% full. That cost nothing while label
+/// sizes were constants. It is not nothing now that they follow a zoom:
+/// unsnapped, the scale takes a new value on every frame of a drag, so one
+/// gesture asks for dozens of sizes, each rasterizing its own copy of every
+/// glyph on screen and pushing the atlas toward a rebuild.
 ///
 /// Two grains bound that set, and the coarser of them is the one that bites:
 ///
@@ -94,7 +111,7 @@ fn ring_radius(radius: f32, ppp: f32) -> f32 {
 ///     how many pixels it crosses. A pixel grid alone is far too fine once a
 ///     name is 60 pixels tall and rising: measured over one 120-frame zoom
 ///     drag it let through 299 distinct sizes, and every one of them is a set
-///     of glyphs rasterized and an atlas re-uploaded behind it.
+///     of glyphs rasterized into the atlas.
 ///   - the PIXEL, which the ladder's rungs are rounded onto. Below a few tens
 ///     of pixels the rungs fall closer together than that, and two sizes
 ///     inside one pixel are the same picture of the same letter twice. It is
@@ -658,11 +675,16 @@ impl TextBatch {
             self.pieces.clear();
             self.marks.clear();
         }
-        let atlas = atlas_if_changed(
-            painter.ctx(),
-            &state.instruments.font_atlas,
-            std::mem::take(&mut self.drawn),
-        );
+        let atlas = if renderer_font_texture_is_current(painter.ctx()) {
+            self.drawn.clear();
+            None
+        } else {
+            atlas_if_changed(
+                painter.ctx(),
+                &state.instruments.font_atlas,
+                std::mem::take(&mut self.drawn),
+            )
+        };
         let marks = marks_if_changed(painter.ctx(), &state.instruments.font_atlas);
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
@@ -684,12 +706,10 @@ impl TextBatch {
     /// and the pass that draws them is the pane's own — where the pane's
     /// corner is the origin and the render scale decides the pixels.
     ///
-    /// The atlas comes from a mirror of its own rather than the one
-    /// [`flush`](Self::flush) draws from. Each mirror answers for one
-    /// TEXTURE — "is every glyph this batch points at in the copy that
-    /// renderer holds" — and the lattice has its own, so a single mirror
-    /// would hand each renderer half the publications and leave both holding
-    /// half an atlas.
+    /// The font atlas normally reaches both callbacks as egui's renderer
+    /// texture. The `atlas` value below is the independently tracked fallback
+    /// for shells that cannot publish that texture; the mark sheet is also
+    /// tracked per renderer because each owns its own GPU copy.
     pub(crate) fn lattice_labels(
         &mut self,
         painter: &egui::Painter,
@@ -713,14 +733,17 @@ impl TextBatch {
         let (atlas, marks) = if self.glyphs.is_empty() {
             (None, None)
         } else {
-            (
+            let atlas = if renderer_font_texture_is_current(painter.ctx()) {
+                self.drawn.clear();
+                None
+            } else {
                 atlas_if_changed(
                     painter.ctx(),
                     &state.instruments.lattice_atlas,
                     std::mem::take(&mut self.drawn),
-                ),
-                marks_if_changed(painter.ctx(), &state.instruments.lattice_atlas),
-            )
+                )
+            };
+            (atlas, marks_if_changed(painter.ctx(), &state.instruments.lattice_atlas))
         };
         let mut glyphs = std::mem::take(&mut self.glyphs);
         for glyph in &mut glyphs {
@@ -751,38 +774,30 @@ fn rings(ctx: &egui::Context) -> [TextRing; 2] {
     })
 }
 
-/// What one renderer's copy of egui's font atlas currently holds.
+/// What one glyph renderer has received from an egui context.
 ///
-/// One of these per copy, and there are two: the text callback's, and the
-/// lattice's, which draws its node names inside its own scene pass off a
-/// texture of its own. Each answers for the texture it belongs to, so they
-/// are separate mirrors rather than one shared — a single mirror publishes an
-/// atlas once, and whichever renderer asked second would be told nothing had
-/// changed while holding none of it.
+/// The plugin and offline shells publish egui's GPU font texture directly, so
+/// the font fields below serve only the CPU fallback used by other shells.
+/// The mark sheet always uses the publication key because it is packed here
+/// rather than by egui. There is one tracker for the text callback and one for
+/// the lattice callback because each owns its own mark texture and fallback
+/// font texture.
 ///
-/// The callback cannot bind egui's own font texture — `CallbackResources`
-/// holds what WE put there — so the atlas is mirrored, and something has to
-/// say when the mirror is stale. egui's delta channel is not ours to take
-/// (draining it would starve egui's own renderer and the rest of the UI's
-/// text would stop updating), and the atlas exposes no version, so staleness
-/// is inferred from the one thing that is knowable: a glyph found at a texel
-/// we have never uploaded cannot be in the copy the GPU holds, so the first
-/// time a [`GlyphKey`] is drawn, the mirror is refreshed.
+/// The fallback cannot drain egui's texture-delta channel because egui's own
+/// renderer consumes it. The atlas exposes no version, so a glyph found at a
+/// texel the fallback has never uploaded makes that copy stale.
 ///
 /// The three fields below are guards on top of that, each for a way the whole
 /// atlas can move at once — cheaper to notice wholesale than one glyph at a
 /// time, and `size` and `ppp` also cover the case where a rearrangement lands
 /// a DIFFERENT glyph on a texel some key already claims.
 ///
-/// How often this copies is a function of how many distinct sizes the panes
-/// ask for, which is no longer a handful: a label's size follows the camera
-/// and the pitch zoom, so a zoom gesture walks through sizes and each is a
-/// fresh set of glyphs. See [`snap_scale`], which bounds that set, and the
-/// note on what a refresh costs in `harmonigraph_render::text`.
+/// See [`snap_scale`] for why the fallback still bounds the number of distinct
+/// glyph sizes it can be asked to publish.
 #[derive(Default)]
 pub(crate) struct AtlasMirror {
     seen: std::collections::HashSet<GlyphKey>,
-    /// The atlas size the mirror was taken at; a resize moves every glyph.
+    /// The fallback atlas size; a resize moves every glyph.
     size: [usize; 2],
     /// The scale factor it was taken at, as bits — the third way every glyph
     /// moves, and the one the others can miss.
@@ -799,9 +814,9 @@ pub(crate) struct AtlasMirror {
     /// Dragging the window between a Retina display and an external monitor is
     /// the ordinary way to do it.
     ppp: u32,
-    /// How full egui said its atlas was, last time we looked — the fourth way
-    /// every glyph moves, and the only signal that egui has thrown the atlas
-    /// away and started over.
+    /// How full egui said its atlas was when the fallback last copied it — the
+    /// fourth way every glyph moves, and the only signal that egui has thrown
+    /// the atlas away and started over.
     ///
     /// `Fonts::begin_pass` rebuilds the entire font store once the atlas passes
     /// 80% full, re-rasterizing every glyph at fresh UVs. Zoom-scaled labels are
@@ -814,8 +829,8 @@ pub(crate) struct AtlasMirror {
     /// happened. (It only ever drops there; new glyphs raise it.) Everything in
     /// `seen` is stale with it, so it goes too.
     fill: f32,
-    /// Bumped on every refresh; the callback compares it against what it
-    /// last uploaded.
+    /// Bumped on every fallback refresh; the callback compares it against
+    /// what it last uploaded.
     key: u64,
     /// The version of the MARK sheet this renderer was last handed. Nothing
     /// like the four guards above is needed for it: that sheet is ours, so it
@@ -852,41 +867,8 @@ impl AtlasMirror {
     }
 }
 
-/// egui's font atlas, on the frames the mirror needs it, and `None` on the
-/// rest — which is nearly all of them.
-/// TEMPORARY probe: what the font-atlas mirror published, for the zoom-cost
-/// measurement. Counts publications and the texels each one copied.
-#[cfg(test)]
-pub(crate) mod probe {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    pub(crate) static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static TEXELS: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static MARK_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static MARK_TEXELS: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static REPACKS: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static PACKED: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) static SHEET_H: AtomicUsize = AtomicUsize::new(0);
-    /// Nanoseconds spent inside the atlas CLONE alone.
-    pub(crate) static CLONE_NS: AtomicUsize = AtomicUsize::new(0);
-    pub(crate) fn reset() {
-        PUBLISHES.store(0, Ordering::Relaxed);
-        TEXELS.store(0, Ordering::Relaxed);
-        MARK_PUBLISHES.store(0, Ordering::Relaxed);
-        MARK_TEXELS.store(0, Ordering::Relaxed);
-        REPACKS.store(0, Ordering::Relaxed);
-        PACKED.store(0, Ordering::Relaxed);
-        CLONE_NS.store(0, Ordering::Relaxed);
-    }
-    pub(crate) fn note(texels: usize) {
-        PUBLISHES.fetch_add(1, Ordering::Relaxed);
-        TEXELS.fetch_add(texels, Ordering::Relaxed);
-    }
-    pub(crate) fn note_marks(texels: usize) {
-        MARK_PUBLISHES.fetch_add(1, Ordering::Relaxed);
-        MARK_TEXELS.fetch_add(texels, Ordering::Relaxed);
-    }
-}
-
+/// egui's font atlas, on the frames the fallback mirror needs it, and `None`
+/// on the rest.
 fn atlas_if_changed(
     ctx: &egui::Context,
     mirror: &std::sync::Mutex<AtlasMirror>,
@@ -918,14 +900,7 @@ fn atlas_if_changed(
     mirror.size = size;
     mirror.ppp = ppp;
     mirror.key = mirror.key.wrapping_add(1);
-    #[cfg(test)]
-    probe::note(size[0] * size[1]);
-    #[cfg(test)]
-    let started = std::time::Instant::now();
     let image = std::sync::Arc::new(ctx.fonts(|fonts| fonts.image()));
-    #[cfg(test)]
-    probe::CLONE_NS
-        .fetch_add(started.elapsed().as_nanos() as usize, std::sync::atomic::Ordering::Relaxed);
     Some(harmonigraph_render::FontAtlas { image, key: mirror.key })
 }
 
@@ -953,8 +928,6 @@ fn marks_if_changed(
         return None;
     }
     mirror.marks_key = sheet.key;
-    #[cfg(test)]
-    probe::note_marks(sheet.image.width() * sheet.image.height());
     Some(harmonigraph_render::FontAtlas { image: sheet.image.clone(), key: sheet.key })
 }
 
@@ -988,7 +961,7 @@ pub(crate) struct MarkPatch {
 /// dragging every letter with it (issue #304).
 ///
 /// Two rules make the sheet safe to hand out mid-frame, and they are the same
-/// two egui's atlas keeps (see `harmonigraph_render::text`'s `mirror_atlas`):
+/// two egui's atlas keeps (see `harmonigraph_render::text`'s `bind_sheets`):
 /// a patch is only ever APPENDED within a pass, and the sheet only ever grows
 /// downward, so a uv issued earlier in the pass still points at its own mark.
 /// A repack waits for the next pass, where it runs before any uv is issued.
@@ -1081,8 +1054,6 @@ impl MarkAtlas {
         if let Some(&patch) = self.at.get(&key) {
             return patch;
         }
-        #[cfg(test)]
-        probe::PACKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let image = crate::marks::rasterize_mark(key);
         let size = [image.size[0] as u32, image.size[1] as u32];
         let at = self.claim(size);
@@ -1129,11 +1100,6 @@ impl MarkAtlas {
             self.at.insert(key, MarkPatch { at, size: patch.size });
         }
         self.key = next_sheet_key();
-        #[cfg(test)]
-        {
-            probe::REPACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            probe::SHEET_H.store(self.image.height(), std::sync::atomic::Ordering::Relaxed);
-        }
     }
 
     /// Reserve `size` texels on the current shelf (or the next), growing the
@@ -1403,7 +1369,7 @@ mod tests {
     /// the sheet has grown under it.
     ///
     /// This is the rule the whole publication scheme rests on, and it is the
-    /// same one egui's atlas keeps: `harmonigraph_render`'s `mirror_atlas`
+    /// same one egui's atlas keeps: `harmonigraph_render`'s `bind_sheets`
     /// carries a pane that has already prepared onto a texture some LATER pane
     /// grew, and what makes that safe is that the earlier pane's uvs still
     /// name their own texels. Repack inside a pass instead and every mark
@@ -1706,6 +1672,37 @@ mod tests {
             });
         }
         assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
+    }
+
+    /// A shell that installs egui's current GPU texture makes a CPU atlas
+    /// publication pure duplication. The glyph run still has to reach the
+    /// callback; only the cloned image is omitted.
+    #[test]
+    fn a_renderer_font_texture_replaces_the_cpu_atlas_publication() {
+        let ctx = egui::Context::default();
+        use_renderer_font_texture(&ctx);
+        let state = crate::tests::probe::fresh();
+        let mut result = (0usize, false);
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut batch = TextBatch::default();
+            batch.text(
+                ui.painter(),
+                egui::pos2(20.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                "C4".to_owned(),
+                egui::FontId::monospace(13.0),
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+            );
+            let labels = batch.lattice_labels(
+                ui.painter(),
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                &state,
+            );
+            result = (labels.glyphs.len(), labels.atlas.is_some());
+        });
+        assert!(result.0 > 0, "the fixture must hand glyphs to the renderer");
+        assert!(!result.1, "the current renderer texture makes a CPU clone redundant");
     }
 
     #[test]

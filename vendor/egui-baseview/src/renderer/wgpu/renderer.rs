@@ -504,6 +504,17 @@ impl Renderer {
                 );
             }
 
+            // The font texture is current here: every delta above has landed,
+            // and paint callbacks have not prepared yet. A raw Texture is the
+            // private CallbackResources contract with harmonigraph-render;
+            // cloning it clones the GPU handle, not its pixels.
+            let font_texture = renderer
+                .texture(&egui::TextureId::default())
+                .and_then(|entry| entry.texture.clone());
+            if let Some(texture) = font_texture {
+                renderer.callback_resources.insert(texture);
+            }
+
             self.last_texture_ms = tex_start.elapsed().as_secs_f32() * 1000.0;
 
             let ubuf_start = std::time::Instant::now();

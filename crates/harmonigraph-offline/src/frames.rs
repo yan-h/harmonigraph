@@ -115,6 +115,14 @@ impl Renderer {
         for (id, delta) in &textures.set {
             self.egui.update_texture(&self.device, &self.queue, *id, delta);
         }
+        // Paint callbacks need the texture after this frame's deltas, not the
+        // image cloned out of the font store. Texture::clone shares the GPU
+        // allocation; it does not copy atlas pixels.
+        let font_texture =
+            self.egui.texture(&egui::TextureId::default()).and_then(|entry| entry.texture.clone());
+        if let Some(texture) = font_texture {
+            self.egui.callback_resources.insert(texture);
+        }
 
         let descriptor =
             egui_wgpu::ScreenDescriptor { size_in_pixels: self.size, pixels_per_point };

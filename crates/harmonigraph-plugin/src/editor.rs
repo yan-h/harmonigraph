@@ -904,6 +904,9 @@ impl Editor for LatticeEditor {
                 .with_size_source(size_source),
             WindowState::new(self.shared.clone(), self.params.clone()),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
+                // egui-baseview installs the current font texture in
+                // CallbackResources after applying this frame's deltas.
+                harmonigraph_ui::use_renderer_font_texture(egui_ctx);
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the release of what
                 // the closed window left behind, the fold floor, and the
