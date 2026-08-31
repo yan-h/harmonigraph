@@ -979,6 +979,9 @@ struct LatticeCallback {
     /// Which mixture every caster's ink is blurred with — the row `prepare`
     /// packs a cell per term of (`ShadowKernel::terms`).
     kernel: harmonigraph_scene::ShadowKernel,
+    /// Minimum atlas texels per pane point for a distance cell. Carried beside
+    /// `kernel` because it changes packing only on that row.
+    distance_texels_per_point: f32,
     /// Which caster each node instance's shadow is, by index into `casters` —
     /// parallel to `instances`, since the walk interleaves the two lists.
     node_cells: Vec<u32>,
@@ -1451,6 +1454,7 @@ impl LatticeCallback {
             casters,
             node_cells,
             kernel: scene.glow_shadow_kernel,
+            distance_texels_per_point: scene.glow_shadow_resolution,
             marker_arm_points,
             draws,
             node_points,
@@ -3875,7 +3879,14 @@ impl CallbackTrait for LatticeCallback {
         let atlas_max =
             if self.kernel.floods() { max_dim.min(shadow::SEED_COORD_LIMIT) } else { max_dim };
         let packed = if self.uniforms.misc11[3] > 0.0 {
-            shadow::pack(&self.casters, sigma, ppp * self.render_scale, atlas_max, kernel)
+            shadow::pack(
+                &self.casters,
+                sigma,
+                ppp * self.render_scale,
+                self.distance_texels_per_point,
+                atlas_max,
+                kernel,
+            )
         } else {
             shadow::Packed::default()
         };
