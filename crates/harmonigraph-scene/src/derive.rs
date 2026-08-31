@@ -564,9 +564,6 @@ pub fn derive_scene(
         glow_shadow_name: view.glow_shadow_name.clamp(0.0, crate::GLOW_SHADOW_NAME_MAX),
         // No clamp: an enum is in range or the blob did not parse.
         glow_shadow_kernel: view.glow_shadow_kernel,
-        glow_shadow_resolution: view
-            .glow_shadow_resolution
-            .clamp(crate::GLOW_SHADOW_RESOLUTION_MIN, crate::GLOW_SHADOW_RESOLUTION_MAX),
         glow_shadow_shape: view
             .glow_shadow_shape
             .clamp(crate::SHADOW_SHAPE_MIN, crate::SHADOW_SHAPE_MAX),

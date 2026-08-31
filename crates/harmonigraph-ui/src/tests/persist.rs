@@ -86,45 +86,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.camera_presets[0].yaw, 0.7);
 }
 
-/// The Distance atlas resolution is part of the saved look rather than a
-/// renderer-local experiment. A non-default value has to survive the whole UI
-/// persist path so editor and offline scenes are derived from the same input.
-#[test]
-fn distance_shadow_resolution_round_trips() {
-    let mut state = fresh();
-    state.view.glow_shadow_resolution = 1.2;
-    let saved = state.save_persist();
-
-    let mut restored = fresh();
-    assert!(restored.load_persist(&saved), "this build's own blob was refused");
-    assert_eq!(restored.view.glow_shadow_resolution, 1.2);
-}
-
-/// A hand-edited Distance resolution reopens at a value its bar can produce.
-/// NaN repairs to the fresh 0.8 floor, while finite values clamp to the nearest
-/// endpoint; the rest of the blob still loads in every case.
-#[test]
-fn a_blob_naming_a_nonsense_distance_resolution_opens_on_what_the_bar_can_reach() {
-    let fresh_resolution = harmonigraph_scene::ViewConfig::default().glow_shadow_resolution;
-    for (bad, want, hint) in [
-        ("NaN", fresh_resolution, "a NaN resolution"),
-        ("-4.0", harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN, "a resolution below the floor"),
-        ("99.0", harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX, "a resolution above the cap"),
-    ] {
-        let mut state = fresh();
-        state.camera.yaw = 1.23;
-        let saved = state.save_persist();
-        let edited =
-            replace_pair(&saved, "glow_shadow_resolution", &format!("{fresh_resolution:?}"), bad);
-        assert_ne!(edited, saved, "{hint}: the resolution key is not in the blob");
-
-        let mut restored = fresh();
-        assert!(restored.load_persist(&edited), "{hint}: the edited blob was refused");
-        assert_eq!(restored.view.glow_shadow_resolution, want, "{hint}");
-        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob did not load");
-    }
-}
-
 #[test]
 fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // Every project saved before the switch existed carries no key for it,

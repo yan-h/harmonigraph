@@ -282,6 +282,18 @@ fn the_live_view_on_the_distance_row() -> Scene {
     scene
 }
 
+/// The live view's DISTANCE row at the top of the Shadow bar.
+///
+/// Sigma-relative cell sizing is coarsest here: σ grows while its three-texel
+/// representation stays fixed. This frame holds the resulting contours and
+/// medial-axis softness at the end of the range where the performance gate is
+/// measured.
+fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
+    let mut scene = the_live_view_on_the_distance_row();
+    scene.glow_shadow = harmonigraph_scene::GLOW_SHADOW_MAX;
+    scene
+}
+
 /// The distance row at the default camera distance and full Shadow depth.
 ///
 /// This is the scale where a node's curved ink is only a few pixels wide on
@@ -597,6 +609,15 @@ fn the_live_view_draws_the_frame_on_record() {
 #[test]
 fn the_live_view_on_the_distance_row_draws_the_frame_on_record() {
     check("live-view-distance", on_the_ground_it_clears_to(the_live_view_on_the_distance_row()));
+}
+
+/// The coarsest Distance grid at the top of the Shadow bar stays on record.
+#[test]
+fn the_live_view_at_the_top_of_the_distance_row_draws_the_frame_on_record() {
+    check(
+        "live-view-distance-top",
+        on_the_ground_it_clears_to(the_live_view_at_the_top_of_the_distance_row()),
+    );
 }
 
 /// The distance row stays smooth when its ink projects to a handful of pixels.

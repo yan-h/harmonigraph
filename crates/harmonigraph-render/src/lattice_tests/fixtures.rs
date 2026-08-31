@@ -214,7 +214,6 @@ pub(super) fn parity_scene() -> Scene {
         glow_shadow_curve: 1.0,
         glow_shadow_name: 1.0,
         glow_shadow_kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-        glow_shadow_resolution: 0.8,
         // The distance family's own bar, at the plain exponential the fresh
         // view opens on. Inert on the Gaussian row every other fixture reads.
         glow_shadow_shape: 1.0,
