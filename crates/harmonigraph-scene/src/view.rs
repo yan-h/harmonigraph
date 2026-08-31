@@ -7,8 +7,9 @@ use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
     GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX,
-    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
-    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_SHADOW_RESOLUTION_MAX, GLOW_SHADOW_RESOLUTION_MIN,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1314,6 +1315,15 @@ pub struct ViewConfig {
     /// is the area packed and the taps a caster's draw takes, not the kernel
     /// any one cell is blurred by.
     pub glow_shadow_kernel: ShadowKernel,
+    /// The minimum resolution of a DISTANCE cell,
+    /// [`GLOW_SHADOW_RESOLUTION_MIN`]..=[`GLOW_SHADOW_RESOLUTION_MAX`], in
+    /// atlas texels per pane point. Inert on a blur row.
+    ///
+    /// 0.8 holds small type at the floor its contour seeding needs and is what
+    /// a fresh view opens on. 1.2 and 1.6 are the 1.5x and 2x sampling probes:
+    /// cell area grows roughly with the square, so the right end costs about
+    /// four times the atlas area and flood work of the left.
+    pub glow_shadow_resolution: f32,
     /// The exponent a DISTANCE row's decay is taken over,
     /// [`SHADOW_SHAPE_MIN`](crate::SHADOW_SHAPE_MIN)..=[`SHADOW_SHAPE_MAX`](crate::SHADOW_SHAPE_MAX).
     /// 1 is the plain exponential and is what a fresh view opens on.
@@ -2329,6 +2339,9 @@ impl ViewConfig {
         // And the distance family's two, held to their bars whatever row is
         // picked: a blob switched back to a Gaussian still carries them, and a
         // number out of range would be waiting there when it is switched back.
+        self.glow_shadow_resolution =
+            finite_or(self.glow_shadow_resolution, fresh.glow_shadow_resolution)
+                .clamp(GLOW_SHADOW_RESOLUTION_MIN, GLOW_SHADOW_RESOLUTION_MAX);
         self.glow_shadow_shape = finite_or(self.glow_shadow_shape, fresh.glow_shadow_shape)
             .clamp(crate::SHADOW_SHAPE_MIN, crate::SHADOW_SHAPE_MAX);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
@@ -2671,6 +2684,9 @@ impl Default for ViewConfig {
             // One Gaussian, which is one cell per caster and the picture the
             // rest of the Shadow section is calibrated on.
             glow_shadow_kernel: ShadowKernel::Gaussian,
+            // The floor that keeps the smallest projected note-name stems
+            // represented by about two contour-seed texels.
+            glow_shadow_resolution: 0.8,
             // The plain exponential, which is the ceiling of the shape bar and
             // the only value in its range with no knee anywhere in the decay.
             glow_shadow_shape: 1.0,

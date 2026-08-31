@@ -316,6 +316,23 @@ pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
 /// letterforms want a blur their neighbours do not.
 pub const GLOW_SHADOW_NAME_MAX: f32 = 3.0;
 
+/// The least resolution a distance shadow cell may hold (see
+/// [`ViewConfig::glow_shadow_resolution`]), in atlas texels per pane point.
+///
+/// Eight tenths keeps a roughly 30-point monospace stem about two texels wide
+/// at the smallest projected label sizes. Below that the distance field loses
+/// the source samples the floor exists to preserve, so this is a quality bound
+/// rather than merely the left end of an experimental range.
+pub const GLOW_SHADOW_RESOLUTION_MIN: f32 = 0.8;
+
+/// The most resolution a distance shadow cell may hold (see
+/// [`ViewConfig::glow_shadow_resolution`]), in atlas texels per pane point.
+///
+/// Twice the minimum is the largest experiment #552 calls for and makes a
+/// distance cell about four times its minimum area. More would spend atlas and
+/// flood work beyond the comparison this control is meant to make.
+pub const GLOW_SHADOW_RESOLUTION_MAX: f32 = 1.6;
+
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
 ///
@@ -971,6 +988,11 @@ pub struct Scene {
     /// [`ViewConfig::glow_shadow_kernel`]). Carried whole: the renderer takes
     /// the row off it rather than a copy of the numbers.
     pub glow_shadow_kernel: ShadowKernel,
+    /// The minimum atlas texels per pane point a DISTANCE cell keeps (see
+    /// [`ViewConfig::glow_shadow_resolution`]); already clamped to
+    /// [`GLOW_SHADOW_RESOLUTION_MIN`]..=[`GLOW_SHADOW_RESOLUTION_MAX`]. Inert
+    /// on a blur row.
+    pub glow_shadow_resolution: f32,
     /// The exponent a DISTANCE row's decay is taken over (see
     /// [`ViewConfig::glow_shadow_shape`]); already clamped to
     /// [`SHADOW_SHAPE_MIN`]..=[`SHADOW_SHAPE_MAX`]. Inert on a blur row.
