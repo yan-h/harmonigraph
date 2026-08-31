@@ -37,38 +37,6 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Flo
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 
-/// The fewest texels of a DISTANCE cell one POINT of the pane may be drawn at.
-///
-/// A blur cell shrinks without limit as σ grows (`SIGMA_CELL_MAX / σ`), because
-/// a blur needs no more texels than its own width. A distance cell cannot: FORM
-/// is the point of the family, and form lives at the ink's own resolution, so
-/// what has to survive is the thinnest stroke in the picture.
-///
-/// Two texels of it. The lattice's thinnest ink is a stroke of type, and a name
-/// is set at `NAME_SIZE` 30 points (`harmonigraph-ui`'s `marks.rs`) whose
-/// monospace stem is about a twelfth of the em — two and a half POINTS. Two
-/// texels of that is 0.8 a point, and under it a stem is one texel or none: the
-/// flood's seeds come off a coverage contour (`INK_FLOOR`), and a stroke that
-/// covers no texel to half seeds nothing at all, so its shadow does not thin —
-/// it disappears.
-///
-/// In the pane's POINTS and not in the target's pixels, which is the whole
-/// reason it is written this way round: a stem is a fixed number of points and
-/// a varying number of pixels, so a floor on the fraction of the target would
-/// hold two texels only at the framing it was fitted to. The editor runs at 2
-/// pixels a point and the offline renderer at 1 to 4 (`default_scale` in
-/// harmonigraph-offline's `main.rs`, 1.5 for a 1080p export), so a fraction
-/// fitted to the editor is a name whose shadow is present on screen and gone
-/// from the mp4. The cell's cost is unchanged by the swap: what it decides is
-/// `k`, and `k` is this number.
-///
-/// Above the floor a distance cell shrinks with the Shadow bar exactly as a
-/// blur cell does, so the widest settings cost no more atlas per cell than the
-/// floor allows. What it does NOT bound is the cell's area, which grows with
-/// the pad: `timing.rs` is what reads that back at the top of the bar, and
-/// `a_kernel_row_costs_this_much_atlas_against_one_gaussian` bounds it.
-pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
-
 /// What the flood's ping-pong pair is kept in: one texel's nearest seed, as a
 /// pair of ABSOLUTE atlas coordinates.
 ///
@@ -391,13 +359,16 @@ pub(crate) const NO_CASTER: ShadowCaster = ShadowCaster {
 /// Every caster's cell, shelf-packed in the order the casters arrive.
 ///
 /// `px_per_point` is the target's pixels per pane point — the device's scale
-/// times the render scale — and `max_side` the device's texture limit.
+/// times the render scale — `distance_texels_per_point` is the minimum atlas
+/// resolution a distance cell keeps in that same pane-point space, and
+/// `max_side` the device's texture limit.
 ///
 /// A PURE function of this frame, which is what the offline renderer's
-/// determinism rests on: the layout depends on the casters, σ and nothing a
-/// previous frame left behind. The texture that holds it may be larger than
-/// `size` (it grows to demand and never shrinks, see [`ShadowTarget`]); the
-/// cells' texel coordinates are absolute, so that changes nothing sampled.
+/// determinism rests on: the layout depends on the casters, σ, target scale,
+/// Distance resolution, device limit and kernel, and nothing a previous frame
+/// left behind. The texture that holds it may be larger than `size` (it grows
+/// to demand and never shrinks, see [`ShadowTarget`]); the cells' texel
+/// coordinates are absolute, so that changes nothing sampled.
 ///
 /// A cell the atlas cannot hold — past `max_side` in either direction — is
 /// packed as no cell at all, its level zeroed so the box draws nothing. At the
@@ -407,6 +378,7 @@ pub(crate) fn pack(
     casters: &[Caster],
     sigma_px: f32,
     px_per_point: f32,
+    distance_texels_per_point: f32,
     max_side: u32,
     kernel: &[harmonigraph_scene::KernelTerm],
 ) -> Packed {
@@ -456,10 +428,11 @@ pub(crate) fn pack(
     // taps to that cell's rect, so N terms are N cells the existing pass sweeps
     // rather than N kernels any one of them is blurred by.
     // A DISTANCE cell parts from that in both numbers, and each for its own
-    // reason. Its resolution is floored ([`DISTANCE_TEXELS_PER_POINT`]) because
-    // form is what the family draws and a stroke under two texels seeds nothing
-    // at all; its pad is the standoff's own stop rather than the kernel's reach,
-    // that being where the curve is windowed to zero
+    // reason. Its resolution is floored because form is what the family draws
+    // and a stroke under two texels seeds nothing at all. The floor is in pane
+    // POINTS rather than target pixels so editor and offline scales keep the
+    // same source samples. Its pad is the standoff's own stop rather than the
+    // kernel's reach, that being where the curve is windowed to zero
     // (`KernelTerm::reach_sigmas`, which is the one place the two are written
     // down). σ in the CELL is zero: what the blur chain does to such a cell is
     // a pass-through, which is what carries its coverage to the resolve.
@@ -471,7 +444,7 @@ pub(crate) fn pack(
         let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
         // The floor is a `k` and not a fraction of the target, so it holds two
         // texels of a stem at every framing rather than at one.
-        let floor = (DISTANCE_TEXELS_PER_POINT / px_per_point).min(1.0);
+        let floor = distance_texels_per_point / px_per_point;
         let scale = if is_distance(t) { fit.max(floor) } else { fit };
         let k = scale * px_per_point;
         // This term's σ in the cell's own texels, which is what the PADDING is
@@ -1262,7 +1235,14 @@ pub(crate) mod tests {
         // the pane and the resolutions below are the packer's own choice rather
         // than the pane's.
         let sigma = SIGMA_CELL_MAX * 40.0;
-        let packed = pack(&[caster(0.0, 0.0, 40.0, 12.0)], sigma, 1.0, 16384, terms);
+        let packed = pack(
+            &[caster(0.0, 0.0, 40.0, 12.0)],
+            sigma,
+            1.0,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            16384,
+            terms,
+        );
         assert_eq!(packed.boxes.len(), terms.len(), "one cell per term");
         assert_eq!(packed.casters.len(), 1, "one entry per caster, whatever the term count");
         for (t, term) in terms.iter().enumerate() {
@@ -1323,7 +1303,14 @@ pub(crate) mod tests {
         // Each term's cell fits alone, while the pair cannot both be shelved in
         // this atlas. That reaches the partial-kernel branch rather than the
         // simpler case where the whole row fits.
-        let packed = pack(&[caster(0.0, 0.0, 300.0, 300.0)], 40.0, 1.0, 96, terms);
+        let packed = pack(
+            &[caster(0.0, 0.0, 300.0, 300.0)],
+            40.0,
+            1.0,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            96,
+            terms,
+        );
         assert_eq!(packed.casters.len(), 1);
         assert_eq!(
             packed.casters[0].level[0], 0.0,
@@ -1367,16 +1354,17 @@ pub(crate) mod tests {
             // The CELLS' own area, not the texture's: a target is rounded up to
             // a power of two in each direction, which quantizes every reading
             // to a factor of two and hides what a row actually asked for.
-            let area = |kernel: harmonigraph_scene::ShadowKernel| -> f64 {
-                pack(&casters, sigma, 2.0, 16384, kernel.terms())
+            let area = |kernel: harmonigraph_scene::ShadowKernel, resolution: f32| -> f64 {
+                pack(&casters, sigma, 2.0, resolution, 16384, kernel.terms())
                     .boxes
                     .iter()
                     .map(|b| f64::from(b.cell[2]) * f64::from(b.cell[3]))
                     .sum()
             };
-            let plain = area(Gaussian);
+            let fresh_resolution = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
+            let plain = area(Gaussian, fresh_resolution);
             assert!(plain > 0.0, "one Gaussian packed nothing at {what}");
-            let ratio = area(TwoScale) / plain;
+            let ratio = area(TwoScale, fresh_resolution) / plain;
             eprintln!("TwoScale at {what}: {ratio:.2}x one Gaussian's cells");
             assert!(
                 ratio <= 4.0,
@@ -1386,20 +1374,28 @@ pub(crate) mod tests {
             // The DISTANCE row on a bound of its own, and two orders of
             // magnitude above the blur rows' rather than beside them. A blur
             // cell shrinks with σ and a distance cell stops at
-            // `DISTANCE_TEXELS_PER_POINT`, so the top of the bar is where the
-            // two families' costs part company by construction — the number
-            // measures 87x there, and the bound is a CEILING on that rather
-            // than a claim it should be smaller. What it catches is the same
-            // thing the blur-row bound above does: a change that walks the
-            // atlas into `max_side`, where a caster stops casting with nothing
-            // on screen to say so.
-            let ratio = area(Distance) / plain;
-            eprintln!("Distance at {what}: {ratio:.2}x one Gaussian's cells");
+            // the view's fresh resolution floor, so the top of the bar is
+            // where the two families' costs part company by construction —
+            // the number measures 87x there, and the bound is a CEILING on
+            // that rather than a claim it should be smaller. What it catches
+            // is the same thing the blur-row bound above does: a change that
+            // walks the atlas into `max_side`, where a caster stops casting
+            // with nothing on screen to say so.
+            let ratio = area(Distance, fresh_resolution) / plain;
+            eprintln!(
+                "Distance at {what}, {fresh_resolution:.2} tex/pt: {ratio:.2}x one Gaussian's cells"
+            );
             assert!(
                 ratio <= 120.0,
                 "Distance packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
                  reaches the device's texture limit rather than a row to compare",
             );
+            for resolution in [1.2, harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX] {
+                let ratio = area(Distance, resolution) / plain;
+                eprintln!(
+                    "Distance at {what}, {resolution:.2} tex/pt: {ratio:.2}x one Gaussian's cells"
+                );
+            }
         }
     }
 
@@ -1466,7 +1462,14 @@ pub(crate) mod tests {
     #[test]
     fn a_cells_sigma_is_at_most_three_texels_at_every_shadow_width() {
         for sigma_px in [0.05f32, 0.5, 1.0, 2.9, 3.0, 3.1, 10.0, 100.0, 5000.0] {
-            let packed = pack(&[caster(10.0, 10.0, 40.0, 12.0)], sigma_px, 2.0, 16384, one());
+            let packed = pack(
+                &[caster(10.0, 10.0, 40.0, 12.0)],
+                sigma_px,
+                2.0,
+                harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+                16384,
+                one(),
+            );
             let b = packed.boxes[0];
             assert!(
                 b.terms[1] <= SIGMA_CELL_MAX + 1e-4,
@@ -1491,13 +1494,30 @@ pub(crate) mod tests {
     /// whose Shadow is shut.
     #[test]
     fn a_frame_with_no_caster_packs_no_cell() {
-        assert_eq!(pack(&[], 4.0, 2.0, 16384, one()), Packed::default());
         assert_eq!(
-            pack(&[caster(0.0, 0.0, 10.0, 10.0)], 0.0, 2.0, 16384, one()),
+            pack(&[], 4.0, 2.0, harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN, 16384, one(),),
             Packed::default()
         );
         assert_eq!(
-            pack(&[caster(0.0, 0.0, 10.0, 10.0)], f32::NAN, 2.0, 16384, one()),
+            pack(
+                &[caster(0.0, 0.0, 10.0, 10.0)],
+                0.0,
+                2.0,
+                harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+                16384,
+                one(),
+            ),
+            Packed::default()
+        );
+        assert_eq!(
+            pack(
+                &[caster(0.0, 0.0, 10.0, 10.0)],
+                f32::NAN,
+                2.0,
+                harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+                16384,
+                one(),
+            ),
             Packed::default()
         );
     }
@@ -1519,7 +1539,8 @@ pub(crate) mod tests {
             })
             .chain([caster(0.0, 0.0, 700.0, 10.0)])
             .collect();
-        let packed = pack(&casters, 6.0, 2.0, 16384, one());
+        let packed =
+            pack(&casters, 6.0, 2.0, harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN, 16384, one());
         assert_eq!(packed.boxes.len(), casters.len());
         let rects: Vec<[u32; 4]> = packed.boxes.iter().map(|b| b.cell.map(|v| v as u32)).collect();
         for (i, r) in rects.iter().enumerate() {
@@ -1539,7 +1560,10 @@ pub(crate) mod tests {
         }
         // The same frame packs the same way: a layout is a function of the
         // frame and nothing else.
-        assert_eq!(pack(&casters, 6.0, 2.0, 16384, one()), packed);
+        assert_eq!(
+            pack(&casters, 6.0, 2.0, harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN, 16384, one(),),
+            packed
+        );
     }
 
     /// A cell past the texture limit is no cell, with its level zeroed so its
@@ -1547,7 +1571,8 @@ pub(crate) mod tests {
     #[test]
     fn a_cell_the_atlas_cannot_hold_casts_nothing() {
         let casters: Vec<Caster> = (0..8).map(|_| caster(0.0, 0.0, 100.0, 100.0)).collect();
-        let packed = pack(&casters, 2.0, 1.0, 256, one());
+        let packed =
+            pack(&casters, 2.0, 1.0, harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN, 256, one());
         assert_eq!(packed.size, [256, 256]);
         let cast: Vec<bool> = packed.boxes.iter().map(|b| b.terms[2] > 0.0).collect();
         assert!(cast.iter().any(|&c| c), "nothing fit an atlas that holds four cells");
@@ -1569,8 +1594,22 @@ pub(crate) mod tests {
     fn a_caster_that_darkens_nothing_takes_no_cell_and_no_room() {
         let live = caster(0.0, 0.0, 100.0, 100.0);
         let dead = Caster { level: 0.0, ..live };
-        let without = pack(&[live, live], 2.0, 1.0, 4096, one());
-        let with_dead = pack(&[live, dead, live], 2.0, 1.0, 4096, one());
+        let without = pack(
+            &[live, live],
+            2.0,
+            1.0,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            4096,
+            one(),
+        );
+        let with_dead = pack(
+            &[live, dead, live],
+            2.0,
+            1.0,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            4096,
+            one(),
+        );
         assert_eq!(with_dead.boxes[1].cell, [0.0; 4], "the dead caster took a cell");
         assert_eq!(with_dead.boxes[1].terms[2], 0.0, "the dead caster kept a level");
         assert_eq!(with_dead.size, without.size, "the dead caster sized the atlas");
@@ -1613,6 +1652,7 @@ pub(crate) mod tests {
             &[caster(0.0, 0.0, 80.0, 80.0), caster(0.0, 0.0, 80.0, 80.0)],
             SIGMA,
             1.0,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
             4096,
             one(),
         );
@@ -2064,7 +2104,8 @@ pub(crate) mod tests {
         // without limit and a distance cell stops.
         let sigma = 40.0;
         let packed = ShadowKernel::Distance.terms();
-        let out = pack(&[caster], sigma, 1.0, 4096, packed);
+        let resolution = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
+        let out = pack(&[caster], sigma, 1.0, resolution, 4096, packed);
         let cell = out.boxes[0];
         let scale = cell.terms[3];
         // At EVERY framing, which is the half a fraction of the target cannot
@@ -2072,14 +2113,22 @@ pub(crate) mod tests {
         // (`default_scale` in harmonigraph-offline), so a floor fitted to one
         // of them is a shadow present on screen and gone from the mp4. What has
         // to hold still is the texels a POINT is drawn at.
-        for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
-            let held = pack(&[caster], sigma * px_per_point, px_per_point, 8192, packed).boxes[0];
-            let k = held.terms[0];
-            assert!(
-                k >= DISTANCE_TEXELS_PER_POINT - 1e-5,
-                "at {px_per_point} pixels a point a distance cell draws a point across {k} \
-                 texels, so a stem of type is under two of them and seeds nothing",
-            );
+        for resolution in [
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            1.2,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX,
+        ] {
+            for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
+                let held =
+                    pack(&[caster], sigma * px_per_point, px_per_point, resolution, 8192, packed)
+                        .boxes[0];
+                let k = held.terms[0];
+                assert!(
+                    (k - resolution).abs() < 1e-5,
+                    "at {px_per_point} pixels a point a {resolution} texel/point setting packed \
+                     {k}, so editor and offline scales do not keep the same source samples",
+                );
+            }
         }
         assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ, so the chain blurs it");
         assert_eq!(cell.who[1], DISTANCE_KIND, "the box does not say it holds a distance");
@@ -2093,8 +2142,39 @@ pub(crate) mod tests {
         );
         assert!(out.flood >= want * scale, "the chain is sized {} for a pad of {pad}", out.flood);
         // And the same row on the Gaussian's own terms floods nothing.
-        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian.terms());
+        let blur = pack(&[caster], sigma, 1.0, resolution, 4096, ShadowKernel::Gaussian.terms());
         assert_eq!(blur.flood, 0.0, "a blur row asked for a flood chain");
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
+    }
+
+    /// Raising the Distance resolution buys more source samples and only that
+    /// row pays for them. The 2x endpoint is allowed to quantize at the cell's
+    /// edge, but its area still has to grow by about 4x; a Gaussian does not
+    /// read the setting at all.
+    #[test]
+    fn distance_resolution_sizes_distance_cells_and_not_blur_cells() {
+        use harmonigraph_scene::ShadowKernel;
+        let caster = caster(40.0, 40.0, 20.0, 20.0);
+        let sigma = 40.0;
+        let low = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
+        let high = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX;
+        let distance = |resolution| {
+            pack(&[caster], sigma, 1.0, resolution, 8192, ShadowKernel::Distance.terms())
+        };
+        let [low_cell, high_cell] = [distance(low).boxes[0], distance(high).boxes[0]];
+        assert!((low_cell.terms[0] - low).abs() < 1e-5);
+        assert!((high_cell.terms[0] - high).abs() < 1e-5);
+        let area = |cell: ShadowBox| cell.cell[2] * cell.cell[3];
+        assert!(
+            area(high_cell) >= 3.8 * area(low_cell),
+            "2x Distance resolution grew cell area from {} to {}, less than the expected 4x",
+            area(low_cell),
+            area(high_cell),
+        );
+
+        let gaussian = |resolution| {
+            pack(&[caster], sigma, 1.0, resolution, 8192, ShadowKernel::Gaussian.terms())
+        };
+        assert_eq!(gaussian(low), gaussian(high), "a blur row read the Distance resolution");
     }
 }

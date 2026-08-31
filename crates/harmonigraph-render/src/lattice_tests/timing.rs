@@ -53,24 +53,38 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
 /// so a row's cost is not one number.
 ///
 /// A DISTANCE row is the expensive one, and is why this probe is run before a
-/// merge rather than after (#536). Its cell does not shrink past
-/// `DISTANCE_SCALE_FLOOR`, so the atlas grows with the bar instead of shrinking;
-/// its fill is the whole node shader at near-target resolution, per node
-/// (#507); and the flood is `log2(pad)` passes over those cells on top. What is
-/// wanted here is whether that floor is affordable at the top of the bar.
+/// merge rather than after (#536). Its cell does not shrink past the view's
+/// resolution floor, so the atlas grows with the bar instead of shrinking;
+/// its fill is the whole node shader at that resolution, per node (#507); and
+/// the flood is `log2(pad)` passes over those cells on top. All three useful
+/// floors are timed: the fresh 0.8, and #552's 1.5x and 2x probes.
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_each_kernel_costs_this_much() {
     use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
     for kernel in [Gaussian, TwoScale, Distance] {
+        let resolutions = [
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN,
+            1.2,
+            harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX,
+        ];
+        let resolution_count = if kernel.floods() { resolutions.len() } else { 1 };
         for (shadow, where_) in [
             (the_live_view().glow_shadow, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),
         ] {
-            let mut scene = the_live_view();
-            scene.glow_shadow = shadow;
-            scene.glow_shadow_kernel = kernel;
-            time_a_frame_of_names(scene, &format!("{kernel:?} at {where_}"));
+            for &resolution in &resolutions[..resolution_count] {
+                let mut scene = the_live_view();
+                scene.glow_shadow = shadow;
+                scene.glow_shadow_kernel = kernel;
+                scene.glow_shadow_resolution = resolution;
+                let suffix = if kernel.floods() {
+                    format!(", {resolution:.2} tex/pt")
+                } else {
+                    String::new()
+                };
+                time_a_frame_of_names(scene, &format!("{kernel:?} at {where_}{suffix}"));
+            }
         }
     }
 }
