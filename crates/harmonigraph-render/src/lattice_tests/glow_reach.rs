@@ -68,9 +68,9 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     );
 }
 
-/// Moving the point into the outer reach leaves the peak alone and carries
-/// visible light into that reach. That is the picture the curve exists to
-/// make: a quiet tail rather than a second strength control.
+/// A slower shape leaves the peak alone and carries visible light into the
+/// outer reach. That is the picture the curve exists to make: a quiet tail
+/// rather than a second strength control.
 #[test]
 fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     const SIZE: [u32; 2] = [256, 256];
@@ -85,7 +85,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
         scene
     };
     let default_curve = harmonigraph_scene::GlowCurve::default();
-    let long_curve = harmonigraph_scene::GlowCurve { distance: 0.75, level: 0.18 };
+    let long_curve = harmonigraph_scene::GlowCurve { shape: 0.75 };
     let default = shooter.shot(&at(default_curve));
     let long = shooter.shot(&at(long_curve));
     let mut unlit = at(default_curve);
@@ -93,7 +93,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     let off = shooter.shot(&unlit);
 
     // The fixture's node is at the frame centre. Curve endpoint 0 is fixed at
-    // full, so the pixel there is exactly the same when the point moves — not
+    // full, so the pixel there is exactly the same when the shape moves — not
     // merely close after a retuned Strength.
     let centre = ((SIZE[1] / 2) * SIZE[0] + SIZE[0] / 2) as usize;
     assert_eq!(

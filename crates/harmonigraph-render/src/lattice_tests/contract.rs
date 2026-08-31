@@ -63,16 +63,16 @@ fn the_shaders_pitch_luts_are_the_length_the_scene_says() {
     );
 }
 
-/// The shader spends the two powers the CPU derives from the editable point in
-/// the same global double-power family `GlowCurve::sample` presents in the UI.
-/// A piecewise interpolant here would put the elbow back in the rendered light
-/// while the editor continued to show the smooth curve.
+/// The shader spends the scene's signed shape in the same normalized
+/// exponential `GlowCurve::sample` presents in the UI.
+/// A two-power family here would put the low-right S back in the rendered light
+/// while the editor continued to show a single-bend curve.
 #[test]
 fn the_shader_uses_the_scenes_global_glow_curve() {
-    let formula = "pow(max(1.0 - pow(p, u.glow_curve.x), 0.0), u.glow_curve.y)";
+    let formula = "(exp(shape * remaining) - 1.0) / (exp(shape) - 1.0)";
     assert!(
         SHADER_SRC.contains(formula),
-        "lattice.wgsl must spend the scene's two glow powers as `{formula}`",
+        "lattice.wgsl must spend the scene's glow shape as `{formula}`",
     );
 }
 

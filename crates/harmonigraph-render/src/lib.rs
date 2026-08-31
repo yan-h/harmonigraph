@@ -583,8 +583,8 @@ struct Uniforms {
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the shapes beside it have nothing to shape.
     misc10: [f32; 4],
-    /// The node glow's falloff inside its reach, as the two positive powers of
-    /// its global curve (`Scene::glow_curve`) in x/y. z/w unused.
+    /// The node glow's falloff inside its reach, as the signed shape of its
+    /// normalized exponential (`Scene::glow_curve`) in x. y/z/w unused.
     ///
     /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
     /// strength is off.
@@ -1505,8 +1505,7 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 glow_curve: if lights {
-                    let [inner, outer] = scene.glow_curve.exponents();
-                    [inner, outer, 0.0, 0.0]
+                    [scene.glow_curve.shape(), 0.0, 0.0, 0.0]
                 } else {
                     [0.0; 4]
                 },

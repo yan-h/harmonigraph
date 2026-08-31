@@ -5,10 +5,10 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
-    GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
-    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
-    RING_INNER_MAX, RING_WIDTH_MAX,
+    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
+    GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX,
+    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
+    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -53,78 +53,64 @@ pub struct DrawnWindow {
     pub max: LatticePos,
 }
 
-/// One point on the node glow's falloff through
-/// [`ViewConfig::glow_reach`]. The centre and the far edge are fixed at 1 and
-/// 0, and one global double-power curve passes through this point. Moving it
-/// changes the whole bend without putting an interpolation join in the curve.
+/// The shape of the node glow's falloff through [`ViewConfig::glow_reach`].
+/// The centre and the far edge stay fixed at 1 and 0 while one signed exponent
+/// bends the curve between them without an interpolation join or an inflection.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-// A curve nested in a persisted view still has its own fallback per field, so
-// a hand-edited blob missing one coordinate costs that coordinate alone.
+// A curve nested in a persisted view still has its own fallback, so a
+// hand-edited blob missing its shape costs that field alone.
 #[serde(default)]
 pub struct GlowCurve {
-    /// Where the point sits from the node's centre to the glow's edge,
-    /// 0.06..=0.94. Moving right holds the light near its centre for longer.
-    pub distance: f32,
-    /// How much light remains at [`distance`](Self::distance), 0.03..=0.97.
-    /// Moving up holds more light into the outer part of the reach.
-    pub level: f32,
+    /// Signed exponent, [`GLOW_CURVE_SHAPE_MIN`]..=[`GLOW_CURVE_SHAPE_MAX`].
+    /// Zero is linear; positive falls early and negative falls late.
+    pub shape: f32,
 }
 
 impl GlowCurve {
-    const DISTANCE_MIN: f32 = 0.06;
-    const DISTANCE_MAX: f32 = 0.94;
-    const LEVEL_MIN: f32 = 0.03;
-    const LEVEL_MAX: f32 = 0.97;
-
-    /// The editable point as distance then level.
-    pub fn point(self) -> [f32; 2] {
-        [self.distance, self.level]
-    }
-
-    /// Move the editable point inside the range whose endpoint slopes remain
-    /// useful to dial rather than collapsing into a numerical corner.
-    pub fn set_point(&mut self, distance: f32, level: f32) {
-        self.distance = distance.clamp(Self::DISTANCE_MIN, Self::DISTANCE_MAX);
-        self.level = level.clamp(Self::LEVEL_MIN, Self::LEVEL_MAX);
-    }
-
     /// The glow level `p` of the way from its centre to its edge.
     ///
-    /// `level = (1 - p^a)^b`, with the two exponents chosen so the curve passes
-    /// through [`point`](Self::point). The whole domain uses this one formula:
-    /// the point is a parameter, not a knot where two pieces meet.
+    /// `level = expm1(k(1 - p)) / expm1(k)`. Positive `k` is a fast
+    /// exponential-like decay, negative `k` holds then falls, and zero is the
+    /// straight line.
     pub fn sample(self, p: f32) -> f32 {
         let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
         if p >= 1.0 {
             return 0.0;
         }
-        let [inner, outer] = self.exponents();
-        (1.0 - p.powf(inner)).max(0.0).powf(outer)
+        exponential_level(p, self.shape())
     }
 
-    /// The two positive powers consumed by the renderer, inner then outer.
-    pub fn exponents(self) -> [f32; 2] {
-        let point = self.sanitized();
-        let half = 0.5f32.ln();
-        [half / point.distance.ln(), point.level.ln() / half]
+    /// The finite, bounded shape consumed by the renderer.
+    pub fn shape(self) -> f32 {
+        self.sanitized().shape
     }
 
-    /// Repair both coordinates into the finite rectangle the editor can
-    /// produce.
+    /// Repair the value into the finite range the editor can produce.
     pub fn sanitized(mut self) -> Self {
         let fresh = GlowCurve::default();
-        self.distance =
-            finite_or(self.distance, fresh.distance).clamp(Self::DISTANCE_MIN, Self::DISTANCE_MAX);
-        self.level = finite_or(self.level, fresh.level).clamp(Self::LEVEL_MIN, Self::LEVEL_MAX);
+        self.shape =
+            finite_or(self.shape, fresh.shape).clamp(GLOW_CURVE_SHAPE_MIN, GLOW_CURVE_SHAPE_MAX);
         self
     }
 }
 
+/// The normalized exponential at `p`. The series is the same one the shader
+/// uses where direct subtraction of two almost-equal exponentials loses the
+/// bend to float cancellation.
+fn exponential_level(p: f32, shape: f32) -> f32 {
+    let remaining = 1.0 - p;
+    if shape.abs() < 0.05 {
+        let shape2 = shape * shape;
+        return remaining * (1.0 - shape * p * 0.5 + shape2 * p * (2.0 * p - 1.0) / 12.0);
+    }
+    (shape * remaining).exp_m1() / shape.exp_m1()
+}
+
 impl Default for GlowCurve {
     fn default() -> Self {
-        // This point makes the global family closely follow the compact accent
-        // the fresh Glow bars are tuned around.
-        GlowCurve { distance: 0.45, level: 0.24 }
+        // This exponent closely follows the compact accent the fresh Glow bars
+        // are tuned around while leaving both slower and faster shapes in reach.
+        GlowCurve { shape: 2.75 }
     }
 }
 
@@ -1180,10 +1166,9 @@ pub struct ViewConfig {
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
-    /// Where the light's brightness sits inside
-    /// [`glow_reach`](Self::glow_reach), as one point the global falloff passes
-    /// through. The endpoints stay fixed: full at the node's centre and zero
-    /// where the reach ends.
+    /// How the light's brightness falls inside [`glow_reach`](Self::glow_reach).
+    /// The endpoints stay fixed: full at the node's centre and zero where the
+    /// reach ends.
     pub glow_curve: GlowCurve,
     /// The Shadow: how wide every item's shadow is, in the same quad UV units
     /// [`ring_gap`](Self::ring_gap) reads in. It is HALF this in σ

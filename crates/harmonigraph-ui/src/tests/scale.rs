@@ -342,17 +342,13 @@ fn every_settings_row_is_one_row_high() {
 
 /// Every bar a settings pane draws is its declared height at every scale.
 ///
-/// Ordinary bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT). The glow
-/// curve needs enough vertical range to move its point in two dimensions, so
-/// it declares a taller track. Both reach their heights by allocating them
-/// outright rather than by the `interact_size` floor that catches settings
-/// rows; those independent routes are what this pins.
+/// Bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), reached by
+/// allocating it outright rather than by the `interact_size` floor that
+/// catches settings rows.
 ///
 /// Sweeping the real panes makes every full-width well enter the census at the
 /// site where it is used. The `SpectrumBar` gives the right end of its row to
-/// a button, so its declared track width is recognised too. The glow curve is
-/// identified by the path inside its well rather than by the height this test
-/// is meant to verify.
+/// a button, so its declared track width is recognised too.
 #[test]
 fn every_bar_has_its_declared_height() {
     for pane in [
@@ -366,14 +362,6 @@ fn every_bar_has_its_declared_height() {
             let scale = 0.7 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
             let shapes = settings_pane_at_scale(pane, scale);
-            let curves = crate::widgets::glow_curve_paths(
-                &shapes.iter().map(|shape| shape.shape.clone()).collect::<Vec<_>>(),
-            );
-            assert!(
-                curves.len() <= 1,
-                "{pane:?} at scale {scale} drew {} glow curves",
-                curves.len()
-            );
             // Found by WIDTH, never by height: a bar fills the column (the
             // spectrum's track gives its right end to the flip button and is
             // the one exception), so that is a property this test does not
@@ -392,17 +380,12 @@ fn every_bar_has_its_declared_height() {
                     continue;
                 }
                 found += 1;
-                let is_curve = curves
-                    .first()
-                    .is_some_and(|curve| curve.iter().all(|point| r.rect.contains(*point)));
-                let declared =
-                    if is_curve { crate::widgets::glow_curve_height(scale) } else { want };
                 // Egui rounds painted rect edges to eighth-points. A scaled
                 // height that is not on that grid can therefore lose half a
                 // step between its allocated and painted rects.
                 assert!(
-                    (r.rect.height() - declared).abs() < 0.07,
-                    "{pane:?} at scale {scale} drew a {}pt bar, not its declared {declared}pt",
+                    (r.rect.height() - want).abs() < 0.07,
+                    "{pane:?} at scale {scale} drew a {}pt bar, not its declared {want}pt",
                     r.rect.height(),
                 );
             }

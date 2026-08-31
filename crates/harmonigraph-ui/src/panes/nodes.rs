@@ -12,15 +12,16 @@
 use super::spectral::settings::ms_readout;
 use super::{param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, GlowCurveBar, OctaveStrip, StackBar, ValueBar};
+use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX,
-    GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
-    GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
-    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
+    GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
+    GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
+    GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SHADOW_SHAPE_MAX,
+    SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -650,13 +651,29 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Strength")
             .show(ui)
             .on_hover_text("How much light a node lays down. 1 is the tuned amount.");
-        GlowCurveBar::new(&mut view.glow_curve).show(ui).on_hover_text(
+        ValueBar::new(
+            &mut view.glow_curve.shape,
+            GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
+            "Shape",
+        )
+        .decimals(2)
+        .magnet(0.0, 0.15)
+        .display(|shape| {
+            if shape.abs() < f32::EPSILON {
+                "Linear".to_owned()
+            } else if shape > 0.0 {
+                format!("Fast {shape:.2}")
+            } else {
+                format!("Slow {:.2}", -shape)
+            }
+        })
+        .curve(|shape, p| GlowCurve { shape }.sample(p))
+        .show(ui)
+        .on_hover_text(
             "How the light fades from the node's full-bright centre at the \
-                 left to the edge of its Reach at the right. Drag the point in \
-                 two dimensions: right holds the core for longer, and up \
-                 carries more light into the outer reach. One smooth global \
-                 curve passes through it and always fades outward. \
-                 Double-click to restore.",
+                 left to the edge of its Reach at the right. The middle is \
+                 linear; drag right for a fast exponential-like fall, or left \
+                 to hold the light before a late fall.",
         );
         // What colour the light comes out, between the amount of it and the
         // Shadow under it. "Color blend" and not "Spread": under this heading,

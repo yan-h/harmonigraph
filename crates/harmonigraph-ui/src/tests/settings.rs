@@ -145,11 +145,13 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
-    // One bar on the page draws a curve on itself: the Fade curve, Note being
-    // the first section and the bar its second row.
+    // The rising line is the Fade curve: Note is the first section and this is
+    // its second row. Glow's falloff shares the widget and descends instead.
     let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 1, "the Lattice page drew {} preview lines", paths.len());
-    let points = &paths[0];
+    let rising: Vec<&Vec<egui::Pos2>> =
+        paths.iter().filter(|path| path.first().unwrap().y > path.last().unwrap().y).collect();
+    assert_eq!(rising.len(), 1, "the Lattice page drew {} rising preview lines", rising.len());
+    let points = rising[0];
     assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
@@ -184,10 +186,10 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 }
 
 /// The Glow section draws the same falloff `ViewConfig` hands to the scene.
-/// The editor is the setting's readout, so a line drifting from the renderer
+/// The bar is the setting's readout, so a line drifting from the renderer
 /// is a false value just as surely as a bar printing the wrong number.
 #[test]
-fn the_glow_curve_editor_draws_the_curve_the_scene_receives() {
+fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
         SettingsPane::Page(DisplayPage::Lattice),
         320.0,
@@ -196,9 +198,11 @@ fn the_glow_curve_editor_draws_the_curve_the_scene_receives() {
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
-    let paths = crate::widgets::glow_curve_paths(&shapes);
-    assert_eq!(paths.len(), 1, "the Lattice page drew {} glow curves", paths.len());
-    let points = &paths[0];
+    let paths = crate::widgets::curve_paths(&shapes);
+    let descending: Vec<&Vec<egui::Pos2>> =
+        paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
+    assert_eq!(descending.len(), 1, "the Lattice page drew {} descending curves", descending.len());
+    let points = descending[0];
     assert!(points.len() > 8, "the glow curve used only {} points", points.len());
 
     let curve = harmonigraph_scene::ViewConfig::default().glow_curve;
@@ -210,7 +214,7 @@ fn the_glow_curve_editor_draws_the_curve_the_scene_receives() {
         let want = top + (bottom - top) * (1.0 - curve.sample(p));
         assert!(
             (point.y - want).abs() < 0.02,
-            "at {p} across the reach the editor is at {} and the scene curve at {want}",
+            "at {p} across the reach the bar is at {} and the scene curve at {want}",
             point.y,
         );
     }

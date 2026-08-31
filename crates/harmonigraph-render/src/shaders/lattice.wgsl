@@ -128,9 +128,9 @@ struct Uniforms {
     // composited at the BOTTOM of the scene pass, which is what puts it under
     // every shadow the lattice casts.
     misc10: vec4<f32>,
-    // The node glow's falloff inside its reach, as the two positive powers of
-    // its global curve in x/y. The fixed full/zero endpoints are supplied by
-    // `glow_curve_at`; z/w unused. Zeroed with misc10.
+    // The node glow's falloff inside its reach, as the signed shape of its
+    // normalized exponential in x. The fixed full/zero endpoints are supplied
+    // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
     glow_curve: vec4<f32>,
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
@@ -3178,13 +3178,23 @@ fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
     return vec4<f32>(mix(mean.xyz, lit.xyz, mix_out), mean.w);
 }
 
-/// The glow level `d` from the node's centre inside `span`. The tuned accent
-/// is one global double-power curve: the editable point determines its two
-/// powers on the CPU, so there is no spline join where the bend can acquire an
-/// elbow.
+/// The glow level `d` from the node's centre inside `span`. One normalized
+/// exponential covers the whole domain: it can bend either way but has no
+/// inflection, so a low point in the outer reach cannot make an S-curve.
 fn glow_curve_at(d: f32, span: f32) -> f32 {
     let p = clamp(d / span, 0.0, 1.0);
-    return pow(max(1.0 - pow(p, u.glow_curve.x), 0.0), u.glow_curve.y);
+    let shape = u.glow_curve.x;
+    let remaining = 1.0 - p;
+    // This is the second-order series of the quotient below. Both halves match
+    // `GlowCurve::sample`; the branch keeps a nearly-linear shape from being
+    // rounded into an exactly linear one by subtracting exponentials near 1.
+    if abs(shape) < 0.05 {
+        let shape2 = shape * shape;
+        return remaining
+            * (1.0 - shape * p * 0.5
+                + shape2 * p * (2.0 * p - 1.0) / 12.0);
+    }
+    return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
 }
 
 /// The node's light at this fragment, premultiplied, exactly as every other

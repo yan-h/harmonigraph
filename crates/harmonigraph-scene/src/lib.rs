@@ -238,6 +238,14 @@ pub const PLUS_SIZE_MAX: f32 = 0.9;
 /// rather than a number the renderer defends.
 pub const GLOW_REACH_MAX: f32 = 8.0;
 
+/// Limits of the signed exponent that shapes the glow's normalized falloff
+/// (see [`GlowCurve::shape`]). Zero is linear, positive values fall quickly
+/// and negative values hold their brightness before falling. Eight already
+/// puts the halfway level within two percent of an endpoint, so more travel
+/// spends almost the whole bar on curves that read alike.
+pub const GLOW_CURVE_SHAPE_MIN: f32 = -8.0;
+pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
+
 /// What the node glow scales its own skirt by
 /// (see [`ViewConfig::glow_strength`]).
 ///
@@ -936,8 +944,8 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-    /// The point the light's global falloff passes through inside its reach
-    /// (see [`ViewConfig::glow_curve`]); already sanitized.
+    /// The shape of the light's global falloff inside its reach (see
+    /// [`ViewConfig::glow_curve`]); already sanitized.
     pub glow_curve: GlowCurve,
     /// The Shadow: how wide every caster's blur is, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to
