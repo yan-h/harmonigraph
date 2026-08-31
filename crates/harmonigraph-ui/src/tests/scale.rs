@@ -340,29 +340,21 @@ fn every_settings_row_is_one_row_high() {
     }
 }
 
-/// Every bar a settings pane draws is one
-/// [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT) tall, at every scale.
+/// Every bar a settings pane draws is its declared height at every scale.
 ///
-/// The bars are the other half of a settings pane and they reach the height by
-/// a different route — each allocates it outright, rather than being grown to
-/// it by the `interact_size` floor that catches everything in
-/// [`every_settings_row_is_one_row_high`]. Two routes to one number is exactly
-/// what drifts, so both are pinned.
+/// Ordinary bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT). The glow
+/// curve needs enough vertical range to place three levels on its own shape,
+/// so it declares a taller track. Both reach their heights by allocating them
+/// outright rather than by the `interact_size` floor that catches settings
+/// rows; those independent routes are what this pins.
 ///
-/// Swept through the real panes rather than by building the six bar types by
-/// hand, which is what makes this cover them: `ValueBar`, `RangeBar`,
-/// `OctaveStrip`, `SpreadBar` and the render `progress_bar` are all in the
-/// panes below, and a seventh added later is covered on the day it is drawn
-/// rather than on the day someone remembers to add it to a list here.
-///
-/// The `SpectrumBar` is a row like the rest, and its width is the one thing
-/// that differs — the flip button takes the right end of the row. It is what
-/// the Colors page is in the sweep for, being the one page that draws any —
-/// both gradient groups live there. The gradient preview above it is
-/// deliberately SHORTER than a row and is not swept: it paints no well, being
-/// a picture rather than a track, so the sniffing below never reaches it.
+/// Sweeping the real panes makes every full-width well enter the census at the
+/// site where it is used. The `SpectrumBar` gives the right end of its row to
+/// a button, so its declared track width is recognised too. The glow curve is
+/// identified by the path inside its well rather than by the height this test
+/// is meant to verify.
 #[test]
-fn every_bar_is_one_row_high() {
+fn every_bar_has_its_declared_height() {
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
         SettingsPane::Page(DisplayPage::Colors),
@@ -374,6 +366,14 @@ fn every_bar_is_one_row_high() {
             let scale = 0.7 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
             let shapes = settings_pane_at_scale(pane, scale);
+            let curves = crate::widgets::glow_curve_paths(
+                &shapes.iter().map(|shape| shape.shape.clone()).collect::<Vec<_>>(),
+            );
+            assert!(
+                curves.len() <= 1,
+                "{pane:?} at scale {scale} drew {} glow curves",
+                curves.len()
+            );
             // Found by WIDTH, never by height: a bar fills the column (the
             // spectrum's track gives its right end to the flip button and is
             // the one exception), so that is a property this test does not
@@ -392,9 +392,17 @@ fn every_bar_is_one_row_high() {
                     continue;
                 }
                 found += 1;
+                let is_curve = curves
+                    .first()
+                    .is_some_and(|curve| curve.iter().all(|point| r.rect.contains(*point)));
+                let declared =
+                    if is_curve { crate::widgets::glow_curve_height(scale) } else { want };
+                // Egui rounds painted rect edges to eighth-points. A scaled
+                // height that is not on that grid can therefore lose half a
+                // step between its allocated and painted rects.
                 assert!(
-                    (r.rect.height() - want).abs() < 0.01,
-                    "{pane:?} at scale {scale} drew a {}pt bar, not {want}pt",
+                    (r.rect.height() - declared).abs() < 0.07,
+                    "{pane:?} at scale {scale} drew a {}pt bar, not its declared {declared}pt",
                     r.rect.height(),
                 );
             }

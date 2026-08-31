@@ -200,6 +200,7 @@ pub(super) fn parity_scene() -> Scene {
         // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
+        glow_curve: harmonigraph_scene::GlowCurve::default(),
         // The fresh Shadow and the share a lit slice's own ink takes of the
         // light, so a test that says nothing about either measures the fresh
         // picture.

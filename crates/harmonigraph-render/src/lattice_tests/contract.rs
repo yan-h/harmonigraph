@@ -63,6 +63,27 @@ fn the_shaders_pitch_luts_are_the_length_the_scene_says() {
     );
 }
 
+/// The CPU sends curve levels as offsets from `GlowCurve::default`, while the
+/// shader adds those offsets to its own three literals. A one-sided retune
+/// leaves zero exact but makes every custom curve move the untouched handles
+/// too, so the two copies are one contract rather than similar defaults.
+#[test]
+fn the_shaders_glow_curve_origin_is_the_scenes() {
+    let [quarter, half, three_quarters] = harmonigraph_scene::GlowCurve::default().controls();
+    for (name, value) in [
+        ("GLOW_CURVE_QUARTER", quarter),
+        ("GLOW_CURVE_HALF", half),
+        ("GLOW_CURVE_THREE_QUARTERS", three_quarters),
+    ] {
+        let needle = format!("const {name}: f32 = {value:.8};");
+        assert!(
+            SHADER_SRC.contains(&needle),
+            "lattice.wgsl must declare `{needle}` to match GlowCurve::default; the CPU sends \
+             custom handles as offsets from that value",
+        );
+    }
+}
+
 /// The field names `struct {name} { ... }` declares in `src`, in order — a
 /// `//` or `///` comment line is skipped, and each remaining non-blank line
 /// contributes the identifier before its first `:`. Neither language's

@@ -53,6 +53,141 @@ pub struct DrawnWindow {
     pub max: LatticePos,
 }
 
+/// The node glow's brightness at the three interior quarters of its
+/// [`ViewConfig::glow_reach`]. The centre and the far edge are fixed at 1 and
+/// 0, so this shapes where light sits inside a reach without changing either
+/// its peak or where its finite billboard ends.
+///
+/// The three levels descend outward. That constraint makes the cubic through
+/// them monotone: a glow can hold a long, quiet tail, but it cannot brighten
+/// again into a ring away from the node that emits it.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+// A curve nested in a persisted view still has its own fallback per field, so
+// a hand-edited blob missing one handle costs that handle alone.
+#[serde(default)]
+pub struct GlowCurve {
+    /// Brightness one quarter of the way from the node's centre to the glow's
+    /// edge, 0..=1.
+    pub quarter: f32,
+    /// Brightness halfway to the glow's edge, 0..=[`quarter`](Self::quarter).
+    pub half: f32,
+    /// Brightness three quarters of the way to the glow's edge,
+    /// 0..=[`half`](Self::half).
+    pub three_quarters: f32,
+}
+
+impl GlowCurve {
+    /// The three editable levels, from near to far.
+    pub fn controls(self) -> [f32; 3] {
+        [self.quarter, self.half, self.three_quarters]
+    }
+
+    /// Move one editable level without letting it cross either neighbour.
+    pub fn set_control(&mut self, index: usize, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        match index {
+            0 => self.quarter = level.clamp(self.half, 1.0),
+            1 => self.half = level.clamp(self.three_quarters, self.quarter),
+            2 => self.three_quarters = level.clamp(0.0, self.half),
+            _ => {}
+        }
+    }
+
+    /// The glow level `p` of the way from its centre to its edge.
+    ///
+    /// The tuned accent supplies the distance coordinate: `1 - base(p)` walks
+    /// from 0 to 1 at the rate that falloff already moves. A cubic Hermite maps
+    /// that coordinate through the five levels here. The default levels are
+    /// exactly `base`'s three samples, so that mapping is the straight line
+    /// `1 - x` and the tuned curve is unchanged between its handles as well as
+    /// on them.
+    ///
+    /// The tangent at an interior point is limited to the shallower of the
+    /// slopes beside it. The limit keeps every segment between its two
+    /// handles; an ordinary Catmull-Rom tangent overshoots when a steep core
+    /// gives way to a nearly-flat tail.
+    pub fn sample(self, p: f32) -> f32 {
+        let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
+        if p >= 1.0 {
+            return 0.0;
+        }
+        let base = glow_curve_base(p);
+        if self == GlowCurve::default() {
+            return base;
+        }
+        let levels = [1.0, self.quarter, self.half, self.three_quarters, 0.0];
+        let fresh = GlowCurve::default();
+        let coordinates =
+            [0.0, 1.0 - fresh.quarter, 1.0 - fresh.half, 1.0 - fresh.three_quarters, 1.0];
+        let along = p * 4.0;
+        let segment = (along.floor() as usize).min(3);
+        let x = 1.0 - base;
+        let x0 = coordinates[segment];
+        let x1 = coordinates[segment + 1];
+        let width = x1 - x0;
+        let t = ((x - x0) / width).clamp(0.0, 1.0);
+        let y0 = levels[segment];
+        let y1 = levels[segment + 1];
+        let slope = (y1 - y0) / width;
+        let m0 = if segment == 0 {
+            slope
+        } else {
+            monotone_tangent((y0 - levels[segment - 1]) / (x0 - coordinates[segment - 1]), slope)
+        };
+        let m1 = if segment == 3 {
+            slope
+        } else {
+            monotone_tangent(slope, (levels[segment + 2] - y1) / (coordinates[segment + 2] - x1))
+        };
+        let t2 = t * t;
+        let t3 = t2 * t;
+        ((2.0 * t3 - 3.0 * t2 + 1.0) * y0
+            + (t3 - 2.0 * t2 + t) * width * m0
+            + (-2.0 * t3 + 3.0 * t2) * y1
+            + (t3 - t2) * width * m1)
+            .clamp(0.0, 1.0)
+    }
+
+    /// Repair all three controls into the finite descending shape the editor
+    /// can produce.
+    pub fn sanitized(mut self) -> Self {
+        let fresh = GlowCurve::default();
+        self.quarter = finite_or(self.quarter, fresh.quarter).clamp(0.0, 1.0);
+        self.half = finite_or(self.half, fresh.half).clamp(0.0, self.quarter);
+        self.three_quarters =
+            finite_or(self.three_quarters, fresh.three_quarters).clamp(0.0, self.half);
+        self
+    }
+}
+
+/// One tangent shared by the two segments either side of a curve handle.
+fn monotone_tangent(left: f32, right: f32) -> f32 {
+    if left * right <= 0.0 {
+        0.0
+    } else {
+        left.signum() * left.abs().min(right.abs())
+    }
+}
+
+/// The fresh glow's tuned falloff, without its amount. Kept as the coordinate
+/// every custom curve bends, so the default is the identity mapping over this
+/// exact shape rather than an approximation through its three samples.
+fn glow_curve_base(p: f32) -> f32 {
+    let p = p.clamp(0.0, 1.0);
+    let window_p = ((p - 0.5) / 0.5).clamp(0.0, 1.0);
+    let window = 1.0 - window_p * window_p * (3.0 - 2.0 * window_p);
+    (-3.0 * p).exp() * window
+}
+
+impl Default for GlowCurve {
+    fn default() -> Self {
+        // Samples of the tuned accent at one, two and three quarters of its
+        // span. The first half is exp(-3p); the last half carries the smooth
+        // window that seats the finite curve on zero at its edge.
+        GlowCurve { quarter: 0.472_366_54, half: 0.223_130_17, three_quarters: 0.052_699_61 }
+    }
+}
+
 impl DrawnWindow {
     /// Every position in the block, threes outer and sevens inner.
     ///
@@ -1074,14 +1209,12 @@ pub struct ViewConfig {
     /// drawn edge plus this reach is both the falloff's domain and where its
     /// window shuts, so this bar is exactly where the light stops.
     ///
-    /// The falloff laid over that span is one fixed exponential
-    /// (`GLOW_FALLOFF` in lattice.wgsl), so this bar alone says both how far
-    /// the light goes and how much of that distance has anything left in it:
-    /// past about one radius there is little out there to see, and a field
-    /// that overlaps its neighbours is bought by reaching far enough to cover
-    /// them. The ceiling
-    /// ([`GLOW_REACH_MAX`]) is sized for that — several lattice steps, where
-    /// every node's light overlaps its neighbourhood's.
+    /// [`glow_curve`](Self::glow_curve) says how much light is left at each
+    /// distance inside that span. Keeping the two separate makes a wide Reach
+    /// useful both as a larger accent and as a faint field carried across the
+    /// gaps between nodes. The ceiling ([`GLOW_REACH_MAX`]) is sized for the
+    /// second picture — several lattice steps, where every node's light
+    /// overlaps its neighbourhood's.
     ///
     /// It is the ONLY light a node has: a view with this at 0 draws exactly the
     /// ink the ring stack describes and nothing around it.
@@ -1107,6 +1240,11 @@ pub struct ViewConfig {
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
+    /// Where the light's brightness sits inside
+    /// [`glow_reach`](Self::glow_reach), as three descending levels at one,
+    /// two and three quarters of that span. The endpoints stay fixed: full at
+    /// the node's centre and zero where the reach ends.
+    pub glow_curve: GlowCurve,
     /// The Shadow: how wide every item's shadow is, in the same quad UV units
     /// [`ring_gap`](Self::ring_gap) reads in. It is HALF this in σ
     /// (`shadow::sigma_px` in harmonigraph-render), which puts a wide caster's
@@ -2245,6 +2383,7 @@ impl ViewConfig {
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+        self.glow_curve = self.glow_curve.sanitized();
         // The Shadow, which every caster's quad is grown by: a number from
         // outside the bar is a quad nothing can fill.
         self.glow_shadow =
@@ -2580,6 +2719,7 @@ impl Default for ViewConfig {
             // of the neighbour it would otherwise reach.
             glow_reach: 0.35,
             glow_strength: 1.0,
+            glow_curve: GlowCurve::default(),
             // A sixth of a radius, so σ is a twelfth of one: the shadow and the
             // light either side of it read as one blur rather than as a cut
             // through it, which is what a band with a short edge, laid against

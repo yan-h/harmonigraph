@@ -1465,6 +1465,39 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     }
 }
 
+/// A missing handle inside the glow curve costs that handle alone. The curve
+/// is a persisted struct nested inside `ViewConfig`, so the view-level sweep
+/// above only proves the whole curve has a fallback; it cannot see whether the
+/// curve itself accidentally made all three fields required.
+#[test]
+fn a_glow_curve_missing_any_one_handle_keeps_the_other_two() {
+    use harmonigraph_scene::GlowCurve;
+
+    let curve = GlowCurve { quarter: 0.8, half: 0.15, three_quarters: 0.01 };
+    let fresh = GlowCurve::default();
+    let full = ron::to_string(&curve).expect("a glow curve serializes");
+    let pairs = top_level_pairs(&full);
+    assert_eq!(pairs.len(), 3, "the probe must see every curve handle: {full}");
+
+    for (key, _) in &pairs {
+        let kept: Vec<&str> = pairs
+            .iter()
+            .filter(|(candidate, _)| candidate != key)
+            .map(|(_, text)| text.as_str())
+            .collect();
+        let loaded = ron::from_str::<GlowCurve>(&format!("({})", kept.join(",")))
+            .unwrap_or_else(|e| panic!("dropping {key:?} sank the glow curve: {e}"));
+        let mut expected = curve;
+        match key.as_str() {
+            "quarter" => expected.quarter = fresh.quarter,
+            "half" => expected.half = fresh.half,
+            "three_quarters" => expected.three_quarters = fresh.three_quarters,
+            _ => panic!("the curve serialized an unknown field {key:?}"),
+        }
+        assert_eq!(loaded, expected, "dropping {key:?} changed another handle");
+    }
+}
+
 /// A key the struct no longer has costs that key alone: the rest of the view
 /// loads, at the values the blob holds.
 ///

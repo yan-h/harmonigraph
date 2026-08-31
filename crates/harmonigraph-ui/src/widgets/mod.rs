@@ -13,6 +13,7 @@
 //! which file it is in.
 
 mod bar;
+mod curve;
 mod gradient;
 mod mesh;
 mod octave;
@@ -23,6 +24,7 @@ mod rows;
 mod stack;
 mod value;
 
+pub use curve::GlowCurveBar;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
@@ -35,6 +37,8 @@ pub use value::{progress_bar, ValueBar};
 // against, and three readers they pick a preview out of a frame with.
 // Re-exported rather than reached for by module path, so which file a widget
 // lives in stays this module's business.
+#[cfg(test)]
+pub(crate) use curve::{glow_curve_height, glow_curve_paths};
 #[cfg(test)]
 pub(crate) use gradient::{preview_height, spectrum_track_width};
 #[cfg(test)]

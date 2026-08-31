@@ -113,12 +113,11 @@ struct Uniforms {
     // 0; y: 1 where each wedge is ONE reading taken at its own octave's pitch
     // (the FOLD) rather than a window of pitch spread across it; z/w unused.
     misc9: vec4<f32>,
-    // The node glow's four dials. x: how far past a node's outermost drawn
-    // edge its light spreads, in the node's own uv; y: how much light that is;
-    // z: how flat the falloff is across that span, 0 the exponential heaped on
-    // the node and 1 an even field across it (see `glow_layer`); w: how widely
-    // a node's own ink is averaged into the colour of its light, 0 keeping each
-    // layer's sectors distinct and 1 laying one tint over the whole halo.
+    // The node glow's dials. x: how far past a node's outermost drawn edge its
+    // light spreads, in the node's own uv; y: how much light that is; z unused;
+    // w: how widely a node's own ink is averaged into the colour of its light,
+    // 0 keeping each layer's sectors distinct and 1 laying one tint over the
+    // whole halo.
     //
     // ZEROED WHOLE where the glow is off, by the CPU, so `u.misc10.x > 0.0` is
     // the one test anything here makes and no half-on state exists.
@@ -129,6 +128,12 @@ struct Uniforms {
     // composited at the BOTTOM of the scene pass, which is what puts it under
     // every shadow the lattice casts.
     misc10: vec4<f32>,
+    // The node glow's falloff inside its reach, as the offsets from the fresh
+    // curve's levels one, two and three quarters of the way from its centre to
+    // its edge in x/y/z. The fresh curve is therefore exactly zero here and
+    // takes its tuned path unchanged. The fixed full/zero endpoints are
+    // supplied by `glow_curve_at`; w unused. Zeroed with misc10.
+    glow_curve: vec4<f32>,
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
     // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
@@ -249,17 +254,13 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
-// The rate the light's exponential comes off at across one span
-// (`glow_layer`).
-//
-// An accent: down to a fifth of its peak by half the span and to nothing well
-// before the end of it, so the falloff is the whole shape and the node is
-// plainly what the light belongs to. A field several nodes light at once is
-// reached by widening the Reach until the halos cover each other, which keeps
-// each node the brightest point of its own; a rate flat enough to spread the
-// light on its own instead takes that away, and a screen of several near-flat
-// halos puts more light in the GAP between two nodes than either node has.
-const GLOW_FALLOFF: f32 = 3.0;
+// The fresh curve at the three positions its editor exposes. These are also
+// `GlowCurve::default` in harmonigraph-scene: the CPU sends each edited level
+// as an offset from that default, so zero reaches the exact tuned formula in
+// `glow_curve_base` rather than a cubic approximation of it.
+const GLOW_CURVE_QUARTER: f32 = 0.47236654;
+const GLOW_CURVE_HALF: f32 = 0.22313017;
+const GLOW_CURVE_THREE_QUARTERS: f32 = 0.05269961;
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -3186,6 +3187,85 @@ fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
     return vec4<f32>(mix(mean.xyz, lit.xyz, mix_out), mean.w);
 }
 
+/// One tangent shared by the two curve segments beside a handle. Limiting its
+/// magnitude to the shallower secant keeps both segments between their two
+/// endpoints, so a steep centre settling into a long tail cannot overshoot
+/// into a bright ring.
+fn glow_curve_tangent(left: f32, right: f32) -> f32 {
+    if left * right <= 0.0 {
+        return 0.0;
+    }
+    return sign(left) * min(abs(left), abs(right));
+}
+
+/// The tuned accent at `d`, in the same arithmetic the light uses when no
+/// custom curve is present. Kept whole rather than normalised through `p` so a
+/// zero curve leaves the existing picture byte-for-byte unchanged.
+fn glow_curve_base(d: f32, span: f32) -> f32 {
+    let window = 1.0 - smoothstep(span * 0.5, span, d);
+    return exp(-3.0 * d / span) * window;
+}
+
+/// The glow level `d` from the node's centre inside `span`. The tuned accent
+/// supplies the interpolation coordinate, so its three samples describe the
+/// identity and leave the whole curve exact; edited samples bend that same
+/// coordinate with a monotone cubic.
+fn glow_curve_at(d: f32, span: f32) -> f32 {
+    let base = glow_curve_base(d, span);
+    if all(u.glow_curve.xyz == vec3<f32>(0.0)) {
+        return base;
+    }
+    // Sanitised on the CPU and clamped again so a hand-built Scene cannot make
+    // a curve rise outward.
+    let quarter = clamp(GLOW_CURVE_QUARTER + u.glow_curve.x, 0.0, 1.0);
+    let half = clamp(GLOW_CURVE_HALF + u.glow_curve.y, 0.0, quarter);
+    let three_quarters =
+        clamp(GLOW_CURVE_THREE_QUARTERS + u.glow_curve.z, 0.0, half);
+    let levels = array<f32, 5>(1.0, quarter, half, three_quarters, 0.0);
+    let coordinates = array<f32, 5>(
+        0.0,
+        1.0 - GLOW_CURVE_QUARTER,
+        1.0 - GLOW_CURVE_HALF,
+        1.0 - GLOW_CURVE_THREE_QUARTERS,
+        1.0,
+    );
+    let p = clamp(d / span, 0.0, 1.0);
+    let along = clamp(p, 0.0, 1.0) * 4.0;
+    let segment = min(u32(floor(along)), 3u);
+    let x = 1.0 - base;
+    let x0 = coordinates[segment];
+    let x1 = coordinates[segment + 1u];
+    let width = x1 - x0;
+    let t = clamp((x - x0) / width, 0.0, 1.0);
+    let y0 = levels[segment];
+    let y1 = levels[segment + 1u];
+    let slope = (y1 - y0) / width;
+    var m0 = slope;
+    if segment > 0u {
+        m0 = glow_curve_tangent(
+            (y0 - levels[segment - 1u]) / (x0 - coordinates[segment - 1u]),
+            slope,
+        );
+    }
+    var m1 = slope;
+    if segment < 3u {
+        m1 = glow_curve_tangent(
+            slope,
+            (levels[segment + 2u] - y1) / (coordinates[segment + 2u] - x1),
+        );
+    }
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return clamp(
+        (2.0 * t3 - 3.0 * t2 + 1.0) * y0
+            + (t3 - 2.0 * t2 + t) * width * m0
+            + (-2.0 * t3 + 3.0 * t2) * y1
+            + (t3 - t2) * width * m1,
+        0.0,
+        1.0,
+    );
+}
+
 /// The node's light at this fragment, premultiplied, exactly as every other
 /// layer here returns its ink.
 fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
@@ -3212,16 +3292,10 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     if d >= span {
         return vec4<f32>(0.0);
     }
-    // The window, which is where the light STOPS: full to half the span and
-    // shut by the end of it, at every setting of every bar. The falloff
-    // underneath it says how much light is left to be shut off out there; the
-    // Reach alone says how far the light goes.
-    let window = 1.0 - smoothstep(span * 0.5, span, d);
-    // The falloff, plain: one exponential from the node's exact centre outward,
-    // with nothing shaping the middle apart from what the node draws over it.
-    // A node's middle gets no treatment of its own — whatever the Reach does
-    // out in the halo, it does at radius 0 too.
-    let skirt = GLOW_BASE * exp(-GLOW_FALLOFF * d / span) * window;
+    // The falloff from the fixed full centre to the fixed zero edge. Strength
+    // scales it after the curve, so moving a handle changes the distribution
+    // of light without moving either endpoint or changing what the bar names.
+    let skirt = GLOW_BASE * glow_curve_at(d, span);
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's
@@ -3383,4 +3457,3 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
     return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
 }
-

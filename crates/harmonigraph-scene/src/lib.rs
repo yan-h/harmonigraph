@@ -55,7 +55,7 @@ pub use style::{
     Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, TermKind, REACH_SIGMAS,
     SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN, SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
 };
-pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
+pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::{Envelope, LatticePos};
@@ -936,6 +936,9 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
+    /// The descending levels of the light at the three interior quarters of
+    /// its reach (see [`ViewConfig::glow_curve`]); already sanitized.
+    pub glow_curve: GlowCurve,
     /// The Shadow: how wide every caster's blur is, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to
     /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no

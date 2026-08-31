@@ -68,6 +68,78 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     );
 }
 
+/// Lifting the far handle leaves the peak alone and carries visible light into
+/// the outer reach. That is the picture the curve exists to make: a quiet tail
+/// rather than a second strength control.
+#[test]
+fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |curve: harmonigraph_scene::GlowCurve| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.glow_curve = curve;
+        scene
+    };
+    let default_curve = harmonigraph_scene::GlowCurve::default();
+    let mut long_curve = default_curve;
+    long_curve.three_quarters = 0.18;
+    let default = shooter.shot(&at(default_curve));
+    let long = shooter.shot(&at(long_curve));
+    let mut unlit = at(default_curve);
+    unlit.glow_reach = 0.0;
+    let off = shooter.shot(&unlit);
+
+    // The fixture's node is at the frame centre. Curve endpoint 0 is fixed at
+    // full, so the pixel there is exactly the same when only the far handle
+    // moves — not merely close after a retuned Strength.
+    let centre = ((SIZE[1] / 2) * SIZE[0] + SIZE[0] / 2) as usize;
+    assert_eq!(
+        &long[centre * 4..centre * 4 + 4],
+        &default[centre * 4..centre * 4 + 4],
+        "lifting the tail changed the glow at its peak",
+    );
+
+    let row = SIZE[0] as usize;
+    let middle = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
+    let edge = long
+        .chunks(4)
+        .zip(off.chunks(4))
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(i, _)| {
+            let (x, y) = ((i % row) as f32, (i / row) as f32);
+            ((x - middle.0).powi(2) + (y - middle.1).powi(2)).sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    assert!(edge > 20.0, "the fixture's glow reached only {edge:.1}px");
+
+    let outer = |shot: &[u8]| {
+        let mut sum = 0i64;
+        let mut count = 0i64;
+        for (i, (pixel, dark)) in shot.chunks(4).zip(off.chunks(4)).enumerate() {
+            let (x, y) = ((i % row) as f32, (i / row) as f32);
+            let radius = ((x - middle.0).powi(2) + (y - middle.1).powi(2)).sqrt();
+            if radius >= edge * 0.68 && radius <= edge * 0.82 {
+                sum += (brightness(pixel) - brightness(dark)).max(0);
+                count += 1;
+            }
+        }
+        assert!(count > 100, "the outer-reach annulus held only {count} pixels");
+        sum as f64 / count as f64
+    };
+    let (ordinary, tailed) = (outer(&default), outer(&long));
+    assert!(ordinary > 0.0, "the default curve left no outer halo to compare");
+    assert!(
+        tailed > ordinary * 1.5,
+        "lifting only the far handle left the outer reach at {tailed:.2} against \
+         the default's {ordinary:.2}",
+    );
+}
+
 /// The widest the colours round one node's halo get from one another: the
 /// annulus `inner..outer` about the frame's centre cut into wedges, each
 /// wedge's mean taken, and the largest distance between any two of them.
