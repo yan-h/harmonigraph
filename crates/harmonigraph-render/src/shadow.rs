@@ -155,6 +155,14 @@ pub(crate) struct Caster {
     /// approximate it again. Blur terms still need the shared cell that holds
     /// their convolution.
     pub direct_distance: bool,
+    /// Whether a distance cell is filled with a signed field by the caster's
+    /// own rasterizer rather than reconstructed from coverage by the flood.
+    ///
+    /// Nodes carry their analytic layer geometry into the atlas. Names do not:
+    /// their glyph rasterizer still supplies coverage for the shared flood.
+    /// Unlike [`Self::direct_distance`], this keeps a real cell for the scene
+    /// draw to sample.
+    pub analytic_distance: bool,
 }
 
 /// The caster a name's glyphs make: the box round every glyph's rect, the
@@ -175,7 +183,13 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Ca
         }
     }
     if !(max[0] > min[0] && max[1] > min[1]) {
-        return Caster { rect: [0.0; 4], level: 0.0, sigma_scale, direct_distance: false };
+        return Caster {
+            rect: [0.0; 4],
+            level: 0.0,
+            sigma_scale,
+            direct_distance: false,
+            analytic_distance: false,
+        };
     }
     let level = glyphs.iter().map(|g| f32::from(g.rim[3]) / 255.0).fold(0.0, f32::max);
     Caster {
@@ -183,6 +197,7 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Ca
         level,
         sigma_scale,
         direct_distance: false,
+        analytic_distance: false,
     }
 }
 
@@ -212,7 +227,8 @@ pub(crate) struct ShadowBox {
     /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
     /// reaches, in the pane's points — the pad the rect was grown by, which is
     /// where the standoff's curve is windowed to nothing and so the value a
-    /// texel out of every seed's reach is resolved to; w unused.
+    /// texel out of every seed's reach is resolved to; w: whether this distance
+    /// cell already holds the caster's analytic field and skips the flood.
     ///
     /// x is read by the node's SCENE draw, which needs every term at once and
     /// so reaches the array rather than the box; y and z by the passes that
@@ -226,7 +242,8 @@ pub(crate) struct ShadowBox {
 
 /// What `ShadowBox::who`'s y and `ShadowCaster::kind` hold for a term whose
 /// cell is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
-/// and common.wgsl, pinned by `the_shaders_distance_kind_is_the_packers`.
+/// and common.wgsl, pinned by
+/// `the_shaders_distance_kind_and_window_are_the_packers`.
 ///
 /// A float and not a flag because it rides in a vertex attribute and a storage
 /// array that are floats already; compared with a `> 0.5` wherever it is read,
@@ -289,8 +306,9 @@ pub(crate) struct Packed {
     pub boxes: Vec<ShadowBox>,
     pub casters: Vec<ShadowCaster>,
     pub size: [u32; 2],
-    /// How far the flood has to carry a seed, in texels: the widest distance
-    /// cell's own pad, and 0 where this frame packed no distance cell at all.
+    /// How far the flood has to carry a seed, in texels: the widest flooded
+    /// distance cell's own pad, and 0 where every distance is direct or
+    /// analytic.
     ///
     /// ONE chain over every distance cell in the atlas, so the schedule is the
     /// widest cell's and a narrower one pays passes whose every tap lands
@@ -572,16 +590,17 @@ pub(crate) fn pack(
             let [x, y] = placed[i];
             let cell =
                 if whole && !direct { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
+            let analytic = caster.analytic_distance && is_distance(term) && !direct;
             boxes.push(ShadowBox {
                 rect,
                 cell,
                 terms: [k, sigma_cell, level, scale],
-                who: [c as f32, kind, pad, 0.0],
+                who: [c as f32, kind, pad, f32::from(analytic)],
             });
             if !whole {
                 continue;
             }
-            if is_distance(term) && !direct {
+            if is_distance(term) && !direct && !analytic {
                 flood = flood.max(pad * k);
             }
             entry.kind[t] = kind;
@@ -623,8 +642,8 @@ pub(crate) struct ShadowTarget {
     /// Reading `views[i]`, as every consumer of the atlas takes it
     /// ([`read_layout`]).
     pub(crate) reads: [wgpu::BindGroup; 2],
-    /// The jump flood's own pair, present exactly while a frame packs a
-    /// DISTANCE cell ([`ensure_flood`](Self::ensure_flood)).
+    /// The jump flood's own pair, present exactly while a frame packs a name's
+    /// coverage-based DISTANCE cell ([`ensure_flood`](Self::ensure_flood)).
     ///
     /// Two more textures the size of the atlas, at four bytes a texel against
     /// the atlas's two — so a blur row does not carry them, which is what keeps
@@ -731,10 +750,9 @@ impl ShadowTarget {
 
     /// Hold the flood's pair while `want`, and drop it when not.
     ///
-    /// Kept off the atlas's own allocation because a blur row never runs the
-    /// chain and the pair is twice the atlas's bytes a texel: a frame on the
-    /// Gaussian row pays exactly what it paid before this family existed, which
-    /// is what makes the second family free to have in the tree.
+    /// Kept off the atlas's own allocation because neither a blur row nor a
+    /// node-only Distance frame runs the chain, and the pair is twice the
+    /// atlas's bytes a texel.
     ///
     /// Sized to the atlas it belongs to, so it is rebuilt with the atlas and
     /// never separately — the two ping-pong over the same coordinates.
@@ -760,14 +778,14 @@ impl ShadowTarget {
         Self::pass(encoder, "lattice_shadow_ink_pass", &self.views[0])
     }
 
-    /// The jump flood over this frame's DISTANCE cells, carrying a seed
-    /// `reach` texels and leaving the nearest-seed field in the pair's
+    /// The jump flood over this frame's coverage-based DISTANCE cells, carrying
+    /// a seed `reach` texels and leaving the nearest-seed field in the pair's
     /// `views[0]`.
     ///
     /// Run between the ink pass and the blur, off the atlas's `views[0]`, which
     /// holds the casters' raw coverage until the blur's y pass overwrites it.
-    /// Every draw here is over the cells and collapses a blur cell's quad, so a
-    /// mixture of kinds costs the chain only what its distance cells are.
+    /// Every draw here collapses blur and analytic cells, so the chain reaches
+    /// names alone.
     ///
     /// A no-op with no pair held, which is a frame that packed no distance cell
     /// (`ensure_flood`).
@@ -829,18 +847,16 @@ impl ShadowTarget {
     /// no others, and what a fragment of the y pass reads beside its cell has
     /// to be nothing rather than last frame's cell there.
     ///
-    /// THREE draws over two passes, and the third is what a distance cell's
-    /// answer arrives by. The x pass sweeps every cell — a distance cell's σ is
-    /// zero, so what it does there is copy the coverage into `views[1]`, which
-    /// is where the resolve then reads the seed's own coverage from. The second
-    /// pass then splits by kind: the y pass finishes the blur cells, and the
-    /// resolve turns each distance cell's field into a distance in points.
-    /// Both write `views[0]` and the two never touch one texel, the kinds being
-    /// disjoint by construction.
+    /// The x pass sweeps every cell. A distance cell's σ is zero, so it copies
+    /// either coverage or an analytic field into `views[1]`. The second pass
+    /// splits into three disjoint draws: the y pass finishes blur cells, the
+    /// analytic copy preserves node fields, and the resolve turns each name's
+    /// flooded coverage into a distance in points.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: (&wgpu::RenderPipeline, &wgpu::RenderPipeline),
+        analytic: &wgpu::RenderPipeline,
         resolve: &wgpu::RenderPipeline,
         boxes: &wgpu::Buffer,
         count: u32,
@@ -857,6 +873,8 @@ impl ShadowTarget {
         pass.set_pipeline(blur_y);
         pass.set_bind_group(0, &self.reads[1], &[]);
         pass.set_vertex_buffer(0, boxes.slice(..));
+        pass.draw(0..4, 0..count);
+        pass.set_pipeline(analytic);
         pass.draw(0..4, 0..count);
         if let Some(flood) = self.flood.as_ref() {
             pass.set_pipeline(resolve);
@@ -1066,17 +1084,19 @@ pub(crate) fn caster_buffer(
     (buffer, bind_group)
 }
 
-/// Every pipeline that sweeps the CELLS: the blur's two, the resolve that turns
-/// a flooded cell into a distance, and the flood's own seed and step.
+/// Every pipeline that sweeps the CELLS: the blur's two, the analytic field's
+/// copy, the resolve that turns a flooded cell into a distance, and the flood's
+/// own seed and step.
 ///
-/// One module and one function for the five because they share the vertex
-/// shader — a cell's quad, off the same box stream — and differ only in what
-/// they read and what they write. No blend anywhere here: each writes its
-/// cell's texels outright over a cleared target, a later answer being simply
-/// the better one rather than something to mix.
+/// One module and one constructor for the six because they share a cell quad
+/// off the same box stream and differ only in what they read and write. No
+/// blend anywhere here: each writes its cell's texels outright over a cleared
+/// target, a later answer being simply the better one rather than something to
+/// mix.
 pub(crate) struct CellPipelines {
     pub(crate) blur_x: wgpu::RenderPipeline,
     pub(crate) blur_y: wgpu::RenderPipeline,
+    pub(crate) analytic: wgpu::RenderPipeline,
     pub(crate) resolve: wgpu::RenderPipeline,
     pub(crate) seed: wgpu::RenderPipeline,
     pub(crate) step: wgpu::RenderPipeline,
@@ -1141,6 +1161,7 @@ pub(crate) fn create_cell_pipelines(
         // into the half-blur target, which is where the resolve reads it.
         blur_x: pipeline("fs_blur_x", "vs_cell", &blur_layout, ATLAS_FORMAT),
         blur_y: pipeline("fs_blur_y", "vs_cell_blur", &blur_layout, ATLAS_FORMAT),
+        analytic: pipeline("fs_copy", "vs_cell_analytic", &blur_layout, ATLAS_FORMAT),
         resolve: pipeline("fs_flood_resolve", "vs_cell_distance", &both_layout, ATLAS_FORMAT),
         seed: pipeline("fs_flood_seed", "vs_cell_distance", &both_layout, SEED_FORMAT),
         step: pipeline("fs_flood_step", "vs_cell_distance", &both_layout, SEED_FORMAT),
@@ -1176,7 +1197,13 @@ pub(crate) mod tests {
     /// A caster at the picture's own width, which is what every caster but a
     /// note name is. The tests that ask about the RATIO name it themselves.
     fn caster(x: f32, y: f32, w: f32, h: f32) -> Caster {
-        Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0, direct_distance: false }
+        Caster {
+            rect: [x, y, w, h],
+            level: 1.0,
+            sigma_scale: 1.0,
+            direct_distance: false,
+            analytic_distance: false,
+        }
     }
 
     /// One Gaussian: one cell per caster, which is what every claim about the
@@ -1737,6 +1764,7 @@ pub(crate) mod tests {
         target.blur(
             &mut encoder,
             (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.analytic,
             &pipelines.resolve,
             &boxes,
             2,
@@ -1853,7 +1881,7 @@ pub(crate) mod tests {
     /// off by nearly half along this diagonal; the reconstructed contour
     /// segment is what makes the tighter claim reachable.
     #[test]
-    fn the_flood_answers_the_true_distance_between_two_strokes() {
+    fn the_flood_reconstructs_the_distance_between_two_diagonal_strokes() {
         const SIZE: [u32; 2] = [256, 128];
         // Two diagonals, `SPLIT` apart along x and `2 * HALF` wide across it —
         // a name's two stems, and the gap a sampled dilation could not fill.
@@ -1900,6 +1928,7 @@ pub(crate) mod tests {
         target.blur(
             &mut encoder,
             (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.analytic,
             &pipelines.resolve,
             &boxes,
             1,
@@ -1971,6 +2000,7 @@ pub(crate) mod tests {
         target.blur(
             &mut encoder,
             (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.analytic,
             &pipelines.resolve,
             &boxes,
             1,
@@ -2021,6 +2051,7 @@ pub(crate) mod tests {
         target.blur(
             &mut encoder,
             (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.analytic,
             &pipelines.resolve,
             &boxes,
             1,
@@ -2076,8 +2107,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// The three modules that spell a distance term's kind agree on it, and the
-    /// two that spell the standoff's window agree on that.
+    /// The three modules that spell a distance term's kind agree on it, the two
+    /// that spell the standoff's window agree on that, and node layers use the
+    /// same half-level contour the flood seeds from.
     ///
     /// Each has to be written more than once — there is no linkage between
     /// shader modules here, and the scene crate has no shader at all — and each
@@ -2099,6 +2131,14 @@ pub(crate) mod tests {
             let held: f32 = shader_const(&common, name).parse().expect("a number");
             assert_eq!(held, want, "common.wgsl's {name} and the scene's have parted");
         }
+        let lattice = crate::with_common(crate::SHADER_SRC);
+        let flood_floor: f32 = shader_const(SHADOW_SRC, "INK_FLOOR").parse().expect("a number");
+        let node_floor: f32 =
+            shader_const(&lattice, "DISTANCE_LEVEL_FLOOR").parse().expect("a number");
+        assert_eq!(
+            node_floor, flood_floor,
+            "node layers and flooded glyph coverage use different distance contours",
+        );
     }
 
     /// The packed seed leaves one high bit for a point distinct from every
@@ -2133,6 +2173,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_scale: 1.0,
             direct_distance: false,
+            analytic_distance: false,
         };
         // A σ well past `SIGMA_CELL_MAX`, which is where a blur cell shrinks
         // without limit and a distance cell stops.
@@ -2193,6 +2234,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_scale: 1.0,
             direct_distance: true,
+            analytic_distance: false,
         };
         let low = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
         let high = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MAX;
@@ -2227,6 +2269,38 @@ pub(crate) mod tests {
         assert!(mixed.boxes[0].cell[2] > 0.0 && mixed.boxes[0].cell[3] > 0.0);
         assert_eq!(mixed.boxes[1].cell, [0.0; 4]);
         assert_eq!(mixed.casters[0].kind[1], DISTANCE_KIND);
+    }
+
+    /// A node's analytic distance keeps the real cell its scene draw samples,
+    /// marks that cell for the copy path, and contributes nothing to the flood
+    /// schedule. Turning the flag off is the name path and schedules the same
+    /// cell for reconstruction.
+    #[test]
+    fn an_analytic_distance_keeps_its_cell_and_drops_the_flood() {
+        use harmonigraph_scene::ShadowKernel;
+        let analytic = Caster {
+            rect: [40.0, 40.0, 20.0, 20.0],
+            level: 1.0,
+            sigma_scale: 1.0,
+            direct_distance: false,
+            analytic_distance: true,
+        };
+        let resolution = harmonigraph_scene::GLOW_SHADOW_RESOLUTION_MIN;
+        let exact = pack(&[analytic], 40.0, 2.0, resolution, 4096, ShadowKernel::Distance.terms());
+        assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
+        assert_eq!(exact.boxes[0].who[3], 1.0, "the cell is not on the analytic copy path");
+        assert_eq!(exact.flood, 0.0, "the analytic field widened the flood schedule");
+
+        let flooded = pack(
+            &[Caster { analytic_distance: false, ..analytic }],
+            40.0,
+            2.0,
+            resolution,
+            4096,
+            ShadowKernel::Distance.terms(),
+        );
+        assert_eq!(flooded.boxes[0].who[3], 0.0);
+        assert!(flooded.flood > 0.0, "the coverage cell did not schedule its flood");
     }
 
     /// Raising the Distance resolution buys more source samples and only that

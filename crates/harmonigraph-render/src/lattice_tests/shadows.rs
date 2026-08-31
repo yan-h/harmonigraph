@@ -79,6 +79,187 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
     scene
 }
 
+/// A node's distance cell is the analytic field of its ring layers, in pane
+/// points. This fixture has constant-width angular gaps and one marked sector,
+/// whose two diagonal sides continue into the outer strip. The CPU reference
+/// repeats the geometry from `OctaveLayout` to pin the new uv reconstruction,
+/// point scaling, storage and atlas-copy path before the shadow curve can hide
+/// an error in a rendered picture.
+#[test]
+fn the_flood_answers_the_true_distance_between_two_strokes() {
+    const SHADOW: f32 = 0.24;
+    const QUAD_MARGIN: f32 = 1.6;
+    let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+        return;
+    };
+
+    let marked = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+    let mut scene = on_ground(SHADOW, 1.0);
+    scene.nodes[0].melody_slots = marked;
+    scene.nodes[0].melody_level = 1.0;
+    scene.outer_inner = 0.42;
+    scene.outer_outer = 0.72;
+    scene.rings_outer = scene.outer_outer;
+    scene.octave_gap = 0.10;
+    scene.mark_inner = 0.84;
+    scene.mark_thickness = 0.16;
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    scene.glow_shadow_resolution = 1.2;
+
+    let cb = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        41,
+        None,
+    );
+    assert_eq!(cb.instances.len(), 1, "the fixture must ship exactly one node");
+    assert_eq!(cb.casters.len(), 1, "the fixture must pack exactly one caster");
+    let terms = cb.kernel.terms();
+    let sigma_px = shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, cb.render_scale);
+    let packed = shadow::pack(
+        &cb.casters,
+        sigma_px,
+        cb.render_scale,
+        cb.distance_texels_per_point,
+        device.limits().max_texture_dimension_2d.min(shadow::SEED_COORD_LIMIT),
+        terms,
+    );
+    let cell = packed.boxes[cb.node_cells[0] as usize * terms.len()];
+    assert_eq!(cell.who[3], 1.0, "the node's distance cell is not analytic");
+    assert_eq!(packed.flood, 0.0, "an analytic node scheduled the jump flood");
+
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+    queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    let res: &LatticeResources = resources.get().expect("prepare created resources");
+    let target = res
+        .panes
+        .get(&41)
+        .and_then(|pane| pane.offscreen.as_ref())
+        .and_then(|offscreen| offscreen.shadow.as_ref())
+        .expect("the node packed a shadow atlas");
+    let bytes = crate::gpu_harness::readback_r16(&device, &queue, &target.textures[0], target.size);
+    let held = |x: u32, y: u32| {
+        let i = ((y * target.size[0] + x) * 2) as usize;
+        shadow::tests::half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
+    };
+
+    let node = &scene.nodes[0];
+    let centre = on_screen(&scene, SIZE, node.world_pos);
+    let (right, up) = scene.camera.right_up();
+    let uv_world = scene.node_radius * 1.8 * node.scale.max(0.05);
+    let screen_right = on_screen(&scene, SIZE, node.world_pos + right * uv_world) - centre;
+    let screen_up = on_screen(&scene, SIZE, node.world_pos + up * uv_world) - centre;
+    let to_uv = |point: glam::Vec2| {
+        let delta = point - centre;
+        glam::Vec2::new(
+            delta.dot(screen_right) / screen_right.length_squared(),
+            delta.dot(screen_up) / screen_up.length_squared(),
+        )
+    };
+
+    let layout = scene.octave_layout;
+    let ring = layout.ring(node.cents);
+    let sector = |slot: i32| {
+        let i = (slot - ring.base).clamp(0, layout.span as i32 - 1) as usize;
+        [ring.seam - layout.bounds[i], ring.seam - layout.bounds[i + 1]]
+    };
+    let fold = |uv: glam::Vec2, edges: [f32; 2]| {
+        let mid = 0.5 * (edges[0] + edges[1]);
+        let half = (0.5 * (edges[0] - edges[1])).clamp(0.0, std::f32::consts::PI);
+        let (s, c) = mid.sin_cos();
+        (
+            glam::Vec2::new((uv.y * c - uv.x * s).abs(), uv.x * c + uv.y * s),
+            glam::Vec2::new(half.sin(), half.cos()),
+        )
+    };
+    let sector_sd = |uv: glam::Vec2, inner: f32, outer: f32, edges: [f32; 2]| {
+        let (q, edge) = fold(uv, edges);
+        let side = edge.y * q.x - edge.x * q.y;
+        let arc = q.length() - outer;
+        let edge_distance = (q - edge * q.dot(edge).clamp(0.0, outer)).length();
+        let sign = if side < 0.0 {
+            -1.0
+        } else if side > 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        let pie = arc.max(edge_distance * sign);
+        let gap = if q.dot(edge) > 0.0 { scene.octave_gap * 0.5 } else { 0.0 };
+        let annulus = (uv.length() - 0.5 * (inner + outer)).abs() - 0.5 * (outer - inner);
+        annulus.max(pie).max(side + gap)
+    };
+    let marked_slot = harmonigraph_scene::MIDDLE_C_SLOT as i32;
+    let marked_edges = sector(marked_slot);
+    assert!(
+        marked_edges.iter().all(|a| a.sin().abs() > 0.2 && a.cos().abs() > 0.2),
+        "the marked sector's edges are not diagonal: {marked_edges:?}",
+    );
+    let mark_in = scene.mark_inner.min(QUAD_MARGIN - 0.02);
+    let mark_out = (mark_in + scene.mark_thickness).min(QUAD_MARGIN - 0.02);
+    let truth = |uv: glam::Vec2| {
+        let mut sd = f32::MAX;
+        for i in 0..layout.span {
+            sd = sd.min(sector_sd(
+                uv,
+                scene.outer_inner,
+                scene.outer_outer,
+                sector(ring.base + i as i32),
+            ));
+        }
+        sd.min(sector_sd(uv, mark_in, mark_out, marked_edges))
+    };
+
+    let [x, y, w, h] = cell.cell.map(|v| v as u32);
+    let k = cell.terms[0];
+    let tolerance = 0.45 / k;
+    let mut checked = 0usize;
+    let mut worst = 0.0f32;
+    let mut worst_at = (0u32, 0u32);
+    let mut saw_gap = false;
+    let mut saw_mark = false;
+    for ty in y..y + h {
+        for tx in x..x + w {
+            let point = glam::Vec2::new(
+                cell.rect[0] + (tx as f32 + 0.5 - cell.cell[0]) / k,
+                cell.rect[1] + (ty as f32 + 0.5 - cell.cell[1]) / k,
+            );
+            let uv = to_uv(point);
+            let want = truth(uv);
+            let want_points = want * screen_right.length();
+            // The CPU geometry is unbounded, while the cell deliberately stops
+            // where the shadow curve reaches zero. Stay half a texel inside
+            // that support so the comparison is of the field, not its clip.
+            if want_points > cell.who[2] - 0.5 / k {
+                continue;
+            }
+            let err = (held(tx, ty) - want_points).abs();
+            if err > worst {
+                worst = err;
+                worst_at = (tx, ty);
+            }
+            let radius = uv.length();
+            saw_gap |= want > 0.0 && radius > scene.outer_inner && radius < scene.outer_outer;
+            saw_mark |= want < 0.0 && radius > mark_in && radius < mark_out;
+            checked += 1;
+        }
+    }
+    assert!(checked > 2_000, "only {checked} texels reached the analytic comparison");
+    assert!(saw_gap, "the fixture never sampled between two ring strokes");
+    assert!(saw_mark, "the fixture never sampled inside its marked sector");
+    assert!(
+        worst <= tolerance,
+        "the node cell is off by {worst:.4} points at {worst_at:?}; tolerance is {tolerance:.4}, \
+         under half its {:.4}-point texel",
+        1.0 / k,
+    );
+}
+
 /// The grey a marker's ink is drawn in here — dark against [`GROUND`], so the
 /// pixels the cross covers are told from the ones its shadow lands on.
 const CROSS_INK: glam::Vec4 = glam::Vec4::new(0.1, 0.1, 0.12, 1.0);
@@ -1537,7 +1718,7 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
         values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
     let deviation = variance.sqrt();
     assert!(
-        mean > 0.4 && mean < 0.75,
+        mean > 0.4 && mean < 0.8,
         "the ring takes {mean:.3} of the ground at the sampled radius, outside the range where \
          angular variation measures its shape",
     );
