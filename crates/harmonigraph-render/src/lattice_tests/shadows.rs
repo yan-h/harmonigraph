@@ -1,6 +1,6 @@
-//! The shadow a node's rings and a resting cross cast: a blur of the item's
-//! own ink, multiplied into everything already in the frame under it by the
-//! item's own draw (`shadow_through` in lattice.wgsl).
+//! The shadow a node's rings and a resting cross cast: the selected kernel of
+//! the item's own ink, multiplied into everything already in the frame under
+//! it by the item's own draw (`shadow_through` in lattice.wgsl).
 
 use super::fixtures::*;
 use crate::*;
@@ -558,6 +558,83 @@ fn a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from() {
     );
 }
 
+/// A markers-only Distance frame casts from the exact field in its scene draw
+/// and therefore has no shadow atlas from which a flood could be scheduled.
+#[test]
+fn a_distance_frame_of_markers_casts_without_an_atlas_or_flood() {
+    const ARM: f32 = 0.5;
+    const SHADOW: f32 = 0.6;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let scene = |depth| {
+        let mut scene =
+            crosses_on_ground(&[(-1.5, 1.0), (0.0, 0.6), (1.5, 0.3)], ARM, SHADOW, depth);
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        scene
+    };
+    let flat = shooter.shot(&scene(0.0));
+    let deep = shooter.shot(&scene(1.0));
+    let moved = differing_pixels(&flat, &deep);
+    assert!(moved > 200, "the direct marker field moved only {moved} pixels, which is no shadow");
+    assert_eq!(
+        atlas_of(&shooter),
+        None,
+        "a markers-only Distance frame allocated an atlas, so the direct field still schedules cells",
+    );
+}
+
+/// A direct marker distance is measured in the marker's own projected points,
+/// so perspective changes the cross's size without changing the shadow width
+/// past its ink.
+#[test]
+fn a_distance_markers_shadow_width_is_screen_constant_under_perspective() {
+    const ARM: f32 = 0.5;
+    const SHADOW: f32 = 0.8;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let scene = |depth| {
+        let mut scene = crosses_on_ground(&[], ARM, SHADOW, depth);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Perspective,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        scene.pluses = vec![
+            one_marker(glam::Vec3::new(0.0, 1.5, 4.0), ARM, CROSS_INK, 1.0),
+            one_marker(glam::Vec3::new(0.0, -1.5, -8.0), ARM, CROSS_INK, 1.0),
+        ];
+        scene
+    };
+    let flat_scene = scene(0.0);
+    let deep_scene = scene(1.0);
+    let flat = shooter.shot(&flat_scene);
+    let deep = shooter.shot(&deep_scene);
+    let right = flat_scene.camera.right_up().0;
+    let reach = |position: glam::Vec3| {
+        let centre = on_screen(&flat_scene, SIZE, position);
+        let tip = on_screen(&flat_scene, SIZE, position + right * ARM);
+        let row = centre.y.round() as u32;
+        let start = tip.x.ceil() as u32 + 2;
+        let last = (start..SIZE[0])
+            .rfind(|&x| bright_at(&deep, x, row) < bright_at(&flat, x, row))
+            .expect("the marker casts past its ink");
+        last as f32 - tip.x
+    };
+    let near = reach(glam::Vec3::new(0.0, 1.5, 4.0));
+    let far = reach(glam::Vec3::new(0.0, -1.5, -8.0));
+    assert!(near > 3.0 && far > 3.0, "the markers reach only {near:.1} and {far:.1} px");
+    assert!(
+        (near - far).abs() < 2.0,
+        "perspective moved the marker shadow from {near:.1} px near the eye to {far:.1} px far away",
+    );
+}
+
 /// A node whose only ink is its audio ring: the ring's coverage rides
 /// `audio_ring` (`in.ring`), so one number moves the whole of what it draws.
 fn ringing_only(ring: f32, shadow: f32, depth: f32) -> Scene {
@@ -746,6 +823,10 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         far(scene)
     };
     let flooded = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
+    let direct_cross = (
+        distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
+        distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
+    );
     for (what, (deep_scene, flat_scene), edge) in [
         ("a node's rings", node, ink_radius(&far(on_ground(SHADOW, 1.0)))),
         ("a cross", cross, ARM * points_per_world(&far(crosses_on_ground(&[], ARM, SHADOW, 1.0)))),
@@ -753,6 +834,11 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
             "a node's rings on the distance row",
             flooded,
             ink_radius(&distant(on_ground(SHADOW, 1.0))),
+        ),
+        (
+            "a cross on the distance row",
+            direct_cross,
+            ARM * points_per_world(&distant(crosses_on_ground(&[], ARM, SHADOW, 1.0))),
         ),
     ] {
         let flat = shooter.shot(&flat_scene);
@@ -1025,23 +1111,28 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let mut shot = |cross: bool, shadow: f32| -> Vec<u8> {
+    let mut shot = |kernel, cross: bool, shadow: f32| -> Vec<u8> {
         let mut scene = lit_node_and_a_name(REACH, shadow, DEPTH);
         scene.glow_strength = STRENGTH;
         scene.bloom_strength = 1.0;
+        scene.glow_shadow_kernel = kernel;
         if cross {
             scene.pluses = vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, CROSS_INK, 1.0)];
         }
         shooter.shot(&scene)
     };
 
-    let alone = differing_pixels(&shot(false, 0.0), &shot(false, SHADOW));
-    let with_cross = differing_pixels(&shot(true, 0.0), &shot(true, SHADOW));
-    assert!(
-        with_cross > alone + 1000,
-        "turning the Shadow on moved {with_cross} pixels with a cross in the frame and {alone} \
-         without, so a resting marker's shadow is not reaching the bloom's copy",
-    );
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let alone = differing_pixels(&shot(kernel, false, 0.0), &shot(kernel, false, SHADOW));
+        let with_cross = differing_pixels(&shot(kernel, true, 0.0), &shot(kernel, true, SHADOW));
+        assert!(
+            with_cross > alone + 1000,
+            "{kernel:?}: turning the Shadow on moved {with_cross} pixels with a cross in the \
+             frame and {alone} without, so its shadow is not reaching the bloom's copy",
+        );
+    }
 }
 
 /// How much further a MARKED node's shadow reaches than an unmarked one's is

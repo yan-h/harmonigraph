@@ -1034,9 +1034,9 @@ pub struct ViewConfig {
     /// is where the marker STOPS; a cross faded along its sides as well is a
     /// blurred plus rather than one reaching out of its crossing.
     ///
-    /// A cross's SHADOW is a blur of the ink this fades (`fs_plus_cell` in
-    /// lattice.wgsl), so widening this softens the dark around the four tips
-    /// along with the ink in them.
+    /// A cross's blur shadow follows the coverage this fades. Its distance
+    /// shadow treats the half-alpha contour as the end of the exact field, the
+    /// same contour the flood uses for every other caster.
     pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
@@ -1176,11 +1176,11 @@ pub struct ViewConfig {
     /// shadow all but out at one bar width.
     ///
     /// ONE length for the whole picture, and that is what makes it one bar. A
-    /// node's rings, a resting cross and a name's box are each blurred at this
-    /// σ and each multiplies whatever is already in the frame under it by that
-    /// blur, in the painter's order the pass already walks — so what an item
-    /// casts is read off its own ink rather than off which draw it belongs to,
-    /// and a nearer item darkens a farther one wherever the two overlap.
+    /// blur row convolves each caster at this σ; a distance row spends the same
+    /// width through its profile. Each item multiplies whatever is already in
+    /// the frame under it in the painter's order the pass already walks — so
+    /// what it casts is read off its own ink rather than off which draw it
+    /// belongs to, and a nearer item darkens a farther one wherever they overlap.
     ///
     /// A blur of the INK and not of a circle around it: a node reaching a
     /// melody mark on one octave casts from that wedge and hugs its rings
