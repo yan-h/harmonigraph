@@ -448,6 +448,12 @@ pub(crate) struct MarkKey {
     weight_16: u32,
 }
 
+impl MarkKey {
+    pub(crate) fn kind(self) -> MarkKind {
+        self.kind
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MarkKind {
     Minus,
@@ -465,6 +471,18 @@ pub(crate) enum MarkKind {
     /// unlike the septimal pair they are not one shape and its mirror.
     Sharp,
     Flat,
+}
+
+impl MarkKind {
+    /// Every drawn shape a note name can emit, in stable atlas order.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Minus,
+        Self::Plus,
+        Self::Septimal(false),
+        Self::Septimal(true),
+        Self::Sharp,
+        Self::Flat,
+    ];
 }
 
 /// Clear pixels around every mark bitmap, so a mark's own ink never reaches

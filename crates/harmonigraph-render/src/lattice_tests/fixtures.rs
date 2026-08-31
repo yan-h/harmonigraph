@@ -312,6 +312,18 @@ impl Shooter {
     }
 
     pub(super) fn draw(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
+        self.draw_modified(scene, labels, |_| {})
+    }
+
+    /// [`draw`](Self::draw), with a test-only change to the callback before it
+    /// prepares. This keeps comparison fixtures on the production render path
+    /// while letting one retained reference producer be selected explicitly.
+    pub(super) fn draw_modified(
+        &mut self,
+        scene: &Scene,
+        labels: LatticeLabels,
+        modify: impl FnOnce(&mut LatticeCallback),
+    ) -> Vec<u8> {
         // A lit node's ink-strip row is read back by IDENTITY, out of a strip
         // `glow_rows` tall, so a row past the end is not a small error in a
         // fixture: what an out-of-range `textureLoad` returns is the BACKEND's
@@ -336,7 +348,9 @@ impl Shooter {
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
-        let cb = LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
+        let mut cb =
+            LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
+        modify(&mut cb);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let bufs =
             cb.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
@@ -998,6 +1012,7 @@ pub(super) fn name_glyph(scene: &Scene, rect: [f32; 4]) -> GlyphInstance {
     let ink = scene.lattice_ground;
     GlyphInstance {
         rect,
+        sdf_rect: rect,
         fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
         // The shadow's strength, which is the whole of what the glow pass reads
         // off this colour (`fs_glyph_glow`).
@@ -1016,6 +1031,7 @@ pub(super) fn names(runs: Vec<(u32, Vec<GlyphInstance>)>) -> LatticeLabels {
         glyphs: runs.into_iter().flat_map(|(_, glyphs)| glyphs).collect(),
         atlas: Some(crate::text::tests::atlas()),
         marks: Some(crate::text::tests::mark_sheet()),
+        sdf: Some(crate::text::tests::sdf_atlas()),
         slide: SlideAxis::default(),
     }
 }

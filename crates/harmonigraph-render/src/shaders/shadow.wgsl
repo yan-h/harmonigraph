@@ -4,9 +4,10 @@
 // A BLUR cell holds the ink convolved with a Gaussian of that cell's σ, once
 // along x into the atlas's second texture and once along y back into the first.
 // A DISTANCE cell holds how far each texel stands from the caster's nearest
-// ink, in pane points. Nodes write that field analytically. Names still arrive
-// as coverage and use the jump flood: seed every inked texel with its own
-// coordinate, pass those coordinates outward in halving steps, then resolve.
+// ink, in pane points. Nodes write that field analytically and names MIN-blend
+// their fixed glyph SDFs. The jump flood remains as the placement reference
+// for a coverage cell until the next step removes it: seed every inked texel
+// with its coordinate, pass those coordinates outward, then resolve.
 // Either way the scene pass samples one texel and spends it (`fs_shadow_box`).
 //
 // A pass here is a draw over the CELLS rather than one quad over the atlas, and
@@ -19,13 +20,9 @@
 // (`pack` in shadow.rs) is what puts the whole of its blur — or the whole of
 // the reach its curve is windowed to — inside the rect the taps are clamped to.
 //
-// Why a flood rather than sampling a dilation at N offsets: a dilation sampled
-// at N offsets is a binary dilation by a disc wherever the coverage is flat, and
-// N discrete taps cannot fill a disc unless they sit closer together than a
-// stroke is wide — under which N goes as the square of the reach and the
-// shortfall reads as shifted copies of the letters. The flood costs `log2` of
-// the reach in passes and answers with a distance, so a name can share the
-// consumer an analytic node reaches directly until the font SDF replaces it.
+// Kept whole rather than weakened into a test-only approximation: the old
+// coverage producer is the picture oracle for the SDF's placement, and the
+// difference between their renders is what catches a half-pixel offset.
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 // The layout's sampler slot, which the scene pass's one tap takes and nothing
@@ -144,9 +141,9 @@ fn vs_cell_blur(
     return cell_quad(vertex, cell, terms, who, who.y < 0.5);
 }
 
-/// The flooded DISTANCE cells alone: names still arrive as coverage and take
-/// the three reconstruction passes. A node writes its field directly and is
-/// excluded here so it cannot allocate or run a flood it has already answered.
+/// The flooded DISTANCE cells alone. Shipped casters answer their own exact
+/// field; this selects a coverage reference cell without reaching any analytic
+/// one beside it.
 @vertex
 fn vs_cell_distance(
     @builtin(vertex_index) vertex: u32,

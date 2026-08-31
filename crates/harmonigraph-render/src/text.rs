@@ -48,6 +48,13 @@ use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
+/// Clear texels carried around a glyph's high-resolution distance patch.
+pub const GLYPH_SDF_NEAR_PAD: u32 = 32;
+/// Clear texels carried around a glyph's coarse distance patch.
+pub const GLYPH_SDF_COARSE_PAD: u32 = 48;
+/// Near-field texels over which sampling hands off to the coarse field.
+pub const GLYPH_SDF_NEAR_BLEND: u32 = 8;
+
 /// Entry points the text shader must provide.
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
@@ -57,6 +64,10 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_fill_lit",
     "vs_glyph_cell",
     "fs_glyph_ink",
+    "vs_glyph_distance_cell",
+    "fs_glyph_distance",
+    "vs_distance_pad",
+    "fs_distance_pad",
     "vs_shadow_box",
     "fs_shadow_box",
 ];
@@ -79,6 +90,16 @@ pub struct GlyphInstance {
     /// y]`. The shader reads nothing outside it — the neighbouring texels
     /// are a different letter.
     pub uv: [f32; 4],
+    /// Screen rect the fixed SDF's ink box maps onto: min, then size. The
+    /// typeset path is the visible [`Self::rect`]; a drawn mark uses this
+    /// second rect so the clear bitmap margin does not become part of its
+    /// letterform when the scale-free field is sampled.
+    pub sdf_rect: [f32; 4],
+    /// The near and coarse SDF texel rectangles corresponding to
+    /// [`Self::sdf_rect`], min then max. Zero rectangles mean this glyph has
+    /// no distance entry and contributes nothing to a distance cell.
+    pub sdf_near: [f32; 4],
+    pub sdf_coarse: [f32; 4],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub fill: [u8; 4],
     /// The rim's color at full strength; the rings decide its opacity. A
@@ -110,9 +131,12 @@ impl GlyphInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x4, // rect
             1 => Float32x4, // uv
-            2 => Unorm8x4,  // fill
-            3 => Unorm8x4,  // rim
-            4 => Uint32,    // atlas
+            2 => Float32x4, // sdf_rect
+            3 => Float32x4, // sdf_near
+            4 => Float32x4, // sdf_coarse
+            5 => Unorm8x4,  // fill
+            6 => Unorm8x4,  // rim
+            7 => Uint32,    // atlas
         ],
     };
 }
@@ -136,6 +160,16 @@ pub struct TextRing {
 /// The key changes whenever its pixels do.
 pub struct FontAtlas {
     pub image: std::sync::Arc<egui::ColorImage>,
+    pub key: u64,
+}
+
+/// The process-stable signed-distance sheet used by lattice name shadows.
+/// Values are signed distances in atlas texels; each instance carries the
+/// mapping that turns them back into pane points.
+#[derive(Clone)]
+pub struct GlyphSdfAtlas {
+    pub image: std::sync::Arc<Vec<f32>>,
+    pub size: [u32; 2],
     pub key: u64,
 }
 
@@ -302,6 +336,9 @@ struct TextResources {
     /// empty for its whole life.
     marks: AtlasTexture,
     blank: wgpu::Texture,
+    /// The text callback does not cast lattice shadows, but shares this bind
+    /// group layout with the lattice and therefore binds a typed stand-in.
+    blank_sdf: wgpu::Texture,
     panes: HashMap<u64, TextPane>,
 }
 
@@ -426,6 +463,67 @@ impl AtlasTexture {
     }
 }
 
+/// The lattice renderer's GPU copy of the fixed signed-distance sheet.
+/// Unlike egui's font atlas it never grows or moves; the key only keeps a
+/// recreated shell from mistaking another allocation for the one it bound.
+#[derive(Default)]
+pub(crate) struct SdfTexture {
+    texture: Option<wgpu::Texture>,
+    key: Option<u64>,
+}
+
+impl SdfTexture {
+    pub(crate) fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &GlyphSdfAtlas,
+    ) -> bool {
+        if self.key == Some(atlas.key) {
+            return false;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("text_sdf_atlas"),
+            size: wgpu::Extent3d {
+                width: atlas.size[0].max(1),
+                height: atlas.size[1].max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(atlas.image.as_slice()),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(atlas.size[0] * 4),
+                rows_per_image: Some(atlas.size[1]),
+            },
+            wgpu::Extent3d {
+                width: atlas.size[0],
+                height: atlas.size[1],
+                depth_or_array_layers: 1,
+            },
+        );
+        self.texture = Some(texture);
+        self.key = Some(atlas.key);
+        true
+    }
+
+    pub(crate) fn key(&self) -> u64 {
+        self.key.unwrap_or(0)
+    }
+
+    pub(crate) fn view_or(&self, blank: &wgpu::Texture) -> wgpu::TextureView {
+        self.texture.as_ref().unwrap_or(blank).create_view(&Default::default())
+    }
+}
+
 struct TextPane {
     uniform_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
@@ -473,6 +571,16 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
                 count: None,
             },
             sheet(3),
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -490,24 +598,31 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
     })
 }
 
-/// A lattice name's glyphs into their cell of the shadow atlas: coverage under
-/// a MAX blend, so a cell holds the union of its name's glyphs whatever order
-/// they arrive in (`fs_glyph_ink`). Two vertex buffers, the glyphs and — one
-/// per glyph — the box of the name each belongs to (`vs_glyph_cell`).
-pub(crate) fn create_glyph_cell_pipeline(
+/// The three draws that prepare a name's shadow cell.
+///
+/// Blur terms keep the coverage union they already use. A distance term first
+/// fills every analytic cell with its own pad, then MIN-blends each glyph's
+/// true signed field over that value. The latter is the exact union of the
+/// letterforms and cannot double-darken where two glyph quads overlap.
+pub(crate) fn create_glyph_cell_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Max,
     };
-    glyph_pipeline(
+    const MIN_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Min,
+    };
+    let coverage = glyph_pipeline(
         device,
         shader,
-        "fs_glyph_ink",
+        "glyph_coverage_cell",
         &[Some(layout)],
         ("vs_glyph_cell", "fs_glyph_ink"),
         &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
@@ -517,7 +632,36 @@ pub(crate) fn create_glyph_cell_pipeline(
             write_mask: wgpu::ColorWrites::ALL,
         })],
         None,
-    )
+    );
+    let distance = glyph_pipeline(
+        device,
+        shader,
+        "glyph_distance_cell",
+        &[Some(layout)],
+        ("vs_glyph_distance_cell", "fs_glyph_distance"),
+        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
+        &[Some(wgpu::ColorTargetState {
+            format: crate::shadow::ATLAS_FORMAT,
+            blend: Some(wgpu::BlendState { color: MIN_COMPONENT, alpha: MIN_COMPONENT }),
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
+        None,
+    );
+    let pad = glyph_pipeline(
+        device,
+        shader,
+        "glyph_distance_cell_pad",
+        &[Some(layout)],
+        ("vs_distance_pad", "fs_distance_pad"),
+        &[crate::shadow::ShadowBox::LAYOUT],
+        &[Some(wgpu::ColorTargetState {
+            format: crate::shadow::ATLAS_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
+        None,
+    );
+    (coverage, distance, pad)
 }
 
 /// A name's shadow into the scene pass, over the name's own box
@@ -733,6 +877,7 @@ impl TextResources {
             atlas: AtlasTexture::default(),
             marks: AtlasTexture::default(),
             blank: blank_atlas(device, queue),
+            blank_sdf: blank_sdf_atlas(device, queue),
             panes: HashMap::new(),
         }
     }
@@ -789,6 +934,7 @@ impl TextResources {
         let view = self.atlas.view_or(&self.blank);
         let mark_view = self.marks.view_or(&self.blank);
         let (layout, sampler) = (&self.layout, &self.sampler);
+        let sdf_view = self.blank_sdf.create_view(&Default::default());
         for pane in self.panes.values_mut() {
             // The sizes alone, not the whole struct: a pane that has already
             // prepared wrote the rest of its uniforms this frame, and one that
@@ -798,8 +944,15 @@ impl TextResources {
                 ATLAS_SIZES_OFFSET,
                 bytemuck::cast_slice(&sizes),
             );
-            pane.bind_group =
-                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
+            pane.bind_group = Some(bind_group(
+                device,
+                layout,
+                sampler,
+                &view,
+                &mark_view,
+                &sdf_view,
+                &pane.uniform_buffer,
+            ));
         }
     }
 
@@ -832,6 +985,7 @@ pub(crate) fn bind_group(
     sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
     mark_view: &wgpu::TextureView,
+    sdf_view: &wgpu::TextureView,
     uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -844,6 +998,10 @@ pub(crate) fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 3,
                 resource: wgpu::BindingResource::TextureView(mark_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(sdf_view),
             },
         ],
     })
@@ -875,6 +1033,27 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
     queue.write_texture(
         texture.as_image_copy(),
         &[0u8; 4],
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+    );
+    texture
+}
+
+/// A typed stand-in for the fixed R32Float signed-distance sheet.
+pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("text_blank_sdf_atlas"),
+        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        bytemuck::bytes_of(&0.0f32),
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
         wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
     );
@@ -1015,6 +1194,7 @@ impl CallbackTrait for TextCallback {
 
         let view = resources.atlas.view().expect("checked above");
         let mark_view = resources.marks.view_or(&resources.blank);
+        let sdf_view = resources.blank_sdf.create_view(&Default::default());
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -1033,8 +1213,15 @@ impl CallbackTrait for TextCallback {
             count: 0,
         });
         if pane.bind_group.is_none() {
-            pane.bind_group =
-                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
+            pane.bind_group = Some(bind_group(
+                device,
+                layout,
+                sampler,
+                &view,
+                &mark_view,
+                &sdf_view,
+                &pane.uniform_buffer,
+            ));
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -1096,6 +1283,23 @@ impl CallbackTrait for TextCallback {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// The shader expands the ink rectangles back to the packed tile bounds,
+    /// so those constants must move with the generator's public contract.
+    #[test]
+    fn the_sdf_tile_padding_agrees_with_the_shader() {
+        let near: f32 =
+            crate::shadow::tests::shader_const(TEXT_SRC, "SDF_NEAR_PAD").parse().expect("a number");
+        let coarse: f32 = crate::shadow::tests::shader_const(TEXT_SRC, "SDF_COARSE_PAD")
+            .parse()
+            .expect("a number");
+        let blend: f32 = crate::shadow::tests::shader_const(TEXT_SRC, "SDF_NEAR_BLEND")
+            .parse()
+            .expect("a number");
+        assert_eq!(near, GLYPH_SDF_NEAR_PAD as f32);
+        assert_eq!(coarse, GLYPH_SDF_COARSE_PAD as f32);
+        assert_eq!(blend, GLYPH_SDF_NEAR_BLEND as f32);
+    }
     use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
     const SIZE: [u32; 2] = [64, 64];
@@ -1407,10 +1611,30 @@ pub(crate) mod tests {
         GlyphInstance {
             rect: [24.0, 24.0, 8.0, 8.0],
             uv: [8.0, 8.0, 16.0, 16.0],
+            sdf_rect: [24.0, 24.0, 8.0, 8.0],
+            sdf_near: [60.0, 60.0, 68.0, 68.0],
+            sdf_coarse: [60.0, 60.0, 68.0, 68.0],
             fill: [255, 255, 255, 255],
             rim: [255, 0, 0, 255],
             atlas: GlyphInstance::TYPE,
         }
+    }
+
+    /// A true signed field for [`glyph`]'s opaque square, with enough room for
+    /// both fixed sampling ranges around it.
+    pub(crate) fn sdf_atlas() -> GlyphSdfAtlas {
+        const SIDE: u32 = 128;
+        let mut image = Vec::with_capacity((SIDE * SIDE) as usize);
+        for y in 0..SIDE {
+            for x in 0..SIDE {
+                let p = glam::Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                let q = (p - glam::Vec2::splat(64.0)).abs() - glam::Vec2::splat(4.0);
+                let outside = q.max(glam::Vec2::ZERO).length();
+                let inside = q.x.max(q.y).min(0.0);
+                image.push(outside + inside);
+            }
+        }
+        GlyphSdfAtlas { image: std::sync::Arc::new(image), size: [SIDE, SIDE], key: 1 }
     }
 
     /// The glyph lands where it was told to, in its own color, and the rim
@@ -2021,6 +2245,9 @@ pub(crate) mod tests {
         let ink = |rect: [f32; 4], uv: [f32; 4]| GlyphInstance {
             rect,
             uv,
+            sdf_rect: rect,
+            sdf_near: [0.0; 4],
+            sdf_coarse: [0.0; 4],
             fill: [255, 255, 255, 255],
             rim: [0, 0, 0, 0],
             atlas: GlyphInstance::TYPE,

@@ -65,7 +65,10 @@ pub use glow::{glow_paint_callback, GlowDot};
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{text_paint_callback, FontAtlas, GlyphInstance, SlideAxis, TextRing};
+pub use text::{
+    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, SlideAxis, TextRing,
+    GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
+};
 
 /// A name's shadow: its ink blurred into a cell of an atlas, which the name's
 /// own draw multiplies the frame by.
@@ -107,6 +110,10 @@ pub struct LatticeLabels {
     pub atlas: Option<FontAtlas>,
     /// And the drawn marks' own sheet, on the frames it has moved.
     pub marks: Option<FontAtlas>,
+    /// The fixed distance sheet every glyph's `sdf_*` rectangles address.
+    /// Published with a non-empty batch; unlike the coverage sheets it never
+    /// changes after startup.
+    pub sdf: Option<GlyphSdfAtlas>,
     /// The axis these names travel along, for the reconstruction filter — see
     /// [`SlideAxis`]. `Across` here is the default for want of an answer: an
     /// orbiting camera moves a node name both ways at once.
@@ -1003,6 +1010,7 @@ struct LatticeCallback {
     /// The fallback font sheet and drawn-mark sheet, on their publication frames.
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
+    sdf: Option<GlyphSdfAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
     pluses: Vec<GpuPlus>,
@@ -1463,6 +1471,7 @@ impl LatticeCallback {
             node_points,
             atlas: labels.atlas,
             marks: labels.marks,
+            sdf: labels.sdf,
             slide: labels.slide,
             pluses,
             uniforms: Uniforms {
@@ -1683,7 +1692,9 @@ struct LatticeResources {
     /// into its cell, the passes that sweep the cells — the blur along each
     /// axis, and the jump flood a DISTANCE cell is answered by — and the box
     /// each name multiplies the scene by off its finished cell.
-    glyph_cell_pipeline: wgpu::RenderPipeline,
+    glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
+    glyph_distance_cell_pipeline: wgpu::RenderPipeline,
+    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipelines: shadow::CellPipelines,
     shadow_box_pipeline: wgpu::RenderPipeline,
     /// The other two rasterizers of a cell: a node's ink into its own, and one
@@ -1711,6 +1722,8 @@ struct LatticeResources {
     atlas: text::AtlasTexture,
     marks: text::AtlasTexture,
     blank: wgpu::Texture,
+    sdf: text::SdfTexture,
+    blank_sdf: wgpu::Texture,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
@@ -1964,7 +1977,7 @@ struct PaneBuffers {
     /// Names both sampled sheets, so it is rebuilt whenever either allocation
     /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
-    glyph_sheet_keys: (u64, u64),
+    glyph_sheet_keys: (u64, u64, u64),
     offscreen: Option<Offscreen>,
 }
 
@@ -3273,8 +3286,11 @@ impl LatticeResources {
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
-        let glyph_cell_pipeline =
-            text::create_glyph_cell_pipeline(device, &glyph_shader, &glyph_layout);
+        let (
+            glyph_coverage_cell_pipeline,
+            glyph_distance_cell_pipeline,
+            glyph_distance_pad_pipeline,
+        ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
         let shadow_cell_pipelines =
             shadow::create_cell_pipelines(device, &shadow_layout, &flood_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
@@ -3369,7 +3385,9 @@ impl LatticeResources {
             glow_dummy_bind_group,
             strip_layout,
             sampler,
-            glyph_cell_pipeline,
+            glyph_coverage_cell_pipeline,
+            glyph_distance_cell_pipeline,
+            glyph_distance_pad_pipeline,
             shadow_cell_pipelines,
             shadow_box_pipeline,
             node_cell_pipeline,
@@ -3384,6 +3402,8 @@ impl LatticeResources {
             atlas: text::AtlasTexture::default(),
             marks: text::AtlasTexture::default(),
             blank: text::blank_atlas(device, queue),
+            sdf: text::SdfTexture::default(),
+            blank_sdf: text::blank_sdf_atlas(device, queue),
             target_format,
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
@@ -3418,6 +3438,7 @@ impl LatticeResources {
         shared_atlas: Option<&wgpu::Texture>,
         fallback_atlas: Option<&FontAtlas>,
         marks: Option<&FontAtlas>,
+        sdf: Option<&GlyphSdfAtlas>,
     ) {
         if let Some(atlas) = fallback_atlas.filter(|a| !self.atlas.holds(a)) {
             self.atlas.upload(device, queue, atlas);
@@ -3426,6 +3447,9 @@ impl LatticeResources {
         }
         if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
             self.marks.upload(device, queue, marks);
+        }
+        if let Some(sdf) = sdf {
+            self.sdf.upload(device, queue, sdf);
         }
     }
 
@@ -3462,7 +3486,8 @@ impl LatticeResources {
         let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
         let atlas_view = self.atlas.view();
         let mark_view = self.marks.view_or(&self.blank);
-        let sheet_keys = (self.atlas.key(), self.marks.key());
+        let sdf_view = self.sdf.view_or(&self.blank_sdf);
+        let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf.key());
         let shared = OffscreenShared {
             format: self.target_format,
             composite_layout: &self.composite_layout,
@@ -3544,7 +3569,7 @@ impl LatticeResources {
                     mapped_at_creation: false,
                 }),
                 glyph_bind_group: None,
-                glyph_sheet_keys: (u64::MAX, u64::MAX),
+                glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 offscreen: None,
             }
         });
@@ -3562,6 +3587,7 @@ impl LatticeResources {
                     glyph_sampler,
                     view,
                     &mark_view,
+                    &sdf_view,
                     &pane.glyph_uniform_buffer,
                 ));
                 pane.glyph_sheet_keys = sheet_keys;
@@ -3797,7 +3823,11 @@ impl CallbackTrait for LatticeCallback {
                         Some(DEPTH_FORMAT),
                         EGUI_BLEND,
                     );
-                    let glyph_cell_pipeline = text::create_glyph_cell_pipeline(
+                    let (
+                        glyph_coverage_cell_pipeline,
+                        glyph_distance_cell_pipeline,
+                        glyph_distance_pad_pipeline,
+                    ) = text::create_glyph_cell_pipelines(
                         device,
                         &glyph_shader,
                         &resources.glyph_layout,
@@ -3812,7 +3842,9 @@ impl CallbackTrait for LatticeCallback {
                         DEPTH_FORMAT,
                     );
                     resources.glyph_fill_pipeline = glyph_fill_pipeline;
-                    resources.glyph_cell_pipeline = glyph_cell_pipeline;
+                    resources.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
+                    resources.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
+                    resources.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
                     resources.shadow_box_pipeline = shadow_box_pipeline;
 
                     // And the text CALLBACK's own glyph pipelines, in an entry
@@ -3838,6 +3870,7 @@ impl CallbackTrait for LatticeCallback {
             shared_atlas.as_ref(),
             self.atlas.as_ref(),
             self.marks.as_ref(),
+            self.sdf.as_ref(),
         );
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
@@ -4213,6 +4246,14 @@ impl CallbackTrait for LatticeCallback {
             if let Some(atlas) = atlas {
                 let mut pass = atlas.ink_pass(egui_encoder);
                 let box_bytes = std::mem::size_of::<shadow::ShadowBox>() as u64;
+                if let Some(glyphs) =
+                    pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
+                {
+                    pass.set_pipeline(&resources.glyph_distance_pad_pipeline);
+                    pass.set_bind_group(0, glyphs, &[]);
+                    pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.box_count);
+                }
                 if pane.instance_count > 0 {
                     pass.set_pipeline(&resources.node_cell_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
@@ -4237,23 +4278,27 @@ impl CallbackTrait for LatticeCallback {
                 if let Some(glyphs) =
                     pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
                 {
-                    pass.set_pipeline(&resources.glyph_cell_pipeline);
                     pass.set_bind_group(0, glyphs, &[]);
                     pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                     let stride = box_bytes * pane.glyph_capacity as u64;
                     for t in 0..terms as u64 {
                         pass.set_vertex_buffer(1, pane.cell_buffer.slice(t * stride..));
+                        pass.set_pipeline(&resources.glyph_coverage_cell_pipeline);
                         pass.draw(0..4, 0..pane.glyph_count);
+                        if matches!(kernel[t as usize].kind, harmonigraph_scene::TermKind::Distance)
+                        {
+                            pass.set_pipeline(&resources.glyph_distance_cell_pipeline);
+                            pass.draw(0..4, 0..pane.glyph_count);
+                        }
                     }
                 }
                 drop(pass);
                 let cells = &resources.shadow_cell_pipelines;
                 // The FLOOD, between the ink and the blur: it reads the raw
                 // coverage out of the atlas's first texture, which the blur's y
-                // pass is the first thing to overwrite. Every draw in it
-                // collapses blur and analytic cells, so a node-only Distance
-                // frame holds no pair and names remain on the flood until their
-                // own SDF lands.
+                // pass is the first thing to overwrite. Shipped casters now
+                // answer exact fields and allocate no pair; the retained path
+                // is the placement reference removed in step 4.
                 atlas.flood(
                     queue,
                     egui_encoder,
