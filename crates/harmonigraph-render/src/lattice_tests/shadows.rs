@@ -1384,6 +1384,67 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
 // The distance family
 // ---------------------------------------------------------------------------
 
+/// A DISTANCE shadow stays one smooth annulus when its width projects to about
+/// a pixel at full depth.
+///
+/// The flood resolves a contour to within half a CELL texel. Stopping its cell
+/// at the pane's resolution makes that error most of this Shadow's σ, so the
+/// deep profile alternates between gaps and dark rays around an otherwise
+/// continuous ring. The standard deviation around one radius is the spikes'
+/// reading; it is bounded as a share of the mean so a uniformly fainter shadow
+/// cannot pass by moving every sample toward zero.
+#[test]
+fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let sample = |shot: &[u8], p: glam::Vec2| {
+        let x = p.x.clamp(0.0, SIZE[0] as f32 - 2.0);
+        let y = p.y.clamp(0.0, SIZE[1] as f32 - 2.0);
+        let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+        let (tx, ty) = (f64::from(x - x.floor()), f64::from(y - y.floor()));
+        let at = |x, y| bright_at(shot, x, y) as f64;
+        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    };
+    let mut scene = ringing_only(1.0, 0.16, 1.0);
+    scene.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    // Close the intentional gaps between the ring's wedges. Angular variation
+    // in the samples below is then the distance field's rather than the ink's.
+    scene.octave_gap = 0.0;
+    assert!(
+        sigma(&scene) < 1.25,
+        "the fixture's Shadow is not narrow enough for a cell texel to dominate it",
+    );
+    let deep = shooter.shot(&scene);
+    scene.glow_shadow_depth = 0.0;
+    let flat = shooter.shot(&scene);
+    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+    // Half a point past the ring's outer edge, where the deep profile still
+    // takes enough of the ground to measure and its cell-grid error is largest.
+    let radius = ink_radius(&scene) + 0.5;
+    let values: Vec<f64> = (0..720)
+        .map(|i| {
+            let a = std::f32::consts::TAU * i as f32 / 720.0;
+            let p = centre + radius * glam::Vec2::new(a.cos(), a.sin());
+            1.0 - sample(&deep, p) / sample(&flat, p)
+        })
+        .collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance =
+        values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
+    let deviation = variance.sqrt();
+    assert!(mean > 0.4, "the ring takes only {mean:.3} of the ground at the sampled radius");
+    assert!(
+        deviation < 0.3 * mean,
+        "the ring's distance shadow varies by {deviation:.3} around a mean of {mean:.3}, so its \
+         profile has broken into angular spikes",
+    );
+}
+
 /// A block of ink standing on grey, well clear of the node the fixture's name
 /// belongs to: the square caster the two readings below are taken off.
 ///

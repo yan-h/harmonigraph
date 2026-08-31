@@ -282,6 +282,21 @@ fn the_live_view_on_the_distance_row() -> Scene {
     scene
 }
 
+/// The distance row at the default camera distance and full Shadow depth.
+///
+/// This is the scale where a node's curved ink is only a few pixels wide on
+/// the pane. The frame holds whether its distance cell preserves that contour
+/// rather than turning the decay outside it into rays.
+fn the_zoomed_out_view_on_the_distance_row() -> Scene {
+    let view = harmonigraph_scene::ViewConfig {
+        center_threes: 1,
+        glow_shadow_depth: 1.0,
+        glow_shadow_kernel: harmonigraph_scene::ShadowKernel::Distance,
+        ..Default::default()
+    };
+    lattice(&view, Camera::default())
+}
+
 /// A sevens sheet standing behind the home one.
 ///
 /// The depth ordering the whole design turns on: a sheet is not a plane the
@@ -582,6 +597,15 @@ fn the_live_view_draws_the_frame_on_record() {
 #[test]
 fn the_live_view_on_the_distance_row_draws_the_frame_on_record() {
     check("live-view-distance", on_the_ground_it_clears_to(the_live_view_on_the_distance_row()));
+}
+
+/// The distance row stays smooth when its ink projects to a handful of pixels.
+#[test]
+fn the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record() {
+    check(
+        "zoomed-out-distance",
+        on_the_ground_it_clears_to(the_zoomed_out_view_on_the_distance_row()),
+    );
 }
 
 /// A sevens sheet behind the home one.

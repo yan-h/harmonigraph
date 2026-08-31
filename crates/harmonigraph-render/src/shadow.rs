@@ -4,11 +4,12 @@
 //!
 //! One cell per caster PER TERM of the kernel, each at a scale that keeps the
 //! blur's cost flat: a cell is the caster's box grown by that term's reach,
-//! drawn at `min(1, 3 / σ_t)` of the target's pixels, so σ is at most
-//! `SIGMA_CELL_MAX` texels in every cell and the kernel at most nineteen taps
-//! whatever the Shadow bar says and whatever row of the kernel table is
-//! chosen. The atlas is about the names' own area at the fresh Shadow and one
-//! Gaussian, shrinks as the bar widens, and grows with the term count.
+//! drawn at `min(1, 3 / σ_t)` of the target's pixels for a blur, so σ is at
+//! most `SIGMA_CELL_MAX` texels and the kernel at most nineteen taps whatever
+//! the Shadow bar says. A distance cell may be finer than the target so the
+//! flood's half-texel precision does not become most of a narrow shadow. The
+//! atlas is about the names' own area at the fresh Shadow and one Gaussian,
+//! shrinks as the bar widens, and grows with the term count.
 //!
 //! Each term at its OWN resolution is the whole point of the shape: a mixture's
 //! narrow term carries the kernel's core, and a shared resolution picked for
@@ -68,6 +69,21 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// the pad: `timing.rs` is what reads that back at the top of the bar, and
 /// `a_kernel_row_costs_this_much_atlas_against_one_gaussian` bounds it.
 pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
+
+/// The most texels of a DISTANCE cell one POINT of the pane may be drawn at.
+///
+/// The flood reconstructs the ink's contour to within half a cell texel. At a
+/// zoom where the Shadow's σ is under a pane pixel, stopping a distance cell at
+/// the target's resolution makes that error most of the profile's width; full
+/// depth then turns the cell grid into rays outside curved ink. Up to this
+/// ceiling the cell is allowed to draw finer, aiming for [`SIGMA_CELL_MAX`]
+/// texels per σ just as a wide cell draws coarser to stay under it.
+///
+/// Four texels per point is two cell texels per editor pixel and four per pixel
+/// in a 1x export. It holds the far camera's σ near the target without
+/// letting a nearly-closed Shadow grow a caster without bound. The floor above
+/// still owns wide shadows, so the expensive end of the bar is unchanged.
+pub(crate) const DISTANCE_TEXELS_PER_POINT_MAX: f32 = 4.0;
 
 /// What the flood's ping-pong pair is kept in: one texel's nearest seed, as a
 /// pair of ABSOLUTE atlas coordinates.
@@ -211,8 +227,9 @@ pub(crate) struct ShadowBox {
     /// The cell in atlas texels: origin, then size, all whole numbers.
     pub cell: [f32; 4],
     /// x: the scale from points to cell texels; y: σ in cell texels; z: the
-    /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels,
-    /// `min(1, SIGMA_CELL_MAX / σ)`.
+    /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels. At
+    /// most 1 for a blur; a distance cell may be finer than the target up to
+    /// [`DISTANCE_TEXELS_PER_POINT_MAX`].
     ///
     /// The last is what a cell's own rasterizer antialiases against
     /// (`aa_width` in lattice.wgsl): a fragment of the cell is one pane pixel
@@ -459,13 +476,14 @@ pub(crate) fn pack(
     let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
         let sigma = sigma_of(c, t);
         // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
-        // infinity the `min` answers: the cell is at the target's own
-        // resolution and its kernel collapses to the centre tap.
-        let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
-        // The floor is a `k` and not a fraction of the target, so it holds two
-        // texels of a stem at every framing rather than at one.
+        // infinity the limits below answer: a blur cell is at the target's own
+        // resolution, a distance cell at its precision ceiling.
+        let fit = SIGMA_CELL_MAX / sigma;
+        // Both bounds are on `k` and not on a fraction of the target, so the
+        // contour has the same resolution in points at every framing.
         let floor = (DISTANCE_TEXELS_PER_POINT / px_per_point).min(1.0);
-        let scale = if is_distance(t) { fit.max(floor) } else { fit };
+        let ceiling = DISTANCE_TEXELS_PER_POINT_MAX / px_per_point;
+        let scale = if is_distance(t) { fit.min(ceiling).max(floor) } else { fit.min(1.0) };
         let k = scale * px_per_point;
         // This term's σ in the cell's own texels, which is what the PADDING is
         // in whatever the kind — the two families reach different multiples of
@@ -1970,13 +1988,16 @@ pub(crate) mod tests {
     }
 
     /// A distance term's cell is padded to exactly where its curve is windowed
-    /// to nothing, and floored in resolution so a stroke of type survives it.
+    /// to nothing, and bounded in resolution so both its ink and profile
+    /// survive.
     ///
     /// The pair the family's cost is decided by, and the two are opposite
     /// claims. The pad has to REACH the stop or the shadow ends in a straight
-    /// line at the cell's edge; the scale has to stop shrinking or the ink the
-    /// flood seeds off thins to nothing. A blur cell keeps neither property,
-    /// which is what makes this the branch worth pinning.
+    /// line at the cell's edge. The scale has to stop shrinking or the ink the
+    /// flood seeds off thins to nothing, and it has to grow past the target's
+    /// resolution where half a flood texel would be most of the Shadow's σ. A
+    /// blur cell keeps neither property, which is what makes this the branch
+    /// worth pinning.
     #[test]
     fn a_distance_cell_reaches_the_stop_and_holds_its_resolution() {
         use harmonigraph_scene::ShadowKernel;
@@ -2000,6 +2021,21 @@ pub(crate) mod tests {
                 k >= DISTANCE_TEXELS_PER_POINT - 1e-5,
                 "at {px_per_point} pixels a point a distance cell draws a point across {k} \
                  texels, so a stem of type is under two of them and seeds nothing",
+            );
+
+            // A σ narrower than a pane point: the field aims for the same
+            // `SIGMA_CELL_MAX` texels of precision at every device scale, then
+            // stops at its ceiling rather than growing without bound as the
+            // Shadow closes.
+            let sigma_points = 0.5;
+            let held =
+                pack(&[caster], sigma_points * px_per_point, px_per_point, 8192, packed).boxes[0];
+            let k = held.terms[0];
+            assert!(
+                (k - DISTANCE_TEXELS_PER_POINT_MAX).abs() < 1e-5,
+                "at {px_per_point} pixels a point a narrow distance cell draws a point across \
+                 {k} texels rather than its {}-texel ceiling",
+                DISTANCE_TEXELS_PER_POINT_MAX,
             );
         }
         assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ, so the chain blurs it");

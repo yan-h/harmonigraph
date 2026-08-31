@@ -872,7 +872,9 @@ const AA_SOFTNESS_PX: f32 = 2.0;
 // `AA_SOFTNESS_PX` times a scale of 0.5 is exactly a fragment, and the bar
 // stops there — and the floor is what answers for a surface drawn coarser than
 // the pane, plus the sliver of `RENDER_SCALE_RANGE` below the bar, where a
-// band finer than a fragment is no antialiasing either.
+// band finer than a fragment is no antialiasing either. A distance cell drawn
+// finer than the target keeps scaling the knob past 1 so it rasterizes the same
+// screen-width contour rather than a sharper one at its extra resolution.
 //
 // That surface is a cell of the shadow atlas, whose fragment is a texel `σ / 3`
 // render pixels wide (`shadow::pack`). Scaling the knob is what keeps the
@@ -885,7 +887,7 @@ const AA_SOFTNESS_PX: f32 = 2.0;
 // other way, a cell antialiased at a width finer than the texels it has to draw
 // in being no antialiasing at all.
 fn aa_width(coord_fwidth: f32, surface_scale: f32) -> f32 {
-    let knob = AA_SOFTNESS_PX * max(u.misc2.z, 0.01) * clamp(surface_scale, 0.0, 1.0);
+    let knob = AA_SOFTNESS_PX * max(u.misc2.z, 0.01) * max(surface_scale, 0.0);
     return max(coord_fwidth, 1e-4) * max(knob, 1.0);
 }
 
