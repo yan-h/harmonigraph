@@ -3206,8 +3206,8 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // ONE length under the whole layer: the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
-    // its edge, and it is where the window shuts, so the Reach bar says exactly
-    // how far the light goes.
+    // its edge, and it is where the curve reaches zero, so the Reach bar says
+    // exactly how far the light goes.
     //
     // Not the quad's own margin, which is the tempting reading of "window it at
     // the edge": `quad_margin` floors at QUAD_MARGIN, so on a small reach the
@@ -3216,10 +3216,10 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // other way instead — the quad is SIZED to hold this, with room to spare
     // (`node_vertex`), so the light is never clipped square at the corners.
     let span = max(in.glow.z + reach, 0.1);
-    // Past the window there is no light. Not an early-out, and so needing no
-    // `EARLY_OUT` of its own — `window` is exactly 0 out here, which carries
-    // `skirt` and the coverage below it to 0 by the same arithmetic the slow
-    // path runs.
+    // Past the curve's zero endpoint there is no light. Not an early-out, and
+    // so needing no `EARLY_OUT` of its own — `glow_curve_at` is exactly 0 at
+    // the span, which carries `skirt` and the coverage below it to 0 by the
+    // same arithmetic the slow path runs.
     if d >= span {
         return vec4<f32>(0.0);
     }

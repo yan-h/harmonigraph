@@ -80,8 +80,21 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     let at = |curve: harmonigraph_scene::GlowCurve| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.glow_reach = 0.8;
-        scene.glow_strength = 1.5;
+        scene.glow_strength = 1.0;
         scene.glow_curve = curve;
+        // Aligned readback rows require an even width, whose geometric centre
+        // lies between fragments. Pan the content onto the centre of one pixel
+        // so the fixed full endpoint is the thing compared below.
+        let pixel_center = glam::Vec2::new(SIZE[0] as f32 * 0.5 + 0.5, SIZE[1] as f32 * 0.5 + 0.5);
+        for _ in 0..12 {
+            let error = pixel_center - on_screen(&scene, SIZE, glam::Vec3::ZERO);
+            scene.camera.pan(error);
+        }
+        let projected = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+        assert!(
+            projected.distance(pixel_center) < 0.001,
+            "the curve's full endpoint landed at {projected:?} rather than {pixel_center:?}",
+        );
         scene
     };
     let default_curve = harmonigraph_scene::GlowCurve::default();

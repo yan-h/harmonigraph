@@ -380,11 +380,10 @@ fn every_bar_has_its_declared_height() {
                     continue;
                 }
                 found += 1;
-                // Egui rounds painted rect edges to eighth-points. A scaled
-                // height that is not on that grid can therefore lose half a
-                // step between its allocated and painted rects.
+                // Every scale in the sweep makes the row height a whole point;
+                // the tolerance covers only f32 arithmetic on that height.
                 assert!(
-                    (r.rect.height() - want).abs() < 0.07,
+                    (r.rect.height() - want).abs() < 0.01,
                     "{pane:?} at scale {scale} drew a {}pt bar, not its declared {want}pt",
                     r.rect.height(),
                 );
