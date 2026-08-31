@@ -71,6 +71,7 @@ pub use harmonigraph_take::{
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use state::default_dock;
 pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
+pub use text::use_renderer_font_texture;
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell

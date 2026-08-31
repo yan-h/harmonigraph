@@ -109,6 +109,9 @@ pub fn render(
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
 
     let context = egui::Context::default();
+    // `frames::Renderer` installs the current font texture after applying
+    // each frame's texture deltas and before paint callbacks prepare.
+    harmonigraph_ui::use_renderer_font_texture(&context);
     harmonigraph_ui::theme::apply_theme(&context);
     context.set_pixels_per_point(settings.pixels_per_point);
     // What the GPU under this render will actually take. Read once: it is a

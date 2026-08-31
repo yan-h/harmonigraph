@@ -454,8 +454,8 @@ impl Workspace {
 /// of the three is contended; in each the concurrency primitive IS the return
 /// path, for one of two reasons.
 ///
-/// `roll_notes` and `font_atlas` are an atomic and a `Mutex` because they are
-/// written from a `&SharedState` — the roll draws from one, and so does the
+/// `roll_notes` and the atlas trackers use an atomic and `Mutex`es because they
+/// are written from a `&SharedState` — the roll draws from one, and so does the
 /// label batch's flush — with no way to hand a value back up the call stack.
 ///
 /// `lattice_stats` is an `Arc` for the harder version of the same problem, and
@@ -471,10 +471,9 @@ impl Workspace {
 ///
 /// `timings` and `perf` are the other end of the same frame: what the shell
 /// measured before `root_ui` ran, and the rolling windows `root_ui` folds all
-/// of it into. `font_atlas` is the odd member — a mirror rather than a
-/// measurement — and it rides here for the mechanism rather than the meaning:
-/// it is the third thing the draw path publishes through a shared reference,
-/// taken once per flush and uncontended for exactly the same reason.
+/// of it into. The atlas trackers ride here for the mechanism rather than the
+/// meaning: the draw path updates them through a shared reference, once per
+/// flush and uncontended.
 ///
 /// None of it is persisted — `save_persist` builds `UiPersist` field by field,
 /// so what is grouped here cannot reach the blob either way.
@@ -484,10 +483,10 @@ impl Workspace {
 /// `root_ui`, which the offline renderer never enters at all. The three side
 /// channels it DOES write, every offline frame, because it calls `draw_pane` —
 /// but nothing offline reads `lattice_stats` or `roll_notes`, so those are
-/// dead writes, and the atlas mirror is a function of the glyphs the frame
-/// drew rather than of anything timed. Both `lattice_stats` and `roll_notes`
-/// carry wall-clock or per-frame values, so a future offline READ of either is
-/// exactly what would break determinism.
+/// dead writes, and the atlas trackers depend only on the context's glyph
+/// assets. Both `lattice_stats` and `roll_notes` carry wall-clock or per-frame
+/// values, so a future offline READ of either is exactly what would break
+/// determinism.
 pub struct Instruments {
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. Carries the
@@ -514,13 +513,12 @@ pub struct Instruments {
     /// second roll on screen and reporting its count as THE count would be
     /// wrong, exactly as it is for the preview's lattice.
     pub(crate) roll_notes: std::sync::atomic::AtomicU32,
-    /// What the label callback's copy of egui's font atlas holds (see
-    /// [`text::AtlasMirror`]). Taken once per flush, uncontended.
+    /// The label callback's context-local fallback font and mark publication
+    /// state (see [`text::AtlasMirror`]). Taken once per flush, uncontended.
     pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
-    /// And what the LATTICE's copy holds. Its node names are drawn inside its
-    /// own scene pass, off a texture of its own, and a mirror answers for one
-    /// texture — see [`text::AtlasMirror`] for why that makes it a second
-    /// mirror rather than a second reader of the first.
+    /// The same publication state for the lattice callback, whose node names
+    /// draw inside its own scene pass and whose mark sheet has a GPU copy of
+    /// its own.
     pub(crate) lattice_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// What the shell measured about the previous frame. Written by the shell
     /// before `root_ui` and read once, by `FrameCosts::assemble`; no pane
@@ -785,18 +783,13 @@ impl SharedState {
     /// allocated nothing it would patch two slabs of a buffer that was never
     /// written.
     ///
-    /// The label mirror is the same trap one layer along. It holds the atlas
-    /// size, scale and fill ratio it last saw and the texel of every glyph
-    /// drawn at them — all four readings of one context — and answers "already
-    /// uploaded" from them. Carried into a new window it answers for texels in
-    /// a texture the new renderer never allocated, so the callback finds no
-    /// atlas, paints nothing, and every haloed label stays absent: nothing else
-    /// asks for a refresh, because the mirror IS what asks.
+    /// The label trackers carry the fallback atlas guards and the mark sheet's
+    /// publication key, all of which describe one context. Carrying them into
+    /// another context can suppress the first publication to its renderer.
     pub fn release_context_resources(&mut self) {
         self.spectrum.release_gpu_grids();
-        // Both mirrors: the lattice's names are drawn off a texture of their
-        // own, and a mirror left answering for the window that closed strands
-        // its renderer exactly the same way.
+        // Each callback owns its fallback and mark texture, so each publication
+        // tracker describes the context that closed.
         for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {
             mirror
                 .get_mut()

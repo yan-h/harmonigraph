@@ -185,9 +185,8 @@ pub(crate) fn draw_lattice(
     // recreates the texture behind whichever renderer went first. Growing it
     // before the names go is what keeps that to one recreate.
     //
-    // A saving now, not a correctness requirement: each renderer holds a
-    // mirror of its own (see `crate::text::AtlasMirror`), and each is handed
-    // the atlas on the frame its own glyphs move.
+    // A saving now, not a correctness requirement: the shell publishes egui's
+    // current texture after all layout and before either callback prepares.
     //
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of

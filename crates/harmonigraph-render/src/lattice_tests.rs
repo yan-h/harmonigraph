@@ -20,4 +20,3 @@ mod shimmer;
 mod ships;
 mod sweep;
 mod timing;
-mod uploadcost;

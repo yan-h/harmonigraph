@@ -102,8 +102,8 @@ pub struct LatticeLabels {
     /// One entry per label, naming its node and how many of `glyphs` are
     /// its own.
     pub labels: Vec<Label>,
-    /// egui's font atlas, on the frames the renderer's mirror of it is
-    /// stale. `None` on the rest, which is nearly all of them.
+    /// A CPU font-atlas snapshot for shells that cannot publish egui's current
+    /// renderer texture, on the frames that fallback is stale.
     pub atlas: Option<FontAtlas>,
     /// And the drawn marks' own sheet, on the frames it has moved.
     pub marks: Option<FontAtlas>,
@@ -714,7 +714,7 @@ struct Uniforms {
     /// SURFACE — the docked pane and the Render preview both draw a lattice in
     /// one frame, and a `write_texture` is ordered ahead of the shared encoder
     /// egui-wgpu submits, so one shared texture would hand both panes whichever
-    /// spectrum was written last (the trap `mirror_sheets` documents) — and a
+    /// spectrum was written last (the trap `bind_sheets` documents) — and a
     /// second upload path beside the uniforms, which are already per pane and
     /// already carry a lookup table of their own. The interpolation is two
     /// unpacks and a mix.
@@ -931,9 +931,8 @@ pub struct LatticeStats {
     pub poll_ms: std::sync::atomic::AtomicU32,
     /// Of that, staging this frame's data: sizing the offscreen targets,
     /// recreating them when the size moved, the `queue.write_buffer` calls for
-    /// instances, markers, labels and both sets of uniforms, and — on the rare
-    /// frame that brings one — the copy of egui's font atlas the labels are
-    /// read out of.
+    /// instances, markers, labels and both sets of uniforms, plus label-sheet
+    /// binding updates and drawn-mark uploads.
     pub write_ms: std::sync::atomic::AtomicU32,
     /// Of that, encoding the scene pass and the bloom chain — five
     /// `begin_render_pass` calls and the draws inside them. No GPU work
@@ -995,7 +994,7 @@ struct LatticeCallback {
     /// because a node and a marker cast whether or not the frame carries a
     /// single name.
     node_points: f32,
-    /// The two sheets, on the frames either has moved.
+    /// The fallback font sheet and drawn-mark sheet, on their publication frames.
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
@@ -1686,11 +1685,10 @@ struct LatticeResources {
     /// that answer a distance cell; see [`shadow::flood_layout`].
     flood_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
-    /// This renderer's copies of the two sheets a glyph can be cut from —
-    /// egui's font atlas and the drawn marks'. Its own, not the text
-    /// callback's: a mirror answers for one texture, and these are two.
-    atlas: text::MirroredAtlas,
-    marks: text::MirroredAtlas,
+    /// This renderer's bindings for the two sheets a glyph can be cut from —
+    /// egui's shared font texture and the drawn marks' private texture.
+    atlas: text::AtlasTexture,
+    marks: text::AtlasTexture,
     blank: wgpu::Texture,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
@@ -1942,8 +1940,8 @@ struct PaneBuffers {
     /// What the glyph shader is told about this pane: its size in points, the
     /// atlas's, and the terms a name's shadow is cast on.
     glyph_uniform_buffer: wgpu::Buffer,
-    /// Names both mirrored sheets, so it is rebuilt whenever a fresh one has
-    /// been uploaded — and `glyph_sheet_keys` is which uploads it names.
+    /// Names both sampled sheets, so it is rebuilt whenever either allocation
+    /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
     glyph_sheet_keys: (u64, u64),
     offscreen: Option<Offscreen>,
@@ -3352,8 +3350,8 @@ impl LatticeResources {
             glyph_fill_pipeline,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
-            atlas: text::MirroredAtlas::default(),
-            marks: text::MirroredAtlas::default(),
+            atlas: text::AtlasTexture::default(),
+            marks: text::AtlasTexture::default(),
             blank: text::blank_atlas(device, queue),
             target_format,
             panes: HashMap::new(),
@@ -3363,10 +3361,10 @@ impl LatticeResources {
         }
     }
 
-    /// Upload whichever of the two label sheets has moved.
+    /// Bind egui's current font texture and upload whichever fallback sheet moved.
     ///
     /// The text callback answers the same question with a great deal more
-    /// (`text::TextResources::mirror_atlas`, which carries every pane already
+    /// (`text::TextResources::bind_sheets`, which carries every pane already
     /// prepared this frame onto the new texture), and the difference is not an
     /// omission — it is where the two record their draws. That callback draws
     /// in `paint`, after every `prepare` in the frame, so a pane's bind group
@@ -3382,15 +3380,18 @@ impl LatticeResources {
     /// still going to sample the texture it was recorded against. Old texture,
     /// new size, which is exactly the mismatch the text callback's version
     /// exists to prevent, arriving by the other road.
-    fn mirror_sheets(
+    fn bind_sheets(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        atlas: Option<&FontAtlas>,
+        shared_atlas: Option<&wgpu::Texture>,
+        fallback_atlas: Option<&FontAtlas>,
         marks: Option<&FontAtlas>,
     ) {
-        if let Some(atlas) = atlas.filter(|a| !self.atlas.holds(a)) {
+        if let Some(atlas) = fallback_atlas.filter(|a| !self.atlas.holds(a)) {
             self.atlas.upload(device, queue, atlas);
+        } else if let Some(atlas) = shared_atlas {
+            self.atlas.share(atlas);
         }
         if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
             self.marks.upload(device, queue, marks);
@@ -3425,8 +3426,8 @@ impl LatticeResources {
         let layout = &self.bind_group_layout;
         let caster_layout = &self.caster_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
-        // whatever the mirror holds right now, which is this frame's atlas —
-        // `prepare` uploads before it gets here.
+        // this frame's font texture and mark sheet — `prepare` binds them
+        // before it gets here.
         let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
         let atlas_view = self.atlas.view();
         let mark_view = self.marks.view_or(&self.blank);
@@ -3641,6 +3642,10 @@ impl CallbackTrait for LatticeCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        // The shell publishes egui's current font texture under its concrete
+        // wgpu type before callbacks prepare. Clone the handle before taking a
+        // mutable borrow from the resource map; its pixels remain shared.
+        let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
         // Lazily (re)create shared resources. Recreate if the target format
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources
@@ -3796,12 +3801,17 @@ impl CallbackTrait for LatticeCallback {
         // inside the scene pass below, so the textures they read have to be the
         // current ones by the time that pass is recorded.
         let write_start = std::time::Instant::now();
-        resources.mirror_sheets(device, queue, self.atlas.as_ref(), self.marks.as_ref());
-        // Nothing has ever been uploaded: the first frames of a session arrive
-        // before any pane has drawn a glyph, and the labels wait for the frame
-        // that brings one. Gated on the FONT atlas alone, which is not a
-        // shortcut: a mark is always drawn beside a letter, so a frame with a
-        // mark in it is a frame with type in it.
+        resources.bind_sheets(
+            device,
+            queue,
+            shared_atlas.as_ref(),
+            self.atlas.as_ref(),
+            self.marks.as_ref(),
+        );
+        // The first frames of a session can arrive before any pane has drawn a
+        // glyph, and the labels wait for a font texture. Gated on the FONT
+        // atlas alone: a mark is always drawn beside a letter, so a frame with
+        // a mark in it is a frame with type in it.
         let has_atlas = !resources.atlas.is_empty();
         let sheet_sizes = resources.sheet_sizes();
 

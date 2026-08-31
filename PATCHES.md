@@ -280,6 +280,12 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   reparenting the plugin) would otherwise leave a permanently blank
   editor. The GL renderer draws into the view's own context and takes the
   no-op.
+- **Patch 13** (`src/renderer/wgpu/renderer.rs`): publish egui's managed font
+  texture into `CallbackResources` after this frame's texture deltas and
+  before paint callbacks prepare. Harmonigraph's glyph callbacks bind that
+  GPU allocation directly; cloning the `wgpu::Texture` handle does not copy
+  its pixels. This removes the 4.67–24.69 ms whole-atlas mirror upload paid
+  whenever a zoom first reaches a new label size.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
@@ -287,7 +293,8 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers,
   the upload split with its per-frame-reconfigure fix, the `layer_present`
   module with its hooks and objc2 deps — both the resize half and the
-  occlusion hide/unhide — and the kept pointer position.
+  occlusion hide/unhide — the kept pointer position, and the font-texture
+  publication into `CallbackResources`.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 
