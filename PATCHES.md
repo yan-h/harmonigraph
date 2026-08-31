@@ -294,8 +294,9 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   into roughly 400 MiB of process memory. The cap is still eight times the
   largest glyph Harmonigraph allows, and puts a 64 MiB ceiling on egui's CPU
   image before its 80% rebuild clears historical sizes. At the fresh Name
-  size, a full-range zoom reaches 16 MiB on its first sweep and stays there
-  through every return trip.
+  size, a full-range zoom reaches 32 MiB on its first sweep and stays there
+  through every return trip; the largest valid Name size reaches the 64 MiB
+  ceiling once and reuses it too.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the

@@ -39,6 +39,19 @@ use crate::SharedState;
 /// which is a fold resizing a pane nobody folded.
 pub const MIN_WINDOW_WIDTH: f32 = 400.0;
 
+/// Largest side of the font atlas an interactive shell advertises to egui.
+///
+/// egui fixes the atlas width at this value, so reporting an 8192-wide device
+/// retains 64–128 MiB of CPU font pixels after a full lattice zoom. The
+/// renderer still owns the device's real limit; this bounds only the atlas
+/// egui chooses for type it rasterizes itself.
+pub const FONT_ATLAS_MAX_SIDE: usize = 4096;
+
+/// Bound egui's font atlas without lowering the renderer's texture limit.
+pub fn limit_font_atlas(input: &mut egui::RawInput) {
+    input.max_texture_side = input.max_texture_side.map(|side| side.min(FONT_ATLAS_MAX_SIDE));
+}
+
 /// What a shell hands over once it has built an egui `Context`.
 ///
 /// A context, rather than a process or a window, is the unit: the plugin

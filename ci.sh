@@ -57,14 +57,13 @@ run cargo test -p harmonigraph-render
 # crate cannot see the workspace's baseview patch, so its command repeats that
 # path explicitly; WGPU is the backend the plugin ships.
 #
-# `--target-dir` because the crate is its own workspace root and would
-# otherwise open a second target/ inside vendor/, 113 MB per worktree on a
-# machine that has already been filled once by target dirs.
-run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/vendor-baseview
+# Each crate is its own workspace root, so keep both of their targets under
+# `target/debug`: the idle-worktree reclaimer owns that whole subtree.
+run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/debug/vendor-baseview
 run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
   --no-default-features --features wgpu,tracing \
   --config 'patch.crates-io.baseview.path="vendor/baseview"' \
-  --target-dir target/vendor-egui-baseview
+  --target-dir target/debug/vendor-egui-baseview
 
 # Doc links, which is the only mechanical check on comments this tree has.
 # Comments are ~40% of the non-blank lines under crates/ and carry the

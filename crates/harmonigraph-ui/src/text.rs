@@ -252,7 +252,7 @@ pub(crate) fn ink_inset(
 /// One rung of the size ladder, as a ratio. 4% — under what reads as a change
 /// of size while a picture is moving, and coarse enough that a sixfold zoom
 /// asks for some 45 sizes where a pixel grid asked for 300.
-const SIZE_STEP: f32 = 1.04;
+pub(crate) const SIZE_STEP: f32 = 1.04;
 
 /// The largest a label's type is ever rasterized, in physical pixels.
 ///
