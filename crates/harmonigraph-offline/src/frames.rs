@@ -93,8 +93,9 @@ impl Renderer {
     /// `None` makes egui report its own 2048 default, and egui grows its font
     /// atlas only up to whatever it is told: a render whose labels need more
     /// glyph area than that simply loses them, with nothing on screen or in
-    /// stderr saying so (issue #368). The editor has no such gap: the vendored
-    /// egui-baseview passes its renderer's limit in, off this same wgpu call.
+    /// stderr saying so (issue #368). The interactive editor accepts a 4096
+    /// bound to cap its long-lived font atlas; an offline frame can legitimately
+    /// exceed 4K and needs the device's full answer here.
     ///
     /// The DEVICE's number rather than a lower one chosen here. A second,
     /// quieter cap in this crate would make an offline frame differ from the
