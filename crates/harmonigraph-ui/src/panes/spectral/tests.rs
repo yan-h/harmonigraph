@@ -1767,12 +1767,9 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
 /// direction, and only a frame that actually paints can say which expression
 /// is there.
 ///
-/// The frame itself is most of the test: the run the pane hands the GPU is
-/// what the fold produced, and a fold given the whole take instead of the
-/// window comes out several times the cap (issue #367). What puts real columns
-/// outside the window is `--start`/`--end` on a longer bounce —
-/// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the whole
-/// file whatever window was asked for, and the slab is cut for the window.
+/// The frame itself is most of the test: the run the pane hands the GPU is what
+/// the fold produced. The deliberately wider stored set makes a fold given all
+/// of it come out several times the cap, while the slab is cut for the window.
 #[test]
 fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
     let mut state = fresh();

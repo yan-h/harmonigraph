@@ -491,6 +491,17 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert_eq!(ws.start, 0.0);
     assert!(ws.columns.len() > 10, "a 2 s take yields many columns, got {}", ws.columns.len());
 
+    // A full-take request starts at sample 0 and ends at the buffer's last
+    // frame, so bounding the feed leaves its established hop grid untouched.
+    let window_frames = cfg.window.samples();
+    let hop_frames = (AudioSpectrum::FFT_INTERVAL * f64::from(sr)).round() as usize;
+    let first_end = window_frames.div_ceil(hop_frames) * hop_frames;
+    let expected_columns = (n - first_end) / hop_frames + 1;
+    assert_eq!(ws.columns.len(), expected_columns, "the full-take column grid changed");
+    let window_center = window_frames as f64 / f64::from(sr) * 0.5;
+    assert!((ws.columns[0].time - (first_end as f64 / f64::from(sr) - window_center)).abs() < 1e-9);
+    assert!((ws.columns.last().unwrap().time - (seconds - window_center)).abs() < 1e-9);
+
     // Columns are in take time, strictly increasing, inside the take.
     let mut prev = -1.0;
     for c in &ws.columns {
@@ -506,7 +517,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
 
     // `time_origin` shifts every column onto the take's timeline.
-    let shifted = WholeSong::precompute(&samples, 1, sr, 5.0, 0.0, seconds, &cfg);
+    let shifted = WholeSong::precompute(&samples, 1, sr, 5.0, 5.0, seconds, &cfg);
     assert!(
         (shifted.columns[0].time - ws.columns[0].time - 5.0).abs() < 1e-6,
         "time_origin offsets the columns"
@@ -519,6 +530,100 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     for (a, b) in ws.columns.iter().zip(&again.columns) {
         assert_eq!(a.time, b.time);
         assert_eq!(a.db, b.db, "precompute is deterministic");
+    }
+}
+
+/// A late render window pays for that window and its analyzer input margins,
+/// while keeping the same absolute sample grid as a full-take analysis.
+///
+/// The nonzero audio origin and a start four seconds into a six-second take are
+/// both load-bearing: a fixture starting at zero would never enter the trimmed
+/// path, and relative slice timestamps would happen to look like take time.
+/// The signal changes pitch at the render start so the first drawable column
+/// also depends on samples from both sides of that boundary; matching the full
+/// analysis proves the pre-roll reaches the FFT rather than merely moving a
+/// timestamp.
+#[test]
+fn a_late_window_precomputes_only_its_audio_on_the_take_grid() {
+    use harmonigraph_core::spectrum::midi_to_hz;
+    let sr = 4_000.0f32;
+    let take_seconds = 6.0;
+    let time_origin = 10.0;
+    let start = 14.0;
+    let span = 1.0;
+    let frames = (f64::from(sr) * take_seconds) as usize;
+    let samples: Vec<f32> = (0..frames)
+        .map(|i| {
+            let t = i as f32 / sr;
+            let hz = if f64::from(t) < start - time_origin {
+                midi_to_hz(57.0)
+            } else {
+                midi_to_hz(69.0)
+            };
+            0.7 * (std::f32::consts::TAU * hz * t).sin()
+        })
+        .collect();
+    let cfg = SpectrumConfig { window: SpectrumWindow::Fast, ..SpectrumConfig::default() };
+    let full = WholeSong::precompute(&samples, 1, sr, time_origin, time_origin, take_seconds, &cfg);
+    let late = WholeSong::precompute(&samples, 1, sr, time_origin, start, span, &cfg);
+    let past_audio = WholeSong::precompute(
+        &samples,
+        1,
+        sr,
+        time_origin,
+        time_origin + take_seconds + 1.0,
+        span,
+        &cfg,
+    );
+    assert!(past_audio.columns.is_empty(), "a disjoint window still analyzed the take");
+
+    let window = cfg.window.samples() as f64 / f64::from(sr);
+    let hop = AudioSpectrum::FFT_INTERVAL;
+    let stored_ceiling = ((span + window) / hop).ceil() as usize + 1;
+    assert!(
+        late.columns.len() <= stored_ceiling,
+        "{} columns exceed a {span} s window plus {window:.3} s of history",
+        late.columns.len(),
+    );
+    assert!(
+        full.columns.len() > late.columns.len() * 3,
+        "the fixture did not distinguish a late slice ({} columns) from the full take ({})",
+        late.columns.len(),
+        full.columns.len(),
+    );
+    assert!(
+        late.columns.first().is_some_and(|c| c.time >= start - window && c.time < start),
+        "the stored set does not begin in the analyzer history before {start}",
+    );
+    assert!(
+        late.columns.last().is_some_and(|c| c.time <= start + span),
+        "the stored set reaches beyond the requested end",
+    );
+
+    let drawn: Vec<_> = late.drawn_columns(span).collect();
+    assert!(drawn.len() > 10, "the late fixture never reached drawable columns");
+    assert!(
+        (drawn[0].time - start).abs() < hop * 0.25,
+        "the first drawable column is stamped {} instead of absolute take time {start}",
+        drawn[0].time,
+    );
+    assert!(
+        (drawn.last().unwrap().time - (start + span)).abs() < hop * 0.25,
+        "the last drawable column is stamped {} instead of reaching {}",
+        drawn.last().unwrap().time,
+        start + span,
+    );
+    for column in &late.columns {
+        let reference = full
+            .columns
+            .iter()
+            .find(|candidate| candidate.time == column.time)
+            .unwrap_or_else(|| panic!("{} is not on the full take's hop grid", column.time));
+        assert_eq!(
+            column.db, reference.db,
+            "the sliced analyzer lost the history behind column {}",
+            column.time,
+        );
     }
 }
 

@@ -545,17 +545,18 @@ pub(crate) struct PaneView {
 
 /// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
 ///
-/// The whole-song arm counts the UNTRIMMED set, while the fold reads
+/// The whole-song arm counts its stored set, while the fold reads
 /// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) — so `start`
 /// reaches the key through nothing at all, and `span` only through `bucket`,
 /// which is many-to-one wherever [`MIN_BUCKET`] binds. Two windows on one
 /// column set can therefore mint the same key for different runs.
 ///
 /// What makes that safe rather than the stale-key bug it looks like is that a
-/// [`WholeSong`](crate::WholeSong) is built once per render, before the frame
-/// loop, and only its `roll` is written afterwards — so `start` and `span` are
-/// constants for the life of every key minted from them. It is safe by that
-/// fact and not by the key, which is why the fact is written down: a
+/// [`WholeSong`](crate::WholeSong) and its window-bounded column set are built
+/// once per render, before the frame loop, and only its `roll` is written
+/// afterwards — so `start`, `span` and `columns.last()` are constants for the
+/// life of every key minted from them. It is safe by that fact and not by the
+/// key, which is why the fact is written down: a
 /// `WholeSong` that changed window mid-render would draw the previous
 /// window's grid at the previous window's geometry, and no assertion here
 /// would see it.
@@ -756,11 +757,10 @@ pub(crate) fn build(
     // re-walking the store.
     let (centers, power) = match whole {
         // Offline whole-song: a fixed column set, folded once per render — a
-        // plain batch aggregate, over the columns the depth axis can draw rather
-        // than every column the take holds. That trim is what bounds the RUN
-        // (see [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)):
-        // `bucket` is cut for the window, so folding a longer take's whole
-        // column set would spend slabs on time no pixel shows.
+        // plain batch aggregate over the columns the depth axis can draw. The
+        // stored set includes analyzer pre-roll, so the fold still owns the
+        // exact window trim (see
+        // [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)).
         Some(ws) => aggregate_slabs(ws.drawn_columns(view.window), bucket),
         // Live: fold only the new column(s) into the kept slab grid instead of
         // rescanning the whole window every rebuild. `history` and the
@@ -1003,9 +1003,9 @@ impl SlabGrid {
 /// disagree, and this keeps what it folded from the finer data rather than
 /// re-reading the coarser.
 ///
-/// That is also what the offline renderer sees: [`crate::WholeSong`] analyses a
-/// take into raw columns and never merges them, so a grid built from raw columns
-/// is the picture the live heatmap is meant to match.
+/// That is also what the offline renderer sees: [`crate::WholeSong`] analyses
+/// its render window into raw columns and never merges them, so a grid built
+/// from raw columns is the picture the live heatmap is meant to match.
 ///
 /// Treating the merge as a reason to fall back instead is what this replaced,
 /// and it was not a small cost: it fired on every frame at any Span past the
@@ -2043,13 +2043,10 @@ mod tests {
     /// The sweep above cannot see this: it derives the whole-song slab count
     /// from `window / bucket`, and the two numbers part company exactly here.
     /// `bucket` is cut for the WINDOW ([`Plan::new`]) while the run's length
-    /// comes from the columns the fold walks, and
-    /// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the
-    /// whole `samples` buffer whatever `--start`/`--end` asked for — so a short
-    /// window on a long bounce arrives with columns spanning the file. Ten
-    /// seconds of a three-minute take folds to some 14 000 slabs, which is a
-    /// grid several times the size of the picture that shows it, on time no
-    /// pixel reaches (issue #367).
+    /// comes from the columns the fold walks. A caller can supply a set wider
+    /// than the window, and ten seconds selected from three minutes would then
+    /// fold to some 14 000 slabs — several times the size of the picture that
+    /// shows it, on time no pixel reaches.
     ///
     /// FOLDED rather than counted. The length is a property of
     /// [`SlabGrid::fold`]'s absolute keying — an empty slab still takes a row,
@@ -2181,8 +2178,8 @@ mod tests {
         // The axis' own floor, from `TimeAxis::new`.
         const FLOOR: f64 = 0.05;
         let (start, span) = (60.0, 0.02);
-        // Columns at the analyzer's rate across the window and past it —
-        // `precompute` stamps them over the whole take whatever was asked for.
+        // Columns at the analyzer's rate across the floored axis window and
+        // past it, so handing `build` the requested span would end the run early.
         let columns: Vec<_> = (0..40)
             .map(|i| col(59.9 + i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
             .collect();

@@ -75,7 +75,7 @@ OPTIONS:
                            auto (default) cross-correlates it against the
                            take\'s own recording; off assumes it starts at
                            take zero; a number sets the start by hand.
-        --playhead         Lay the whole take\'s spectrogram out at once and
+        --playhead         Lay the render window\'s spectrogram out at once and
                            sweep a playhead across it, instead of the live
                            scrolling window. Needs audio.
         --dump-layout      Print the resolved layout as .ron and exit —
