@@ -312,7 +312,7 @@ pub const HEADING_FAMILY: &str = "heading";
 /// monospace — chosen for its narrow numerals in ValueBars and readouts,
 /// and used by the console. All OFL; license texts ship next to the TTFs
 /// in `fonts/`. egui's bundled faces remain as fallbacks.
-fn install_fonts(ctx: &egui::Context) {
+pub(crate) fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
     let mut fonts = FontDefinitions::default();
@@ -356,6 +356,7 @@ fn install_fonts(ctx: &egui::Context) {
 /// (eframe's creation context; the plugin editor's build closure).
 pub fn apply_theme(ctx: &egui::Context) {
     install_fonts(ctx);
+    crate::text_sdf::prepare();
     // The lattice is a dark-background instrument; pin the UI to dark
     // rather than following the host/system preference.
     ctx.set_theme(egui::ThemePreference::Dark);

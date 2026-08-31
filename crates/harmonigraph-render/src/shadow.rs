@@ -158,8 +158,8 @@ pub(crate) struct Caster {
     /// Whether a distance cell is filled with a signed field by the caster's
     /// own rasterizer rather than reconstructed from coverage by the flood.
     ///
-    /// Nodes carry their analytic layer geometry into the atlas. Names do not:
-    /// their glyph rasterizer still supplies coverage for the shared flood.
+    /// Nodes carry their analytic layer geometry into the atlas. Names carry
+    /// the fixed font field their glyph instances address.
     /// Unlike [`Self::direct_distance`], this keeps a real cell for the scene
     /// draw to sample.
     pub analytic_distance: bool,
@@ -197,7 +197,7 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Ca
         level,
         sigma_scale,
         direct_distance: false,
-        analytic_distance: false,
+        analytic_distance: true,
     }
 }
 
@@ -259,13 +259,13 @@ impl ShadowBox {
         ],
     };
 
-    /// The same rows at the locations after a glyph's five, for the draw that
+    /// The same rows at the locations after a glyph's eight, for the draw that
     /// rasterizes a glyph into its cell alongside `GlyphInstance::LAYOUT`.
     pub(crate) const BESIDE_GLYPHS: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
+            8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4
         ],
     };
 
@@ -642,8 +642,9 @@ pub(crate) struct ShadowTarget {
     /// Reading `views[i]`, as every consumer of the atlas takes it
     /// ([`read_layout`]).
     pub(crate) reads: [wgpu::BindGroup; 2],
-    /// The jump flood's own pair, present exactly while a frame packs a name's
-    /// coverage-based DISTANCE cell ([`ensure_flood`](Self::ensure_flood)).
+    /// The jump flood's own pair, present exactly while a frame packs a
+    /// coverage-based DISTANCE reference cell
+    /// ([`ensure_flood`](Self::ensure_flood)).
     ///
     /// Two more textures the size of the atlas, at four bytes a texel against
     /// the atlas's two — so a blur row does not carry them, which is what keeps
@@ -1202,7 +1203,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_scale: 1.0,
             direct_distance: false,
-            analytic_distance: false,
+            analytic_distance: true,
         }
     }
 
@@ -2273,8 +2274,8 @@ pub(crate) mod tests {
 
     /// A node's analytic distance keeps the real cell its scene draw samples,
     /// marks that cell for the copy path, and contributes nothing to the flood
-    /// schedule. Turning the flag off is the name path and schedules the same
-    /// cell for reconstruction.
+    /// schedule. Turning the flag off schedules the same cell for the retained
+    /// coverage reference path.
     #[test]
     fn an_analytic_distance_keeps_its_cell_and_drops_the_flood() {
         use harmonigraph_scene::ShadowKernel;
@@ -2290,6 +2291,12 @@ pub(crate) mod tests {
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
         assert_eq!(exact.boxes[0].who[3], 1.0, "the cell is not on the analytic copy path");
         assert_eq!(exact.flood, 0.0, "the analytic field widened the flood schedule");
+
+        let name = caster_of(&[crate::text::tests::glyph()], 1.0);
+        assert!(name.analytic_distance, "a name did not select its fixed SDF field");
+        let name = pack(&[name], 40.0, 2.0, resolution, 4096, ShadowKernel::Distance.terms());
+        assert_eq!(name.flood, 0.0, "a name scheduled the retired reconstruction path");
+        assert_eq!(name.boxes[0].who[3], 1.0);
 
         let flooded = pack(
             &[Caster { analytic_distance: false, ..analytic }],

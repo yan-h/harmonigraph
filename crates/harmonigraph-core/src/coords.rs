@@ -144,6 +144,17 @@ pub struct NoteName {
 }
 
 impl NoteName {
+    /// Every typeset character a counted note name can contain.
+    ///
+    /// The UI draws the four signs and the septimal chevrons as geometry, so
+    /// this is the closed set the remaining type path owes its glyph atlas:
+    /// seven letters and the ten digits a count can emit. Kept here, beside
+    /// the spelling, so an atlas cannot silently fall behind a new character
+    /// that [`Display`](std::fmt::Display) learns to produce.
+    pub const fn typeset_characters() -> [char; 17] {
+        ['A', 'B', 'C', 'D', 'E', 'F', 'G', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+    }
+
     /// The accidental mark alone: `♯`, `♯2`, `♭3`, or empty for a natural.
     /// Empty when there is no accidental.
     pub fn accidental_mark(&self) -> String {

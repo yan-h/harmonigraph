@@ -11,6 +11,7 @@ mod perf;
 /// and the one window floor both shells hold.
 pub mod shell;
 pub(crate) mod text;
+mod text_sdf;
 pub mod theme;
 pub mod widgets;
 

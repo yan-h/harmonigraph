@@ -489,6 +489,7 @@ impl TextBatch {
         #[cfg(test)]
         let first = self.glyphs.len();
         let font_size_bits = font.size.to_bits();
+        let sdf_family = font.family.clone();
         let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
         // Placed at whatever position it is handed, NOT rounded onto a whole
         // physical pixel — for EVERY pane that draws through this batch, not
@@ -536,15 +537,20 @@ impl TextBatch {
                 let left_top = glyph.pos + glyph.uv_rect.offset;
                 let min = pos + row.pos.to_vec2() + left_top.to_vec2();
                 let min = self.magnify.map_or(min, |m| m.point(min));
+                let rect = [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k];
+                let sdf = crate::text_sdf::sheet().type_patch(&sdf_family, glyph.chr);
                 self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
                 self.glyphs.push(GlyphInstance {
-                    rect: [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k],
+                    rect,
                     uv: [
                         f32::from(glyph.uv_rect.min[0]),
                         f32::from(glyph.uv_rect.min[1]),
                         f32::from(glyph.uv_rect.max[0]),
                         f32::from(glyph.uv_rect.max[1]),
                     ],
+                    sdf_rect: rect,
+                    sdf_near: sdf.map_or([0.0; 4], |patch| patch.near),
+                    sdf_coarse: sdf.map_or([0.0; 4], |patch| patch.coarse),
                     fill: color.to_array(),
                     rim: outline.to_array(),
                     atlas: GlyphInstance::TYPE,
@@ -609,9 +615,20 @@ impl TextBatch {
         let min = center - size / 2.0;
         let min = self.magnify.map_or(min, |m| m.point(min));
         let [x, y] = patch.at.map(|n| n as f32);
+        let inset = crate::marks::MARK_BITMAP_PAD as f32 / ppp * k;
+        let rect = [min.x, min.y, size.x * k, size.y * k];
+        let sdf = crate::text_sdf::sheet().mark_patch(key.kind());
         self.glyphs.push(GlyphInstance {
-            rect: [min.x, min.y, size.x * k, size.y * k],
+            rect,
             uv: [x, y, x + patch.size[0] as f32, y + patch.size[1] as f32],
+            sdf_rect: [
+                rect[0] + inset,
+                rect[1] + inset,
+                (rect[2] - 2.0 * inset).max(0.0),
+                (rect[3] - 2.0 * inset).max(0.0),
+            ],
+            sdf_near: sdf.near,
+            sdf_coarse: sdf.coarse,
             fill: color.to_array(),
             rim: outline.to_array(),
             atlas: GlyphInstance::MARK,
@@ -749,12 +766,16 @@ impl TextBatch {
         for glyph in &mut glyphs {
             glyph.rect[0] -= rect.min.x;
             glyph.rect[1] -= rect.min.y;
+            glyph.sdf_rect[0] -= rect.min.x;
+            glyph.sdf_rect[1] -= rect.min.y;
         }
+        let sdf = (!glyphs.is_empty()).then(|| crate::text_sdf::sheet().atlas.clone());
         harmonigraph_render::LatticeLabels {
             glyphs,
             labels: std::mem::take(&mut self.labels),
             atlas,
             marks,
+            sdf,
             // The default, and here that is a want of an answer rather than
             // one: an orbiting camera carries a node name across the screen
             // and up it at once, so there is no axis its motion is along.
@@ -1591,6 +1612,37 @@ mod tests {
             );
         });
         batch.drawn
+    }
+
+    /// Editor and offline shells can render at any display scale. The visible
+    /// raster changes with that scale, while the fixed field patch does not;
+    /// mapping the same patch onto the visible rect is what keeps both shells
+    /// in point space without a device-scale correction of their own.
+    #[test]
+    fn a_lattice_glyph_maps_one_sdf_patch_at_every_display_scale() {
+        let mapped = |ppp: f32| {
+            let ctx = crate::tests::probe::themed_at(ppp);
+            let mut batch = TextBatch::default();
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                batch.text(
+                    ui.painter(),
+                    egui::pos2(20.0, 20.0),
+                    egui::Align2::LEFT_TOP,
+                    "A".to_owned(),
+                    egui::FontId::monospace(30.0),
+                    egui::Color32::WHITE,
+                    egui::Color32::BLACK,
+                );
+            });
+            let glyph = batch.glyphs.into_iter().next().expect("A has one glyph");
+            assert_eq!(glyph.sdf_rect, glyph.rect, "the {ppp} ppp glyph maps another screen box");
+            glyph
+        };
+        let glyphs = [1.0, 1.5, 2.0, 4.0].map(mapped);
+        for glyph in &glyphs[1..] {
+            assert_eq!(glyph.sdf_near, glyphs[0].sdf_near);
+            assert_eq!(glyph.sdf_coarse, glyphs[0].sdf_coarse);
+        }
     }
 
     /// Every batch drawn in one frame keeps its own instance buffer, keyed on

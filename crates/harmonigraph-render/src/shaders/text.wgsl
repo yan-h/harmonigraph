@@ -76,6 +76,7 @@ struct Locals {
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
 @group(0) @binding(3) var mark_atlas: texture_2d<f32>;
+@group(0) @binding(4) var sdf_atlas: texture_2d<f32>;
 
 /// The `atlas` an instance carries when it is a drawn mark rather than a
 /// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
@@ -125,10 +126,13 @@ fn vs_glyph(
     @location(0) rect: vec4<f32>,
     // The same glyph in the atlas, in texels: min, then max.
     @location(1) uv: vec4<f32>,
-    @location(2) fill: vec4<f32>,
-    @location(3) rim: vec4<f32>,
+    @location(2) sdf_rect: vec4<f32>,
+    @location(3) sdf_near: vec4<f32>,
+    @location(4) sdf_coarse: vec4<f32>,
+    @location(5) fill: vec4<f32>,
+    @location(6) rim: vec4<f32>,
     // Which sheet `uv` addresses.
-    @location(4) sheet: u32,
+    @location(7) sheet: u32,
 ) -> VertexOut {
     var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
     out.position = on_screen(out.position.xy);
@@ -149,12 +153,16 @@ fn vs_glyph_cell(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) uv: vec4<f32>,
-    @location(2) fill: vec4<f32>,
-    @location(3) rim: vec4<f32>,
-    @location(4) sheet: u32,
-    @location(5) box_rect: vec4<f32>,
-    @location(6) box_cell: vec4<f32>,
-    @location(7) box_meta: vec4<f32>,
+    @location(2) sdf_rect: vec4<f32>,
+    @location(3) sdf_near: vec4<f32>,
+    @location(4) sdf_coarse: vec4<f32>,
+    @location(5) fill: vec4<f32>,
+    @location(6) rim: vec4<f32>,
+    @location(7) sheet: u32,
+    @location(8) box_rect: vec4<f32>,
+    @location(9) box_cell: vec4<f32>,
+    @location(10) box_meta: vec4<f32>,
+    @location(11) box_who: vec4<f32>,
 ) -> VertexOut {
     var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
     let texel = cell_texel(out.position.xy, box_rect, box_cell, box_meta.x);
@@ -163,8 +171,110 @@ fn vs_glyph_cell(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell),
+        cell_packed(box_cell) && (box_who.y < 0.5 || box_who.w < 0.5),
     );
+    return out;
+}
+
+/// One glyph's fixed signed field over the whole name cell. The visible
+/// coverage rect and these atlas rectangles come from the UI together, so the
+/// renderer maps coordinates without learning the character or its face.
+struct SdfOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) near_texel: vec2<f32>,
+    @location(1) coarse_texel: vec2<f32>,
+    @location(2) @interpolate(flat) near_bounds: vec4<f32>,
+    @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
+    @location(4) @interpolate(flat) scales: vec2<f32>,
+};
+
+const SDF_NEAR_PAD: f32 = 32.0;
+const SDF_COARSE_PAD: f32 = 48.0;
+const SDF_NEAR_BLEND: f32 = 8.0;
+
+@vertex
+fn vs_glyph_distance_cell(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) sdf_rect: vec4<f32>,
+    @location(3) sdf_near: vec4<f32>,
+    @location(4) sdf_coarse: vec4<f32>,
+    @location(5) fill: vec4<f32>,
+    @location(6) rim: vec4<f32>,
+    @location(7) sheet: u32,
+    @location(8) box_rect: vec4<f32>,
+    @location(9) box_cell: vec4<f32>,
+    @location(10) box_meta: vec4<f32>,
+    @location(11) box_who: vec4<f32>,
+) -> SdfOut {
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex & 1u) == 1u),
+        select(0.0, 1.0, (vertex & 2u) == 2u),
+    );
+    let point = box_rect.xy + corner * box_rect.zw;
+    let near_span = sdf_near.zw - sdf_near.xy;
+    let coarse_span = sdf_coarse.zw - sdf_coarse.xy;
+    let valid = near_span.x > 0.0 && near_span.y > 0.0
+        && coarse_span.x > 0.0 && coarse_span.y > 0.0
+        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0
+        && box_who.y >= 0.5 && box_who.w >= 0.5;
+
+    var out: SdfOut;
+    let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
+    out.position = select(
+        no_quad(),
+        cell_clip(texel, locals.shadow_atlas_size, 1.0),
+        valid && cell_packed(box_cell),
+    );
+    let relative = (point - sdf_rect.xy) / max(sdf_rect.zw, vec2<f32>(1.0e-6));
+    out.near_texel = sdf_near.xy + relative * near_span;
+    out.coarse_texel = sdf_coarse.xy + relative * coarse_span;
+    out.near_bounds = vec4<f32>(
+        sdf_near.xy - vec2<f32>(SDF_NEAR_PAD),
+        sdf_near.zw + vec2<f32>(SDF_NEAR_PAD),
+    );
+    out.coarse_bounds = vec4<f32>(
+        sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
+        sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
+    );
+    out.scales = vec2<f32>(
+        0.5 * (sdf_rect.z / max(near_span.x, 1.0e-6)
+            + sdf_rect.w / max(near_span.y, 1.0e-6)),
+        0.5 * (sdf_rect.z / max(coarse_span.x, 1.0e-6)
+            + sdf_rect.w / max(coarse_span.y, 1.0e-6)),
+    );
+    return out;
+}
+
+struct PadOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) pad: f32,
+};
+
+/// Set every analytic distance cell to its own finite far value before glyphs
+/// MIN-blend into it. Nodes overwrite the same initialization with their full
+/// analytic quad; blur cells stay on the render pass's zero clear.
+@vertex
+fn vs_distance_pad(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) box_rect: vec4<f32>,
+    @location(1) box_cell: vec4<f32>,
+    @location(2) box_meta: vec4<f32>,
+    @location(3) box_who: vec4<f32>,
+) -> PadOut {
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex & 1u) == 1u),
+        select(0.0, 1.0, (vertex & 2u) == 2u),
+    );
+    let texel = box_cell.xy + corner * box_cell.zw;
+    var out: PadOut;
+    out.position = select(
+        no_quad(),
+        cell_clip(texel, locals.shadow_atlas_size, 1.0),
+        box_who.y >= 0.5 && box_who.w >= 0.5 && cell_packed(box_cell),
+    );
+    out.pad = box_who.z;
     return out;
 }
 
@@ -533,6 +643,64 @@ fn fs_fill_lit(in: VertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
+}
+
+/// Bilinear sampling written over textureLoad because R32Float is not a
+/// filterable format on the baseline device feature set.
+fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> f32 {
+    let safe = clamp(texel, bounds.xy + vec2<f32>(0.5), bounds.zw - vec2<f32>(0.5));
+    let p = safe - vec2<f32>(0.5);
+    let first = vec2<i32>(ceil(bounds.xy));
+    let last = vec2<i32>(ceil(bounds.zw)) - vec2<i32>(1, 1);
+    let lo = clamp(vec2<i32>(floor(p)), first, last);
+    let hi = clamp(lo + vec2<i32>(1, 1), first, last);
+    let f = fract(p);
+    let a = mix(
+        textureLoad(sdf_atlas, lo, 0).r,
+        textureLoad(sdf_atlas, vec2<i32>(hi.x, lo.y), 0).r,
+        f.x,
+    );
+    let b = mix(
+        textureLoad(sdf_atlas, vec2<i32>(lo.x, hi.y), 0).r,
+        textureLoad(sdf_atlas, hi, 0).r,
+        f.x,
+    );
+    return mix(a, b, f.y);
+}
+
+@fragment
+fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+    let coarse_at = clamp(
+        in.coarse_texel,
+        in.coarse_bounds.xy + vec2<f32>(0.5),
+        in.coarse_bounds.zw - vec2<f32>(0.5),
+    );
+    // Past the coarse tile, carry its boundary value outward by the remaining
+    // Euclidean distance instead of clamping it into a flat shelf. A flat far
+    // field is precisely the ray a wide, fading shadow would expose.
+    let coarse = sdf_sample(coarse_at, in.coarse_bounds) * in.scales.y
+        + length(in.coarse_texel - coarse_at) * in.scales.y;
+    let near = sdf_sample(in.near_texel, in.near_bounds) * in.scales.x;
+    let near_edge = min(
+        min(
+            in.near_texel.x - in.near_bounds.x - 0.5,
+            in.near_texel.y - in.near_bounds.y - 0.5,
+        ),
+        min(
+            in.near_bounds.z - 0.5 - in.near_texel.x,
+            in.near_bounds.w - 0.5 - in.near_texel.y,
+        ),
+    );
+    // The coarse mask is deliberately conservative at its sparse resolution,
+    // so its absolute distance does not meet the near field exactly. Hand off
+    // inside the near tile instead of exposing that difference as a hard ring.
+    let distance = mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
+    return vec4<f32>(distance, 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
 }
 
 struct BoxOut {

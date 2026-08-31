@@ -97,9 +97,10 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     // Shadow: the fill alone answers the question, and a shadow would spread
     // the reading over pixels nothing is being asked about.
     let picture = |instance: GlyphInstance, off: f32, label: Option<u32>| -> Vec<u8> {
+        let rect = [x + off - 4.0, y - 4.0, 8.0, 8.0];
         let (glyphs, labels) = match label {
             Some(node) => (
-                vec![GlyphInstance { rect: [x + off - 4.0, y - 4.0, 8.0, 8.0], ..instance }],
+                vec![GlyphInstance { rect, sdf_rect: rect, ..instance }],
                 vec![Label { node, glyphs: 1 }],
             ),
             None => (Vec::new(), Vec::new()),
@@ -111,6 +112,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
                 labels,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: Some(crate::text::tests::mark_sheet()),
+                sdf: Some(crate::text::tests::sdf_atlas()),
                 slide: SlideAxis::default(),
             },
             points,
@@ -248,8 +250,10 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     let (near, hush_a, hush_b, home) = (0u32, 1u32, 2u32, 3u32);
 
     // A glyph per label, told apart by where it claims to be.
-    let glyph =
-        |at: f32| GlyphInstance { rect: [at, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let glyph = |at: f32| {
+        let rect = [at, 0.0, 1.0, 1.0];
+        GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() }
+    };
     let call = LatticeCallback::from_scene(
         &scene,
         LatticeLabels {
@@ -257,6 +261,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
             labels: [near, hush_a, hush_b, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
+            sdf: Some(crate::text::tests::sdf_atlas()),
             slide: SlideAxis::default(),
         },
         egui::vec2(256.0, 256.0),
@@ -351,8 +356,10 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
     // walk with nothing between them.
     scene.nodes = vec![node(1.0, 0.0), node(0.0, 1.0)];
     let (near, home) = (0u32, 1u32);
-    let glyph =
-        |at: f32| GlyphInstance { rect: [at, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let glyph = |at: f32| {
+        let rect = [at, 0.0, 1.0, 1.0];
+        GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() }
+    };
     let call = LatticeCallback::from_scene(
         &scene,
         LatticeLabels {
@@ -360,6 +367,7 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
             labels: [near, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
+            sdf: Some(crate::text::tests::sdf_atlas()),
             slide: SlideAxis::default(),
         },
         egui::vec2(256.0, 256.0),
@@ -426,7 +434,8 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     // The hovered one is silent and first, so it is culled before anything at
     // all has shipped — the case where a count has nothing to distinguish.
     scene.nodes = vec![node(0.0), node(1.0)];
-    let glyph = GlyphInstance { rect: [0.0, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let rect = [0.0, 0.0, 1.0, 1.0];
+    let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(
         &scene,
         LatticeLabels {
@@ -434,6 +443,7 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
             labels: vec![Label { node: 0, glyphs: 1 }],
             atlas: Some(crate::text::tests::atlas()),
             marks: None,
+            sdf: Some(crate::text::tests::sdf_atlas()),
             slide: SlideAxis::default(),
         },
         egui::vec2(256.0, 256.0),
@@ -489,11 +499,9 @@ fn a_label_adds_no_light_through_the_bloom() {
         if !on {
             return (Vec::new(), Vec::new());
         }
+        let rect = [x - 6.0, y - 6.0, 12.0, 12.0];
         (
-            vec![GlyphInstance {
-                rect: [x - 6.0, y - 6.0, 12.0, 12.0],
-                ..crate::text::tests::glyph()
-            }],
+            vec![GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() }],
             vec![Label { node: 0, glyphs: 1 }],
         )
     };
@@ -510,6 +518,7 @@ fn a_label_adds_no_light_through_the_bloom() {
                 labels,
                 atlas: Some(crate::text::tests::atlas()),
                 marks: None,
+                sdf: Some(crate::text::tests::sdf_atlas()),
                 slide: SlideAxis::default(),
             },
             points,

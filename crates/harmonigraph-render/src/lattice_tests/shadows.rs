@@ -1663,6 +1663,72 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
 // The distance family
 // ---------------------------------------------------------------------------
 
+/// The fixed glyph field lands where the retained coverage flood does at the
+/// live view. Their edge reconstruction is deliberately different, so the
+/// contract is a small image epsilon rather than byte identity; a misplaced
+/// SDF rect makes the entire shadow disappear and misses it by orders of
+/// magnitude.
+#[test]
+fn a_fixed_name_sdf_matches_the_flood_at_the_live_view() {
+    const GREY: f32 = 0.55;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = wgpu::Color { r: GREY as f64, g: GREY as f64, b: GREY as f64, a: 1.0 };
+    let mut scene = lit_node_and_a_name(0.0, 0.16, 0.85);
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    let labels = || name_at(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
+    let bare = shooter.shot(&scene);
+    let exact = shooter.shot_with(&scene, labels());
+    shooter.pane += 1;
+    let flooded = shooter.draw_modified(&scene, labels(), |callback| {
+        let cell = callback
+            .draws
+            .iter()
+            .find_map(|draw| match *draw {
+                Draw::Label(_, _, cell) => Some(cell),
+                _ => None,
+            })
+            .expect("the fixture carries one name");
+        callback.casters[cell as usize].analytic_distance = false;
+    });
+
+    let mut affected = 0usize;
+    let mut error = 0usize;
+    let mut worst = 0u8;
+    let (mut sdf_dark, mut flood_dark) = (0i64, 0i64);
+    let (mut sdf_pixels, mut flood_pixels) = (0usize, 0usize);
+    for ((plain, sdf), flood) in
+        bare.chunks_exact(4).zip(exact.chunks_exact(4)).zip(flooded.chunks_exact(4))
+    {
+        if sdf[..3] == plain[..3] && flood[..3] == plain[..3] {
+            continue;
+        }
+        affected += 1;
+        let plain_brightness = brightness(&plain[..3]);
+        let sdf_delta = plain_brightness - brightness(&sdf[..3]);
+        let flood_delta = plain_brightness - brightness(&flood[..3]);
+        sdf_dark += sdf_delta.max(0);
+        flood_dark += flood_delta.max(0);
+        sdf_pixels += usize::from(sdf_delta > 0);
+        flood_pixels += usize::from(flood_delta > 0);
+        for channel in 0..3 {
+            let d = sdf[channel].abs_diff(flood[channel]);
+            error += d as usize;
+            worst = worst.max(d);
+        }
+    }
+    assert!(affected > 40, "the name moved only {affected} pixels off the bare frame");
+    let mean = error as f32 / (3 * affected) as f32;
+    eprintln!(
+        "SDF {sdf_pixels} px/{sdf_dark} darkness, flood {flood_pixels} px/{flood_dark} darkness; \
+         error {mean:.2} mean/{worst} max over {affected} px"
+    );
+    assert!(mean <= 5.0, "the SDF and flood differ by {mean:.2}/255 on average");
+    assert!(worst <= 32, "the SDF and flood differ by {worst}/255 at one channel");
+}
+
 /// A DISTANCE shadow stays one smooth annulus when its width projects to about
 /// a pixel at full depth.
 ///
