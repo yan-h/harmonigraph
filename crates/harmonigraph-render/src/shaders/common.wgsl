@@ -178,7 +178,7 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32)
     // The blur terms, summed by weight; and the distance term's own coverage.
     var blur = 0.0;
     var cov = 0.0;
-    var flooded = false;
+    var distance = false;
     for (var t = 0u; t < min(terms, SHADOW_TERMS); t = t + 1u) {
         let cell = shadow_casters[who].cell[t];
         if !cell_packed(cell) {
@@ -197,13 +197,13 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32)
         // creases are where two answers are equally right.
         let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
         if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
-            flooded = true;
+            distance = true;
             cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t], shape);
         } else {
             blur = blur + map.w * held;
         }
     }
-    if flooded {
+    if distance {
         // A distance row does NOT see the gain. The gain exists to push a
         // hairline's blur up to full depth, and a distance field already gives
         // a hairline full depth at its own edge by construction — a gain on top

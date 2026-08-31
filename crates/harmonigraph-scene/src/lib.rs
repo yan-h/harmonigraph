@@ -330,7 +330,7 @@ pub const GLOW_SHADOW_RESOLUTION_MIN: f32 = 0.8;
 ///
 /// Twice the minimum is the largest experiment #552 calls for and makes a
 /// distance cell about four times its minimum area. More would spend atlas and
-/// flood work beyond the comparison this control is meant to make.
+/// fill work beyond the comparison this control is meant to make.
 pub const GLOW_SHADOW_RESOLUTION_MAX: f32 = 1.6;
 
 /// The longest attack or release the node glow offers, in seconds (see

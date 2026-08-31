@@ -768,7 +768,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // are gated by: a distance field gives a hairline the whole depth at
         // its own edge by construction, so `shadow_kernel` returns before the
         // gain is ever read on a distance row and the bar moves nothing there.
-        ui.add_enabled_ui(!view.glow_shadow_kernel.floods(), |ui| {
+        ui.add_enabled_ui(!view.glow_shadow_kernel.has_distance(), |ui| {
             ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
                 .display(|v| format!("{v:.2}x"))
                 .show(ui)
@@ -809,7 +809,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // nothing is worse than one that is plainly not for this row. Grayed
         // rather than hidden, so the section does not change height under the
         // picker and the hover text is there to say what would switch it on.
-        ui.add_enabled_ui(view.glow_shadow_kernel.floods(), |ui| {
+        ui.add_enabled_ui(view.glow_shadow_kernel.has_distance(), |ui| {
             ValueBar::new(
                 &mut view.glow_shadow_resolution,
                 GLOW_SHADOW_RESOLUTION_MIN..=GLOW_SHADOW_RESOLUTION_MAX,
@@ -821,7 +821,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 "How finely a Distance shadow's source is sampled in the \
                  atlas, in texels per pane point. 0.80 keeps the quality floor \
                  used by the fresh view; 1.20 is 1.5x that sampling and 1.60 \
-                 is 2x. Atlas area and flood work grow roughly with the square, \
+                 is 2x. Atlas area and fill work grow roughly with the square, \
                  so 1.60 costs about four times 0.80. Blur rows do not use this \
                  setting.",
             );
