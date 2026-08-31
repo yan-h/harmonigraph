@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Does a swap into the shared bundle slot reach a host that already has the
-# plugin open?
+# plugin open, including when the source build lives in a Codex-managed
+# worktree outside the main checkout?
 #
 # The swap is the one sequence in the tree whose failure is completely silent.
 # Bitwig's plugin host keeps the library it opened mapped for as long as its
@@ -72,6 +73,15 @@ sha=$(git -C "$repo" rev-parse --short HEAD)
 
 cp "$ROOT/load-plugin.sh" "$ROOT/update-plugin.sh" "$repo/"
 
+# Codex-managed worktrees normally live under $CODEX_HOME rather than inside
+# the checkout. The loader must discover this one through Git registration,
+# retain its `codex/` branch name, and load it on the same terms as main.
+codex_branch="codex/app-worktree"
+codex_wt="$TMP/codex/worktrees/a1b2/harmonigraph"
+mkdir -p "$(dirname "$codex_wt")"
+git -C "$repo" worktree add -q -b "$codex_branch" "$codex_wt" HEAD 2>/dev/null || {
+  echo "✗ could not create the Codex-managed worktree fixture" >&2; exit 1; }
+
 # The artifacts a build would have left. The dylib carries the build tag the
 # loader reads back out of it with `strings`, in the shape build.rs stamps it.
 mkdir -p "$repo/target/release"
@@ -83,6 +93,17 @@ cc -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/nu
   echo "✗ could not build the fixture's Mach-O" >&2; exit 1; }
 printf '#!/bin/sh\ntrue\n' > "$repo/target/release/harmonigraph-offline"
 chmod +x "$repo/target/release/harmonigraph-offline"
+
+mkdir -p "$codex_wt/target/release"
+cat > "$TMP/codex.c" <<C
+const char *tag = "$codex_branch @$sha";
+int main(void) { return 0; }
+C
+cc -o "$codex_wt/target/release/libharmonigraph_plugin.dylib" \
+  "$TMP/codex.c" 2>/dev/null || {
+  echo "✗ could not build the Codex worktree fixture's Mach-O" >&2; exit 1; }
+printf '#!/bin/sh\ntrue\n' > "$codex_wt/target/release/harmonigraph-offline"
+chmod +x "$codex_wt/target/release/harmonigraph-offline"
 
 # A DIFFERENT binary in the slot to begin with, so "the new bytes arrived" is
 # a real question rather than one the fixture answers by construction.
@@ -180,8 +201,43 @@ elif ! grep -q "^tag=main @$sha" "$loaded"; then
   failures=$((failures + 1))
 fi
 
+# 5. A registered Codex-managed worktree outside main is visible by branch,
+# reports its own overlay tag, and can be selected for the same swap. This is
+# the path contract; matching only `.claude/worktrees` would make the task's
+# finished build invisible even though Git knows exactly where it is.
+codex_tag=$(cd "$repo" && ./load-plugin.sh --tag "$codex_branch" 2>/dev/null)
+if [ "$codex_tag" != "$codex_branch @$sha" ]; then
+  echo "✗ Codex worktree tag was '${codex_tag:-missing}', expected $codex_branch @$sha" >&2
+  failures=$((failures + 1))
+fi
+
+codex_list=$(cd "$repo" && ./load-plugin.sh --list 2>/dev/null)
+if ! printf '%s\n' "$codex_list" | grep -Fq "$codex_branch"; then
+  echo "✗ --list does not include the Codex-managed worktree" >&2
+  failures=$((failures + 1))
+fi
+
+codex_out="$TMP/codex-load.log"
+(cd "$repo" && HOME="$TMP/home" ./load-plugin.sh "$codex_branch") \
+  >"$codex_out" 2>&1
+codex_status=$?
+if [ "$codex_status" -ne 0 ]; then
+  echo "✗ loading the Codex-managed worktree exited $codex_status" >&2
+  sed 's/^/    /' "$codex_out" >&2
+  failures=$((failures + 1))
+elif ! grep -Fq "$codex_branch @$sha" \
+  "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"; then
+  echo "✗ the Codex-managed worktree's bytes did not reach the bundle" >&2
+  failures=$((failures + 1))
+elif ! grep -Fq "branch=$codex_branch" "$loaded" \
+  || ! grep -Fq "tag=$codex_branch @$sha" "$loaded"; then
+  echo "✗ .loaded does not identify the Codex-managed build:" >&2
+  sed 's/^/    /' "$loaded" >&2
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -eq 0 ]; then
-  echo "  ok — the swap reaches a host that already has the plugin open"
+  echo "  ok — registered worktrees reach a host that already has the plugin open"
 else
   echo "✗ $failures plugin-swap check(s) failed" >&2
   exit 1

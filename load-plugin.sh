@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
-# load-plugin.sh — pick an already-built worktree build and swap it into the
-# ONE bundle slot Bitwig scans (the MAIN checkout's target/bundled/), then
-# re-sign ad-hoc. This is the PULL side of the workflow: parallel sessions
+# load-plugin.sh — pick an already-built registered worktree build and swap it
+# into the ONE bundle slot Bitwig scans (the MAIN checkout's target/bundled/),
+# then re-sign ad-hoc. This is the PULL side of the workflow: parallel sessions
 # each build into their own worktree's target/release/ but do NOT touch the
-# shared slot; you choose which of those builds is live.
+# shared slot; you choose which of those builds is live. Git registration, not
+# a parent-directory convention, is what makes both Claude- and Codex-managed
+# worktrees discoverable here.
 #
 # It COPIES ONLY — it never builds. A build has to exist in the worktree
 # already (a session's `cargo build --release`, or `./update-plugin.sh`).
@@ -299,9 +301,10 @@ load_build() {  # $1 = worktree index
 
 # Echo the index of the worktree containing directory $1, or nothing.
 #
-# LONGEST match, not the first one that fits: the worktrees live under the main
-# checkout's own `.claude/worktrees/`, so every worktree path is also a path
-# inside main, and a first-match search answers "main" for all of them.
+# LONGEST match, not the first one that fits: Claude worktrees live under the
+# main checkout's own `.claude/worktrees/`, so their paths also fit main. Codex
+# worktrees normally live elsewhere, but both kinds travel through this one
+# lookup.
 wt_containing() {
   local dir="$1" i best="" best_len=0 len
   for i in "${!WT_PATH[@]}"; do

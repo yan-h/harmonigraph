@@ -23,6 +23,13 @@ it up — a rescan does not reload one that is already loaded. Deactivate it
 BEFORE the swap when a session is worth protecting: the copy rewrites code
 the running host has not faulted in yet.
 
+The loader discovers registered Git worktrees, not one hard-coded parent
+directory, so a Codex-managed worktree appears on the same menu without any
+loader configuration. It does need a branch: Codex creates a managed
+worktree detached, and the root contract requires the task to create its
+`codex/<slug>` branch before editing. A detached build appears as `(detached)`,
+cannot be selected uniquely by branch, and cannot carry a useful overlay tag.
+
 - Both `load-plugin.sh` and `update-plugin.sh` record the live build in
   `target/bundled/.loaded`, so "what's loaded?" is answerable without guessing.
 - `./update-plugin.sh` remains the build-and-load-in-one-shot path (it builds
@@ -69,8 +76,9 @@ the same way a WGSL const answers it for the plugin.
 
 ## Every build says which build it is
 
-The performance overlay's bottom line reads `build  <branch> @<sha>` — the
-branch with its `worktree-` prefix stripped, so it is exactly the argument
+The performance overlay's bottom line reads `build  <branch> @<sha>` — a
+Claude branch has its `worktree-` prefix stripped, while a Codex branch keeps
+its `codex/` prefix. The result is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
 `crates/harmonigraph-perf/build.rs`. The overlay carrying it ships OFF, so reading
 the tag takes one tick first: **Display tab → System page → Performance →

@@ -7,6 +7,10 @@ allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 Delegate the edit to Codex; keep the context assembly and the verification
 in this session.
 
+This command is the Claude Companion path, not a direct Codex app task. A
+direct app task gets a Codex-managed worktree under the root contract in
+`CLAUDE.md`; Companion instead inherits this Claude session's cwd.
+
 ## Why the brief is the whole Claude-side job
 
 Codex reads `AGENTS.md`, which is a symlink to `CLAUDE.md`, so it arrives

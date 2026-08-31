@@ -42,9 +42,10 @@ fn main() {
 
     let tag = match (branch, sha) {
         (Some(branch), Some(sha)) => {
-            // Every session branch carries the same `worktree-` prefix, which
-            // is noise in a HUD. Stripping it also makes the tag exactly the
-            // argument `./load-plugin.sh <branch>` takes.
+            // Claude session branches carry the `worktree-` prefix, which is
+            // noise in a HUD. Codex's `codex/` prefix identifies the branch and
+            // stays. In both cases the tag is exactly the argument
+            // `./load-plugin.sh <branch>` takes.
             let name = branch.strip_prefix("worktree-").unwrap_or(&branch);
             format!("{name} @{sha}")
         }

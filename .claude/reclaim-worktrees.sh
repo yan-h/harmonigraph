@@ -5,10 +5,11 @@
 # TWO TIERS, because "reclaim disk" and "remove a worktree" are different
 # questions and only the second one needs to know whether work is merged:
 #
-#   1. PRUNE `target/debug` and `target/doc` from any idle worktree. They are
-#      regenerable build caches that hold no work, and they are the bulk of
-#      the footprint: 27G of 33G across nine worktrees, measured 2026-07-26.
-#      Needing no merge detection is the whole point — see WHY TIER 1 below.
+#   1. PRUNE `target/debug` and `target/doc` from any idle Claude worktree.
+#      They are regenerable build caches that hold no work, and they are the
+#      bulk of the footprint: 27G of 33G across nine worktrees, measured
+#      2026-07-26. Needing no merge detection is the whole point — see WHY
+#      TIER 1 below.
 #
 #   2. REMOVE a whole worktree once its work is provably merged and its tree
 #      is clean. Tier 1 has already reclaimed the space by then, so this is
@@ -52,7 +53,8 @@
 # is swept by the next one.
 #
 # A worktree is REMOVED (tier 2) only when ALL of these hold:
-#   - it lives under .claude/worktrees/ (never touch a hand-made worktree)
+#   - it is a direct child of .claude/worktrees/ (never touch a hand-made or
+#     Codex-managed worktree)
 #   - it is not the main checkout
 #   - it is not the worktree this session is running in
 #   - its HEAD is an ancestor of main, so the work is merged and nothing is lost
@@ -70,6 +72,11 @@
 #
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
 # and the branch can be checked out again later.
+#
+# Codex owns cleanup and snapshots for its managed worktrees, so both tiers
+# leave those alone even though `git worktree list` includes them. Exact
+# direct-child ownership also protects a Codex root configured below
+# `.claude/worktrees`: its `<id>/<repo>` worktrees are not Claude's to release.
 #
 # Runs automatically at SessionStart, wired up in .claude/settings.json. Also
 # safe to run by hand, from the main checkout OR any worktree — it locates the
@@ -294,11 +301,14 @@ usable() {
   [ -d "$path" ] || return 1
   [ "$path" = "$MAIN_WT" ] && return 1
 
-  # Only ever touch worktrees Claude created.
-  case "$path" in
-    */.claude/worktrees/*) ;;
-    *) note "skip $name: not under .claude/worktrees"; return 1 ;;
-  esac
+  # Claude owns exactly the direct children of this directory. A broader path
+  # prefix also catches Codex's `<id>/<repo>` shape when its configurable root
+  # sits below .claude/worktrees, and would let this hook prune or remove a
+  # worktree whose lifecycle belongs to the app.
+  if [ "$(dirname "$path")" != "$WT_DIR" ]; then
+    note "skip $name: not a direct Claude-owned worktree"
+    return 1
+  fi
 
   # Never saw off the branch we are sitting on.
   case "$SESSION_CWD/" in
