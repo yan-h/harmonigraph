@@ -87,11 +87,12 @@ pub(crate) struct SpectrogramSurface {
 /// floats of power, and why old ones are merged.
 pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
-/// The whole take's spectrogram, precomputed for the offline renderer's
-/// playhead mode: every column of the full audio, laid out statically along
-/// the time axis with a playhead at `now`, instead of the live scrolling
-/// window. `Some` only in the offline renderer — the live ring
-/// ([`AudioSpectrum::history`]) is bounded and cannot hold a whole song.
+/// The offline renderer's whole-song playhead data: the whole note roll, plus
+/// the raw spectrogram columns needed for the requested render window. The
+/// columns include the analyzer's pre-roll before [`start`](Self::start), but
+/// not audio after [`start + span`](Self::span) or the rest of a longer take.
+/// `Some` only in the offline renderer — the live ring
+/// ([`AudioSpectrum::history`]) is bounded and scrolls with `now` instead.
 /// Runtime-only, never persisted (like
 /// [`SharedState::learn_active`](crate::SharedState::learn_active)).
 pub struct WholeSong {
@@ -100,7 +101,9 @@ pub struct WholeSong {
     pub start: f64,
     /// Seconds spanned across the depth axis — the render's duration.
     pub span: f64,
-    /// Every spectrogram column, oldest first.
+    /// The render window's raw spectrogram columns, oldest first. The first
+    /// columns can precede `start` because an FFT needs its full input window
+    /// before the first drawable measurement exists.
     pub columns: Vec<SpectrogramColumn>,
     /// The whole take's notes, laid out from the start. The live tracker only
     /// holds notes replayed up to `now`, so the roll would otherwise fill in as
@@ -115,17 +118,18 @@ impl WholeSong {
     /// much regardless, so the picture reaches past what was asked for.
     pub const MIN_WINDOW: f64 = 0.05;
 
-    /// Analyze the entire `samples` buffer, one raw column per hop,
-    /// `time`-stamped in take time (`time_origin` is the take time of sample 0).
-    /// Raw, exactly like the live store: the heatmap reads what was measured,
-    /// and blurring one column into the next is not something it has done since
-    /// temporal smoothing was dropped.
+    /// Analyze the part of `samples` needed by `[start, start + span]`, one raw
+    /// column per hop, `time`-stamped in take time (`time_origin` is the take
+    /// time of sample 0). One FFT window before `start` is fed as history; the
+    /// analyzer is backward-looking, so without it the first drawable columns
+    /// would measure an incomplete window. Raw, exactly like the live store:
+    /// the heatmap reads what was measured, without blurring adjacent columns.
     ///
-    /// The hop is the live one, EXCEPT that a long take stretches it: this build
-    /// spans the whole song rather than a scrolling window, so its time axis is
+    /// The hop is the live one, EXCEPT that a long render window stretches it:
+    /// this build is laid out statically rather than in a scrolling window, so its time axis is
     /// cut into `span / WHOLE_SONG_SLAB_CAP` slabs at best, and columns finer
     /// than that are aggregated away by the MAX the moment they are drawn. A
-    /// three-minute take at the live rate would hold 22 500 columns (86 MB) to
+    /// three-minute render at the live rate would hold 22 500 columns (86 MB) to
     /// display 4096 of them. Scaling the hop to the slab keeps the same
     /// [`COLUMNS_PER_SLAB`](crate::spectrogram::COLUMNS_PER_SLAB) margin
     /// the live path has — every slab still gets a column, none goes empty — for
@@ -139,8 +143,9 @@ impl WholeSong {
     /// from the look that was dialed in, and only for stereo-wide material, which
     /// is the hardest kind of difference to attribute.
     ///
-    /// Pure: `(samples, channels, rate, config)` in, columns out, no clock or
-    /// RNG, so a render built on it stays byte-identical between runs.
+    /// Pure: `(samples, channels, rate, time_origin, start, span, config)` in,
+    /// columns out, no clock or RNG, so a render built on it stays byte-identical
+    /// between runs.
     pub fn precompute(
         samples: &[f32],
         channels: usize,
@@ -161,11 +166,17 @@ impl WholeSong {
             .max(AudioSpectrum::FFT_INTERVAL);
         let total = samples.len() / channels; // frames
         let mut columns = Vec::new();
-        // Feed the buffer in one-hop chunks; once the window has filled every
-        // hop yields a column, exactly as the live `push_samples` loop does.
-        let (mut fed, mut k) = (0usize, 1usize);
-        loop {
-            let end = ((k as f64 * hop * sr).round() as usize).min(total);
+        // Frame indices stay relative to sample 0, even though the analyzer
+        // sees only this render's slice. That keeps the column grid and its
+        // take timestamps independent of where the slice begins.
+        let frame_at = |time: f64| ((time - time_origin) * sr).clamp(0.0, total as f64);
+        let first = frame_at(start - analyzer.window_seconds()).floor() as usize;
+        let last = frame_at(start + span.max(0.0)).ceil() as usize;
+        let hop_frames = hop * sr;
+        let mut fed = first;
+        let mut k = (first as f64 / hop_frames).floor() as usize + 1;
+        while fed < last {
+            let end = ((k as f64 * hop_frames).round() as usize).min(last);
             if end > fed {
                 analyzer.push_frames(&samples[fed * channels..end * channels]);
                 fed = end;
@@ -179,7 +190,7 @@ impl WholeSong {
                 let center = time_origin + end as f64 / sr - analyzer.window_center_offset();
                 columns.push(SpectrogramColumn::from_power(center, &power));
             }
-            if end >= total {
+            if end >= last {
                 break;
             }
             k += 1;
@@ -190,7 +201,7 @@ impl WholeSong {
     }
 
     /// The columns the depth axis can actually draw: those stamped inside
-    /// `[start, start + span]`.
+    /// `[start, start + window]`.
     ///
     /// The heatmap's WIDTH comes from the columns the fold is handed, not from
     /// the span the plan sized its slab against:
@@ -198,14 +209,10 @@ impl WholeSong {
     /// window, while the module's `aggregate_slabs` gives every elapsed slab a
     /// texel between the first column and the last (both private to it, so
     /// named here rather than linked).
-    /// Those agree only while the columns lie inside the window, and
-    /// [`precompute`](Self::precompute) leaves them free to reach past it: it
-    /// analyses the whole `samples` buffer
-    /// whatever the render's `--start`/`--end`, so a ten-second window on a
-    /// three-minute bounce arrives here with columns spanning the file and a
-    /// bucket cut for ten seconds. Folding those builds a texture around 14 000
-    /// texels wide against a limit of 2048 — issue #367, the same
-    /// `load_texture` assert as #333/#335, reached from the other axis.
+    /// Those agree only while the columns lie inside the window.
+    /// [`precompute`](Self::precompute) retains the analyzer's pre-roll before
+    /// `start`, and callers can construct a set reaching farther either way, so
+    /// the fold owns the exact trim rather than relying on its source to match.
     ///
     /// The window the depth axis actually maps time across:
     /// [`span`](Self::span) under [`MIN_WINDOW`](Self::MIN_WINDOW).

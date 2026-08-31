@@ -200,8 +200,8 @@ pub(crate) fn draw_spectrogram(
     let time = TimeAxis::new(state, split, now);
     let whole = state.whole_song.as_ref();
     let spectrum = &mut state.spectrum;
-    // Columns come from the precomputed whole-take set (playhead mode) or the
-    // live store.
+    // Columns come from the precomputed render-window set (playhead mode) or
+    // the live store.
     let enough = match whole {
         Some(ws) => ws.columns.len() >= 2,
         None => spectrum.history().len() >= 2,
