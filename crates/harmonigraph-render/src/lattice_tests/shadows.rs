@@ -1387,12 +1387,13 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
 /// A DISTANCE shadow stays one smooth annulus when its width projects to about
 /// a pixel at full depth.
 ///
-/// The flood resolves a contour to within half a CELL texel. Stopping its cell
-/// at the pane's resolution makes that error most of this Shadow's σ, so the
-/// deep profile alternates between gaps and dark rays around an otherwise
-/// continuous ring. The standard deviation around one radius is the spikes'
-/// reading; it is bounded as a share of the mean so a uniformly fainter shadow
-/// cannot pass by moving every sample toward zero.
+/// A flood chosen only by seed CENTRES leaves grid-aligned Voronoi wedges even
+/// when resolve reconstructs a subpixel contour segment. At this scale the
+/// wedges are most of the projected Shadow's σ, so full depth exposes them as
+/// dark rays around otherwise continuous ink. The standard deviation around
+/// one radius is the rays' reading; it is bounded as a share of the mean, while
+/// the mean is bounded too so flattening the ring toward either rail cannot
+/// pass for smoothing it.
 #[test]
 fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -1437,9 +1438,13 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     let variance =
         values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
     let deviation = variance.sqrt();
-    assert!(mean > 0.4, "the ring takes only {mean:.3} of the ground at the sampled radius");
     assert!(
-        deviation < 0.3 * mean,
+        mean > 0.4 && mean < 0.75,
+        "the ring takes {mean:.3} of the ground at the sampled radius, outside the range where \
+         angular variation measures its shape",
+    );
+    assert!(
+        deviation < 0.24 * mean,
         "the ring's distance shadow varies by {deviation:.3} around a mean of {mean:.3}, so its \
          profile has broken into angular spikes",
     );

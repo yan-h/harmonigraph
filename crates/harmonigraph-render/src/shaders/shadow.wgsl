@@ -262,6 +262,13 @@ const INK_FLOOR: f32 = 0.5;
 /// distant edge.
 const CONTOUR_TANGENT_REACH: f32 = 2.0;
 
+/// How far seed selection may look along a candidate's tangent, in texels.
+///
+/// Three eighths lets overlapping contour pieces compete before resolve.
+/// A quarter retains the point field's visible wedges, while half a texel lets
+/// a tangent win far enough from its seed to thicken a narrow curved shadow.
+const FLOOD_TANGENT_REACH: f32 = 0.375;
+
 /// Coverage at `at`, or no ink for a tap outside this cell.
 ///
 /// The atlas packs unrelated casters beside each other, so the gradient used
@@ -384,7 +391,17 @@ fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
             if cand.x == NO_SEED {
                 continue;
             }
-            let d = vec2<f32>(at - seed_texel(cand));
+            var d = vec2<f32>(at - seed_texel(cand));
+            // A local refinement chooses a short piece of the segment the
+            // resolve will measure, rather than only its texel centre. Long
+            // jumps retain the point metric so a remote tangent cannot win.
+            if jump.step.x == 1 {
+                let normal = seed_normal(cand);
+                let tangent = vec2<f32>(-normal.y, normal.x);
+                let along =
+                    clamp(dot(d, tangent), -FLOOD_TANGENT_REACH, FLOOD_TANGENT_REACH);
+                d = d - along * tangent;
+            }
             let dist = dot(d, d);
             if dist < best_d {
                 best_d = dist;
