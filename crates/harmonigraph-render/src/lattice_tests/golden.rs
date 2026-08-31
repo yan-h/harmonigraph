@@ -450,6 +450,43 @@ fn two_strokes_of_one_name() -> Shot {
     Shot { labels, ..scene.into() }
 }
 
+/// A multi-stroke name at the far end of the camera, on the Distance row.
+///
+/// Its one-pixel stems and two enclosed gaps put separate edges inside one
+/// output footprint. This is the scale where reconstructing one atlas sample
+/// exposes the distance cell's grid, and where output filtering has a visible
+/// shape to preserve rather than a single block to soften.
+fn a_tiny_distance_name() -> Shot {
+    let mut scene = a_named_node(the_live_view().glow_shadow);
+    scene.camera.distance = Camera::MAX_DISTANCE;
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    let at = on_screen(&scene, GOLDEN_SIZE, name_on_the_band(&scene));
+    let height = NAME_SHARE * node_points(&scene);
+    let width = 0.65 * height;
+    let stroke = 0.18 * height;
+    let (left, top) = (at.x - width / 2.0, at.y - height / 2.0);
+    // Part way through release, where translucent ink exposes the shadow
+    // under it instead of covering that silhouette with an opaque glyph.
+    const LEVEL: u8 = 96;
+    let glyph = |rect| {
+        let mut glyph = name_glyph(&scene, rect);
+        for channel in &mut glyph.fill[..3] {
+            *channel = (f32::from(*channel) * f32::from(LEVEL) / 255.0).round() as u8;
+        }
+        glyph.fill[3] = LEVEL;
+        glyph.rim[3] = LEVEL;
+        glyph
+    };
+    let bar = |y| glyph([left, y, width, stroke]);
+    let labels = a_name(vec![
+        glyph([left, top, stroke, height]),
+        bar(top),
+        bar(at.y - stroke / 2.0),
+        bar(top + height - stroke),
+    ]);
+    Shot { labels, ..scene.into() }
+}
+
 /// Two names on ONE sheet, on nodes that cover each other on screen.
 ///
 /// The case only the any-to-any design gets right (#498) and the one #469
@@ -606,6 +643,12 @@ fn the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record() {
         "zoomed-out-distance",
         on_the_ground_it_clears_to(the_zoomed_out_view_on_the_distance_row()),
     );
+}
+
+/// A tiny Distance name is byte-identical to the filtered frame on record.
+#[test]
+fn a_tiny_distance_name_draws_the_frame_on_record() {
+    check("tiny-distance-name", a_tiny_distance_name());
 }
 
 /// A sevens sheet behind the home one.

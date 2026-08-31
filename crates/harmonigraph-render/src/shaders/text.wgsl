@@ -619,20 +619,66 @@ fn vs_shadow_box(
 /// `shadow_depth` says. Over an unlit node there is no bloom to take away and
 /// this does nothing, which is what makes it an answer to the bright case
 /// alone.
-@fragment
-fn fs_shadow_box(in: BoxOut) -> SceneOut {
-    let full = shadow_kernel(
+fn name_shadow_through(in: BoxOut, full: f32) -> vec2<f32> {
+    return vec2<f32>(
+        shadow_transmittance(full, locals.shadow_depth, in.level, locals.shadow_curve),
+        shadow_transmittance(full, 1.0, in.level, locals.shadow_curve),
+    );
+}
+
+fn name_shadow_at(in: BoxOut, at: vec2<f32>) -> vec2<f32> {
+    return name_shadow_through(in, shadow_kernel(
         in.who,
-        in.at,
+        at,
         u32(max(locals.shadow_terms, 0.0)),
         locals.shadow_gain,
         locals.shadow_shape,
-    );
-    let t = shadow_transmittance(full, locals.shadow_depth, in.level, locals.shadow_curve);
+    ));
+}
+
+/// Whether this name carries a distance term whose reconstructed output needs
+/// the pixel-footprint filter below. A blur cell is already band-limited by its
+/// kernel; sampling it again changes that profile and makes every other row pay
+/// for a Distance representation constraint.
+fn name_shadow_has_distance(who: u32) -> bool {
+    if who >= arrayLength(&shadow_casters) {
+        return false;
+    }
+    for (var t = 0u; t < min(u32(max(locals.shadow_terms, 0.0)), SHADOW_TERMS); t = t + 1u) {
+        if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
+            return true;
+        }
+    }
+    return false;
+}
+
+@fragment
+fn fs_shadow_box(in: BoxOut) -> SceneOut {
+    // Centres of the output pixel's four quadrants, expressed in pane points.
+    // The derivatives stay outside the branch because WGSL requires them in
+    // uniform control flow even though `who` is flat across this whole quad.
+    let dx = 0.25 * dpdx(in.at);
+    let dy = 0.25 * dpdy(in.at);
+    var through: vec2<f32>;
+    if name_shadow_has_distance(in.who) {
+        // Each sample spends the COMPLETE profile and transmittance before the
+        // average. Averaging distances or kernel coverage first would move the
+        // nonlinear powers in `standoff_coverage` and `shadow_transmittance`
+        // outside the filter and draw a different shadow.
+        through = 0.25 * (
+            name_shadow_at(in, in.at - dx - dy)
+            + name_shadow_at(in, in.at + dx - dy)
+            + name_shadow_at(in, in.at - dx + dy)
+            + name_shadow_at(in, in.at + dx + dy)
+        );
+    } else {
+        through = name_shadow_at(in, in.at);
+    }
+    let t = through.x;
     // The bright pass's copy, always at a WHOLE shadow (1) rather than at
     // `shadow_depth`: the copy the bright pass reads takes every caster's
     // shadow to the shader's own floor, whatever the visible one is left at.
-    let lit = shadow_transmittance(full, 1.0, in.level, locals.shadow_curve);
+    let lit = through.y;
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
