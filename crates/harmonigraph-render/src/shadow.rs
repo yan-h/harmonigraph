@@ -4,12 +4,11 @@
 //!
 //! One cell per caster PER TERM of the kernel, each at a scale that keeps the
 //! blur's cost flat: a cell is the caster's box grown by that term's reach,
-//! drawn at `min(1, 3 / σ_t)` of the target's pixels for a blur, so σ is at
-//! most `SIGMA_CELL_MAX` texels and the kernel at most nineteen taps whatever
-//! the Shadow bar says. A distance cell may be finer than the target so the
-//! flood's half-texel precision does not become most of a narrow shadow. The
-//! atlas is about the names' own area at the fresh Shadow and one Gaussian,
-//! shrinks as the bar widens, and grows with the term count.
+//! drawn at `min(1, 3 / σ_t)` of the target's pixels, so σ is at most
+//! `SIGMA_CELL_MAX` texels in every cell and the kernel at most nineteen taps
+//! whatever the Shadow bar says and whatever row of the kernel table is
+//! chosen. The atlas is about the names' own area at the fresh Shadow and one
+//! Gaussian, shrinks as the bar widens, and grows with the term count.
 //!
 //! Each term at its OWN resolution is the whole point of the shape: a mixture's
 //! narrow term carries the kernel's core, and a shared resolution picked for
@@ -70,29 +69,21 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// `a_kernel_row_costs_this_much_atlas_against_one_gaussian` bounds it.
 pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
-/// The most texels of a DISTANCE cell one POINT of the pane may be drawn at.
-///
-/// The flood reconstructs the ink's contour to within half a cell texel. At a
-/// zoom where the Shadow's σ is under a pane pixel, stopping a distance cell at
-/// the target's resolution makes that error most of the profile's width; full
-/// depth then turns the cell grid into rays outside curved ink. Up to this
-/// ceiling the cell is allowed to draw finer, aiming for [`SIGMA_CELL_MAX`]
-/// texels per σ just as a wide cell draws coarser to stay under it.
-///
-/// Four texels per point is two cell texels per editor pixel and four per pixel
-/// in a 1x export. It holds the far camera's σ near the target without
-/// letting a nearly-closed Shadow grow a caster without bound. The floor above
-/// still owns wide shadows, so the expensive end of the bar is unchanged.
-pub(crate) const DISTANCE_TEXELS_PER_POINT_MAX: f32 = 4.0;
-
 /// What the flood's ping-pong pair is kept in: one texel's nearest seed, as a
 /// pair of ABSOLUTE atlas coordinates.
 ///
-/// Sixteen bits an axis, so shadow.wgsl's `NO_SEED` is the format's own top
-/// value and no atlas can address it — a texture 65535 texels across is past
-/// every limit wgpu reports. That is what lets one sentinel stand for "no ink
-/// within reach" with no third channel to say so.
+/// The low fourteen bits hold an atlas coordinate, enough for every 2D texture
+/// wgpu exposes here. Three high bits hold the contour's line direction, and
+/// the remaining high bit is shadow.wgsl's `NO_SEED`; no third channel is
+/// needed for either.
 pub(crate) const SEED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Uint;
+
+/// The largest atlas dimension the packed seed coordinates can name.
+///
+/// Fourteen coordinate bits address 0..16383. A device offering a larger
+/// texture is still held here for a distance row, so its normal bits cannot be
+/// mistaken for position (`pack_seed` in shadow.wgsl).
+pub(crate) const SEED_COORD_LIMIT: u32 = 1 << 14;
 
 /// The largest jump the chain starts from, as a power of two in texels.
 ///
@@ -227,9 +218,8 @@ pub(crate) struct ShadowBox {
     /// The cell in atlas texels: origin, then size, all whole numbers.
     pub cell: [f32; 4],
     /// x: the scale from points to cell texels; y: σ in cell texels; z: the
-    /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels. At
-    /// most 1 for a blur; a distance cell may be finer than the target up to
-    /// [`DISTANCE_TEXELS_PER_POINT_MAX`].
+    /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels,
+    /// `min(1, SIGMA_CELL_MAX / σ)`.
     ///
     /// The last is what a cell's own rasterizer antialiases against
     /// (`aa_width` in lattice.wgsl): a fragment of the cell is one pane pixel
@@ -476,14 +466,13 @@ pub(crate) fn pack(
     let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
         let sigma = sigma_of(c, t);
         // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
-        // infinity the limits below answer: a blur cell is at the target's own
-        // resolution, a distance cell at its precision ceiling.
-        let fit = SIGMA_CELL_MAX / sigma;
-        // Both bounds are on `k` and not on a fraction of the target, so the
-        // contour has the same resolution in points at every framing.
+        // infinity the `min` answers: the cell is at the target's own
+        // resolution and its kernel collapses to the centre tap.
+        let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
+        // The floor is a `k` and not a fraction of the target, so it holds two
+        // texels of a stem at every framing rather than at one.
         let floor = (DISTANCE_TEXELS_PER_POINT / px_per_point).min(1.0);
-        let ceiling = DISTANCE_TEXELS_PER_POINT_MAX / px_per_point;
-        let scale = if is_distance(t) { fit.min(ceiling).max(floor) } else { fit.min(1.0) };
+        let scale = if is_distance(t) { fit.max(floor) } else { fit };
         let k = scale * px_per_point;
         // This term's σ in the cell's own texels, which is what the PADDING is
         // in whatever the kind — the two families reach different multiples of
@@ -1791,9 +1780,9 @@ pub(crate) mod tests {
     /// wrong reason (#450). Along a diagonal the coverage runs the whole of
     /// `[INK_FLOOR, 1]` and the two readings part.
     ///
-    /// Half a texel of tolerance, which is what the correction buys: the flood
-    /// answers in whole texels, and the seed's own coverage puts the profile's
-    /// origin back on the contour to within that.
+    /// Five hundredths of a texel of tolerance. A seed at its texel centre is
+    /// off by nearly half along this diagonal; the reconstructed contour
+    /// segment is what makes the tighter claim reachable.
     #[test]
     fn the_flood_answers_the_true_distance_between_two_strokes() {
         const SIZE: [u32; 2] = [256, 128];
@@ -1877,7 +1866,7 @@ pub(crate) mod tests {
         // test measuring an empty field.
         assert!(checked > 5000, "only {checked} texels stood inside the reach");
         assert!(
-            worst <= 0.5,
+            worst <= 0.05,
             "the flood is off by {worst} texels at {worst_at:?}, inside its own reach",
         );
     }
@@ -1987,17 +1976,28 @@ pub(crate) mod tests {
         }
     }
 
+    /// The packed seed leaves one high bit distinct from every coordinate and
+    /// line direction the field can carry.
+    #[test]
+    fn the_seed_fields_bits_hold_the_largest_distance_atlas_and_its_sentinel() {
+        let held = |name: &str| {
+            shader_const(SHADOW_SRC, name)
+                .trim_end_matches('u')
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("shadow.wgsl's {name} is a u32 literal"))
+        };
+        assert_eq!(held("SEED_COORD_MASK") + 1, SEED_COORD_LIMIT);
+        assert_eq!(held("NO_SEED"), 2 * SEED_COORD_LIMIT);
+    }
+
     /// A distance term's cell is padded to exactly where its curve is windowed
-    /// to nothing, and bounded in resolution so both its ink and profile
-    /// survive.
+    /// to nothing, and floored in resolution so a stroke of type survives it.
     ///
     /// The pair the family's cost is decided by, and the two are opposite
     /// claims. The pad has to REACH the stop or the shadow ends in a straight
-    /// line at the cell's edge. The scale has to stop shrinking or the ink the
-    /// flood seeds off thins to nothing, and it has to grow past the target's
-    /// resolution where half a flood texel would be most of the Shadow's σ. A
-    /// blur cell keeps neither property, which is what makes this the branch
-    /// worth pinning.
+    /// line at the cell's edge; the scale has to stop shrinking or the ink the
+    /// flood seeds off thins to nothing. A blur cell keeps neither property,
+    /// which is what makes this the branch worth pinning.
     #[test]
     fn a_distance_cell_reaches_the_stop_and_holds_its_resolution() {
         use harmonigraph_scene::ShadowKernel;
@@ -2021,21 +2021,6 @@ pub(crate) mod tests {
                 k >= DISTANCE_TEXELS_PER_POINT - 1e-5,
                 "at {px_per_point} pixels a point a distance cell draws a point across {k} \
                  texels, so a stem of type is under two of them and seeds nothing",
-            );
-
-            // A σ narrower than a pane point: the field aims for the same
-            // `SIGMA_CELL_MAX` texels of precision at every device scale, then
-            // stops at its ceiling rather than growing without bound as the
-            // Shadow closes.
-            let sigma_points = 0.5;
-            let held =
-                pack(&[caster], sigma_points * px_per_point, px_per_point, 8192, packed).boxes[0];
-            let k = held.terms[0];
-            assert!(
-                (k - DISTANCE_TEXELS_PER_POINT_MAX).abs() < 1e-5,
-                "at {px_per_point} pixels a point a narrow distance cell draws a point across \
-                 {k} texels rather than its {}-texel ceiling",
-                DISTANCE_TEXELS_PER_POINT_MAX,
             );
         }
         assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ, so the chain blurs it");
