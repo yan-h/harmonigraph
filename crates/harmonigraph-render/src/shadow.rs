@@ -1391,8 +1391,8 @@ pub(crate) mod tests {
     ///
     /// The pad has to REACH the stop or the shadow ends in a straight line at
     /// the cell's edge. The resolution keeps σ at three texels at every target
-    /// scale, so editor and offline renderings sample the same pane-point grid
-    /// without a separate quality floor.
+    /// scale, so once σ is past `SIGMA_CELL_MAX`, editor and offline renderings
+    /// sample the same pane-point grid without a separate quality floor.
     #[test]
     fn a_distance_cell_reaches_the_stop_at_sigma_relative_resolution() {
         use harmonigraph_scene::ShadowKernel;

@@ -755,16 +755,17 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      so at a wide Shadow the whole lattice reads as one soft \
                      blob; a distance is the same at a hairline as at a slab, \
                      so a letter's counters, a cross's arms and a corner all \
-                     keep their shape however wide this is dialled. What it \
-                     gives up is the pocket between two strokes standing \
-                     close.",
+                     keep their shape while the source grid resolves them. At \
+                     the widest settings the adaptive grid softens fine detail \
+                     to keep the cost bounded. What it gives up is the pocket \
+                     between two strokes standing close.",
                 ),
             ],
         );
         // The two that shape the depth rather than set it, under the pair they
         // act on: how much of it the picture's THINNEST ink gets, and where
         // along the shadow's width it sits.
-        // The gain is the BLUR family's, on the same rule the two bars below it
+        // The gain is the BLUR family's, on the same rule the bar below it
         // are gated by: a distance field gives a hairline the whole depth at
         // its own edge by construction, so `shadow_kernel` returns before the
         // gain is ever read on a distance row and the bar moves nothing there.
