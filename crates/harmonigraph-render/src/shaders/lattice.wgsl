@@ -747,7 +747,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: Shadow
 /// The same node, drawn into its own cell of the shadow atlas rather than onto
 /// the pane — [`fs_node_cell`]'s quad, and what its shadow is a blur of.
 ///
-/// An analytic cell's own corners are mapped back into pane points, so every
+/// A distance cell's own corners are mapped back into pane points, so every
 /// texel the packer reserved is written — including the one-texel sampling
 /// guard beyond the shadow's reach. A blur cell keeps the pane quad's mapping
 /// exactly, which is the coverage the Gaussian path convolves.
@@ -765,7 +765,7 @@ fn vs_node_cell(
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
-    if box.who.w < 0.5 {
+    if box.who.y < 0.5 {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
@@ -800,7 +800,7 @@ fn vs_node_cell(
     out.clip_pos =
         select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
-    // The negative sign carries the analytic kind without consuming another
+    // The negative sign carries the distance kind without consuming another
     // interpolator; coverage cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
     return out;
@@ -1567,8 +1567,8 @@ struct NodeLayer {
     coverage: f32,
 }
 
-// The flood's contour threshold (`shadow.wgsl::INK_FLOOR`). The modules have
-// no linkage, so this copy is pinned from Rust beside `DISTANCE_KIND`.
+// The contour threshold the exact field treats as ink. The marker uses the
+// same half-level in `plus_shadow_sd` below.
 const DISTANCE_LEVEL_FLOOR: f32 = 0.5;
 const EMPTY_DISTANCE: f32 = 65504.0;
 
@@ -2694,8 +2694,8 @@ fn node_paint(in: VsOut) -> Painted {
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). A blur
 /// term stores the byte-identical coverage it convolves. A Distance term stores
-/// the analytic union in pane points, with only layers at the flood's half-level
-/// contour included.
+/// the exact union in pane points, with only layers at the half-level contour
+/// included.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2832,10 +2832,9 @@ fn plus_sd(uv: vec2<f32>) -> f32 {
     return plus_box_sd(uv, 1.0);
 }
 
-// Where the taper's alpha crosses the flood's contour threshold. The flood
-// seeds from coverage >= 1/2 (`shadow.wgsl`'s `INK_FLOOR`), and a smoothstep
-// reaches 1/2 halfway through its interval, so this is the same arm the
-// distance cell treated as ink.
+// Where the taper's alpha crosses the distance field's contour threshold. A
+// smoothstep reaches 1/2 halfway through its interval, so this is the same arm
+// the blur cell treats as half-covered.
 fn plus_shadow_sd(uv: vec2<f32>) -> f32 {
     let start = min(u.misc5.y, 1.0 - 1e-3);
     return plus_box_sd(uv, mix(start, 1.0, 0.5));

@@ -171,7 +171,7 @@ fn vs_glyph_cell(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell) && (box_who.y < 0.5 || box_who.w < 0.5),
+        cell_packed(box_cell) && box_who.y < 0.5,
     );
     return out;
 }
@@ -218,7 +218,7 @@ fn vs_glyph_distance_cell(
     let valid = near_span.x > 0.0 && near_span.y > 0.0
         && coarse_span.x > 0.0 && coarse_span.y > 0.0
         && sdf_rect.z > 0.0 && sdf_rect.w > 0.0
-        && box_who.y >= 0.5 && box_who.w >= 0.5;
+        && box_who.y >= 0.5;
 
     var out: SdfOut;
     let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
@@ -252,7 +252,7 @@ struct PadOut {
     @location(0) @interpolate(flat) pad: f32,
 };
 
-/// Set every analytic distance cell to its own finite far value before glyphs
+/// Set every distance cell to its own finite far value before glyphs
 /// MIN-blend into it. Nodes overwrite the same initialization with their full
 /// analytic quad; blur cells stay on the render pass's zero clear.
 @vertex
@@ -272,7 +272,7 @@ fn vs_distance_pad(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        box_who.y >= 0.5 && box_who.w >= 0.5 && cell_packed(box_cell),
+        box_who.y >= 0.5 && cell_packed(box_cell),
     );
     out.pad = box_who.z;
     return out;

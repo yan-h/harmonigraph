@@ -79,14 +79,14 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
     scene
 }
 
-/// A node's distance cell is the analytic field of its ring layers, in pane
+/// A node's distance cell is the exact field of its ring layers, in pane
 /// points. This fixture has constant-width angular gaps and one marked sector,
 /// whose two diagonal sides continue into the outer strip. The CPU reference
-/// repeats the geometry from `OctaveLayout` to pin the new uv reconstruction,
-/// point scaling, storage and atlas-copy path before the shadow curve can hide
-/// an error in a rendered picture.
+/// repeats the geometry from `OctaveLayout` to pin uv reconstruction, point
+/// scaling, storage and the atlas-copy path before the shadow curve can hide an
+/// error in a rendered picture.
 #[test]
-fn the_flood_answers_the_true_distance_between_two_strokes() {
+fn a_node_distance_cell_matches_the_cpu_reference() {
     const SHADOW: f32 = 0.24;
     const QUAD_MARGIN: f32 = 1.6;
     let Some((device, queue)) = crate::gpu_harness::headless_device() else {
@@ -123,12 +123,11 @@ fn the_flood_answers_the_true_distance_between_two_strokes() {
         sigma_px,
         cb.render_scale,
         cb.distance_texels_per_point,
-        device.limits().max_texture_dimension_2d.min(shadow::SEED_COORD_LIMIT),
+        device.limits().max_texture_dimension_2d,
         terms,
     );
     let cell = packed.boxes[cb.node_cells[0] as usize * terms.len()];
-    assert_eq!(cell.who[3], 1.0, "the node's distance cell is not analytic");
-    assert_eq!(packed.flood, 0.0, "an analytic node scheduled the jump flood");
+    assert_eq!(cell.who[1], shadow::DISTANCE_KIND, "the node did not pack a distance cell");
 
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -740,9 +739,9 @@ fn a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from() {
 }
 
 /// A markers-only Distance frame casts from the exact field in its scene draw
-/// and therefore has no shadow atlas from which a flood could be scheduled.
+/// and therefore needs no shadow atlas.
 #[test]
-fn a_distance_frame_of_markers_casts_without_an_atlas_or_flood() {
+fn a_distance_frame_of_markers_casts_without_an_atlas() {
     const ARM: f32 = 0.5;
     const SHADOW: f32 = 0.6;
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -1003,7 +1002,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
         far(scene)
     };
-    let flooded = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
+    let distance = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
     let direct_cross = (
         distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
         distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
@@ -1013,7 +1012,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         ("a cross", cross, ARM * points_per_world(&far(crosses_on_ground(&[], ARM, SHADOW, 1.0)))),
         (
             "a node's rings on the distance row",
-            flooded,
+            distance,
             ink_radius(&distant(on_ground(SHADOW, 1.0))),
         ),
         (
@@ -1663,82 +1662,14 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
 // The distance family
 // ---------------------------------------------------------------------------
 
-/// The fixed glyph field lands where the retained coverage flood does at the
-/// live view. Their edge reconstruction is deliberately different, so the
-/// contract is a small image epsilon rather than byte identity; a misplaced
-/// SDF rect makes the entire shadow disappear and misses it by orders of
-/// magnitude.
-#[test]
-fn a_fixed_name_sdf_matches_the_flood_at_the_live_view() {
-    const GREY: f32 = 0.55;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = wgpu::Color { r: GREY as f64, g: GREY as f64, b: GREY as f64, a: 1.0 };
-    let mut scene = lit_node_and_a_name(0.0, 0.16, 0.85);
-    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
-    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
-    let labels = || name_at(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
-    let bare = shooter.shot(&scene);
-    let exact = shooter.shot_with(&scene, labels());
-    shooter.pane += 1;
-    let flooded = shooter.draw_modified(&scene, labels(), |callback| {
-        let cell = callback
-            .draws
-            .iter()
-            .find_map(|draw| match *draw {
-                Draw::Label(_, _, cell) => Some(cell),
-                _ => None,
-            })
-            .expect("the fixture carries one name");
-        callback.casters[cell as usize].analytic_distance = false;
-    });
-
-    let mut affected = 0usize;
-    let mut error = 0usize;
-    let mut worst = 0u8;
-    let (mut sdf_dark, mut flood_dark) = (0i64, 0i64);
-    let (mut sdf_pixels, mut flood_pixels) = (0usize, 0usize);
-    for ((plain, sdf), flood) in
-        bare.chunks_exact(4).zip(exact.chunks_exact(4)).zip(flooded.chunks_exact(4))
-    {
-        if sdf[..3] == plain[..3] && flood[..3] == plain[..3] {
-            continue;
-        }
-        affected += 1;
-        let plain_brightness = brightness(&plain[..3]);
-        let sdf_delta = plain_brightness - brightness(&sdf[..3]);
-        let flood_delta = plain_brightness - brightness(&flood[..3]);
-        sdf_dark += sdf_delta.max(0);
-        flood_dark += flood_delta.max(0);
-        sdf_pixels += usize::from(sdf_delta > 0);
-        flood_pixels += usize::from(flood_delta > 0);
-        for channel in 0..3 {
-            let d = sdf[channel].abs_diff(flood[channel]);
-            error += d as usize;
-            worst = worst.max(d);
-        }
-    }
-    assert!(affected > 40, "the name moved only {affected} pixels off the bare frame");
-    let mean = error as f32 / (3 * affected) as f32;
-    eprintln!(
-        "SDF {sdf_pixels} px/{sdf_dark} darkness, flood {flood_pixels} px/{flood_dark} darkness; \
-         error {mean:.2} mean/{worst} max over {affected} px"
-    );
-    assert!(mean <= 5.0, "the SDF and flood differ by {mean:.2}/255 on average");
-    assert!(worst <= 32, "the SDF and flood differ by {worst}/255 at one channel");
-}
-
 /// A DISTANCE shadow stays one smooth annulus when its width projects to about
 /// a pixel at full depth.
 ///
-/// A flood chosen only by seed CENTRES leaves grid-aligned Voronoi wedges even
-/// when resolve reconstructs a subpixel contour segment. At this scale the
-/// wedges are most of the projected Shadow's σ, so full depth exposes them as
-/// dark rays around otherwise continuous ink. The standard deviation around
-/// one radius is the rays' reading; it is bounded as a share of the mean, while
-/// the mean is bounded too so flattening the ring toward either rail cannot
-/// pass for smoothing it.
+/// At this scale, one atlas texel is most of the projected Shadow's σ, so
+/// grid-aligned sampling error appears as dark rays around otherwise
+/// continuous ink. The standard deviation around one radius is the rays'
+/// reading; it is bounded as a share of the mean, while the mean is bounded too
+/// so flattening the ring toward either rail cannot pass for smoothing it.
 #[test]
 fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -1968,11 +1899,11 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
 /// that had quietly started SUMMING its terms would read deeper there.
 ///
 /// Two points in ONE frame rather than two frames, which is what makes the
-/// reading survive its own quantisation. The flood answers in whole texels and
-/// a distance cell is drawn at a fraction of the target's pixels, so a texel is
-/// a couple of points and a reading carries up to that much of a phase error;
-/// two frames would carry two different cell origins and two different phases,
-/// where one frame carries one cell and the difference between two points in it.
+/// reading survive its own quantisation. A distance cell is drawn at a
+/// fraction of the target's pixels, so a texel is a couple of points and a
+/// reading carries up to that much of a phase error; two frames would carry two
+/// different cell origins and two different phases, where one frame carries
+/// one cell and the difference between two points in it.
 /// The bound below is set against a SUM — which is 2x — rather than against the
 /// quantisation, for the same reason.
 ///

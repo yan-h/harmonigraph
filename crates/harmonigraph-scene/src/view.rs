@@ -1037,7 +1037,7 @@ pub struct ViewConfig {
     ///
     /// A cross's blur shadow follows the coverage this fades. Its distance
     /// shadow treats the half-alpha contour as the end of the exact field, the
-    /// same contour the flood uses for every other caster.
+    /// same contour every other caster's distance cell holds.
     pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
@@ -1319,10 +1319,10 @@ pub struct ViewConfig {
     /// [`GLOW_SHADOW_RESOLUTION_MIN`]..=[`GLOW_SHADOW_RESOLUTION_MAX`], in
     /// atlas texels per pane point. Inert on a blur row.
     ///
-    /// 0.8 holds small type at the floor its contour seeding needs and is what
-    /// a fresh view opens on. 1.2 and 1.6 are the 1.5x and 2x sampling probes:
+    /// 0.8 holds small type at the floor its sampled field needs and is what a
+    /// fresh view opens on. 1.2 and 1.6 are the 1.5x and 2x sampling probes:
     /// cell area grows roughly with the square, so the right end costs about
-    /// four times the atlas area and flood work of the left.
+    /// four times the atlas area and fill work of the left.
     pub glow_shadow_resolution: f32,
     /// The exponent a DISTANCE row's decay is taken over,
     /// [`SHADOW_SHAPE_MIN`](crate::SHADOW_SHAPE_MIN)..=[`SHADOW_SHAPE_MAX`](crate::SHADOW_SHAPE_MAX).

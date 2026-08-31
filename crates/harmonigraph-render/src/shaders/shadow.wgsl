@@ -5,48 +5,22 @@
 // along x into the atlas's second texture and once along y back into the first.
 // A DISTANCE cell holds how far each texel stands from the caster's nearest
 // ink, in pane points. Nodes write that field analytically and names MIN-blend
-// their fixed glyph SDFs. The jump flood remains as the placement reference
-// for a coverage cell until the next step removes it: seed every inked texel
-// with its coordinate, pass those coordinates outward, then resolve.
+// their fixed glyph SDFs.
 // Either way the scene pass samples one texel and spends it (`fs_shadow_box`).
 //
 // A pass here is a draw over the CELLS rather than one quad over the atlas, and
 // that is what lets every cell carry its own σ, its own resolution and its own
 // kind: a cell's quad reads them off its instance, a tap that falls outside the
 // cell's own rect reads nothing, and a cell of the wrong kind collapses its
-// quad off the viewport. So one chain serves every distance cell in the atlas
-// at once, no seed crosses into the neighbour packed beside it, and a frame on
-// a blur row draws none of the flood at all. The padding a cell is packed with
+// quad off the viewport. The padding a cell is packed with
 // (`pack` in shadow.rs) is what puts the whole of its blur — or the whole of
 // the reach its curve is windowed to — inside the rect the taps are clamped to.
-//
-// Kept whole rather than weakened into a test-only approximation: the old
-// coverage producer is the picture oracle for the SDF's placement, and the
-// difference between their renders is what catches a half-pixel offset.
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 // The layout's sampler slot, which the scene pass's one tap takes and nothing
 // here does: every tap in this module is a texel by construction
 // (`textureLoad`).
 @group(0) @binding(1) var src_sampler: sampler;
-
-// The flood's own group. The three passes read different halves of it — the
-// seed takes the atlas alone, the step the field alone, the resolve both — and
-// what an entry point does not read is pruned before its pipeline is built.
-@group(1) @binding(0) var seeds: texture_2d<u32>;
-@group(1) @binding(1) var<uniform> jump: Jump;
-
-/// The jump this step takes, in texels, in `x`. Halves from a power of two at
-/// or above the widest distance cell's own reach down to 1 (`steps` in
-/// shadow.rs, which is where the sequence is decided).
-///
-/// A whole `vec4<i32>` for one number, which is what the uniform address space
-/// costs: a struct there is laid out on 16-byte alignment, so three explicit pad
-/// words and a `vec3` beside the `i32` come to the same 16 bytes with more ways
-/// to get the Rust side's size wrong.
-struct Jump {
-    step: vec4<i32>,
-};
 
 /// What `ShadowBox::who.y` holds for a cell that is a DISTANCE rather than
 /// blurred ink — `shadow::DISTANCE_KIND`, and spelled again in common.wgsl
@@ -57,20 +31,8 @@ struct CellOut {
     @builtin(position) position: vec4<f32>,
     /// The cell's own rect in atlas texels — min, then max, the max exclusive.
     @location(0) @interpolate(flat) bounds: vec4<f32>,
-    /// σ in atlas texels. Zero on a distance cell, which makes the x pass copy
-    /// either its coverage or its analytic field unchanged.
+    /// σ in atlas texels. Distance cells collapse before this is read.
     @location(1) @interpolate(flat) sigma: f32,
-    /// How many of this cell's texels one point of the pane spans
-    /// (`ShadowBox::terms.x`) — what turns the flood's answer, which is in
-    /// texels, into the points the cell is read back in.
-    @location(2) @interpolate(flat) k: f32,
-    /// How far past the caster's ink this cell reaches, in points
-    /// (`ShadowBox::who.z`). The distance resolved where no seed is within
-    /// reach: the standoff's curve is windowed to exactly zero there, so a
-    /// texel the flood says nothing about and one at the very edge of the reach
-    /// carry the same coverage and the bilinear tap between them has no step to
-    /// cross.
-    @location(3) @interpolate(flat) pad: f32,
 };
 
 /// A quad with no area, off the viewport: what a pass emits for a cell of the
@@ -87,7 +49,6 @@ fn cell_quad(
     vertex: u32,
     cell: vec4<f32>,
     terms: vec4<f32>,
-    who: vec4<f32>,
     draws: bool,
 ) -> CellOut {
     let corner = vec2<f32>(
@@ -95,7 +56,7 @@ fn cell_quad(
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
     // The atlas's size, off the texture at group 0 — which every pass here
-    // binds, and which is the same size as the seed pair the flood writes.
+    // binds.
     let atlas = vec2<f32>(textureDimensions(src));
     let texel = cell.xy + corner * cell.zw;
     var out: CellOut;
@@ -110,13 +71,11 @@ fn cell_quad(
     }
     out.bounds = vec4<f32>(cell.xy, cell.xy + cell.zw);
     out.sigma = terms.y;
-    out.k = terms.x;
-    out.pad = who.z;
     return out;
 }
 
-/// EVERY cell, whatever it holds — the x blur, whose pass-through over a
-/// distance cell is what carries that cell's coverage to the resolve.
+/// The BLUR cells alone: the x pass. A distance cell already holds its final
+/// field in the target this reads, so neither blur pass touches it.
 @vertex
 fn vs_cell(
     @builtin(vertex_index) vertex: u32,
@@ -125,11 +84,10 @@ fn vs_cell(
     @location(2) terms: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who, true);
+    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
 }
 
-/// The BLUR cells alone: the y pass, which shares its target with the resolve
-/// and must not write a texel the resolve is about to.
+/// The BLUR cells alone: the y pass.
 @vertex
 fn vs_cell_blur(
     @builtin(vertex_index) vertex: u32,
@@ -138,35 +96,7 @@ fn vs_cell_blur(
     @location(2) terms: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who, who.y < 0.5);
-}
-
-/// The flooded DISTANCE cells alone. Shipped casters answer their own exact
-/// field; this selects a coverage reference cell without reaching any analytic
-/// one beside it.
-@vertex
-fn vs_cell_distance(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
-    @location(3) who: vec4<f32>,
-) -> CellOut {
-    return cell_quad(vertex, cell, terms, who, who.y >= 0.5 && who.w < 0.5);
-}
-
-/// The analytic DISTANCE cells alone. The x pass copies every distance cell
-/// to the half target; this selects the node fields for the copy back that
-/// shares the final target with the disjoint blur and flood resolves.
-@vertex
-fn vs_cell_analytic(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
-    @location(3) who: vec4<f32>,
-) -> CellOut {
-    return cell_quad(vertex, cell, terms, who, who.y >= 0.5 && who.w >= 0.5);
+    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is
@@ -246,255 +176,4 @@ fn fs_blur_x(in: CellOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
     return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 0.0, 1.0);
-}
-
-/// One exact texel from the half target. Analytic distance cells need no
-/// convolution or reconstruction; this only survives the atlas ping-pong.
-@fragment
-fn fs_copy(in: CellOut) -> @location(0) vec4<f32> {
-    return textureLoad(src, vec2<i32>(in.position.xy), 0);
-}
-
-/// A coordinate no seed occupies — what a texel out of reach of every stroke
-/// carries in both channels.
-///
-/// Atlas coordinates take the low fourteen bits, enough for every 2D texture
-/// wgpu exposes here. One spare bit in x and two in y carry the contour's
-/// undirected normal. X's top bit marks a point whose coverage has no gradient
-/// direction; an all-ones x remains distinct from every line and point seed.
-const SEED_POINT_BIT: u32 = 32768u;
-const NO_SEED: u32 = 65535u;
-const SEED_COORD_MASK: u32 = 16383u;
-
-/// How much of a texel must be inked for it to seed the field.
-///
-/// The half-coverage contour, which is where a rasterizer puts a shape's edge:
-/// a stroke's own texels read near 1 and the texels its antialiased edge falls
-/// across read between, so this reconstructs the shape the eye sees rather than
-/// the shape plus its fringe. Lower and every glyph and every ring grows a texel
-/// of bogus ink all round, which the shadow would then stand off from.
-const INK_FLOOR: f32 = 0.5;
-
-/// How far one seed's local contour may reach along its tangent, in texels.
-///
-/// Two spans one missing seed between covered texels. Keeping it at that
-/// immediate neighbourhood stops a tangent at a corner standing in for a
-/// distant edge.
-const CONTOUR_TANGENT_REACH: f32 = 2.0;
-
-/// How far seed selection may look along a candidate's tangent, in texels.
-///
-/// Three eighths lets overlapping contour pieces compete before resolve.
-/// A quarter retains the point field's visible wedges, while half a texel lets
-/// a tangent win far enough from its seed to thicken a narrow curved shadow.
-const FLOOD_TANGENT_REACH: f32 = 0.375;
-
-/// Coverage at `at`, or no ink for a tap outside this cell.
-///
-/// The atlas packs unrelated casters beside each other, so the gradient used
-/// to place a contour seed must not read the neighbour as part of this one.
-fn cell_coverage(in: CellOut, at: vec2<i32>) -> f32 {
-    let centre = vec2<f32>(at) + vec2<f32>(0.5);
-    if centre.x < in.bounds.x || centre.y < in.bounds.y
-        || centre.x >= in.bounds.z || centre.y >= in.bounds.w {
-        return 0.0;
-    }
-    return clamp(textureLoad(src, at, 0).r, 0.0, 1.0);
-}
-
-/// A seed coordinate with the coverage gradient's line direction in its spare
-/// high bits. Eight directions over half a turn keep the normal within 11.25°
-/// of the rasterizer's while leaving x's point flag distinct.
-fn pack_seed(at: vec2<i32>, gradient: vec2<f32>) -> vec2<u32> {
-    let ax = abs(gradient.x);
-    let ay = abs(gradient.y);
-    let coord = vec2<u32>(at);
-    // A symmetric thin stroke and an isolated texel have no direction to
-    // quantize. Giving either an arbitrary tangent stretches its contour along
-    // one axis, so they retain the point metric the field is seeded from.
-    if ax + ay < 1.0e-6 {
-        return vec2<u32>(coord.x | SEED_POINT_BIT, coord.y);
-    }
-    // Tangents of 11.25°, 33.75°, 56.25° and 78.75° split a quadrant around
-    // its five candidate directions. Comparisons keep this pass off `atan2`,
-    // whose cost would be paid at every texel of the distance atlas.
-    var octant = 0u;
-    if ay >= 0.19891237 * ax {
-        octant = 1u;
-    }
-    if ay >= 0.66817864 * ax {
-        octant = 2u;
-    }
-    if ay >= 1.49660576 * ax {
-        octant = 3u;
-    }
-    if ay >= 5.02733949 * ax {
-        octant = 4u;
-    }
-    let direction = select(octant & 7u, (8u - octant) & 7u, gradient.x * gradient.y < 0.0);
-    return vec2<u32>(
-        coord.x | ((direction & 1u) << 14u),
-        coord.y | (((direction >> 1u) & 3u) << 14u),
-    );
-}
-
-/// The absolute atlas texel a packed seed names.
-fn seed_texel(seed: vec2<u32>) -> vec2<i32> {
-    return vec2<i32>(seed & vec2<u32>(SEED_COORD_MASK));
-}
-
-/// Whether a seed carries a contour normal rather than the point fallback.
-fn seed_has_normal(seed: vec2<u32>) -> bool {
-    return (seed.x & SEED_POINT_BIT) == 0u;
-}
-
-/// The undirected normal a packed seed carries.
-fn seed_normal(seed: vec2<u32>) -> vec2<f32> {
-    let direction = ((seed.x >> 14u) & 1u) | (((seed.y >> 14u) & 3u) << 1u);
-    switch direction {
-        case 0u: { return vec2<f32>(1.0, 0.0); }
-        case 1u: { return vec2<f32>(0.92387953, 0.38268343); }
-        case 2u: { return vec2<f32>(0.70710678, 0.70710678); }
-        case 3u: { return vec2<f32>(0.38268343, 0.92387953); }
-        case 4u: { return vec2<f32>(0.0, 1.0); }
-        case 5u: { return vec2<f32>(-0.38268343, 0.92387953); }
-        case 6u: { return vec2<f32>(-0.70710678, 0.70710678); }
-        default: { return vec2<f32>(-0.92387953, 0.38268343); }
-    }
-}
-
-/// The chain's first pass: every inked texel of a distance cell becomes its own
-/// seed, and every other texel becomes [`NO_SEED`].
-///
-/// Its own entry point rather than a step over an initialised target, because
-/// what it reads is the coverage (one float channel) and what every pass after
-/// it reads is a field of coordinates (two uint channels).
-@fragment
-fn fs_flood_seed(in: CellOut) -> @location(0) vec2<u32> {
-    let at = vec2<i32>(in.position.xy);
-    let coverage = cell_coverage(in, at);
-    if coverage < INK_FLOOR {
-        return vec2<u32>(NO_SEED, NO_SEED);
-    }
-    // Only inked texels need a normal. The padding is most of a wide distance
-    // cell, so four local reads here cost less than evaluating the direction
-    // over every empty texel in the pass.
-    let gradient = 0.5 * vec2<f32>(
-        cell_coverage(in, at + vec2<i32>(1, 0))
-            - cell_coverage(in, at - vec2<i32>(1, 0)),
-        cell_coverage(in, at + vec2<i32>(0, 1))
-            - cell_coverage(in, at - vec2<i32>(0, 1)),
-    );
-    return pack_seed(at, gradient);
-}
-
-/// One flood step: keep the nearest of this texel's own seed and the nine
-/// candidates a jump of [`Jump::step`] reaches.
-///
-/// Nine and not eight, the centre being one of them: a texel that already holds
-/// a seed has to defend it against the ring, or a step landing on a nearer
-/// stroke's territory would overwrite a closer answer with a further one.
-///
-/// The taps are clamped to this CELL's own rect exactly as [`blur`]'s are. A
-/// candidate outside it belongs to whichever caster was packed beside this one,
-/// and a seed that crossed would draw the neighbour's letters inside this
-/// caster's shadow.
-///
-/// Squared distances throughout — the comparison is all this makes, and a square
-/// root is monotone, so the ordering is the same and one per candidate is saved.
-/// The `f32` they are computed in holds an atlas's squared diagonal exactly: at
-/// 8192 across it is under 2^27, well inside the 24 bits an f32 mantissa carries
-/// whole, so two candidates never tie by rounding.
-@fragment
-fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
-    let at = vec2<i32>(in.position.xy);
-    var best = vec2<u32>(NO_SEED, NO_SEED);
-    var best_d = 3.4e38;
-    for (var dy = -1; dy <= 1; dy = dy + 1) {
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            let tap = at + vec2<i32>(dx, dy) * jump.step.x;
-            let centre = vec2<f32>(tap) + vec2<f32>(0.5);
-            if centre.x < in.bounds.x || centre.y < in.bounds.y
-                || centre.x >= in.bounds.z || centre.y >= in.bounds.w {
-                continue;
-            }
-            let cand = textureLoad(seeds, tap, 0).xy;
-            if cand.x == NO_SEED {
-                continue;
-            }
-            var d = vec2<f32>(at - seed_texel(cand));
-            // A local refinement chooses a short piece of the segment the
-            // resolve will measure, rather than only its texel centre. Long
-            // jumps retain the point metric so a remote tangent cannot win.
-            if jump.step.x == 1 && seed_has_normal(cand) {
-                let normal = seed_normal(cand);
-                let tangent = vec2<f32>(-normal.y, normal.x);
-                let along =
-                    clamp(dot(d, tangent), -FLOOD_TANGENT_REACH, FLOOD_TANGENT_REACH);
-                d = d - along * tangent;
-            }
-            let dist = dot(d, d);
-            if dist < best_d {
-                best_d = dist;
-                best = cand;
-            }
-        }
-    }
-    return best;
-}
-
-/// The field turned into what the cell holds: the distance from this texel to
-/// the caster's nearest ink, in the pane's POINTS.
-///
-/// Points and not texels because a cell's resolution is its own (`pack`) and
-/// what reads it back is a fragment of the pane: one division here, at the one
-/// site that knows both, against a scale the sampler would otherwise have to
-/// carry per term.
-///
-/// One seed represents the short, straight contour segment crossing its texel.
-/// The coverage gradient supplies the segment's normal, and the covered share
-/// past [`INK_FLOOR`] moves it from the texel centre onto the rasterizer's
-/// contour. The bounded tangent bridges a one-texel diagonal gap between seed
-/// texels and stays inside the seed's immediate neighbourhood, so a tangent at
-/// a corner does not claim a distant edge.
-///
-/// A single contour POINT is not enough. Its position remains quantized along
-/// the tangent, so a diagonal edge is still up to half a texel away from the
-/// closest point it actually contains. The segment supplies that missing
-/// degree of freedom without making the seed texture or any flood pass larger.
-///
-/// Clamped to the cell's own pad, which is where the curve is windowed to zero:
-/// past it the coverage is 0 whatever the number, so this is the value that
-/// makes "no seed within reach" and "further than the shadow goes" one answer.
-@fragment
-fn fs_flood_resolve(in: CellOut) -> @location(0) vec4<f32> {
-    let at = vec2<i32>(in.position.xy);
-    let seed = textureLoad(seeds, at, 0).xy;
-    if seed.x == NO_SEED {
-        return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
-    }
-    let coverage = cell_coverage(in, at);
-    if coverage >= INK_FLOOR {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    let ink = seed_texel(seed);
-    let seed_coverage = cell_coverage(in, ink);
-    let to_sample = vec2<f32>(at - ink);
-    if !seed_has_normal(seed) {
-        let texels = max(length(to_sample) - (seed_coverage - INK_FLOOR), 0.0);
-        return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
-    }
-    var normal = seed_normal(seed);
-    // The packed normal is a LINE direction. The sample is outside the ink,
-    // so whichever sign points toward it is the contour's outward one.
-    if dot(to_sample, normal) < 0.0 {
-        normal = -normal;
-    }
-    let offset = (seed_coverage - INK_FLOOR) * normal;
-    let contour = vec2<f32>(ink) + offset;
-    let tangent = vec2<f32>(-normal.y, normal.x);
-    let delta = vec2<f32>(at) - contour;
-    let along = clamp(dot(delta, tangent), -CONTOUR_TANGENT_REACH, CONTOUR_TANGENT_REACH);
-    let texels = length(delta - along * tangent);
-    return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
 }

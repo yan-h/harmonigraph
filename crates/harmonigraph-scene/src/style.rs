@@ -511,9 +511,8 @@ pub enum TermKind {
     /// stands within a blur of it.
     Blur,
     /// The DISTANCE, in the pane's points, from this texel to the caster's
-    /// nearest ink — a jump flood over the cell (`flood` in
-    /// `harmonigraph-render`'s `shadow.rs`), read back through the standoff's
-    /// own curve.
+    /// nearest ink, supplied by the caster's exact field and read back through
+    /// the standoff's own curve.
     ///
     /// What it buys is FORM. A blur of a stroke thin against σ peaks at a
     /// fraction of 1 and its profile carries the stroke's WIDTH rather than its
@@ -557,9 +556,9 @@ impl TermKind {
     /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because a
     /// width is 2σ.
     ///
-    /// One expression for both, so a quad, a cell's padding and a flood's
-    /// schedule are all sized off one number — a cell padded short of what its
-    /// quad reaches is a shadow cut off in a straight line at the box.
+    /// One expression for both, so a quad and its cell's padding are sized off
+    /// one number — a cell padded short of what its quad reaches is a shadow
+    /// cut off in a straight line at the box.
     pub fn reach_sigmas(self) -> f32 {
         match self {
             TermKind::Blur => REACH_SIGMAS,
@@ -586,8 +585,7 @@ impl KernelTerm {
 pub const REACH_SIGMAS: f32 = 3.0;
 
 /// How many Shadow widths out the standoff's curve is windowed to nothing, and
-/// so how far a [`Distance`](TermKind::Distance) cell is padded and its flood
-/// carried.
+/// so how far a [`Distance`](TermKind::Distance) cell is padded.
 ///
 /// A decay has no radius at which it stops and a quad does, so this is where
 /// that difference is settled rather than left to the billboard: the coverage
@@ -737,9 +735,8 @@ impl ShadowKernel {
     }
 
     /// Whether any term of this kernel holds a DISTANCE, which is what says
-    /// whether a frame runs the flood chain at all and whether the two bars the
-    /// distance family alone reads are shown.
-    pub fn floods(self) -> bool {
+    /// whether the two bars the distance family alone reads are shown.
+    pub fn has_distance(self) -> bool {
         self.terms().iter().any(|t| t.kind == TermKind::Distance)
     }
 }

@@ -1343,7 +1343,6 @@ impl LatticeCallback {
                 level: 0.0,
                 sigma_scale: 1.0,
                 direct_distance: false,
-                analytic_distance: true,
             };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
@@ -1383,7 +1382,6 @@ impl LatticeCallback {
                 level: 1.0,
                 sigma_scale: 1.0,
                 direct_distance: false,
-                analytic_distance: true,
             }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
@@ -1415,7 +1413,6 @@ impl LatticeCallback {
                 level: 1.0,
                 sigma_scale: 1.0,
                 direct_distance: true,
-                analytic_distance: false,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -1689,9 +1686,8 @@ struct LatticeResources {
     /// is its shadow, the draw before it (`shadow_box_pipeline`).
     glyph_fill_pipeline: wgpu::RenderPipeline,
     /// The shadow atlas's three stages (`crate::shadow`): every name's glyphs
-    /// into its cell, the passes that sweep the cells — the blur along each
-    /// axis, and the jump flood a DISTANCE cell is answered by — and the box
-    /// each name multiplies the scene by off its finished cell.
+    /// into its cell, the passes that sweep the cells, and the box each name
+    /// multiplies the scene by off its finished cell.
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_pad_pipeline: wgpu::RenderPipeline,
@@ -1713,9 +1709,6 @@ struct LatticeResources {
     /// Every caster's kernel, at group 3 of the scene pipelines; see
     /// [`shadow::caster_layout`].
     caster_layout: wgpu::BindGroupLayout,
-    /// The flood's ping-pong field and its jump, at group 1 of the three passes
-    /// that answer a distance cell; see [`shadow::flood_layout`].
-    flood_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
     /// This renderer's bindings for the two sheets a glyph can be cut from —
     /// egui's shared font texture and the drawn marks' private texture.
@@ -2138,8 +2131,6 @@ struct OffscreenShared<'a> {
     /// The shadow atlas as its readers take it; see
     /// [`LatticeResources::shadow_layout`].
     shadow_layout: &'a wgpu::BindGroupLayout,
-    /// The flood's own field and jump; see [`LatticeResources::flood_layout`].
-    flood_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
 }
 
@@ -2441,7 +2432,6 @@ impl Offscreen {
         device: &wgpu::Device,
         shared: &OffscreenShared<'_>,
         want: Option<[u32; 2]>,
-        flood: bool,
     ) {
         match want {
             Some(size) => {
@@ -2453,12 +2443,6 @@ impl Offscreen {
                         shared.sampler,
                         [size[0].max(held[0]), size[1].max(held[1])],
                     ));
-                }
-                // After the size check, so a target rebuilt just above and one
-                // kept from last frame arrive at the same answer: the flood's
-                // pair is the atlas's own size and a rebuild drops it.
-                if let Some(atlas) = self.shadow.as_mut() {
-                    atlas.ensure_flood(device, shared.flood_layout, flood);
                 }
             }
             None => self.shadow = None,
@@ -3192,7 +3176,6 @@ impl LatticeResources {
         // atlas.
         let shadow_layout = shadow::read_layout(device);
         let caster_layout = shadow::caster_layout(device);
-        let flood_layout = shadow::flood_layout(device);
         // The whole module, common half and all, built once for the four
         // pipelines cut from it.
         let shader_src = with_common(SHADER_SRC);
@@ -3291,8 +3274,7 @@ impl LatticeResources {
             glyph_distance_cell_pipeline,
             glyph_distance_pad_pipeline,
         ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
-        let shadow_cell_pipelines =
-            shadow::create_cell_pipelines(device, &shadow_layout, &flood_layout);
+        let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
             device,
             &glyph_shader,
@@ -3395,7 +3377,6 @@ impl LatticeResources {
             shadow_dummy_bind_group,
             shadow_layout,
             caster_layout,
-            flood_layout,
             glyph_fill_pipeline,
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
@@ -3494,7 +3475,6 @@ impl LatticeResources {
             filter_layout: &self.filter_layout,
             strip_layout: &self.strip_layout,
             shadow_layout: &self.shadow_layout,
-            flood_layout: &self.flood_layout,
             sampler: &self.sampler,
         };
         let want_casters = wants.casters;
@@ -3624,7 +3604,7 @@ impl LatticeResources {
             // wrong answer. This settles both.
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow, wants.rows);
-                offscreen.ensure_shadow(device, &shared, wants.shadow, wants.flood);
+                offscreen.ensure_shadow(device, &shared, wants.shadow);
             }
         }
         // The casters' kernels, whose buffer and bind group are one object:
@@ -3664,10 +3644,6 @@ struct PaneTargets {
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
-    /// Whether this frame packed a DISTANCE cell, and so whether the flood's
-    /// ping-pong pair is held beside the atlas. A blur row leaves it `false`
-    /// and pays none of it (`ShadowTarget::ensure_flood`).
-    flood: bool,
     /// The ink strip's height: the row map's own capacity.
     rows: u32,
     /// How many casters this frame's kernels are packed for — the storage
@@ -3920,17 +3896,13 @@ impl CallbackTrait for LatticeCallback {
         // single Gaussian took: every cell's σ is capped in TEXELS, so what N
         // terms cost is atlas area and taps, never a wider kernel.
         let kernel = self.kernel.terms();
-        // A flood seed spends its high coordinate bits on the contour normal.
-        // A blur row has no seed field and may use the device's whole limit.
-        let atlas_max =
-            if self.kernel.floods() { max_dim.min(shadow::SEED_COORD_LIMIT) } else { max_dim };
         let packed = if self.uniforms.misc11[3] > 0.0 {
             shadow::pack(
                 &self.casters,
                 sigma,
                 ppp * self.render_scale,
                 self.distance_texels_per_point,
-                atlas_max,
+                max_dim,
                 kernel,
             )
         } else {
@@ -3939,8 +3911,7 @@ impl CallbackTrait for LatticeCallback {
         let terms = kernel.len().min(harmonigraph_scene::SHADOW_TERMS_MAX);
         // Placeholder boxes preserve caster/term indices for a distance field
         // evaluated directly by its scene draw. Only a real cell asks for the
-        // atlas; a markers-only Distance frame therefore allocates no atlas
-        // and has no flood target to schedule.
+        // atlas; a markers-only Distance frame therefore allocates no atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
         let pane = resources.pane_buffers(
@@ -3951,9 +3922,6 @@ impl CallbackTrait for LatticeCallback {
             PaneTargets {
                 glow,
                 shadow: shadow_wanted,
-                // The chain is empty when no distance cell is packed, so a blur
-                // row carries neither the pair nor the passes.
-                flood: packed.flood > 0.0,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
@@ -4283,38 +4251,28 @@ impl CallbackTrait for LatticeCallback {
                     let stride = box_bytes * pane.glyph_capacity as u64;
                     for t in 0..terms as u64 {
                         pass.set_vertex_buffer(1, pane.cell_buffer.slice(t * stride..));
-                        pass.set_pipeline(&resources.glyph_coverage_cell_pipeline);
+                        let pipeline = match kernel[t as usize].kind {
+                            harmonigraph_scene::TermKind::Blur => {
+                                &resources.glyph_coverage_cell_pipeline
+                            }
+                            harmonigraph_scene::TermKind::Distance => {
+                                &resources.glyph_distance_cell_pipeline
+                            }
+                        };
+                        pass.set_pipeline(pipeline);
                         pass.draw(0..4, 0..pane.glyph_count);
-                        if matches!(kernel[t as usize].kind, harmonigraph_scene::TermKind::Distance)
-                        {
-                            pass.set_pipeline(&resources.glyph_distance_cell_pipeline);
-                            pass.draw(0..4, 0..pane.glyph_count);
-                        }
                     }
                 }
                 drop(pass);
-                let cells = &resources.shadow_cell_pipelines;
-                // The FLOOD, between the ink and the blur: it reads the raw
-                // coverage out of the atlas's first texture, which the blur's y
-                // pass is the first thing to overwrite. Shipped casters now
-                // answer exact fields and allocate no pair; the retained path
-                // is the placement reference removed in step 4.
-                atlas.flood(
-                    queue,
-                    egui_encoder,
-                    (&cells.seed, &cells.step),
-                    &pane.box_buffer,
-                    pane.box_count,
-                    packed.flood,
-                );
-                atlas.blur(
-                    egui_encoder,
-                    (&cells.blur_x, &cells.blur_y),
-                    &cells.analytic,
-                    &cells.resolve,
-                    &pane.box_buffer,
-                    pane.box_count,
-                );
+                if kernel.iter().any(|term| term.kind == harmonigraph_scene::TermKind::Blur) {
+                    let cells = &resources.shadow_cell_pipelines;
+                    atlas.blur(
+                        egui_encoder,
+                        (&cells.blur_x, &cells.blur_y),
+                        &pane.box_buffer,
+                        pane.box_count,
+                    );
+                }
             }
 
             // The node glow, into a target of its own and BEFORE the scene
