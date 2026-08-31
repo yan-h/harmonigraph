@@ -1,56 +1,61 @@
 use crate::GlowCurve;
 
-/// Every editable point is on the curve, and the stretches between them only
-/// descend. Those are separate claims: an interpolant can hit every handle and
-/// still overshoot between two of them.
+/// The editable point is on its global curve, and every stretch of that curve
+/// descends. Those are separate claims: a formula can hit its parameter and
+/// still turn back elsewhere in the domain.
 #[test]
-fn the_glow_curve_passes_through_its_handles_without_turning_back() {
+fn the_glow_curve_passes_through_its_point_without_turning_back() {
     for curve in [
         GlowCurve::default(),
-        GlowCurve { quarter: 0.9, half: 0.35, three_quarters: 0.3 },
-        GlowCurve { quarter: 1.0, half: 1.0, three_quarters: 0.8 },
-        GlowCurve { quarter: 0.2, half: 0.0, three_quarters: 0.0 },
+        GlowCurve { distance: 0.84, level: 0.68 },
+        GlowCurve { distance: 0.2, level: 0.8 },
+        GlowCurve { distance: 0.9, level: 0.08 },
     ] {
-        let expected = [1.0, curve.quarter, curve.half, curve.three_quarters, 0.0];
-        for (i, want) in expected.into_iter().enumerate() {
-            assert_eq!(curve.sample(i as f32 / 4.0), want, "the curve missed handle {i}");
-        }
+        assert!(
+            (curve.sample(curve.distance) - curve.level).abs() < 1e-6,
+            "the curve missed its point: {curve:?}",
+        );
+        assert_eq!(curve.sample(0.0), 1.0, "the curve moved its full centre");
+        assert_eq!(curve.sample(1.0), 0.0, "the curve moved its zero edge");
         let levels: Vec<f32> = (0..=400).map(|i| curve.sample(i as f32 / 400.0)).collect();
         assert!(
             levels.windows(2).all(|pair| pair[0] >= pair[1]),
-            "the descending handles made a curve that rises: {curve:?}",
+            "the point made a curve that rises: {curve:?}",
         );
     }
 }
 
-/// A drag stops at its neighbour instead of swapping the meaning of two fixed
-/// distances. The near, middle and far handles stay those three distances for
-/// the whole gesture.
+/// The middle of the square is the ordinary straight falloff. This is the
+/// anchor that makes movement above and below it read as bending one familiar
+/// line rather than choosing two unrelated powers.
 #[test]
-fn one_glow_curve_handle_cannot_cross_another() {
-    let mut curve = GlowCurve { quarter: 0.8, half: 0.5, three_quarters: 0.2 };
-    curve.set_control(0, 0.1);
-    assert_eq!(curve.controls(), [0.5, 0.5, 0.2]);
-    curve.set_control(2, 0.9);
-    assert_eq!(curve.controls(), [0.5, 0.5, 0.5]);
-    curve.set_control(1, -1.0);
-    assert_eq!(curve.controls(), [0.5, 0.5, 0.5]);
-
-    let mut open = GlowCurve { quarter: 0.8, half: 0.5, three_quarters: 0.2 };
-    open.set_control(1, -1.0);
-    assert_eq!(open.controls(), [0.8, 0.2, 0.2]);
+fn the_middle_point_makes_a_linear_curve() {
+    let curve = GlowCurve { distance: 0.5, level: 0.5 };
+    assert_eq!(curve.exponents(), [1.0, 1.0]);
+    for i in 0..=100 {
+        let p = i as f32 / 100.0;
+        assert!((curve.sample(p) - (1.0 - p)).abs() < 1e-6);
+    }
 }
 
-/// State outside the editor is repaired to the same finite descending shape
-/// its handles can make, including a non-finite value at every position.
+/// Both point coordinates stop short of the fixed endpoints. At the endpoints
+/// their logarithmic mapping has no finite, useful answer; the point still has
+/// almost the whole square available to shape the curve.
+#[test]
+fn the_glow_curve_point_stays_inside_its_useful_domain() {
+    let mut curve = GlowCurve::default();
+    curve.set_point(-1.0, 2.0);
+    assert_eq!(curve.point(), [0.06, 0.97]);
+    curve.set_point(2.0, -1.0);
+    assert_eq!(curve.point(), [0.94, 0.03]);
+    assert!(curve.exponents().into_iter().all(f32::is_finite));
+}
+
+/// State outside the editor is repaired to the same finite rectangle the
+/// point can make, including a non-finite value on either axis.
 #[test]
 fn a_glow_curve_from_state_is_repaired_before_it_reaches_the_picture() {
     let fresh = GlowCurve::default();
-    let repaired =
-        GlowCurve { quarter: f32::NAN, half: 2.0, three_quarters: f32::INFINITY }.sanitized();
-    assert_eq!(repaired.controls(), [fresh.quarter, fresh.quarter, fresh.three_quarters],);
-    assert!(
-        repaired.controls().windows(2).all(|pair| pair[0] >= pair[1]),
-        "the repaired curve still rises: {repaired:?}",
-    );
+    let repaired = GlowCurve { distance: f32::NAN, level: f32::INFINITY }.sanitized();
+    assert_eq!(repaired.point(), [fresh.distance, fresh.level]);
 }

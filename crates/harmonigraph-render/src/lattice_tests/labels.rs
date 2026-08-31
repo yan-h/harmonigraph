@@ -627,7 +627,10 @@ fn a_name_wears_the_wash_it_stands_in() {
     let name: Vec<usize> = drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
     assert!(name.len() > 30, "the name covers {} whole pixels of its own", name.len());
 
-    let lit = lit_node_and_a_name(1.6, FRESH_SHADOW, 0.0);
+    let mut lit = lit_node_and_a_name(1.6, FRESH_SHADOW, 0.0);
+    // The name stands at the outer end of the reach, so the explicit tail
+    // keeps enough light under it for this test to distinguish washed ink.
+    lit.glow_curve = harmonigraph_scene::GlowCurve { distance: 0.75, level: 0.35 };
     let worn = shooter.shot_with(&lit, one_name(&lit, SIZE));
     let lifted =
         name.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();

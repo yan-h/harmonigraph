@@ -343,8 +343,8 @@ fn every_settings_row_is_one_row_high() {
 /// Every bar a settings pane draws is its declared height at every scale.
 ///
 /// Ordinary bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT). The glow
-/// curve needs enough vertical range to place three levels on its own shape,
-/// so it declares a taller track. Both reach their heights by allocating them
+/// curve needs enough vertical range to move its point in two dimensions, so
+/// it declares a taller track. Both reach their heights by allocating them
 /// outright rather than by the `interact_size` floor that catches settings
 /// rows; those independent routes are what this pins.
 ///

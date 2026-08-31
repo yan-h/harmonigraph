@@ -652,10 +652,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text("How much light a node lays down. 1 is the tuned amount.");
         GlowCurveBar::new(&mut view.glow_curve).show(ui).on_hover_text(
             "How the light fades from the node's full-bright centre at the \
-                 left to the edge of its Reach at the right. Drag the three \
-                 points to set the light left one, two and three quarters of \
-                 the way out. Points cannot cross, so the glow always fades \
-                 outward; lift the far point for a long quiet tail. \
+                 left to the edge of its Reach at the right. Drag the point in \
+                 two dimensions: right holds the core for longer, and up \
+                 carries more light into the outer reach. One smooth global \
+                 curve passes through it and always fades outward. \
                  Double-click to restore.",
         );
         // What colour the light comes out, between the amount of it and the

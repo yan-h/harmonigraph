@@ -583,11 +583,8 @@ struct Uniforms {
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the shapes beside it have nothing to shape.
     misc10: [f32; 4],
-    /// The node glow's falloff inside its reach, as the offsets from the fresh
-    /// curve's levels at one, two and three quarters of the span
-    /// (`Scene::glow_curve`) in x/y/z. w unused. Sending offsets makes the
-    /// fresh curve exactly zero here, so the shader can leave its tuned
-    /// falloff byte-for-byte alone.
+    /// The node glow's falloff inside its reach, as the two positive powers of
+    /// its global curve (`Scene::glow_curve`) in x/y. z/w unused.
     ///
     /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
     /// strength is off.
@@ -1508,15 +1505,8 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 glow_curve: if lights {
-                    let [quarter, half, three_quarters] = scene.glow_curve.controls();
-                    let [fresh_quarter, fresh_half, fresh_three_quarters] =
-                        harmonigraph_scene::GlowCurve::default().controls();
-                    [
-                        quarter - fresh_quarter,
-                        half - fresh_half,
-                        three_quarters - fresh_three_quarters,
-                        0.0,
-                    ]
+                    let [inner, outer] = scene.glow_curve.exponents();
+                    [inner, outer, 0.0, 0.0]
                 } else {
                     [0.0; 4]
                 },

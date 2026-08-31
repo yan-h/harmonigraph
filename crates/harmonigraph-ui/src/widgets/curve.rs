@@ -1,5 +1,5 @@
-//! [`GlowCurveBar`]: the node glow's three interior falloff levels, edited on
-//! the curve they make rather than as three numbers on separate rows.
+//! [`GlowCurveBar`]: the node glow's one interior falloff point, edited on the
+//! global curve it shapes rather than as two numbers on separate rows.
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::GlowCurve;
@@ -9,14 +9,14 @@ use crate::theme;
 
 /// Height of the whole editor at the design UI scale.
 const CURVE_HEIGHT: f32 = 62.0;
-/// Space above the plot for its name and three-value readout.
+/// Space above the plot for its name and point readout.
 const HEADER_HEIGHT: f32 = 19.0;
 /// Clear space around the curve and its handles.
 const PLOT_INSET: f32 = 7.0;
-/// Radius of one of the three editable points.
+/// Radius of the editable point.
 const HANDLE_RADIUS: f32 = 4.0;
 /// The curve is finer than one vertex per four screen points in an ordinary
-/// settings column, so its cubic reads as a bend rather than a polyline.
+/// settings column, so its global bend reads as a curve rather than a polyline.
 const CURVE_SEGMENTS: usize = 64;
 
 /// The editor's declared height at one UI scale, for the pane sweep that holds
@@ -32,12 +32,11 @@ fn curve_color() -> egui::Color32 {
     theme::accent().gamma_multiply(0.72)
 }
 
-/// Which handle a drag has hold of, and how far from its centre the press
-/// landed in curve-level units.
+/// How far from the point's centre a drag landed, in curve coordinates.
 #[derive(Clone, Copy, Debug, Default)]
 struct Grab {
-    index: usize,
-    offset: f32,
+    distance_offset: f32,
+    level_offset: f32,
 }
 
 pub struct GlowCurveBar<'a> {
@@ -58,13 +57,15 @@ impl<'a> GlowCurveBar<'a> {
             egui::pos2(rect.left() + PLOT_INSET * scale, rect.top() + HEADER_HEIGHT * scale),
             egui::pos2(rect.right() - PLOT_INSET * scale, rect.bottom() - PLOT_INSET * scale),
         );
-        let point = |index: usize, level: f32| {
-            egui::pos2(
-                plot.left() + plot.width() * (index as f32 + 1.0) / 4.0,
-                plot.bottom() - plot.height() * level,
-            )
+        let point = |distance: f32, level: f32| {
+            egui::pos2(plot.left() + plot.width() * distance, plot.bottom() - plot.height() * level)
         };
-        let level_at = |y: f32| ((plot.bottom() - y) / plot.height().max(1.0)).clamp(0.0, 1.0);
+        let coordinates_at = |position: egui::Pos2| {
+            [
+                (position.x - plot.left()) / plot.width().max(1.0),
+                (plot.bottom() - position.y) / plot.height().max(1.0),
+            ]
+        };
 
         let grab_id = response.id.with("grab");
         if response.double_clicked() {
@@ -75,18 +76,16 @@ impl<'a> GlowCurveBar<'a> {
             if let Some(pointer) = response.interact_pointer_pos() {
                 let grab = grabbed(ui, grab_id, |ui| {
                     let aim = aimed_at(ui, pointer);
-                    let controls = self.curve.controls();
-                    let index = (0..3)
-                        .min_by(|&a, &b| {
-                            point(a, controls[a])
-                                .distance_sq(aim)
-                                .total_cmp(&point(b, controls[b]).distance_sq(aim))
-                        })
-                        .unwrap_or(0);
-                    Grab { index, offset: level_at(aim.y) - controls[index] }
+                    let [distance, level] = self.curve.point();
+                    let [aim_distance, aim_level] = coordinates_at(aim);
+                    Grab {
+                        distance_offset: aim_distance - distance,
+                        level_offset: aim_level - level,
+                    }
                 });
                 let before = *self.curve;
-                self.curve.set_control(grab.index, level_at(pointer.y) - grab.offset);
+                let [distance, level] = coordinates_at(pointer);
+                self.curve.set_point(distance - grab.distance_offset, level - grab.level_offset);
                 if *self.curve != before {
                     response.mark_changed();
                 }
@@ -99,15 +98,11 @@ impl<'a> GlowCurveBar<'a> {
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
 
-        // The guides name the fixed x positions of the three handles. Faint
-        // enough to remain construction lines rather than extra curve data.
-        for index in 0..3 {
-            let x = point(index, 0.0).x;
-            painter.line_segment(
-                [egui::pos2(x, plot.top()), egui::pos2(x, plot.bottom())],
-                egui::Stroke::new(1.0 * scale, theme::hairline().gamma_multiply(0.45)),
-            );
-        }
+        let [distance, level] = self.curve.point();
+        let handle = point(distance, level);
+        let guide = egui::Stroke::new(1.0 * scale, theme::hairline().gamma_multiply(0.45));
+        painter.line_segment([egui::pos2(handle.x, plot.top()), handle], guide);
+        painter.line_segment([egui::pos2(plot.left(), handle.y), handle], guide);
         painter.line_segment(
             [plot.left_bottom(), plot.right_bottom()],
             egui::Stroke::new(1.0 * scale, theme::hairline()),
@@ -124,29 +119,14 @@ impl<'a> GlowCurveBar<'a> {
             .collect();
         painter.add(egui::Shape::line(path, egui::Stroke::new(1.5 * scale, curve_color())));
 
-        let aimed = response.hover_pos().map(|hover| {
-            let controls = self.curve.controls();
-            (0..3)
-                .min_by(|&a, &b| {
-                    point(a, controls[a])
-                        .distance_sq(hover)
-                        .total_cmp(&point(b, controls[b]).distance_sq(hover))
-                })
-                .unwrap_or(0)
-        });
-        for (index, level) in self.curve.controls().into_iter().enumerate() {
-            let fill = if aimed == Some(index) || response.dragged() {
-                theme::text()
-            } else {
-                theme::accent()
-            };
-            painter.circle_filled(point(index, level), HANDLE_RADIUS * scale, fill);
-            painter.circle_stroke(
-                point(index, level),
-                HANDLE_RADIUS * scale,
-                egui::Stroke::new(1.0 * scale, theme::panel()),
-            );
-        }
+        let fill =
+            if response.hovered() || response.dragged() { theme::text() } else { theme::accent() };
+        painter.circle_filled(handle, HANDLE_RADIUS * scale, fill);
+        painter.circle_stroke(
+            handle,
+            HANDLE_RADIUS * scale,
+            egui::Stroke::new(1.0 * scale, theme::panel()),
+        );
 
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
@@ -156,14 +136,8 @@ impl<'a> GlowCurveBar<'a> {
         let body = TextStyle::Body.resolve(ui.style());
         let mono = TextStyle::Monospace.resolve(ui.style());
         let label = painter.layout_no_wrap("Curve".to_owned(), body, text_color);
-        let [quarter, half, three_quarters] = self.curve.controls();
         let values = painter.layout_no_wrap(
-            format!(
-                "{:.0} · {:.0} · {:.0}%",
-                quarter * 100.0,
-                half * 100.0,
-                three_quarters * 100.0,
-            ),
+            format!("{:.0} across · {:.0}% left", distance * 100.0, level * 100.0),
             mono,
             theme::text(),
         );
@@ -172,7 +146,7 @@ impl<'a> GlowCurveBar<'a> {
         painter.galley(egui::pos2(rect.left() + pad, y), label, text_color);
         painter.galley(egui::pos2(rect.right() - pad - values.size().x, y), values, theme::text());
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeVertical)
+        response.on_hover_cursor(egui::CursorIcon::Crosshair)
     }
 }
 
@@ -199,8 +173,8 @@ mod tests {
     use crate::widgets::probe;
 
     #[test]
-    fn the_editor_draws_the_curve_its_handles_describe() {
-        let curve = GlowCurve { quarter: 0.7, half: 0.35, three_quarters: 0.2 };
+    fn the_editor_draws_the_curve_its_point_describes() {
+        let curve = GlowCurve { distance: 0.7, level: 0.35 };
         let shapes = probe::shapes(320.0, |ui| {
             GlowCurveBar::new(&mut curve.clone()).show(ui);
         });
@@ -221,16 +195,15 @@ mod tests {
         }
     }
 
-    /// A pointer gesture moves the handle it starts on and leaves its two
-    /// neighbours alone. The fixed x positions are labels for distance, not
-    /// handles that reorder when one level passes another.
+    /// A pointer gesture moves the curve point freely on both axes. Its x
+    /// coordinate is a setting in its own right rather than a fixed guide.
     #[test]
-    fn a_drag_moves_only_the_curve_handle_it_was_aimed_at() {
+    fn a_drag_moves_both_coordinates_of_the_curve_point() {
         const W: f32 = 320.0;
         let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(W, 100.0));
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let mut curve = GlowCurve { quarter: 0.8, half: 0.5, three_quarters: 0.2 };
+        let mut curve = GlowCurve { distance: 0.4, level: 0.3 };
         let mut time = 0.0;
         let mut frame = |curve: &mut GlowCurve, events| {
             time += 1.0 / 60.0;
@@ -250,11 +223,11 @@ mod tests {
             egui::pos2(editor.left() + PLOT_INSET, editor.top() + HEADER_HEIGHT),
             egui::pos2(editor.right() - PLOT_INSET, editor.bottom() - PLOT_INSET),
         );
-        let at = |level: f32| {
-            egui::pos2(plot.left() + plot.width() * 0.75, plot.bottom() - plot.height() * level)
+        let at = |distance: f32, level: f32| {
+            egui::pos2(plot.left() + plot.width() * distance, plot.bottom() - plot.height() * level)
         };
-        let from = at(curve.three_quarters);
-        let to = at(0.4);
+        let from = at(curve.distance, curve.level);
+        let to = at(0.78, 0.62);
         frame(&mut curve, vec![egui::Event::PointerMoved(from)]);
         frame(
             &mut curve,
@@ -263,12 +236,10 @@ mod tests {
         frame(&mut curve, vec![egui::Event::PointerMoved(from + (to - from).normalized() * 8.0)]);
         frame(&mut curve, vec![egui::Event::PointerMoved(to)]);
 
-        assert_eq!(curve.quarter, 0.8, "the near handle moved with the far one");
-        assert_eq!(curve.half, 0.5, "the middle handle moved with the far one");
         assert!(
-            (curve.three_quarters - 0.4).abs() < 1e-5,
-            "the far handle landed at {} rather than 0.4",
-            curve.three_quarters,
+            (curve.distance - 0.78).abs() < 1e-5 && (curve.level - 0.62).abs() < 1e-5,
+            "the point landed at {:?} rather than [0.78, 0.62]",
+            curve.point(),
         );
     }
 }

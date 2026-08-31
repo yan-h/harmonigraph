@@ -63,25 +63,17 @@ fn the_shaders_pitch_luts_are_the_length_the_scene_says() {
     );
 }
 
-/// The CPU sends curve levels as offsets from `GlowCurve::default`, while the
-/// shader adds those offsets to its own three literals. A one-sided retune
-/// leaves zero exact but makes every custom curve move the untouched handles
-/// too, so the two copies are one contract rather than similar defaults.
+/// The shader spends the two powers the CPU derives from the editable point in
+/// the same global double-power family `GlowCurve::sample` presents in the UI.
+/// A piecewise interpolant here would put the elbow back in the rendered light
+/// while the editor continued to show the smooth curve.
 #[test]
-fn the_shaders_glow_curve_origin_is_the_scenes() {
-    let [quarter, half, three_quarters] = harmonigraph_scene::GlowCurve::default().controls();
-    for (name, value) in [
-        ("GLOW_CURVE_QUARTER", quarter),
-        ("GLOW_CURVE_HALF", half),
-        ("GLOW_CURVE_THREE_QUARTERS", three_quarters),
-    ] {
-        let needle = format!("const {name}: f32 = {value:.8};");
-        assert!(
-            SHADER_SRC.contains(&needle),
-            "lattice.wgsl must declare `{needle}` to match GlowCurve::default; the CPU sends \
-             custom handles as offsets from that value",
-        );
-    }
+fn the_shader_uses_the_scenes_global_glow_curve() {
+    let formula = "pow(max(1.0 - pow(p, u.glow_curve.x), 0.0), u.glow_curve.y)";
+    assert!(
+        SHADER_SRC.contains(formula),
+        "lattice.wgsl must spend the scene's two glow powers as `{formula}`",
+    );
 }
 
 /// The field names `struct {name} { ... }` declares in `src`, in order — a

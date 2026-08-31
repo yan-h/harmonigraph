@@ -1465,19 +1465,19 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     }
 }
 
-/// A missing handle inside the glow curve costs that handle alone. The curve
+/// A missing coordinate inside the glow curve costs that coordinate alone. The curve
 /// is a persisted struct nested inside `ViewConfig`, so the view-level sweep
-/// above only proves the whole curve has a fallback; it cannot see whether the
-/// curve itself accidentally made all three fields required.
+/// above only proves the whole curve has a fallback; it cannot see whether
+/// either field inside it accidentally became required.
 #[test]
-fn a_glow_curve_missing_any_one_handle_keeps_the_other_two() {
+fn a_glow_curve_missing_either_coordinate_keeps_the_other() {
     use harmonigraph_scene::GlowCurve;
 
-    let curve = GlowCurve { quarter: 0.8, half: 0.15, three_quarters: 0.01 };
+    let curve = GlowCurve { distance: 0.8, level: 0.15 };
     let fresh = GlowCurve::default();
     let full = ron::to_string(&curve).expect("a glow curve serializes");
     let pairs = top_level_pairs(&full);
-    assert_eq!(pairs.len(), 3, "the probe must see every curve handle: {full}");
+    assert_eq!(pairs.len(), 2, "the probe must see both point coordinates: {full}");
 
     for (key, _) in &pairs {
         let kept: Vec<&str> = pairs
@@ -1489,12 +1489,11 @@ fn a_glow_curve_missing_any_one_handle_keeps_the_other_two() {
             .unwrap_or_else(|e| panic!("dropping {key:?} sank the glow curve: {e}"));
         let mut expected = curve;
         match key.as_str() {
-            "quarter" => expected.quarter = fresh.quarter,
-            "half" => expected.half = fresh.half,
-            "three_quarters" => expected.three_quarters = fresh.three_quarters,
+            "distance" => expected.distance = fresh.distance,
+            "level" => expected.level = fresh.level,
             _ => panic!("the curve serialized an unknown field {key:?}"),
         }
-        assert_eq!(loaded, expected, "dropping {key:?} changed another handle");
+        assert_eq!(loaded, expected, "dropping {key:?} changed the other coordinate");
     }
 }
 

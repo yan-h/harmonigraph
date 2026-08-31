@@ -936,8 +936,8 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-    /// The descending levels of the light at the three interior quarters of
-    /// its reach (see [`ViewConfig::glow_curve`]); already sanitized.
+    /// The point the light's global falloff passes through inside its reach
+    /// (see [`ViewConfig::glow_curve`]); already sanitized.
     pub glow_curve: GlowCurve,
     /// The Shadow: how wide every caster's blur is, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to

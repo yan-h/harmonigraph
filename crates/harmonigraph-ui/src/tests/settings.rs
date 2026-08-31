@@ -184,9 +184,8 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 }
 
 /// The Glow section draws the same falloff `ViewConfig` hands to the scene.
-/// The editor is the setting's readout — three percentages alone do not say
-/// how the cubic sits between them — so a line drifting from the renderer is a
-/// false value just as surely as a bar printing the wrong number.
+/// The editor is the setting's readout, so a line drifting from the renderer
+/// is a false value just as surely as a bar printing the wrong number.
 #[test]
 fn the_glow_curve_editor_draws_the_curve_the_scene_receives() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
