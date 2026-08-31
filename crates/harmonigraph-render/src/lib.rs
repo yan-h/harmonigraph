@@ -1940,8 +1940,8 @@ struct PaneBuffers {
     /// What the glyph shader is told about this pane: its size in points, the
     /// atlas's, and the terms a name's shadow is cast on.
     glyph_uniform_buffer: wgpu::Buffer,
-    /// Names both mirrored sheets, so it is rebuilt whenever a fresh one has
-    /// been uploaded — and `glyph_sheet_keys` is which uploads it names.
+    /// Names both sampled sheets, so it is rebuilt whenever either allocation
+    /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
     glyph_sheet_keys: (u64, u64),
     offscreen: Option<Offscreen>,
@@ -3810,9 +3810,8 @@ impl CallbackTrait for LatticeCallback {
         );
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
-        // atlas alone, which is not a
-        // shortcut: a mark is always drawn beside a letter, so a frame with a
-        // mark in it is a frame with type in it.
+        // atlas alone: a mark is always drawn beside a letter, so a frame with
+        // a mark in it is a frame with type in it.
         let has_atlas = !resources.atlas.is_empty();
         let sheet_sizes = resources.sheet_sizes();
 
