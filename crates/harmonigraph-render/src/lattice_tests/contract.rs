@@ -63,6 +63,24 @@ fn the_shaders_pitch_luts_are_the_length_the_scene_says() {
     );
 }
 
+/// The shader spends the scene's signed shape in the same normalized
+/// exponential `GlowCurve::sample` presents in the UI.
+/// A two-power family here would put the low-right S back in the rendered light
+/// while the bar continued to show a single-bend curve.
+#[test]
+fn the_shader_uses_the_scenes_global_glow_curve() {
+    for formula in [
+        "abs(shape) < 0.05",
+        "shape2 * p * (2.0 * p - 1.0) / 12.0",
+        "(exp(shape * remaining) - 1.0) / (exp(shape) - 1.0)",
+    ] {
+        assert!(
+            SHADER_SRC.contains(formula),
+            "lattice.wgsl must spend the scene's glow shape as `{formula}`",
+        );
+    }
+}
+
 /// The field names `struct {name} { ... }` declares in `src`, in order — a
 /// `//` or `///` comment line is skipped, and each remaining non-blank line
 /// contributes the identifier before its first `:`. Neither language's

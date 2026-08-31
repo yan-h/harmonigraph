@@ -235,6 +235,7 @@ fn a_chord_at_a_wide_reach() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         glow_reach: 4.0,
         glow_strength: 0.5,
+        glow_curve: harmonigraph_scene::GlowCurve::default(),
         ..Default::default()
     };
     lattice(&view, near_camera())

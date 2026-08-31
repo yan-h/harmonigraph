@@ -1465,6 +1465,24 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     }
 }
 
+/// A missing shape inside the glow curve costs that field alone. The curve is
+/// a persisted struct nested inside `ViewConfig`, so the view-level sweep
+/// above only proves the whole curve has a fallback; it cannot see whether its
+/// field accidentally became required.
+#[test]
+fn a_glow_curve_missing_shape_uses_the_fresh_shape() {
+    use harmonigraph_scene::GlowCurve;
+
+    let curve = GlowCurve { shape: -3.0 };
+    let fresh = GlowCurve::default();
+    let full = ron::to_string(&curve).expect("a glow curve serializes");
+    let pairs = top_level_pairs(&full);
+    assert_eq!(pairs.len(), 1, "the probe must see the curve's one shape: {full}");
+    let loaded = ron::from_str::<GlowCurve>("()")
+        .unwrap_or_else(|e| panic!("dropping shape sank the glow curve: {e}"));
+    assert_eq!(loaded, fresh);
+}
+
 /// A key the struct no longer has costs that key alone: the rest of the view
 /// loads, at the values the blob holds.
 ///

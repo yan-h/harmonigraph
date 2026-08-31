@@ -5,10 +5,10 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
-    GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
-    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
-    RING_INNER_MAX, RING_WIDTH_MAX,
+    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
+    GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX,
+    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
+    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -51,6 +51,67 @@ pub struct DrawnWindow {
     /// center, so a reader needs nothing else to know what is in here.
     pub min: LatticePos,
     pub max: LatticePos,
+}
+
+/// The shape of the node glow's falloff through [`ViewConfig::glow_reach`].
+/// The centre and the far edge stay fixed at 1 and 0 while one signed exponent
+/// bends the curve between them without an interpolation join or an inflection.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+// A curve nested in a persisted view still has its own fallback, so a
+// hand-edited blob missing its shape costs that field alone.
+#[serde(default)]
+pub struct GlowCurve {
+    /// Signed exponent, [`GLOW_CURVE_SHAPE_MIN`]..=[`GLOW_CURVE_SHAPE_MAX`].
+    /// Zero is linear; positive falls early and negative falls late.
+    pub shape: f32,
+}
+
+impl GlowCurve {
+    /// The glow level `p` of the way from its centre to its edge.
+    ///
+    /// `level = expm1(k(1 - p)) / expm1(k)`. Positive `k` is a fast
+    /// exponential-like decay, negative `k` holds then falls, and zero is the
+    /// straight line.
+    pub fn sample(self, p: f32) -> f32 {
+        let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
+        if p >= 1.0 {
+            return 0.0;
+        }
+        exponential_level(p, self.shape())
+    }
+
+    /// The finite, bounded shape consumed by the renderer.
+    pub fn shape(self) -> f32 {
+        self.sanitized().shape
+    }
+
+    /// Repair the value into the finite range the editor can produce.
+    pub fn sanitized(mut self) -> Self {
+        let fresh = GlowCurve::default();
+        self.shape =
+            finite_or(self.shape, fresh.shape).clamp(GLOW_CURVE_SHAPE_MIN, GLOW_CURVE_SHAPE_MAX);
+        self
+    }
+}
+
+/// The normalized exponential at `p`. The series is the same one the shader
+/// uses where direct subtraction of two almost-equal exponentials loses the
+/// bend to float cancellation.
+fn exponential_level(p: f32, shape: f32) -> f32 {
+    let remaining = 1.0 - p;
+    if shape.abs() < 0.05 {
+        let shape2 = shape * shape;
+        return remaining * (1.0 - shape * p * 0.5 + shape2 * p * (2.0 * p - 1.0) / 12.0);
+    }
+    (shape * remaining).exp_m1() / shape.exp_m1()
+}
+
+impl Default for GlowCurve {
+    fn default() -> Self {
+        // This exponent closely follows the compact accent the fresh Glow bars
+        // are tuned around while leaving both slower and faster shapes in reach.
+        GlowCurve { shape: 2.75 }
+    }
 }
 
 impl DrawnWindow {
@@ -1074,14 +1135,12 @@ pub struct ViewConfig {
     /// drawn edge plus this reach is both the falloff's domain and where its
     /// window shuts, so this bar is exactly where the light stops.
     ///
-    /// The falloff laid over that span is one fixed exponential
-    /// (`GLOW_FALLOFF` in lattice.wgsl), so this bar alone says both how far
-    /// the light goes and how much of that distance has anything left in it:
-    /// past about one radius there is little out there to see, and a field
-    /// that overlaps its neighbours is bought by reaching far enough to cover
-    /// them. The ceiling
-    /// ([`GLOW_REACH_MAX`]) is sized for that — several lattice steps, where
-    /// every node's light overlaps its neighbourhood's.
+    /// [`glow_curve`](Self::glow_curve) says how much light is left at each
+    /// distance inside that span. Keeping the two separate makes a wide Reach
+    /// useful both as a larger accent and as a faint field carried across the
+    /// gaps between nodes. The ceiling ([`GLOW_REACH_MAX`]) is sized for the
+    /// second picture — several lattice steps, where every node's light
+    /// overlaps its neighbourhood's.
     ///
     /// It is the ONLY light a node has: a view with this at 0 draws exactly the
     /// ink the ring stack describes and nothing around it.
@@ -1107,6 +1166,10 @@ pub struct ViewConfig {
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
+    /// How the light's brightness falls inside [`glow_reach`](Self::glow_reach).
+    /// The endpoints stay fixed: full at the node's centre and zero where the
+    /// reach ends.
+    pub glow_curve: GlowCurve,
     /// The Shadow: how wide every item's shadow is, in the same quad UV units
     /// [`ring_gap`](Self::ring_gap) reads in. It is HALF this in σ
     /// (`shadow::sigma_px` in harmonigraph-render), which puts a wide caster's
@@ -2245,6 +2308,7 @@ impl ViewConfig {
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+        self.glow_curve = self.glow_curve.sanitized();
         // The Shadow, which every caster's quad is grown by: a number from
         // outside the bar is a quad nothing can fill.
         self.glow_shadow =
@@ -2580,6 +2644,7 @@ impl Default for ViewConfig {
             // of the neighbour it would otherwise reach.
             glow_reach: 0.35,
             glow_strength: 1.0,
+            glow_curve: GlowCurve::default(),
             // A sixth of a radius, so σ is a twelfth of one: the shadow and the
             // light either side of it read as one blur rather than as a cut
             // through it, which is what a band with a short edge, laid against

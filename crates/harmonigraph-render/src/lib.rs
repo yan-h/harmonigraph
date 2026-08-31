@@ -575,16 +575,20 @@ struct Uniforms {
     misc9: [f32; 4],
     /// The node glow's dials. x: how far past a node's outermost drawn edge
     /// its light spreads, in quad UV units (`Scene::glow_reach`); y: how much
-    /// light (`Scene::glow_strength`); z unused, having carried how flat the
-    /// falloff was across that span — one fixed exponential now
-    /// (`GLOW_FALLOFF` in lattice.wgsl); w: how widely a node's own ink is
-    /// averaged into the colour of its light (`Scene::glow_blend`).
+    /// light (`Scene::glow_strength`); z unused; w: how widely a node's own
+    /// ink is averaged into the colour of its light (`Scene::glow_blend`).
     ///
     /// ZEROED WHOLE where the glow does not draw, so `x > 0.0` is the single
     /// test on either side of the boundary — [`LatticeCallback::glow_draws`]
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the shapes beside it have nothing to shape.
     misc10: [f32; 4],
+    /// The node glow's falloff inside its reach, as the signed shape of its
+    /// normalized exponential (`Scene::glow_curve`) in x. y/z/w unused.
+    ///
+    /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
+    /// strength is off.
+    glow_curve: [f32; 4],
     /// The SHADOW's two dials. x: how wide it is, as a share of a node's radius
     /// (`Scene::glow_shadow`) — the σ every caster's ink is blurred at
     /// ([`shadow::sigma_px`]) and the reach every quad is grown by; w: how dark
@@ -1496,6 +1500,11 @@ impl LatticeCallback {
                 // draw — see `Uniforms::misc10`.
                 misc10: if lights {
                     [scene.glow_reach, scene.glow_strength, 0.0, scene.glow_blend]
+                } else {
+                    [0.0; 4]
+                },
+                glow_curve: if lights {
+                    [scene.glow_curve.shape(), 0.0, 0.0, 0.0]
                 } else {
                     [0.0; 4]
                 },

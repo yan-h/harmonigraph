@@ -113,12 +113,11 @@ struct Uniforms {
     // 0; y: 1 where each wedge is ONE reading taken at its own octave's pitch
     // (the FOLD) rather than a window of pitch spread across it; z/w unused.
     misc9: vec4<f32>,
-    // The node glow's four dials. x: how far past a node's outermost drawn
-    // edge its light spreads, in the node's own uv; y: how much light that is;
-    // z: how flat the falloff is across that span, 0 the exponential heaped on
-    // the node and 1 an even field across it (see `glow_layer`); w: how widely
-    // a node's own ink is averaged into the colour of its light, 0 keeping each
-    // layer's sectors distinct and 1 laying one tint over the whole halo.
+    // The node glow's dials. x: how far past a node's outermost drawn edge its
+    // light spreads, in the node's own uv; y: how much light that is; z unused;
+    // w: how widely a node's own ink is averaged into the colour of its light,
+    // 0 keeping each layer's sectors distinct and 1 laying one tint over the
+    // whole halo.
     //
     // ZEROED WHOLE where the glow is off, by the CPU, so `u.misc10.x > 0.0` is
     // the one test anything here makes and no half-on state exists.
@@ -129,6 +128,10 @@ struct Uniforms {
     // composited at the BOTTOM of the scene pass, which is what puts it under
     // every shadow the lattice casts.
     misc10: vec4<f32>,
+    // The node glow's falloff inside its reach, as the signed shape of its
+    // normalized exponential in x. The fixed full/zero endpoints are supplied
+    // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
+    glow_curve: vec4<f32>,
     // The SHADOW's three dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
     // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
@@ -249,17 +252,6 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
-// The rate the light's exponential comes off at across one span
-// (`glow_layer`).
-//
-// An accent: down to a fifth of its peak by half the span and to nothing well
-// before the end of it, so the falloff is the whole shape and the node is
-// plainly what the light belongs to. A field several nodes light at once is
-// reached by widening the Reach until the halos cover each other, which keeps
-// each node the brightest point of its own; a rate flat enough to spread the
-// light on its own instead takes that away, and a screen of several near-flat
-// halos puts more light in the GAP between two nodes than either node has.
-const GLOW_FALLOFF: f32 = 3.0;
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -3186,6 +3178,25 @@ fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
     return vec4<f32>(mix(mean.xyz, lit.xyz, mix_out), mean.w);
 }
 
+/// The glow level `d` from the node's centre inside `span`. One normalized
+/// exponential covers the whole domain: it can bend either way but has no
+/// inflection, so a fast shape cannot make an S-curve.
+fn glow_curve_at(d: f32, span: f32) -> f32 {
+    let p = clamp(d / span, 0.0, 1.0);
+    let shape = u.glow_curve.x;
+    let remaining = 1.0 - p;
+    // This is the second-order series of the quotient below. Both halves match
+    // `GlowCurve::sample`; the branch keeps a nearly-linear shape from being
+    // rounded into an exactly linear one by subtracting exponentials near 1.
+    if abs(shape) < 0.05 {
+        let shape2 = shape * shape;
+        return remaining
+            * (1.0 - shape * p * 0.5
+                + shape2 * p * (2.0 * p - 1.0) / 12.0);
+    }
+    return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
+}
+
 /// The node's light at this fragment, premultiplied, exactly as every other
 /// layer here returns its ink.
 fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
@@ -3195,8 +3206,8 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // ONE length under the whole layer: the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
-    // its edge, and it is where the window shuts, so the Reach bar says exactly
-    // how far the light goes.
+    // its edge, and it is where the curve reaches zero, so the Reach bar says
+    // exactly how far the light goes.
     //
     // Not the quad's own margin, which is the tempting reading of "window it at
     // the edge": `quad_margin` floors at QUAD_MARGIN, so on a small reach the
@@ -3205,23 +3216,17 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // other way instead — the quad is SIZED to hold this, with room to spare
     // (`node_vertex`), so the light is never clipped square at the corners.
     let span = max(in.glow.z + reach, 0.1);
-    // Past the window there is no light. Not an early-out, and so needing no
-    // `EARLY_OUT` of its own — `window` is exactly 0 out here, which carries
-    // `skirt` and the coverage below it to 0 by the same arithmetic the slow
-    // path runs.
+    // Past the curve's zero endpoint there is no light. Not an early-out, and
+    // so needing no `EARLY_OUT` of its own — `glow_curve_at` is exactly 0 at
+    // the span, which carries `skirt` and the coverage below it to 0 by the
+    // same arithmetic the slow path runs.
     if d >= span {
         return vec4<f32>(0.0);
     }
-    // The window, which is where the light STOPS: full to half the span and
-    // shut by the end of it, at every setting of every bar. The falloff
-    // underneath it says how much light is left to be shut off out there; the
-    // Reach alone says how far the light goes.
-    let window = 1.0 - smoothstep(span * 0.5, span, d);
-    // The falloff, plain: one exponential from the node's exact centre outward,
-    // with nothing shaping the middle apart from what the node draws over it.
-    // A node's middle gets no treatment of its own — whatever the Reach does
-    // out in the halo, it does at radius 0 too.
-    let skirt = GLOW_BASE * exp(-GLOW_FALLOFF * d / span) * window;
+    // The falloff from the fixed full centre to the fixed zero edge. Strength
+    // scales it after the curve, so moving the shape changes the distribution
+    // of light without moving either endpoint or changing what the bar names.
+    let skirt = GLOW_BASE * glow_curve_at(d, span);
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's
@@ -3383,4 +3388,3 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
     return SceneOut(seen_of(paint), vec4<f32>(paint.rgb, paint.bloom));
 }
-

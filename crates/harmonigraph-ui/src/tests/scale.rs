@@ -340,29 +340,17 @@ fn every_settings_row_is_one_row_high() {
     }
 }
 
-/// Every bar a settings pane draws is one
-/// [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT) tall, at every scale.
+/// Every bar a settings pane draws is its declared height at every scale.
 ///
-/// The bars are the other half of a settings pane and they reach the height by
-/// a different route — each allocates it outright, rather than being grown to
-/// it by the `interact_size` floor that catches everything in
-/// [`every_settings_row_is_one_row_high`]. Two routes to one number is exactly
-/// what drifts, so both are pinned.
+/// Bars occupy one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), reached by
+/// allocating it outright rather than by the `interact_size` floor that
+/// catches settings rows.
 ///
-/// Swept through the real panes rather than by building the six bar types by
-/// hand, which is what makes this cover them: `ValueBar`, `RangeBar`,
-/// `OctaveStrip`, `SpreadBar` and the render `progress_bar` are all in the
-/// panes below, and a seventh added later is covered on the day it is drawn
-/// rather than on the day someone remembers to add it to a list here.
-///
-/// The `SpectrumBar` is a row like the rest, and its width is the one thing
-/// that differs — the flip button takes the right end of the row. It is what
-/// the Colors page is in the sweep for, being the one page that draws any —
-/// both gradient groups live there. The gradient preview above it is
-/// deliberately SHORTER than a row and is not swept: it paints no well, being
-/// a picture rather than a track, so the sniffing below never reaches it.
+/// Sweeping the real panes makes every full-width well enter the census at the
+/// site where it is used. The `SpectrumBar` gives the right end of its row to
+/// a button, so its declared track width is recognised too.
 #[test]
-fn every_bar_is_one_row_high() {
+fn every_bar_has_its_declared_height() {
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
         SettingsPane::Page(DisplayPage::Colors),
@@ -392,9 +380,11 @@ fn every_bar_is_one_row_high() {
                     continue;
                 }
                 found += 1;
+                // Every scale in the sweep makes the row height a whole point;
+                // the tolerance covers only f32 arithmetic on that height.
                 assert!(
                     (r.rect.height() - want).abs() < 0.01,
-                    "{pane:?} at scale {scale} drew a {}pt bar, not {want}pt",
+                    "{pane:?} at scale {scale} drew a {}pt bar, not its declared {want}pt",
                     r.rect.height(),
                 );
             }

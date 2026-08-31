@@ -4,6 +4,7 @@
 //! them needs; everything else is grouped by what it exercises.
 
 mod camera;
+mod glow_curve;
 mod gradient_cache;
 mod harness;
 mod hue_space;
