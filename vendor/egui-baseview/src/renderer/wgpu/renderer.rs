@@ -342,12 +342,14 @@ impl Renderer {
         self.last_tess_ms
     }
 
-    pub fn max_texture_side(&self) -> usize {
-        self.render_state
+    pub fn font_atlas_max_texture_side(&self) -> usize {
+        let device_max = self
+            .render_state
             .as_ref()
             .device
             .limits()
-            .max_texture_dimension_2d as usize
+            .max_texture_dimension_2d as usize;
+        crate::renderer::font_atlas_max_texture_side(device_max)
     }
 
     fn configure_surface(&self, width: u32, height: u32) {

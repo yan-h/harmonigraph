@@ -70,8 +70,8 @@ impl Renderer {
         })
     }
 
-    pub fn max_texture_side(&self) -> usize {
-        self.painter.max_texture_side()
+    pub fn font_atlas_max_texture_side(&self) -> usize {
+        crate::renderer::font_atlas_max_texture_side(self.painter.max_texture_side())
     }
 
     /// The window's occlusion state changed. Nothing to do here: the GL path

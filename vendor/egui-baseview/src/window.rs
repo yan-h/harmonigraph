@@ -435,7 +435,7 @@ where
         let viewport_id = egui::ViewportId::default();
 
         let mut egui_input = egui::RawInput {
-            max_texture_side: Some(renderer.max_texture_side()),
+            max_texture_side: Some(renderer.font_atlas_max_texture_side()),
             screen_rect: Some(screen_rect),
             ..Default::default()
         };

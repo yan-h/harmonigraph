@@ -53,12 +53,18 @@ run cargo test -p harmonigraph-render
 # dependencies and runs none of their tests. The patches they carry are the
 # reason to run them: the ones in baseview's macOS view decide when a gesture
 # is over, which is not something to find out about in the DAW. Only baseview
-# — egui-baseview's twelve patches carry no tests to run.
+# — and egui-baseview's font-atlas bound now carries its own test. The nested
+# crate cannot see the workspace's baseview patch, so its command repeats that
+# path explicitly; WGPU is the backend the plugin ships.
 #
 # `--target-dir` because the crate is its own workspace root and would
 # otherwise open a second target/ inside vendor/, 113 MB per worktree on a
 # machine that has already been filled once by target dirs.
 run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/vendor-baseview
+run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
+  --no-default-features --features wgpu,tracing \
+  --config 'patch.crates-io.baseview.path="vendor/baseview"' \
+  --target-dir target/vendor-egui-baseview
 
 # Doc links, which is the only mechanical check on comments this tree has.
 # Comments are ~40% of the non-blank lines under crates/ and carry the

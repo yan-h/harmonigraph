@@ -286,6 +286,16 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   GPU allocation directly; cloning the `wgpu::Texture` handle does not copy
   its pixels. This removes the 4.67–24.69 ms whole-atlas mirror upload paid
   whenever a zoom first reaches a new label size.
+- **Patch 14** (`src/renderer.rs`, both renderers, `src/window.rs`): cap the
+  font atlas at 4096 on devices whose texture limit is larger. egui fixes the
+  atlas width at the reported limit and doubles its CPU image's height, so an
+  8192-wide atlas retained 64–128 MiB after walking the lattice's zoom sizes;
+  a full texture delta and the GPU texture temporarily multiplied that cost
+  into roughly 400 MiB of process memory. The cap is still eight times the
+  largest glyph Harmonigraph allows, and puts a 64 MiB ceiling on egui's CPU
+  image before its 80% rebuild clears historical sizes. At the fresh Name
+  size, a full-range zoom reaches 16 MiB on its first sweep and stays there
+  through every return trip.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
@@ -294,7 +304,7 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   the upload split with its per-frame-reconfigure fix, the `layer_present`
   module with its hooks and objc2 deps — both the resize half and the
   occlusion hide/unhide — the kept pointer position, and the font-texture
-  publication into `CallbackResources`.
+  publication into `CallbackResources`, then the font-atlas limit.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 
