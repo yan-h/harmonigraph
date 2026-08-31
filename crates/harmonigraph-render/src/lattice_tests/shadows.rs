@@ -104,7 +104,6 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     scene.mark_inner = 0.84;
     scene.mark_thickness = 0.16;
     scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
-    scene.glow_shadow_resolution = 1.2;
 
     let cb = LatticeCallback::from_scene(
         &scene,
@@ -122,7 +121,6 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         &cb.casters,
         sigma_px,
         cb.render_scale,
-        cb.distance_texels_per_point,
         device.limits().max_texture_dimension_2d,
         terms,
     );
@@ -1136,14 +1134,7 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::TwoScale]
     {
         let terms = kernel.terms();
-        let packed = crate::shadow::pack(
-            &cb.casters,
-            sigma,
-            1.0,
-            cb.distance_texels_per_point,
-            16384,
-            terms,
-        );
+        let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
         // Read over the casters that darken something: one at level 0 is packed
         // as no cell on purpose (`pack`), and most of this fixture's nodes
         // project clean off the pane.

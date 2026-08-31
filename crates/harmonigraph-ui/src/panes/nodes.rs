@@ -18,10 +18,10 @@ use harmonigraph_scene::{
     GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
     GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
-    GLOW_SHADOW_RESOLUTION_MAX, GLOW_SHADOW_RESOLUTION_MIN, GLOW_STRENGTH_MAX, MARK_DELAY_MAX,
-    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SHADOW_SHAPE_MAX,
+    SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -810,21 +810,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // rather than hidden, so the section does not change height under the
         // picker and the hover text is there to say what would switch it on.
         ui.add_enabled_ui(view.glow_shadow_kernel.has_distance(), |ui| {
-            ValueBar::new(
-                &mut view.glow_shadow_resolution,
-                GLOW_SHADOW_RESOLUTION_MIN..=GLOW_SHADOW_RESOLUTION_MAX,
-                "Distance resolution",
-            )
-            .display(|v| format!("{v:.2} tex/pt"))
-            .show(ui)
-            .on_hover_text(
-                "How finely a Distance shadow's source is sampled in the \
-                 atlas, in texels per pane point. 0.80 keeps the quality floor \
-                 used by the fresh view; 1.20 is 1.5x that sampling and 1.60 \
-                 is 2x. Atlas area and fill work grow roughly with the square, \
-                 so 1.60 costs about four times 0.80. Blur rows do not use this \
-                 setting.",
-            );
             ValueBar::new(
                 &mut view.glow_shadow_shape,
                 SHADOW_SHAPE_MIN..=SHADOW_SHAPE_MAX,

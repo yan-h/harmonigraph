@@ -734,8 +734,8 @@ impl ShadowKernel {
         self.terms().iter().fold(0.0f32, |r, term| r.max(term.reach_sigmas()))
     }
 
-    /// Whether any term of this kernel holds a DISTANCE, which is what says
-    /// whether the two bars the distance family alone reads are shown.
+    /// Whether any term of this kernel holds a DISTANCE, which disables the
+    /// blur-only gain and enables the distance family's profile bar.
     pub fn has_distance(self) -> bool {
         self.terms().iter().any(|t| t.kind == TermKind::Distance)
     }
