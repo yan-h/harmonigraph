@@ -74,8 +74,8 @@ pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 ///
 /// The low fourteen bits hold an atlas coordinate, enough for every 2D texture
 /// wgpu exposes here. Three high bits hold the contour's line direction, and
-/// the remaining high bit is shadow.wgsl's `NO_SEED`; no third channel is
-/// needed for either.
+/// the remaining high bit marks a directionless point seed. An all-ones x is
+/// the sentinel, so no third channel is needed for any of the three states.
 pub(crate) const SEED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Uint;
 
 /// The largest atlas dimension the packed seed coordinates can name.
@@ -1871,6 +1871,62 @@ pub(crate) mod tests {
         );
     }
 
+    /// A seed with no coverage gradient remains a point, so its distance is
+    /// isotropic rather than stretched along an arbitrary contour tangent.
+    #[test]
+    fn an_isolated_seeds_distance_is_the_same_in_every_direction() {
+        const SIZE: [u32; 2] = [128, 64];
+        const SEED: [u32; 2] = [64, 32];
+        const REACH: f32 = 8.0;
+
+        let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+            return;
+        };
+        let (target, pipelines, boxes, cell) = one_distance_cell(&device, SIZE, REACH);
+        let mut ink = vec![0u8; (SIZE[0] * SIZE[1] * 2) as usize];
+        let seed_at = ((SEED[1] * SIZE[0] + SEED[0]) * 2) as usize;
+        ink[seed_at..seed_at + 2].copy_from_slice(&half_bits(1.0).to_le_bytes());
+        queue.write_texture(
+            target.textures[0].as_image_copy(),
+            &ink,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE[0] * 2),
+                rows_per_image: Some(SIZE[1]),
+            },
+            wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+        );
+        queue.write_buffer(&boxes, 0, bytemuck::bytes_of(&cell));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        target.flood(&queue, &mut encoder, (&pipelines.seed, &pipelines.step), &boxes, 1, REACH);
+        target.blur(
+            &mut encoder,
+            (&pipelines.blur_x, &pipelines.blur_y),
+            &pipelines.resolve,
+            &boxes,
+            1,
+        );
+        queue.submit([encoder.finish()]);
+        let bytes = crate::gpu_harness::readback(&device, &queue, &target.textures[0], SIZE);
+        let at = |x: u32, y: u32| -> f32 {
+            let i = ((y * SIZE[0]) * 4 + x * 2) as usize;
+            half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
+        };
+
+        for (x, y) in [
+            (SEED[0] - 2, SEED[1]),
+            (SEED[0] + 2, SEED[1]),
+            (SEED[0], SEED[1] - 2),
+            (SEED[0], SEED[1] + 2),
+        ] {
+            let held = at(x, y);
+            assert!(
+                (held - 1.5).abs() < 1.0e-3,
+                "the seed resolves to {held} texels at ({x}, {y}), not 1.5",
+            );
+        }
+    }
+
     /// A texel out of every seed's reach resolves to the cell's own pad, which
     /// is where the standoff's curve is windowed to nothing.
     ///
@@ -1976,10 +2032,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// The packed seed leaves one high bit distinct from every coordinate and
-    /// line direction the field can carry.
+    /// The packed seed leaves one high bit for a point distinct from every
+    /// coordinate and line direction, and one value past every real x for the
+    /// sentinel.
     #[test]
-    fn the_seed_fields_bits_hold_the_largest_distance_atlas_and_its_sentinel() {
+    fn the_seed_fields_bits_hold_the_largest_atlas_a_point_and_the_sentinel() {
         let held = |name: &str| {
             shader_const(SHADOW_SRC, name)
                 .trim_end_matches('u')
@@ -1987,7 +2044,8 @@ pub(crate) mod tests {
                 .unwrap_or_else(|_| panic!("shadow.wgsl's {name} is a u32 literal"))
         };
         assert_eq!(held("SEED_COORD_MASK") + 1, SEED_COORD_LIMIT);
-        assert_eq!(held("NO_SEED"), 2 * SEED_COORD_LIMIT);
+        assert_eq!(held("SEED_POINT_BIT"), 2 * SEED_COORD_LIMIT);
+        assert_eq!(held("NO_SEED"), 4 * SEED_COORD_LIMIT - 1);
     }
 
     /// A distance term's cell is padded to exactly where its curve is windowed

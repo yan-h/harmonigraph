@@ -241,9 +241,10 @@ fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
 ///
 /// Atlas coordinates take the low fourteen bits, enough for every 2D texture
 /// wgpu exposes here. One spare bit in x and two in y carry the contour's
-/// undirected normal; x's top bit remains clear on every real seed, so setting
-/// it alone is an unambiguous sentinel with no third channel.
-const NO_SEED: u32 = 32768u;
+/// undirected normal. X's top bit marks a point whose coverage has no gradient
+/// direction; an all-ones x remains distinct from every line and point seed.
+const SEED_POINT_BIT: u32 = 32768u;
+const NO_SEED: u32 = 65535u;
 const SEED_COORD_MASK: u32 = 16383u;
 
 /// How much of a texel must be inked for it to seed the field.
@@ -284,10 +285,17 @@ fn cell_coverage(in: CellOut, at: vec2<i32>) -> f32 {
 
 /// A seed coordinate with the coverage gradient's line direction in its spare
 /// high bits. Eight directions over half a turn keep the normal within 11.25°
-/// of the rasterizer's while leaving x's sentinel bit untouched.
+/// of the rasterizer's while leaving x's point flag distinct.
 fn pack_seed(at: vec2<i32>, gradient: vec2<f32>) -> vec2<u32> {
     let ax = abs(gradient.x);
     let ay = abs(gradient.y);
+    let coord = vec2<u32>(at);
+    // A symmetric thin stroke and an isolated texel have no direction to
+    // quantize. Giving either an arbitrary tangent stretches its contour along
+    // one axis, so they retain the point metric the field is seeded from.
+    if ax + ay < 1.0e-6 {
+        return vec2<u32>(coord.x | SEED_POINT_BIT, coord.y);
+    }
     // Tangents of 11.25°, 33.75°, 56.25° and 78.75° split a quadrant around
     // its five candidate directions. Comparisons keep this pass off `atan2`,
     // whose cost would be paid at every texel of the distance atlas.
@@ -305,7 +313,6 @@ fn pack_seed(at: vec2<i32>, gradient: vec2<f32>) -> vec2<u32> {
         octant = 4u;
     }
     let direction = select(octant & 7u, (8u - octant) & 7u, gradient.x * gradient.y < 0.0);
-    let coord = vec2<u32>(at);
     return vec2<u32>(
         coord.x | ((direction & 1u) << 14u),
         coord.y | (((direction >> 1u) & 3u) << 14u),
@@ -315,6 +322,11 @@ fn pack_seed(at: vec2<i32>, gradient: vec2<f32>) -> vec2<u32> {
 /// The absolute atlas texel a packed seed names.
 fn seed_texel(seed: vec2<u32>) -> vec2<i32> {
     return vec2<i32>(seed & vec2<u32>(SEED_COORD_MASK));
+}
+
+/// Whether a seed carries a contour normal rather than the point fallback.
+fn seed_has_normal(seed: vec2<u32>) -> bool {
+    return (seed.x & SEED_POINT_BIT) == 0u;
 }
 
 /// The undirected normal a packed seed carries.
@@ -395,7 +407,7 @@ fn fs_flood_step(in: CellOut) -> @location(0) vec2<u32> {
             // A local refinement chooses a short piece of the segment the
             // resolve will measure, rather than only its texel centre. Long
             // jumps retain the point metric so a remote tangent cannot win.
-            if jump.step.x == 1 {
+            if jump.step.x == 1 && seed_has_normal(cand) {
                 let normal = seed_normal(cand);
                 let tangent = vec2<f32>(-normal.y, normal.x);
                 let along =
@@ -448,8 +460,12 @@ fn fs_flood_resolve(in: CellOut) -> @location(0) vec4<f32> {
     }
     let ink = seed_texel(seed);
     let seed_coverage = cell_coverage(in, ink);
-    var normal = seed_normal(seed);
     let to_sample = vec2<f32>(at - ink);
+    if !seed_has_normal(seed) {
+        let texels = max(length(to_sample) - (seed_coverage - INK_FLOOR), 0.0);
+        return vec4<f32>(min(texels / max(in.k, 1.0e-6), in.pad), 0.0, 0.0, 1.0);
+    }
+    var normal = seed_normal(seed);
     // The packed normal is a LINE direction. The sample is outside the ink,
     // so whichever sign points toward it is the contour's outward one.
     if dot(to_sample, normal) < 0.0 {
