@@ -134,7 +134,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     assert!(ordinary > 0.0, "the default curve left no outer halo to compare");
     assert!(
         tailed > ordinary * 1.5,
-        "lifting only the far handle left the outer reach at {tailed:.2} against \
+        "the slower shape left the outer reach at {tailed:.2} against \
          the default's {ordinary:.2}",
     );
 }

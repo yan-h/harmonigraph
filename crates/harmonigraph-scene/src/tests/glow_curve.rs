@@ -14,7 +14,7 @@ fn the_glow_curve_descends_between_its_fixed_endpoints() {
         let levels: Vec<f32> = (0..=400).map(|i| curve.sample(i as f32 / 400.0)).collect();
         assert!(
             levels.windows(2).all(|pair| pair[0] >= pair[1]),
-            "the point made a curve that rises: {curve:?}",
+            "the shape made a curve that rises: {curve:?}",
         );
     }
 }

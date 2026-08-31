@@ -3180,7 +3180,7 @@ fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
 
 /// The glow level `d` from the node's centre inside `span`. One normalized
 /// exponential covers the whole domain: it can bend either way but has no
-/// inflection, so a low point in the outer reach cannot make an S-curve.
+/// inflection, so a fast shape cannot make an S-curve.
 fn glow_curve_at(d: f32, span: f32) -> f32 {
     let p = clamp(d / span, 0.0, 1.0);
     let shape = u.glow_curve.x;
@@ -3224,7 +3224,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     // The falloff from the fixed full centre to the fixed zero edge. Strength
-    // scales it after the curve, so moving the point changes the distribution
+    // scales it after the curve, so moving the shape changes the distribution
     // of light without moving either endpoint or changing what the bar names.
     let skirt = GLOW_BASE * glow_curve_at(d, span);
 
