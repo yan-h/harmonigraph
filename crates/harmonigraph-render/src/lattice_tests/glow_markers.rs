@@ -264,12 +264,12 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
             "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed as far as a square \
              end ({tapered} against {square}), so the taper is not in the shadow",
         );
-        // Two thirds of the way, where the taper is three quarters of the arm: the
-        // claim is which of the two lengths the shadow is cast from, and a third of
-        // that span is more room than the depth's own share of the threshold needs.
+        // Past two fifths of the way. The analytic constructions use the
+        // taper's half-level contour, halfway from its solid start to the tip;
+        // filtering and the integer column walk may give a little of that up.
         let span = square - solid;
         assert!(
-            tapered >= solid + span * 2 / 3,
+            tapered >= solid + span * 2 / 5,
             "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed out to {tapered}, \
              against {solid} for its solid length alone and {square} for the whole arm",
         );

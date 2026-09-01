@@ -927,10 +927,10 @@ fn a_name_is_not_darkened_by_its_own_shadow() {
 /// Two facing strokes of one name cast deeper between them than either casts
 /// alone at the same distance.
 ///
-/// #490's crease, closed: a shadow is a blur of the ink and a blur is linear,
-/// so the gap between two strokes holds both their ink and is darker than
-/// either side of a lone stroke — where a nearest-distance field is a `min`,
-/// so the second stroke contributed nothing and the midline was a crease.
+/// The zero-spread limit is a blur of the ink and a blur is linear, so the gap
+/// between two strokes holds both their ink and is darker than either side of
+/// a lone stroke. A positive spread deliberately unions overlapping expanded
+/// sources first; its corresponding claim lives in the shadow suite.
 ///
 /// The control is each stroke shot ALONE, and the claim is against the deeper
 /// of the two pixel by pixel: a `max` of the two profiles is exactly what a
@@ -953,7 +953,10 @@ fn two_facing_strokes_cast_deeper_between_them_than_either_alone() {
     // within a level of black at the midline, and darker than black is not a
     // reading.
     shooter.clear = over_grey_clear();
-    let scene = inked_on_grey(SHADOW, 0.5);
+    let mut scene = inked_on_grey(SHADOW, 0.5);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
+    scene.glow_shadow_spread = 0.0;
+    scene.glow_shadow_blur = 0.5;
     let at = on_screen(&scene, SIZE, NAME_AT);
     let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
     let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));

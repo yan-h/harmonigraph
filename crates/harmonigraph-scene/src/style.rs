@@ -493,7 +493,7 @@ pub enum NoteNames {
 
 /// The most terms a shadow's kernel may be built out of.
 ///
-/// Two leaves room for a mixed coverage row even though the two current
+/// Two leaves room for a multi-term coverage row even though the two current
 /// constructions each use one term. It sizes the fixed arrays shared with the
 /// shaders, so it is the representation's bound rather than a per-row setting.
 pub const SHADOW_TERMS_MAX: usize = 2;
@@ -501,9 +501,9 @@ pub const SHADOW_TERMS_MAX: usize = 2;
 /// What a term of a kernel PUTS IN a cell, which is what parts the three source
 /// constructions a Shadow can be drawn from.
 ///
-/// The atlas, the packer and the sampler's loop are one path across all three:
-/// a row is a slice of terms whatever the kinds in it, and this is a branch
-/// inside that path rather than a second path beside it.
+/// The atlas, the packer and the sampler's loop are one path across all three.
+/// A row is homogeneous because coverage runs through the blur chain while a
+/// distance field must retain the texture the rasterizer wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TermKind {
     /// The caster's ink, convolved with a Gaussian of this term's σ. The cell

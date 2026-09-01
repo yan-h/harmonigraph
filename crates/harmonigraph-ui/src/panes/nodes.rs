@@ -766,7 +766,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     "How far the caster is expanded before it is softened, as a \
                  share of the displayed Shadow width. More preserves a wider \
                  ring, corner or letter contour; 0% removes the expansion and \
-                 leaves an ordinary Gaussian. Double-click to restore 50%.",
+                 leaves an ordinary Gaussian. Double-click to type a value.",
                 );
             ValueBar::new(&mut view.glow_shadow_blur, 0.0..=GLOW_SHADOW_BLUR_MAX, "Blur")
                 .display(|v| format!("{:.0}%", v * 100.0))
@@ -775,7 +775,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     "The Gaussian softness applied after the expansion, as a \
                  share of the displayed Shadow width. More blends nearby \
                  pieces more gradually; 0% leaves the expanded contour hard. \
-                 Double-click to restore 25%.",
+                 Double-click to type a value.",
                 );
         }
         // The two that shape the depth rather than set it: how much of it the

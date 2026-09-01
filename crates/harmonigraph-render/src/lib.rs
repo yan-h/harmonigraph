@@ -4259,7 +4259,12 @@ impl CallbackTrait for LatticeCallback {
                     }
                 }
                 drop(pass);
-                if kernel.iter().any(|term| term.kind != harmonigraph_scene::TermKind::Distance) {
+                let coverage_row =
+                    kernel.iter().all(|term| term.kind != harmonigraph_scene::TermKind::Distance);
+                let distance_row =
+                    kernel.iter().all(|term| term.kind == harmonigraph_scene::TermKind::Distance);
+                assert!(coverage_row || distance_row, "a shadow row mixes coverage and distance");
+                if coverage_row {
                     let cells = &resources.shadow_cell_pipelines;
                     atlas.blur(
                         egui_encoder,

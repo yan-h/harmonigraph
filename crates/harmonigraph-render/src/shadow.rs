@@ -4,11 +4,12 @@
 //!
 //! One cell per caster PER TERM of the kernel, each at a scale that keeps the
 //! blur's cost flat: a cell is the caster's box grown by that term's reach,
-//! drawn at `min(1, 3 / σ_t)` of the target's pixels, so σ is at most
-//! `SIGMA_CELL_MAX` texels in every cell and the kernel at most nineteen taps
-//! whatever the Shadow bar says and whatever row of the kernel table is
-//! chosen. The atlas is about the names' own area at the fresh Shadow and one
-//! Gaussian, shrinks as the bar widens, and grows with the term count.
+//! drawn at the smaller scale asked for by its blur and its outward spread.
+//! Thus σ is at most `SIGMA_CELL_MAX` texels, the dilation is at most
+//! `SPREAD_CELL_MAX` texels, and neither a very soft nor a hard-expanded cell
+//! grows without bound as the Shadow bar widens. The atlas is about the names'
+//! own area at the fresh Shadow and one Gaussian, shrinks as the bar widens,
+//! and grows with the term count.
 //!
 //! Each term at its OWN resolution is the whole point of the shape: a mixture's
 //! narrow term carries the kernel's core, and a shared resolution picked for
@@ -36,6 +37,14 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Flo
 /// any width: past this a cell is drawn SMALLER rather than blurred wider.
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
+
+/// The most texels an outward spread may occupy in its cell.
+///
+/// Unlike a Gaussian this threshold has no tap radius to bound it naturally.
+/// Twenty-four samples leave its analytic contour substantially finer than
+/// the subsequent three-texel blur while preventing Blur = 0 from allocating
+/// full-resolution padding proportional to the displayed Shadow width.
+const SPREAD_CELL_MAX: f32 = 24.0;
 
 /// The least resolution an atlas-backed distance field keeps, in texels per
 /// pane point.
@@ -155,7 +164,7 @@ pub(crate) struct ShadowBox {
     pub cell: [f32; 4],
     /// x: the scale from points to cell texels; y: σ in cell texels; z: the
     /// caster's level, 0..=1; w: the cell's share of the TARGET's pixels,
-    /// `min(1, SIGMA_CELL_MAX / σ)`.
+    /// bounded independently by its blur σ and outward spread.
     ///
     /// The last is what a cell's own rasterizer antialiases against
     /// (`aa_width` in lattice.wgsl): a fragment of the cell is one pane pixel
@@ -380,11 +389,10 @@ pub(crate) fn pack(
     // shadow of the caster's own ink rather than a kernel of nothing.
     let sigma_of =
         |c: &Caster, t: &harmonigraph_scene::KernelTerm| (picture_sigma_of(c) * t.sigma).max(0.0);
-    // A cell, sized off ITS OWN σ: drawn at `min(1, SIGMA_CELL_MAX / σ)` of the
-    // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the term
-    // or the caster asked for, and padded by the kernel's reach in those same
-    // texels, plus one so the scene pass's bilinear tap at the box's own edge
-    // still lands inside the cell.
+    // A cell, sized off ITS OWN blur and spread: drawn so σ is at most
+    // `SIGMA_CELL_MAX` texels and an outward dilation is at most
+    // `SPREAD_CELL_MAX` texels, then padded by their combined reach plus one so
+    // the scene pass's bilinear tap at the box's own edge still lands inside.
     //
     // Per term and not per frame, which is what holds the blur's cost flat
     // across the whole table: the chain reads σ off each cell and clamps its
@@ -399,10 +407,10 @@ pub(crate) fn pack(
     // the distance cell bypasses the blur chain entirely.
     let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
         let sigma = sigma_of(c, t);
-        // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
-        // infinity the `min` answers: the cell is at the target's own
-        // resolution and its kernel collapses to the centre tap.
-        let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
+        let spread_px = picture_sigma_of(c) * t.spread;
+        // A zero component contributes infinity, so the other component alone
+        // chooses the fit; two zeros leave the cell at the target's resolution.
+        let fit = (SIGMA_CELL_MAX / sigma).min(SPREAD_CELL_MAX / spread_px).min(1.0);
         let floor = if is_distance(t) { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
         // More samples than the target has pixels buy no smoother contour and
         // turn the floor into supersampling at the small end.
@@ -412,7 +420,7 @@ pub(crate) fn pack(
         // the original caster and therefore includes both the outward spread
         // and the blur's tail, expressed together by `KernelTerm::reach_sigmas`.
         let texels = sigma * scale;
-        let spread_texels = picture_sigma_of(c) * t.spread * scale;
+        let spread_texels = spread_px * scale;
         let reach = spread_texels + t.kind.reach_sigmas() * texels;
         let pad = (reach.ceil() + 1.0) / k;
         let spread = picture_sigma_of(c) * t.spread / px_per_point;
@@ -640,9 +648,9 @@ impl ShadowTarget {
     /// The two blur passes over `count` cells of `boxes`, leaving the finished
     /// atlas in `views[0]`.
     ///
-    /// Both targets are cleared first. Distance cells collapse their quads and
-    /// retain the field already in texture 0; ordinary and Spread coverage
-    /// cells run through both passes.
+    /// Both targets are cleared first. The caller hands this only homogeneous
+    /// coverage rows; homogeneous distance rows skip the chain because a clear
+    /// here would erase their fields from texture 0.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -966,7 +974,7 @@ pub(crate) mod tests {
 
     /// The packer carries the independently configured spread to every
     /// analytic caster in pane points; changing the blur must not move that
-    /// threshold, and a zero blur must remain a finite, full-resolution cell.
+    /// threshold, and a zero blur must remain finite.
     #[test]
     fn spread_and_blur_pack_as_independent_lengths() {
         use harmonigraph_scene::ShadowKernel;
@@ -985,6 +993,17 @@ pub(crate) mod tests {
                 assert_eq!(cell.terms[1], 0.0, "a hard spread acquired a Gaussian");
             }
         }
+
+        let terms =
+            ShadowKernel::Spread.terms_with(harmonigraph_scene::GLOW_SHADOW_SPREAD_MAX, 0.0);
+        let picture_sigma = 60.0;
+        let packed = pack(&[caster], picture_sigma, px_per_point, 4096, &terms);
+        let cell = packed.boxes[0];
+        assert!(cell.terms[3] < 1.0, "a wide hard spread kept an unbounded full-size cell");
+        assert!(
+            (picture_sigma * terms[0].spread * cell.terms[3] - SPREAD_CELL_MAX).abs() < 1e-4,
+            "a hard spread occupies more than its bounded texel radius",
+        );
     }
 
     /// A mixture packs one cell per caster per term, each at the resolution its
@@ -1130,6 +1149,15 @@ pub(crate) mod tests {
             assert!(
                 ratio <= 5.0,
                 "Spread packs {ratio:.2}x one Gaussian's cells at {what}, beyond its cost bound",
+            );
+            let hard = harmonigraph_scene::ShadowKernel::Spread
+                .terms_with(harmonigraph_scene::GLOW_SHADOW_SPREAD_MAX, 0.0);
+            let ratio = area(&hard) / plain;
+            eprintln!("Hard Spread at {what}: {ratio:.2}x one Gaussian's cells");
+            assert!(
+                ratio <= 10.0,
+                "a hard Spread packs {ratio:.2}x one Gaussian's cells at {what}, beyond its cost \
+                 bound",
             );
             // The DISTANCE row on a bound of its own, and two orders of
             // magnitude above the blur rows' rather than beside them. A blur

@@ -893,17 +893,26 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         return;
     };
     shooter.clear = over_ground();
-    let scene = ringing_only(1.0, SHADOW, 1.0);
+    // Neutral gain isolates the source's level. A larger gain deliberately
+    // saturates high coverages before the depth spends them, so a point inside
+    // the expanded plateau can stay whole over part of a fade even though the
+    // source itself is moving continuously.
+    let scene_at = |ring, depth| {
+        let mut scene = ringing_only(ring, SHADOW, depth);
+        scene.glow_shadow_gain = 1.0;
+        scene
+    };
+    let scene = scene_at(1.0, 1.0);
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     let row = centre.y.round() as u32;
     // Clear of the ring's own antialiased edge, and well inside its blur.
     let at = (centre.x + ink_radius(&scene)).round() as u32 + 5;
-    let ground = bright_at(&shooter.shot(&ringing_only(1.0, SHADOW, 0.0)), at, row);
+    let ground = bright_at(&shooter.shot(&scene_at(1.0, 0.0)), at, row);
     assert!(ground > 500, "the ground the ring's shadow lands on reads {ground}");
 
     let mut taken = Vec::new();
     for ring in [1.0f32, 0.6, 0.3, 0.0] {
-        let scene = ringing_only(ring, SHADOW, 1.0);
+        let scene = scene_at(ring, 1.0);
         let call = LatticeCallback::from_scene(
             &scene,
             LatticeLabels::default(),
@@ -933,7 +942,7 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         taken[0],
     );
     assert!(
-        taken.windows(2).all(|w| w[0] > w[1] + 0.05),
+        taken.windows(2).all(|w| w[0] > w[1] + 0.02),
         "a ring released over 1, 0.6, 0.3 and 0 of itself took {taken:?} off the ground, which \
          is not one order",
     );

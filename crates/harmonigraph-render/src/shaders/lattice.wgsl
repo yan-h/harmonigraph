@@ -2312,7 +2312,19 @@ struct NodeInk {
     lit: f32,
     // The nearest layer whose level reaches the distance contour.
     sd: f32,
+    // The greyscale dilation of every layer by this cell's configured Spread.
+    // Each layer keeps its own envelope and the union takes their maximum, so
+    // a released ring fades continuously instead of crossing a binary level.
+    spread: f32,
 };
+
+fn spread_layer(field: f32, layer: NodeLayer, spread: f32, aa: f32) -> f32 {
+    if spread < 0.0 || layer.level <= 0.0 {
+        return field;
+    }
+    let coverage = 1.0 - smoothstep(spread - aa, spread + aa, layer.sd);
+    return max(field, clamp(layer.level, 0.0, 1.0) * coverage);
+}
 
 /// What every node layer answers at this fragment: its visible ink and the
 /// nearest half-level signed field the Distance cell stores.
@@ -2328,6 +2340,7 @@ fn node_ink(
     field_step: f32,
     oct: OctRing,
     analytic: bool,
+    spread: f32,
 ) -> NodeInk {
     let activation = in.params.x;
 
@@ -2365,6 +2378,7 @@ fn node_ink(
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
     var node_sd = EMPTY_DISTANCE;
+    var node_spread = 0.0;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2456,10 +2470,9 @@ fn node_ink(
         // place of the other.
         let ink = oct_slot_ink(in, slot);
         let opacity = ink.w;
-        node_sd = layer_distance(
-            node_sd,
-            NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
-        );
+        let octave_layer = NodeLayer(shape_layer.sd, opacity, shape_layer.coverage);
+        node_sd = layer_distance(node_sd, octave_layer);
+        node_spread = spread_layer(node_spread, octave_layer, spread, aa);
         let slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED
@@ -2551,6 +2564,7 @@ fn node_ink(
         analytic,
     );
     node_sd = layer_distance(node_sd, audio.layer);
+    node_spread = spread_layer(node_spread, audio.layer, spread, aa);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
     // The wedge's own reading is its lit share, on the composite the coverage
@@ -2599,6 +2613,8 @@ fn node_ink(
     let bass_cov = layer_coverage(bass_layer);
     node_sd = layer_distance(node_sd, melody_layer);
     node_sd = layer_distance(node_sd, bass_layer);
+    node_spread = spread_layer(node_spread, melody_layer, spread, aa);
+    node_spread = spread_layer(node_spread, bass_layer, spread, aa);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2640,7 +2656,13 @@ fn node_ink(
     // is as lit as a whole one. The floor is the discard's own threshold read
     // from the other side — at no ink there is no share to take, and the
     // caller multiplies the answer by that same nothing.
-    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_sd);
+    return NodeInk(
+        active_rgb,
+        active_alpha,
+        glyph_lit / max(active_alpha, 1e-4),
+        node_sd,
+        node_spread,
+    );
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that
@@ -2717,9 +2739,9 @@ fn node_paint(in: VsOut) -> Painted {
         }
         return Painted(vec3<f32>(0.0), shadow, bloom);
     }
-    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
+    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false, -1.0);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd, ink.spread);
     }
     let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
     let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
@@ -2749,9 +2771,9 @@ fn node_paint(in: VsOut) -> Painted {
 }
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). A blur
-/// term stores the byte-identical coverage it convolves. A Distance term stores
-/// the exact union in pane points, with only layers at the half-level contour
-/// included.
+/// term stores the byte-identical coverage it convolves. Spread stores the
+/// maximum of the dilated layers at their own levels. Distance stores the exact
+/// union in pane points, with only layers at the half-level contour included.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2775,17 +2797,12 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     if !g.paints {
         return vec4<f32>(0.0);
     }
-    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic);
+    let is_spread = abs(in.shadow_meta.y - SPREAD_KIND) < 0.5;
+    let spread_uv = select(-1.0, in.shadow_meta.x / max(abs(in.shadow_at.z), 1e-6), is_spread);
+    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic, spread_uv);
     if analytic {
-        if abs(in.shadow_meta.y - SPREAD_KIND) < 0.5 {
-            let points = ink.sd * abs(in.shadow_at.z);
-            let aa_points = max(g.aa * abs(in.shadow_at.z), 1e-4);
-            let coverage = 1.0 - smoothstep(
-                in.shadow_meta.x - aa_points,
-                in.shadow_meta.x + aa_points,
-                points,
-            );
-            return vec4<f32>(coverage, 0.0, 0.0, 0.0);
+        if is_spread {
+            return vec4<f32>(ink.spread, 0.0, 0.0, 0.0);
         }
         // Stabilize the value before the R16 attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a
