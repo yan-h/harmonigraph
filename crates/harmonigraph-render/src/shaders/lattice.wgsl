@@ -2136,6 +2136,9 @@ fn sector_side(f: SectorFold) -> f32 {
 // the arc on the inside of that line. Measuring against those three features
 // keeps the Euclidean corner a Distance shadow is defined by.
 fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f32 {
+    if outer <= inner {
+        return EMPTY_DISTANCE;
+    }
     let normal = vec2<f32>(f.e.y, -f.e.x);
     let radius = length(f.q);
 

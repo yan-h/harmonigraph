@@ -175,6 +175,9 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         )
     };
     let sector_sd = |uv: glam::Vec2, inner: f32, outer: f32, edges: [f32; 2]| {
+        if outer <= inner {
+            return f32::MAX;
+        }
         let (q, edge) = fold(uv, edges);
         let side = edge.y * q.x - edge.x * q.y;
         let arc = q.length() - outer;
@@ -1344,6 +1347,33 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
              frame and {alone} without, so its shadow is not reaching the bloom's copy",
         );
     }
+}
+
+/// A mark whose strip has no width casts no Distance shadow.
+///
+/// The collapsed radial pair remains the layer's off switch even while its
+/// slot and fade inputs would otherwise keep it live.
+#[test]
+fn a_zero_width_mark_casts_no_distance_shadow() {
+    const SHADOW: f32 = 0.5;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+
+    let staged = |slots| {
+        let mut scene = on_ground(SHADOW, 1.0);
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        scene.mark_thickness = 0.0;
+        scene.nodes[0].melody_slots = slots;
+        scene.nodes[0].melody_level = f32::from(slots != 0);
+        scene.nodes[0].glow.marked = f32::from(slots != 0);
+        scene
+    };
+    let absent = shooter.shot(&staged(0));
+    let collapsed = shooter.shot(&staged(MIDDLE_C));
+    let moved = differing_pixels(&collapsed, &absent);
+    assert_eq!(moved, 0, "a collapsed mark strip left ink or a Distance contour in the frame",);
 }
 
 /// How much further a MARKED node's shadow reaches than an unmarked one's is
