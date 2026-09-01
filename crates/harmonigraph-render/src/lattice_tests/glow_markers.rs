@@ -357,6 +357,106 @@ fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
     }
 }
 
+/// A marker's shadow does not show through the share of its arm the taper
+/// makes transparent.
+///
+/// The arm's full box is the marker's own surface even where its ink is
+/// fading, so its shadow belongs only outside that box. The tapered pixels are
+/// identified from the difference against a square-ended copy rather than
+/// from coordinates: that proves the fixture reaches the alpha ramp, and a
+/// grey pane makes any shadow leaking through it visible as lost light.
+#[test]
+fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
+    const SIZE: [u32; 2] = [256, 256];
+    const SHADOW: f32 = 0.30;
+    const ARM: f32 = 0.9;
+    const TAPERED: f32 = 0.2;
+    const GROUND: f64 = 0.8;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let scene = |depth: f32, taper: f32| {
+            let mut scene =
+                with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, depth, taper), kernel);
+            scene.nodes.clear();
+            scene.glow_reach = 0.0;
+            scene
+        };
+        let bare = shooter.shot(&{
+            let mut scene = scene(0.0, 1.0);
+            scene.pluses.clear();
+            scene
+        });
+        let square = shooter.shot(&scene(0.0, 1.0));
+        let tapered = shooter.shot(&scene(0.0, TAPERED));
+        let body: std::collections::BTreeSet<usize> =
+            fully_inked(&bare, &square).into_iter().collect();
+        let row = SIZE[0] as usize * 4;
+        let fading: Vec<usize> = body
+            .iter()
+            .copied()
+            .filter(|&i| {
+                i >= row + 4
+                    && i + row + 4 < square.len()
+                    && body.contains(&(i - 4))
+                    && body.contains(&(i + 4))
+                    && body.contains(&(i - row))
+                    && body.contains(&(i + row))
+            })
+            .filter(|&i| tapered[i..i + 4] != square[i..i + 4])
+            .collect();
+        assert!(
+            fading.len() > 200,
+            "{kernel:?}: only {} fully covered arm pixels reach the taper",
+            fading.len(),
+        );
+
+        shooter.clear = wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 };
+        let flat_bare = shooter.shot(&{
+            let mut scene = scene(0.0, 1.0);
+            scene.pluses.clear();
+            scene
+        });
+        let flat_square = shooter.shot(&scene(0.0, 1.0));
+        let flat = shooter.shot(&scene(0.0, TAPERED));
+        let deep = shooter.shot(&scene(1.0, TAPERED));
+
+        let moved = fading
+            .iter()
+            .filter(|&&i| (0..4).any(|c| deep[i + c].abs_diff(flat[i + c]) > 1))
+            .count();
+        let worst = fading
+            .iter()
+            .map(|&i| (0..4).map(|c| deep[i + c].abs_diff(flat[i + c])).max().unwrap())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            moved,
+            0,
+            "{kernel:?}: the Shadow depth moved {moved} of the marker's {} fading arm pixels, \
+             by up to {worst}",
+            fading.len(),
+        );
+
+        let ground: Vec<usize> = (0..flat_square.len())
+            .step_by(4)
+            .filter(|&i| flat_square[i..i + 4] == flat_bare[i..i + 4])
+            .collect();
+        let dimmed = ground
+            .iter()
+            .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&flat[i..i + 3]))
+            .count();
+        assert!(
+            dimmed > 200,
+            "{kernel:?}: the marker darkened only {dimmed} pixels outside its arm",
+        );
+        shooter.clear = wgpu::Color::BLACK;
+    }
+}
+
 /// One Shadow is ONE distance: what a marker's shadow reaches past the ink casting
 /// it is a world length off the bar, not a share of the cross.
 ///
