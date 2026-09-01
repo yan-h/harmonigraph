@@ -45,7 +45,7 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// not expose the cell grid. The unit is pane points so the editor and offline
 /// renderer keep the same source samples at every target scale. A direct field
 /// has no cell and therefore pays none of this floor.
-const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
+pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
 /// σ of a caster's blur in the target's pixels, for a Shadow of `shadow` node
 /// radii over a node of `node_points` points, on a pane at `pixels_per_point`

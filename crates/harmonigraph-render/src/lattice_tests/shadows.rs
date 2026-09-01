@@ -1123,6 +1123,14 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
 /// The reach is the first assertion: the fixture only touches this at all if
 /// some node really does project many panes wide, so the projection is
 /// measured rather than assumed.
+///
+/// Swept over every row of the kernel table and over two widths. The width
+/// matters because a distance row is the one that can run the atlas away —
+/// past its floor a distance cell stops shrinking as the shadow widens, while
+/// a blur's keeps shrinking — and at a narrow Shadow the two families are
+/// sized identically, so a single narrow reading would clear Distance on a
+/// cell that is a Gaussian's in all but name. The second reading asserts it is
+/// past that floor rather than assuming it.
 #[test]
 fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     /// How many panes across the atlas may be. A caster's box is clipped to the
@@ -1162,41 +1170,67 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
+    // At the fixture's own Shadow every cell is drawn at the target's own
+    // resolution, which is the regime a blur row and a distance row SHARE. A
+    // distance cell only parts from a blur's once its own floor binds, past
+    // `SIGMA_CELL_MAX / DISTANCE_TEXELS_PER_POINT` — which is where it stops
+    // shrinking with the width and its atlas runs away. Both are swept, so the
+    // Distance arm cannot pass on a cell sized exactly like a Gaussian's.
+    let wide = sigma * 4.0;
+    assert!(
+        crate::shadow::SIGMA_CELL_MAX / wide < crate::shadow::DISTANCE_TEXELS_PER_POINT,
+        "the wide reading does not reach the distance floor, so it measures the shared regime a \
+         second time rather than the one where a distance cell is the expensive one",
+    );
     // At every row of the kernel table, because a row of N terms packs N cells
     // per caster and so reaches the device's limit N times sooner. The clip
     // that keeps a near node's box on the pane is per caster and has to hold
     // for each of its cells (#505).
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::TwoScale]
-    {
-        let terms = kernel.terms();
-        let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
-        // Read over the casters that darken something: one at level 0 is packed
-        // as no cell on purpose (`pack`), and most of this fixture's nodes
-        // project clean off the pane.
-        let casting: Vec<crate::shadow::ShadowBox> = cb
-            .casters
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.level > 0.0)
-            .flat_map(|(i, _)| (0..terms.len()).map(move |t| i * terms.len() + t))
-            .map(|i| packed.boxes[i])
-            .collect();
-        let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
-        assert_eq!(
-            unfit,
-            0,
-            "{kernel:?}: {unfit} of {} cells that darken something got none, and a zeroed cell is \
-             drawn at the atlas origin over the markers' own",
-            casting.len(),
-        );
-        assert!(
+    for (width, sigma) in [("the fixture's Shadow", sigma), ("a wide Shadow", wide)] {
+        for kernel in [
+            harmonigraph_scene::ShadowKernel::Gaussian,
+            harmonigraph_scene::ShadowKernel::TwoScale,
+            harmonigraph_scene::ShadowKernel::Distance,
+        ] {
+            let terms = kernel.terms();
+            let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
+            // Read over the casters that darken something: one at level 0 is packed
+            // as no cell on purpose (`pack`), and most of this fixture's nodes
+            // project clean off the pane.
+            // A caster drawn analytically asks for no cell on a distance term and
+            // holds its index with a zeroed one, so it is not a cell that went
+            // missing — `pack` makes the same exclusion where it shelves.
+            let casting: Vec<crate::shadow::ShadowBox> = cb
+                .casters
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.level > 0.0)
+                .flat_map(|(i, c)| {
+                    let direct = c.direct_distance;
+                    (0..terms.len())
+                        .filter(move |t| {
+                            !(direct && terms[*t].kind == harmonigraph_scene::TermKind::Distance)
+                        })
+                        .map(move |t| i * terms.len() + t)
+                })
+                .map(|i| packed.boxes[i])
+                .collect();
+            let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+            assert_eq!(
+                unfit,
+                0,
+                "{kernel:?} at {width}: {unfit} of {} cells that darken something got none, and a \
+             zeroed cell is drawn at the atlas origin over the markers' own",
+                casting.len(),
+            );
+            assert!(
             packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
-            "{kernel:?}: the atlas came out {:?} for a {:?} pane: a caster's box is sized off a \
-             projection the pane cannot show",
+            "{kernel:?} at {width}: the atlas came out {:?} for a {:?} pane: a caster's box is \
+             sized off a projection the pane cannot show",
             packed.size,
             SIZE,
         );
+        }
     }
 }
 
