@@ -57,6 +57,11 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     continue
   fi
 
+  # Every path the push touches has to be classified, so rename detection is
+  # wrong here: it reports a moved file once, under its DESTINATION, and a file
+  # carried from `crates/` to an exempt path would then read as prose while the
+  # push ships a deletion the remote has never gated. `--no-renames` lists both
+  # sides, and the source alone is enough to demand the gate.
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     case "$path" in
@@ -64,7 +69,7 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
       *) need_ci=1 ;;
     esac
   done <<EOF
-$(git diff --name-only "$base" "$local_sha")
+$(git diff --name-only --no-renames "$base" "$local_sha")
 EOF
 done
 

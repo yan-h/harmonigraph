@@ -659,9 +659,9 @@ struct ShadowCell {
     // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) terms: vec4<f32>,
     // x: this box's caster index in `shadow_casters`; y: whether this is a
-    // distance cell; z: its padding in pane points; w: whether the distance is
-    // already analytic. The scene draw reads x, while the cell and atlas passes
-    // consume the rest one term at a time.
+    // distance cell; z: its padding in pane points; w: unused. The scene draw
+    // reads x, while the cell and atlas passes consume the rest one term at a
+    // time.
     @location(13) who: vec4<f32>,
 };
 

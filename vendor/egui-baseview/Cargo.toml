@@ -9,6 +9,15 @@
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
 
+# A workspace of its own, for the reason `vendor/baseview/Cargo.toml` carries
+# at more length: cargo skips an ancestor root whose `exclude` names this path
+# and keeps walking, so from a worktree under `.claude/worktrees/` the walk
+# passes the worktree's own root and reaches the MAIN checkout's, whose
+# `exclude` entries resolve under a different prefix and so exclude nothing
+# here. Without this table cargo refuses outright, and ci.sh runs `cargo test
+# --manifest-path` against this crate from exactly there.
+[workspace]
+
 [package]
 edition = "2024"
 name = "egui-baseview"

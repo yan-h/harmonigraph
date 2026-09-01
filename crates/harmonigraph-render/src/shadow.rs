@@ -45,7 +45,7 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// not expose the cell grid. The unit is pane points so the editor and offline
 /// renderer keep the same source samples at every target scale. A direct field
 /// has no cell and therefore pays none of this floor.
-const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
+pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
 /// σ of a caster's blur in the target's pixels, for a Shadow of `shadow` node
 /// radii over a node of `node_points` points, on a pane at `pixels_per_point`
@@ -872,10 +872,10 @@ pub(crate) mod tests {
     /// reach" means for a mixture: a row entirely under 1 is a shadow narrower
     /// than the bar says. And it fits in what a caster carries.
     ///
-    /// Walked off the ENUM and not off a list, so a row added to the table is
-    /// checked by having been added. The rows the claims are about are the ones
-    /// that carry a blur term; a distance row has no mixture to sum and is
-    /// measured by the two readings in `lattice_tests::shadows` instead.
+    /// The rows are listed by hand, so a row added to the table has to be
+    /// added here too. The claims are about the rows carrying a blur term; a
+    /// distance row has no mixture to sum and is measured by the two readings
+    /// in `lattice_tests::shadows` instead.
     #[test]
     fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
         use harmonigraph_scene::ShadowKernel::*;

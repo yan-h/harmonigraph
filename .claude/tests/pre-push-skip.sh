@@ -93,6 +93,18 @@ commit_change() { # commit_change <path> <content> -> prints new sha
   git -C "$tmp/r" rev-parse HEAD
 }
 
+# Moves a file with its content intact, so the pair is 100% similar and git
+# reports it as a rename under any `diff.renames` threshold a machine sets.
+commit_rename() { # commit_rename <from> <to> -> prints new sha
+  mkdir -p "$(dirname "$tmp/r/$2")"
+  git -C "$tmp/r" mv "$1" "$2"
+  git -C "$tmp/r" commit -qm "move $1 to $2" >/dev/null || {
+    echo "fixture did not move $1" >&2
+    exit 1
+  }
+  git -C "$tmp/r" rev-parse HEAD
+}
+
 # A deletion carries an all-zero local sha and sends no objects.
 new_repo
 head=$(git -C "$tmp/r" rev-parse HEAD)
@@ -133,6 +145,17 @@ new_repo
 base=$(git -C "$tmp/r" rev-parse HEAD)
 sha=$(commit_change docs/images/shot.png "not really a png")
 check no "a non-markdown file under docs/ does not run the gate" \
+  "refs/heads/b $sha refs/heads/b $base"
+
+# A rename reports one path to `--name-only`, the DESTINATION, so a commit that
+# carries code out of the workspace and into an exempt path reads as prose. The
+# push then ships a `crates/` deletion the remote never gated. Every case above
+# rewrites a file in place, which is the one edit shape that cannot produce a
+# rename pair, so this arm needs a fixture that moves a file to reach it.
+new_repo
+base=$(git -C "$tmp/r" rev-parse HEAD)
+sha=$(commit_rename crates/a.rs docs/a-design.md)
+check yes "code renamed onto an exempt path still runs the gate" \
   "refs/heads/b $sha refs/heads/b $base"
 
 # With no base to measure against, the gate runs rather than guessing.

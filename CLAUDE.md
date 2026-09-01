@@ -295,7 +295,9 @@ Two mechanisms carry the weight instead, and they are worth keeping straight:
 
 - **Every persisted struct carries a container-level `#[serde(default)]`** —
   `ViewConfig`, `SpectrumConfig`, `RenderConfig`, `RenderFrame`, `Camera`,
-  `Gradient`, and each `UiPersist` section but `dock`. `impl Default` is
+  `Gradient`, and each `UiPersist` section but `dock`. A struct NESTED in one
+  of those needs it in its own right and carries it: `GlowCurve` inside
+  `ViewConfig`, `SpiralView` inside its section. `impl Default` is
   therefore the one and only source of a field's fallback: no second set of
   values, and retuning the fresh look is free. A key missing from a blob
   costs that key alone —

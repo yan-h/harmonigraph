@@ -85,7 +85,7 @@ the tag takes one tick first: **Display tab → System page → Performance →
 Performance overlay**. System is a PAGE behind the Display tab's picker, not a
 tab of its own — a session that tells Yan to open a System pane is naming
 something the dock does not have.
-It opens in the editor's bottom-right corner and is DRAGGED from there, so
+It opens in the editor's bottom-left corner and is DRAGGED from there, so
 wherever it was last left is where it is — no session can say which corner to
 look in.
 

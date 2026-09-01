@@ -194,7 +194,7 @@ The flags worth knowing (`--help` lists them all):
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
 | `--ui-state` | use a different look than the one in the take |
-| `--playhead` | lay the whole take's spectrogram out at once and sweep a playhead through it |
+| `--playhead` | lay the render window's spectrogram out at once and sweep a playhead through it |
 
 ### Where the video starts
 
@@ -236,12 +236,13 @@ resolution; raise it for chunkier text, lower it to fit more lattice in.
 
 `--playhead` changes how time reads. Normally the spectrogram and roll
 scroll past a fixed now-line, showing the last few seconds. With `--playhead`
-the whole take is laid out at once — the entire spectrogram across the frame —
-and a playhead sweeps through it, so the finished shape of the piece is visible
-the whole way rather than arriving and scrolling off. It needs audio (the
+the render window is laid out at once — its whole spectrogram across the
+frame — and a playhead sweeps through it, so the finished shape is visible the
+whole way rather than arriving and scrolling off. With no `--start`/`--end`
+that window is the whole take, which is every auto-render. It needs audio (the
 spectrogram is audio-derived) and uses whatever spectrogram and roll look the
-take already carries. The roll is laid out ahead too — the whole piece is
-on screen from the first frame, not only the spectrogram.
+take already carries. The roll is laid out ahead too, and is the whole piece
+whatever the window is — so under a trim the two carry different spans.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of
 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
