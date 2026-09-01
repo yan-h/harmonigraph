@@ -175,6 +175,9 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         )
     };
     let sector_sd = |uv: glam::Vec2, inner: f32, outer: f32, edges: [f32; 2]| {
+        if outer <= inner {
+            return f32::MAX;
+        }
         let (q, edge) = fold(uv, edges);
         let side = edge.y * q.x - edge.x * q.y;
         let arc = q.length() - outer;
@@ -189,7 +192,36 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         let pie = arc.max(edge_distance * sign);
         let gap = if q.dot(edge) > 0.0 { scene.octave_gap * 0.5 } else { 0.0 };
         let annulus = (uv.length() - 0.5 * (inner + outer)).abs() - 0.5 * (outer - inner);
-        annulus.max(pie).max(side + gap)
+        if edges[0] - edges[1] > std::f32::consts::PI {
+            return annulus.max(pie).max(side + gap);
+        }
+
+        let gap = scene.octave_gap * 0.5;
+        let normal = glam::Vec2::new(edge.y, -edge.x);
+        let radius = q.length();
+        let axis_t = gap * edge.y / edge.x.max(1e-6);
+        let inner_t = (inner * inner - gap * gap).max(0.0).sqrt();
+        let outer_t = (outer * outer - gap * gap).max(0.0).sqrt();
+        let segment_start = axis_t.max(inner_t);
+        if segment_start > outer_t {
+            return f32::MAX;
+        }
+        let side_t = q.dot(edge).clamp(segment_start, outer_t);
+        let mut distance = (q - (side_t * edge - gap * normal)).length();
+        let direction = q / radius.max(1e-6);
+        let outer_at = direction * outer;
+        if normal.dot(outer_at) + gap <= 0.0 {
+            distance = distance.min((radius - outer).abs());
+        }
+        let inner_at = direction * inner;
+        if normal.dot(inner_at) + gap <= 0.0 {
+            distance = distance.min((radius - inner).abs());
+        }
+        if radius >= inner && radius <= outer && normal.dot(q) + gap <= 0.0 {
+            -distance
+        } else {
+            distance
+        }
     };
     let marked_slot = harmonigraph_scene::MIDDLE_C_SLOT as i32;
     let marked_edges = sector(marked_slot);
@@ -220,6 +252,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     let mut worst_at = (0u32, 0u32);
     let mut saw_gap = false;
     let mut saw_mark = false;
+    let mut saw_mark_corner = false;
     for ty in y..y + h {
         for tx in x..x + w {
             let point = glam::Vec2::new(
@@ -243,12 +276,17 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
             let radius = uv.length();
             saw_gap |= want > 0.0 && radius > scene.outer_inner && radius < scene.outer_outer;
             saw_mark |= want < 0.0 && radius > mark_in && radius < mark_out;
+            let (q, edge) = fold(uv, marked_edges);
+            let side = edge.y * q.x - edge.x * q.y + scene.octave_gap * 0.5;
+            saw_mark_corner |=
+                radius > mark_out && radius < mark_out + 0.15 && side > 0.0 && side < 0.15;
             checked += 1;
         }
     }
     assert!(checked > 2_000, "only {checked} texels reached the analytic comparison");
     assert!(saw_gap, "the fixture never sampled between two ring strokes");
     assert!(saw_mark, "the fixture never sampled inside its marked sector");
+    assert!(saw_mark_corner, "the fixture never sampled outside a marked sector's corner");
     assert!(
         worst <= tolerance,
         "the node cell is off by {worst:.4} points at {worst_at:?}; tolerance is {tolerance:.4}, \
@@ -1309,6 +1347,33 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
              frame and {alone} without, so its shadow is not reaching the bloom's copy",
         );
     }
+}
+
+/// A mark whose strip has no width casts no Distance shadow.
+///
+/// The collapsed radial pair remains the layer's off switch even while its
+/// slot and fade inputs would otherwise keep it live.
+#[test]
+fn a_zero_width_mark_casts_no_distance_shadow() {
+    const SHADOW: f32 = 0.5;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+
+    let staged = |slots| {
+        let mut scene = on_ground(SHADOW, 1.0);
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        scene.mark_thickness = 0.0;
+        scene.nodes[0].melody_slots = slots;
+        scene.nodes[0].melody_level = f32::from(slots != 0);
+        scene.nodes[0].glow.marked = f32::from(slots != 0);
+        scene
+    };
+    let absent = shooter.shot(&staged(0));
+    let collapsed = shooter.shot(&staged(MIDDLE_C));
+    let moved = differing_pixels(&collapsed, &absent);
+    assert_eq!(moved, 0, "a collapsed mark strip left ink or a Distance contour in the frame",);
 }
 
 /// How much further a MARKED node's shadow reaches than an unmarked one's is

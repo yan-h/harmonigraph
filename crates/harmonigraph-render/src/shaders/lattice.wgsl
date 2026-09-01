@@ -1669,12 +1669,12 @@ fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
 // The signed field and level of one annular sector. The radial field arrives
 // from [`glyph_band`], so every slot shares one construction of the annulus;
 // this intersects it with the slot's pie and its constant-width side gaps.
-// `max` keeps the exact zero contour but is a conservative distance where a
-// radial and angular boundary meet. That continuous bound is the field this
-// layer defines; the cell test separately pins its transform and storage.
+// The distance follows the finite side segments and constrained arcs: a `max`
+// of the radial and angular distances keeps the contour but carries its switch
+// line out past every corner, which a Distance shadow makes visible.
 fn outer_glyph(
     s: i32, ring: OctRing,
-    uv: vec2<f32>, band: NodeLayer, outer: f32, aa: f32,
+    uv: vec2<f32>, band: NodeLayer, inner: f32, outer: f32, aa: f32,
 ) -> NodeLayer {
     let edges = oct_sector(s, ring);
     let fold = sector_fold(uv, edges);
@@ -1684,6 +1684,13 @@ fn outer_glyph(
     let gap = select(0.0, slice_gap_half(), dot(fold.q, fold.e) > 0.0);
     let side = sector_side(fold) + gap;
     let pie = sector_pie(fold, outer);
+    let width = edges.x - edges.y;
+    var sd: f32;
+    if width > TAU * 0.5 {
+        sd = max(max(band.sd, pie), side);
+    } else {
+        sd = annular_sector_distance(fold, inner, outer, slice_gap_half());
+    }
     // The control readout is the existing rasterization exactly: softened
     // ownership and two forward-ray gap cuts, multiplied by the radial band.
     // These are the same constraints the signed field above carries, read at
@@ -1697,7 +1704,7 @@ fn outer_glyph(
     let gaps =
         (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
         * (1.0 - aa_inside(gap_half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)));
-    return NodeLayer(max(max(band.sd, pie), side), band.level, band.coverage * own * gaps);
+    return NodeLayer(sd, band.level, band.coverage * own * gaps);
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
@@ -1918,7 +1925,7 @@ fn spectral_ring(
         // `outer_glyph` whole: the sector's own edges and the same constant
         // gap between neighbours, so one rhythm of slices runs through both
         // rings instead of each drawing its own.
-        let layer = outer_glyph(slot, oct, uv, band, radii.y, aa);
+        let layer = outer_glyph(slot, oct, uv, band, radii.x, radii.y, aa);
         let c = layer_coverage(layer);
         sd = min(sd, layer.sd);
         if c > cov {
@@ -2040,6 +2047,7 @@ fn mark_extension(
     ring: OctRing,
     uv: vec2<f32>,
     strip: NodeLayer,
+    inner: f32,
     outer: f32,
     aa: f32,
     analytic: bool,
@@ -2058,7 +2066,7 @@ fn mark_extension(
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
-            let layer = outer_glyph(s, ring, uv, strip, outer, aa);
+            let layer = outer_glyph(s, ring, uv, strip, inner, outer, aa);
             sd = min(sd, layer.sd);
             coverage = max(coverage, layer.coverage);
         }
@@ -2126,6 +2134,49 @@ fn sector_pie(f: SectorFold, r: f32) -> f32 {
 // negative inside the wedge, positive outside it.
 fn sector_side(f: SectorFold) -> f32 {
     return f.e.y * f.q.x - f.e.x * f.q.y;
+}
+
+// Exact signed distance to a gap-cut annular sector no wider than half a turn.
+// In the folded frame the two angular edges are one line. Its finite boundary
+// runs between the inner and outer circles, while each circle contributes only
+// the arc on the inside of that line. Measuring against those three features
+// keeps the Euclidean corner a Distance shadow is defined by.
+fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f32 {
+    if outer <= inner {
+        return EMPTY_DISTANCE;
+    }
+    let normal = vec2<f32>(f.e.y, -f.e.x);
+    let radius = length(f.q);
+
+    // A point on the cut line is `t * e - gap * normal`. Folding makes x = 0
+    // the place the two cuts meet, so the segment starts at that meeting or at
+    // the inner circle, whichever lies farther out.
+    let axis_t = gap * f.e.y / max(f.e.x, 1e-6);
+    let inner_t = sqrt(max(inner * inner - gap * gap, 0.0));
+    let outer_t = sqrt(max(outer * outer - gap * gap, 0.0));
+    let segment_start = max(axis_t, inner_t);
+    if segment_start > outer_t {
+        return EMPTY_DISTANCE;
+    }
+
+    let side_t = clamp(dot(f.q, f.e), segment_start, outer_t);
+    var distance = length(f.q - (side_t * f.e - gap * normal));
+
+    // A radial projection reaches a circle's arc only while it remains inside
+    // the angular cut. Otherwise that arc's nearest point is its endpoint,
+    // already carried by the side segment above.
+    let direction = f.q / max(radius, 1e-6);
+    let outer_at = direction * outer;
+    if dot(normal, outer_at) + gap <= 0.0 {
+        distance = min(distance, abs(radius - outer));
+    }
+    let inner_at = direction * inner;
+    if dot(normal, inner_at) + gap <= 0.0 {
+        distance = min(distance, abs(radius - inner));
+    }
+
+    let inside = radius >= inner && radius <= outer && dot(normal, f.q) + gap <= 0.0;
+    return select(distance, -distance, inside);
 }
 
 /// The three derivatives-and-geometry answers every layer of a node is drawn
@@ -2376,7 +2427,7 @@ fn node_ink(
         if level <= 0.0 && presence <= 0.0 {
             continue;
         }
-        let shape_layer = outer_glyph(slot, oct, in.uv, band, band_out, aa);
+        let shape_layer = outer_glyph(slot, oct, in.uv, band, band_in, band_out, aa);
         let shape = layer_coverage(shape_layer);
         // This slot's bit in the mark masks, or none at all where the ring
         // names an octave the packing has no room for. The shift is CLAMPED
@@ -2518,6 +2569,7 @@ fn node_ink(
         oct,
         in.uv,
         NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
+        mark_in,
         mark_out,
         aa,
         analytic,
@@ -2527,6 +2579,7 @@ fn node_ink(
         oct,
         in.uv,
         NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
+        mark_in,
         mark_out,
         aa,
         analytic,
@@ -3150,6 +3203,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                     oct,
                     p,
                     NodeLayer(-EMPTY_DISTANCE, 1.0, 1.0),
+                    band_in,
                     EMPTY_DISTANCE,
                     arc,
                 ),
@@ -3188,6 +3242,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 oct,
                 p,
                 NodeLayer(-EMPTY_DISTANCE, clamp(in.params.y, 0.0, 1.0), 1.0),
+                mark_in,
                 EMPTY_DISTANCE,
                 arc,
                 false,
@@ -3199,6 +3254,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 oct,
                 p,
                 NodeLayer(-EMPTY_DISTANCE, clamp(in.params.z, 0.0, 1.0), 1.0),
+                mark_in,
                 EMPTY_DISTANCE,
                 arc,
                 false,
