@@ -2877,52 +2877,49 @@ fn plus_sd(uv: vec2<f32>) -> f32 {
     return plus_box_sd(uv, 1.0);
 }
 
-// The share of its shadow a marker keeps along the taper of its arms.
-//
-// The distance field reaches the whole arm because the taper says how its ink
-// ENDS rather than where the arm ends. Its depth gives up the share of the
-// shadow that the taper gives up of the arm's own length: a square end keeps a
-// whole shadow, while an arm fading from the crossing has no shadow at its
-// tips. Giving up the ramp whole would leave only a short cross casting, and a
-// wide shadow would round that into a disc behind the marker.
-fn plus_shadow_level(uv: vec2<f32>) -> f32 {
+// The longitudinal taper of a marker's ink, folded onto the nearest arm.
+fn plus_taper(uv: vec2<f32>) -> f32 {
     let p = abs(uv);
     let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
     let start = min(u.misc5.y, 1.0 - 1e-3);
     let fade = smoothstep(start, 1.0, clamp(q.x, 0.0, 1.0));
-    return 1.0 - fade * (1.0 - start);
+    return 1.0 - fade;
+}
+
+// The longitudinal fade the shadow takes outside the arm. A square end is
+// represented by the taper start held 0.001 short of its tip, so that sentinel
+// keeps the shadow whole instead of cutting its blur off at the box.
+fn plus_shadow_taper(uv: vec2<f32>) -> f32 {
+    return select(plus_taper(uv), 1.0, u.misc5.y >= 1.0 - 1e-3);
+}
+
+// How much of the marker's full arm box this fragment is inside, before the
+// longitudinal taper changes its ink.
+fn plus_body_coverage(uv: vec2<f32>, aa: f32) -> f32 {
+    return aa_inside(0.0, plus_sd(uv), aa);
 }
 
 // How much of the marker this fragment is inside, `uv` measured in the arm's
 // own length and `aa` the soft band the whole shape is cut with.
 fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
-    let p = abs(uv);
-    let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
     // The four ends taper: an arm is solid out to `misc5.y` of its length and
     // fades to nothing by its tip, the way a line drawn into a node arrives at
-    // nothing rather than stopping at something. `q.x` is the distance along
-    // whichever arm this fragment is on — the same fold that spares the union
-    // spares this a branch, since folding puts every arm on one axis.
+    // nothing rather than stopping at something. `plus_taper` reads the
+    // distance along whichever arm this fragment is on through the same fold
+    // that spares the union a branch.
     //
     // ALPHA rather than width. A cross narrowed to a point is four spikes,
     // which reads as a drawn glyph; one that fades stops being there, which is
     // what a marker running out has to say.
     //
-    // Inside the crossing the two arms' claims meet, and `q.x` is the
-    // Chebyshev distance there — so a fully tapered plus is brightest at the
-    // centre and eases off in every direction at once, with no seam where the
-    // arms overlap.
+    // Inside the crossing the two arms' claims meet, so a fully tapered plus
+    // is brightest at the centre and eases off in every direction at once,
+    // with no seam where the arms overlap.
     //
     // The sides do NOT taper. Only the ends are being softened — where the
     // marker stops — and fading the sides as well would blur the plus rather
     // than let it reach out of its crossing.
-    //
-    // `derive_plus_taper_start` already holds the start short of the tip; the
-    // guard is here too because a zero-width `smoothstep` has no answer and
-    // this is the one line that would have to give it.
-    let start = min(u.misc5.y, 1.0 - 1e-3);
-    let taper = 1.0 - smoothstep(start, 1.0, q.x);
-    return aa_inside(0.0, plus_sd(uv), aa) * taper;
+    return plus_body_coverage(uv, aa) * plus_taper(uv);
 }
 
 @vertex
@@ -3613,6 +3610,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // narrows, and the arms keep their ends instead of squaring off against
     // the quad at the bottom of the bar.
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
+    let body = plus_body_coverage(in.uv, aa);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
     // The SHADOW, multiplied into everything already in the frame under it. A
     // blur row reads the field's shared cell; a distance row spends this
@@ -3622,7 +3620,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // — the painter's order the pass already has is the whole of what decides
     // which.
     let d_points = plus_sd(in.uv) * in.shadow_box.y;
-    let distance_level = in.shadow_at.z * plus_shadow_level(in.uv);
+    let distance_level = in.shadow_at.z;
     let t = plus_shadow_through(
         in.shadow_box.x,
         d_points,
@@ -3630,11 +3628,17 @@ fn plus_paint(in: PlusVsOut) -> Painted {
         in.shadow_at.z,
         distance_level,
     );
-    let final_alpha = 1.0 - (1.0 - alpha) * t.seen;
+    // The full arm box masks this marker's OWN shadow. Outside that surface the
+    // shadow takes the ink's longitudinal taper too, so neither darkness under
+    // a transparent tip nor a hollow outline around it survives the fade.
+    let shadow_exposure = (1.0 - body) * plus_shadow_taper(in.uv);
+    let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
+    let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
+    let final_alpha = 1.0 - (1.0 - alpha) * seen_through;
     // The bloom's copy takes the deeper of the two, and the discard reads that
     // one — the larger alpha, so a shadow only the bright pass can show is not
     // thrown away with the fragment (`node_paint` states the case in full).
-    let bloom_alpha = 1.0 - (1.0 - alpha) * t.bloom;
+    let bloom_alpha = 1.0 - (1.0 - alpha) * bloom_through;
     if bloom_alpha < INK_FLOOR {
         discard;
     }
