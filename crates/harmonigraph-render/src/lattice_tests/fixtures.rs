@@ -213,8 +213,7 @@ pub(super) fn parity_scene() -> Scene {
         glow_shadow_gain: 2.5,
         glow_shadow_curve: 1.0,
         glow_shadow_name: 1.0,
-        glow_shadow_spread: 0.5,
-        glow_shadow_blur: 0.25,
+        glow_shadow_softness: 0.6,
         glow_shadow_kernel: harmonigraph_scene::ShadowKernel::Spread,
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in

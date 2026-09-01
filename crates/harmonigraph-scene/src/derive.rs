@@ -562,8 +562,7 @@ pub fn derive_scene(
             .glow_shadow_curve
             .clamp(crate::GLOW_SHADOW_CURVE_MIN, crate::GLOW_SHADOW_CURVE_MAX),
         glow_shadow_name: view.glow_shadow_name.clamp(0.0, crate::GLOW_SHADOW_NAME_MAX),
-        glow_shadow_spread: view.glow_shadow_spread.clamp(0.0, crate::GLOW_SHADOW_SPREAD_MAX),
-        glow_shadow_blur: view.glow_shadow_blur.clamp(0.0, crate::GLOW_SHADOW_BLUR_MAX),
+        glow_shadow_softness: view.glow_shadow_softness.clamp(0.0, crate::GLOW_SHADOW_SOFTNESS_MAX),
         // No clamp: an enum is in range or the blob did not parse.
         glow_shadow_kernel: view.glow_shadow_kernel,
         glow_wash: view.glow_wash.clamp(0.0, 1.0),

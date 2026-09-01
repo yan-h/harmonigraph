@@ -955,8 +955,7 @@ fn two_facing_strokes_cast_deeper_between_them_than_either_alone() {
     shooter.clear = over_grey_clear();
     let mut scene = inked_on_grey(SHADOW, 0.5);
     scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
-    scene.glow_shadow_spread = 0.0;
-    scene.glow_shadow_blur = 0.5;
+    scene.glow_shadow_softness = 1.0;
     let at = on_screen(&scene, SIZE, NAME_AT);
     let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
     let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));

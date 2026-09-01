@@ -632,18 +632,21 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// source pieces combine: Distance retains the nearest answer, while Spread
 /// unions the pieces before its final Gaussian.
 ///
-/// Spread begins with a half-Shadow-width dilation and a quarter-width
-/// Gaussian, then exposes both as independent shares of the displayed width.
+/// Spread divides the displayed Shadow reach between dilation and a Gaussian
+/// tail. Softness 0 spends all of it on the exact outward contour; softness 1
+/// spends all of it on the Gaussian's three-sigma reach. Every value between
+/// has the same outer reach, so the Shadow bar owns size and Softness owns the
+/// construction's form.
 ///
 /// The table is here and nowhere else. The packer sizes each term's cell off
 /// the same σ ratio the sampler mixes by, and two copies of one row is the
 /// mirror that rots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShadowKernel {
-    /// The caster's half-level contour spread outward, then blurred. It starts
-    /// at half a Shadow width of spread and a quarter-width Gaussian; both
-    /// components are adjustable. Nearby pieces are united before the blur,
-    /// while the spread keeps a wide shadow tied to the source form.
+    /// The caster's half-level contour spread outward, then blurred. Softness
+    /// divides one fixed reach between the exact dilation and the Gaussian's
+    /// three-sigma tail. Nearby pieces are united before the blur, while the
+    /// spread keeps a wide shadow tied to the source form.
     #[default]
     Spread,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
@@ -670,10 +673,18 @@ impl ShadowKernel {
     /// and the sampler cannot come to read the table differently.
     pub fn terms(self) -> &'static [KernelTerm] {
         use TermKind::{Distance, Spread};
-        const SPREAD_BLUR: [KernelTerm; 1] =
-            [KernelTerm { weight: 1.0, sigma: 0.5, spread: 1.0, kind: Spread }];
-        // σ 1: a distance term's own width IS the Shadow bar's, so a second
-        // ratio here would be a second width to keep in step for nothing.
+        // Fresh Softness is 0.6: 40% of the calibrated reach in dilation and
+        // 60% in the three-sigma Gaussian tail. The row's established reach is
+        // 2.5 picture σ, so those become 1.0 and 0.5 in this table's units.
+        const SPREAD_BLUR: [KernelTerm; 1] = [KernelTerm {
+            weight: 1.0,
+            sigma: 2.5 * crate::GLOW_SHADOW_SOFTNESS_DEFAULT / REACH_SIGMAS,
+            spread: 2.5 * (1.0 - crate::GLOW_SHADOW_SOFTNESS_DEFAULT),
+            kind: Spread,
+        }];
+        // Distance keeps its established calibration. Its exponential is
+        // effectively spent within one displayed width and windowed to exact
+        // zero at two; changing that profile is independent of Softness.
         const DISTANCE: [KernelTerm; 1] =
             [KernelTerm { weight: 0.0, sigma: 1.0, spread: 0.0, kind: Distance }];
         match self {
@@ -682,24 +693,26 @@ impl ShadowKernel {
         }
     }
 
-    /// This kernel's terms with the Spread row's two component widths set as
-    /// shares of the displayed Shadow width.
+    /// This kernel's terms with the Spread row divided at `softness`.
     ///
-    /// The table is expressed in picture σ and one Shadow width is two of
-    /// those, hence the factor of two at this one conversion site. Other rows
-    /// ignore the values and retain their fixed calibration.
-    pub fn terms_with(self, spread: f32, blur: f32) -> Vec<KernelTerm> {
+    /// Dilation takes `(1 - softness)` of the row's calibrated 2.5-picture-σ
+    /// reach; Gaussian σ takes one third of the remainder, so its three-sigma
+    /// cutoff ends at the same place. Their sum is therefore 2.5 picture σ at
+    /// every setting. Other rows ignore the value and retain their fixed
+    /// calibration.
+    pub fn terms_with(self, softness: f32) -> Vec<KernelTerm> {
         let mut terms = self.terms().to_vec();
         if self == ShadowKernel::Spread {
-            let bounded = |value: f32, max| {
-                if value.is_nan() {
-                    0.0
-                } else {
-                    value.clamp(0.0, max)
-                }
+            let softness = if softness.is_nan() {
+                0.0
+            } else {
+                softness.clamp(0.0, crate::GLOW_SHADOW_SOFTNESS_MAX)
             };
-            terms[0].spread = 2.0 * bounded(spread, crate::GLOW_SHADOW_SPREAD_MAX);
-            terms[0].sigma = 2.0 * bounded(blur, crate::GLOW_SHADOW_BLUR_MAX);
+            // Read the calibration from the row itself, so retuning its fresh
+            // picture cannot silently give Softness a different outer edge.
+            let reach = terms[0].reach_sigmas();
+            terms[0].spread = reach * (1.0 - softness);
+            terms[0].sigma = reach * softness / REACH_SIGMAS;
         }
         terms
     }

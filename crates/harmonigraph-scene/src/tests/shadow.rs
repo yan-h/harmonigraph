@@ -29,46 +29,41 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
     }
 }
 
-/// Spread and Blur are independent shares of the displayed Shadow width. The
-/// kernel table works in picture σ, which is half that width, so this pins the
-/// conversion as well as the saved-view and derived-scene ranges.
+/// Softness partitions one fixed Shadow reach between exact dilation and a
+/// three-sigma Gaussian tail. The kernel table works in picture σ, which is
+/// half the displayed reference width, so every setting must still end at the
+/// row's calibrated 2.5 table σ.
 #[test]
-fn spread_and_blur_are_independent_width_controls() {
+fn softness_divides_one_fixed_shadow_reach() {
     let fresh = ViewConfig::default();
     assert_eq!(fresh.glow_shadow_kernel, ShadowKernel::Spread);
-    assert_eq!(fresh.glow_shadow_spread, 0.5);
-    assert_eq!(fresh.glow_shadow_blur, 0.25);
+    assert_eq!(fresh.glow_shadow, 0.16);
+    assert_eq!(fresh.glow_shadow_softness, GLOW_SHADOW_SOFTNESS_DEFAULT);
     assert_eq!(
-        ShadowKernel::Spread.terms_with(fresh.glow_shadow_spread, fresh.glow_shadow_blur),
+        ShadowKernel::Spread.terms_with(fresh.glow_shadow_softness),
         ShadowKernel::Spread.terms(),
         "the adjustable row must reproduce its calibrated defaults",
     );
-    let non_finite = ShadowKernel::Spread.terms_with(f32::NAN, f32::INFINITY);
-    assert_eq!(non_finite[0].spread, 0.0);
-    assert_eq!(non_finite[0].sigma, 2.0 * GLOW_SHADOW_BLUR_MAX);
+    let non_finite = ShadowKernel::Spread.terms_with(f32::NAN);
+    assert_eq!(non_finite[0].spread, 2.5);
+    assert_eq!(non_finite[0].sigma, 0.0);
 
-    for (asked_spread, spread, asked_blur, blur) in
-        [(-1.0, 0.0, 0.40, 0.40), (0.20, 0.20, 2.0, 1.0)]
-    {
+    for (asked, softness) in [(-1.0, 0.0), (0.35, 0.35), (2.0, 1.0)] {
         let mut view = ViewConfig {
-            glow_shadow_spread: asked_spread,
-            glow_shadow_blur: asked_blur,
+            glow_shadow_softness: asked,
             glow_shadow_kernel: ShadowKernel::Spread,
             ..ViewConfig::default()
         };
         let scene =
             scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0);
-        assert_eq!(scene.glow_shadow_spread, spread);
-        assert_eq!(scene.glow_shadow_blur, blur);
+        assert_eq!(scene.glow_shadow_softness, softness);
 
-        let terms =
-            ShadowKernel::Spread.terms_with(scene.glow_shadow_spread, scene.glow_shadow_blur);
-        assert_eq!(terms[0].spread, 2.0 * spread, "Spread was not converted from whole widths");
-        assert_eq!(terms[0].sigma, 2.0 * blur, "Blur was not converted from whole widths");
-        assert_eq!(terms[0].reach_sigmas(), 2.0 * spread + 6.0 * blur);
+        let terms = ShadowKernel::Spread.terms_with(scene.glow_shadow_softness);
+        assert!((terms[0].spread - 2.5 * (1.0 - softness)).abs() < 1e-6);
+        assert!((terms[0].sigma - 2.5 * softness / REACH_SIGMAS).abs() < 1e-6);
+        assert!((terms[0].reach_sigmas() - 2.5).abs() < 1e-6);
 
         view.sanitize();
-        assert_eq!(view.glow_shadow_spread, spread);
-        assert_eq!(view.glow_shadow_blur, blur);
+        assert_eq!(view.glow_shadow_softness, softness);
     }
 }

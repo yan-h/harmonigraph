@@ -954,17 +954,16 @@ pub(crate) mod tests {
                     terms,
                     &[harmonigraph_scene::KernelTerm {
                         weight: 1.0,
-                        sigma: 0.5,
-                        spread: 1.0,
+                        sigma: 2.5 * harmonigraph_scene::GLOW_SHADOW_SOFTNESS_DEFAULT
+                            / harmonigraph_scene::REACH_SIGMAS,
+                        spread: 2.5 * (1.0 - harmonigraph_scene::GLOW_SHADOW_SOFTNESS_DEFAULT),
                         kind: harmonigraph_scene::TermKind::Spread,
                     }],
-                    "Spread must default to a quarter-Shadow-width Gaussian behind a \
-                     half-Shadow-width dilation",
+                    "Spread must default to 40% dilation and 60% Gaussian tail",
                 );
                 assert!(
                     (kernel.reach_sigmas() - 2.5).abs() < 1e-6,
-                    "Spread reaches {} picture sigmas rather than its one-sigma dilation plus a \
-                     three-sigma blur",
+                    "Spread reaches {} picture sigmas rather than the Shadow bar's fixed reach",
                     kernel.reach_sigmas(),
                 );
                 continue;
@@ -972,30 +971,33 @@ pub(crate) mod tests {
         }
     }
 
-    /// The packer carries the independently configured spread to every
-    /// analytic caster in pane points; changing the blur must not move that
-    /// threshold, and a zero blur must remain finite.
+    /// The packer carries Softness's complementary spread and blur to every
+    /// analytic caster while their combined reach stays fixed, and the hard
+    /// end remains finite.
     #[test]
-    fn spread_and_blur_pack_as_independent_lengths() {
+    fn softness_partitions_one_packed_reach() {
         use harmonigraph_scene::ShadowKernel;
         let caster = caster(20.0, 30.0, 40.0, 12.0);
-        let picture_sigma = 10.0;
+        // Small enough that even the all-dilation endpoint stays under the
+        // 24-texel spread cap; the separate case below exercises the cap.
+        let picture_sigma = 8.0;
         let px_per_point = 2.0;
-        for blur in [0.0, 0.25, 0.8] {
-            let terms = ShadowKernel::Spread.terms_with(0.2, blur);
+        for softness in [0.0, 0.25, 0.8, 1.0] {
+            let terms = ShadowKernel::Spread.terms_with(softness);
             let packed = pack(&[caster], picture_sigma, px_per_point, 4096, &terms);
             let cell = packed.boxes[0];
             assert_eq!(cell.who[1], SPREAD_KIND);
-            assert!((cell.who[3] - 2.0).abs() < 1e-6, "Blur moved the Spread threshold");
+            let expected_spread = picture_sigma * 2.5 * (1.0 - softness) / px_per_point;
+            assert!((cell.who[3] - expected_spread).abs() < 1e-6);
+            assert!((terms[0].reach_sigmas() - 2.5).abs() < 1e-6);
             assert!(cell.terms.iter().all(|value| value.is_finite()));
-            if blur == 0.0 {
+            if softness == 0.0 {
                 assert_eq!(cell.terms[0], px_per_point, "a hard spread was downsampled");
                 assert_eq!(cell.terms[1], 0.0, "a hard spread acquired a Gaussian");
             }
         }
 
-        let terms =
-            ShadowKernel::Spread.terms_with(harmonigraph_scene::GLOW_SHADOW_SPREAD_MAX, 0.0);
+        let terms = ShadowKernel::Spread.terms_with(0.0);
         let picture_sigma = 60.0;
         let packed = pack(&[caster], picture_sigma, px_per_point, 4096, &terms);
         let cell = packed.boxes[0];
@@ -1150,8 +1152,7 @@ pub(crate) mod tests {
                 ratio <= 5.0,
                 "Spread packs {ratio:.2}x one Gaussian's cells at {what}, beyond its cost bound",
             );
-            let hard = harmonigraph_scene::ShadowKernel::Spread
-                .terms_with(harmonigraph_scene::GLOW_SHADOW_SPREAD_MAX, 0.0);
+            let hard = harmonigraph_scene::ShadowKernel::Spread.terms_with(0.0);
             let ratio = area(&hard) / plain;
             eprintln!("Hard Spread at {what}: {ratio:.2}x one Gaussian's cells");
             assert!(

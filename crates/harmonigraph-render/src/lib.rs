@@ -1315,8 +1315,7 @@ impl LatticeCallback {
         // The kernel's own row, read once: the packer sizes a cell off each
         // term's σ and every quad is grown by the WIDEST of them, so the table
         // is consulted here and nowhere else in this walk.
-        let kernel =
-            scene.glow_shadow_kernel.terms_with(scene.glow_shadow_spread, scene.glow_shadow_blur);
+        let kernel = scene.glow_shadow_kernel.terms_with(scene.glow_shadow_softness);
         let kernel_reach = kernel.iter().fold(0.0f32, |reach, term| reach.max(term.reach_sigmas()));
         let kernel_len = kernel.len();
         let shadow_reach = 0.5 * scene.glow_shadow.max(0.0) * kernel_reach * node_points.max(0.0);

@@ -1696,33 +1696,33 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
     assert_eq!(differing_pixels(&shot(Spread, 0.0), &shot(Distance, 0.0)), 0);
 }
 
-/// The Spread row's two component widths each reach the final picture, while
-/// both remain inert when Shadow depth shuts the feature off.
+/// Softness moves the Spread row between its hard contour and Gaussian limit
+/// without changing its reach, and remains inert when Shadow depth shuts the
+/// feature off.
 #[test]
-fn spread_and_blur_each_move_the_spread_rows_picture() {
+fn softness_moves_the_spread_rows_picture_without_moving_its_reach() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     shooter.clear = over_ground();
-    let mut shot = |spread, blur, depth| {
+    let mut shot = |softness, depth| {
         let mut scene = on_ground(0.4, depth);
         scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
-        scene.glow_shadow_spread = spread;
-        scene.glow_shadow_blur = blur;
+        scene.glow_shadow_softness = softness;
         scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
         shooter.shot_with(&scene, named)
     };
 
-    let reference = shot(0.2, 0.1, 0.85);
-    let spread = differing_pixels(&reference, &shot(0.8, 0.1, 0.85));
-    let blur = differing_pixels(&reference, &shot(0.2, 0.6, 0.85));
-    assert!(spread > 200, "the Spread control moved only {spread} pixels");
-    assert!(blur > 200, "the Blur control moved only {blur} pixels");
+    let reference = shot(0.6, 0.85);
+    let hard = differing_pixels(&reference, &shot(0.0, 0.85));
+    let gaussian = differing_pixels(&reference, &shot(1.0, 0.85));
+    assert!(hard > 200, "the hard end of Softness moved only {hard} pixels");
+    assert!(gaussian > 200, "the Gaussian end of Softness moved only {gaussian} pixels");
 
-    let shut = shot(0.2, 0.1, 0.0);
-    assert_eq!(differing_pixels(&shut, &shot(0.8, 0.1, 0.0)), 0);
-    assert_eq!(differing_pixels(&shut, &shot(0.2, 0.6, 0.0)), 0);
+    let shut = shot(0.6, 0.0);
+    assert_eq!(differing_pixels(&shut, &shot(0.0, 0.0)), 0);
+    assert_eq!(differing_pixels(&shut, &shot(1.0, 0.0)), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1802,8 +1802,7 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
 fn block_on_grey(
     shooter: &mut Shooter,
     kernel: harmonigraph_scene::ShadowKernel,
-    spread: f32,
-    blur: f32,
+    softness: f32,
     shadow: f32,
     depth: f32,
     side: f32,
@@ -1811,8 +1810,7 @@ fn block_on_grey(
     const GREY: f32 = 0.55;
     let mut scene = lit_node_and_a_name(0.0, shadow, depth);
     scene.glow_shadow_kernel = kernel;
-    scene.glow_shadow_spread = spread;
-    scene.glow_shadow_blur = blur;
+    scene.glow_shadow_softness = softness;
     scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
     shooter.clear =
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
@@ -1849,15 +1847,13 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let mut ratio = |label, kernel, spread, blur| {
-        let (bare, cast, min) =
-            block_on_grey(&mut shooter, kernel, spread, blur, SHADOW, DEPTH, SIDE);
-        // One σ out, which is half a Shadow width: far enough off the ink for
+    let mut ratio = |label, kernel, softness| {
+        let (bare, cast, min) = block_on_grey(&mut shooter, kernel, softness, SHADOW, DEPTH, SIDE);
+        // Half the displayed Shadow width out: far enough off the ink for
         // the two geometries to have parted and well inside either row's reach.
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
         scene.glow_shadow_kernel = kernel;
-        scene.glow_shadow_spread = spread;
-        scene.glow_shadow_blur = blur;
+        scene.glow_shadow_softness = softness;
         let d = sigma(&scene);
         let diag = d / std::f32::consts::SQRT_2;
         let dark = |p: glam::Vec2| {
@@ -1872,11 +1868,9 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
         );
         corner as f64 / edge as f64
     };
-    // Zero spread at a half-width blur is the Gaussian limit of the remaining
-    // construction, without keeping a separate picker row for it.
-    let blurred = ratio("Gaussian limit", Spread, 0.0, 0.5);
-    let distance = ratio("Distance", Distance, 0.5, 0.25);
-    let spread = ratio("Spread", Spread, 0.5, 0.25);
+    let blurred = ratio("Gaussian limit", Spread, 1.0);
+    let distance = ratio("Distance", Distance, 0.6);
+    let spread = ratio("Spread", Spread, 0.6);
     assert!(
         blurred < 0.7,
         "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
@@ -1929,11 +1923,10 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
     const GREY: f32 = 0.55;
     shooter.clear =
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
-    let mut form = |label, kernel, spread, blur| {
+    let mut form = |label, kernel, softness| {
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
         scene.glow_shadow_kernel = kernel;
-        scene.glow_shadow_spread = spread;
-        scene.glow_shadow_blur = blur;
+        scene.glow_shadow_softness = softness;
         // Grey under the whole counter, and the name still standing on the
         // node's band: a shadow with nothing beneath it to darken measures an
         // empty frame (#450), and a counter this wide runs past the band's own
@@ -1960,8 +1953,8 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         );
         (beside - middle) as f64 / beside as f64
     };
-    let blurred = form("Gaussian limit", Spread, 0.0, 0.5);
-    let distance = form("Distance", Distance, 0.5, 0.25);
+    let blurred = form("Gaussian limit", Spread, 1.0);
+    let distance = form("Distance", Distance, 0.6);
     assert!(
         blurred < 0.1,
         "at Shadow {SHADOW} a Gaussian holds {blurred:.2} of the gap's form, so the fixture's \

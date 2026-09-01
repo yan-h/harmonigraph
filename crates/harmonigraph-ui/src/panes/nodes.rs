@@ -17,11 +17,11 @@ use crate::SharedState;
 use harmonigraph_scene::{
     shadow_curve_level, GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX,
     GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
-    GLOW_SHADOW_BLUR_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX,
-    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_SHADOW_SPREAD_MAX, GLOW_STRENGTH_MAX,
-    MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX,
-    SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX,
-    SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
+    GLOW_SHADOW_NAME_MAX, GLOW_SHADOW_SOFTNESS_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX,
+    MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX,
+    SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -735,9 +735,9 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     ShadowKernel::Spread,
                     "Spread + blur",
                     "The ink's half-level contour is spread outward, then \
-                     softened with a Gaussian. It starts at half a Shadow width \
-                     of spread and a quarter-width blur; the controls below \
-                     adjust them independently. The spread keeps wide shadows \
+                     softened with a Gaussian. Softness divides the fixed \
+                     Shadow reach between that expansion and the Gaussian's \
+                     tail. The expansion keeps wide shadows \
                      tied to rings, corners and letterforms; the final blur lets \
                      nearby parts join without a nearest-distance seam. One \
                      cell per item.",
@@ -759,24 +759,22 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ],
         );
         if view.glow_shadow_kernel == ShadowKernel::Spread {
-            ValueBar::new(&mut view.glow_shadow_spread, 0.0..=GLOW_SHADOW_SPREAD_MAX, "Spread")
-                .display(|v| format!("{:.0}%", v * 100.0))
-                .show(ui)
-                .on_hover_text(
-                    "How far the caster is expanded before it is softened, as a \
-                 share of the displayed Shadow width. More preserves a wider \
-                 ring, corner or letter contour; 0% removes the expansion and \
-                 leaves an ordinary Gaussian. Double-click to type a value.",
-                );
-            ValueBar::new(&mut view.glow_shadow_blur, 0.0..=GLOW_SHADOW_BLUR_MAX, "Blur")
-                .display(|v| format!("{:.0}%", v * 100.0))
-                .show(ui)
-                .on_hover_text(
-                    "The Gaussian softness applied after the expansion, as a \
-                 share of the displayed Shadow width. More blends nearby \
-                 pieces more gradually; 0% leaves the expanded contour hard. \
-                 Double-click to type a value.",
-                );
+            ValueBar::new(
+                &mut view.glow_shadow_softness,
+                0.0..=GLOW_SHADOW_SOFTNESS_MAX,
+                "Softness",
+            )
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How the fixed Shadow reach is divided between exact \
+                     outward expansion and Gaussian softness. 0% is a hard \
+                     expanded contour; 100% is an ordinary Gaussian ending at \
+                     the same reach. Intermediate values preserve corners and \
+                     rings while letting nearby pieces blend. Changing this \
+                     does not change the shadow's outer extent. Double-click \
+                     to type a value.",
+            );
         }
         // The two that shape the depth rather than set it: how much of it the
         // picture's THINNEST ink gets, and where along the shadow's width it
