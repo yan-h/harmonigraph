@@ -438,7 +438,13 @@ fn plus_distance_term(who: f32) -> u32 {
 // A marker's shadow, with a distance term evaluated from the exact field its
 // scene draw already holds. Blur rows keep the shared cell and take the path
 // above unchanged.
-fn plus_shadow_through(who: f32, d_points: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
+fn plus_shadow_through(
+    who: f32,
+    d_points: f32,
+    points: vec2<f32>,
+    level: f32,
+    distance_level: f32,
+) -> ShadowThrough {
     if level <= 0.0 {
         return ShadowThrough(1.0, 1.0);
     }
@@ -452,8 +458,8 @@ fn plus_shadow_through(who: f32, d_points: f32, points: vec2<f32>, level: f32) -
         2.0 * shadow_casters[caster].sigma[term],
     );
     return ShadowThrough(
-        shadow_transmittance(full, glow_shadow_depth(), level, glow_shadow_curve()),
-        shadow_transmittance(full, 1.0, level, glow_shadow_curve()),
+        shadow_transmittance(full, glow_shadow_depth(), distance_level, glow_shadow_curve()),
+        shadow_transmittance(full, 1.0, distance_level, glow_shadow_curve()),
     );
 }
 
@@ -2871,12 +2877,20 @@ fn plus_sd(uv: vec2<f32>) -> f32 {
     return plus_box_sd(uv, 1.0);
 }
 
-// Where the taper's alpha crosses the distance field's contour threshold. A
-// smoothstep reaches 1/2 halfway through its interval, so this is the same arm
-// the blur cell treats as half-covered.
-fn plus_shadow_sd(uv: vec2<f32>) -> f32 {
+// The share of its shadow a marker keeps along the taper of its arms.
+//
+// The distance field reaches the whole arm because the taper says how its ink
+// ENDS rather than where the arm ends. Its depth gives up the share of the
+// shadow that the taper gives up of the arm's own length: a square end keeps a
+// whole shadow, while an arm fading from the crossing has no shadow at its
+// tips. Giving up the ramp whole would leave only a short cross casting, and a
+// wide shadow would round that into a disc behind the marker.
+fn plus_shadow_level(uv: vec2<f32>) -> f32 {
+    let p = abs(uv);
+    let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
     let start = min(u.misc5.y, 1.0 - 1e-3);
-    return plus_box_sd(uv, mix(start, 1.0, 0.5));
+    let fade = smoothstep(start, 1.0, clamp(q.x, 0.0, 1.0));
+    return 1.0 - fade * (1.0 - start);
 }
 
 // How much of the marker this fragment is inside, `uv` measured in the arm's
@@ -3607,8 +3621,15 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // it reaches them, and a node drawn after it darkens the cross the same way
     // — the painter's order the pass already has is the whole of what decides
     // which.
-    let d_points = plus_shadow_sd(in.uv) * in.shadow_box.y;
-    let t = plus_shadow_through(in.shadow_box.x, d_points, in.shadow_at.xy, in.shadow_at.z);
+    let d_points = plus_sd(in.uv) * in.shadow_box.y;
+    let distance_level = in.shadow_at.z * plus_shadow_level(in.uv);
+    let t = plus_shadow_through(
+        in.shadow_box.x,
+        d_points,
+        in.shadow_at.xy,
+        in.shadow_at.z,
+        distance_level,
+    );
     let final_alpha = 1.0 - (1.0 - alpha) * t.seen;
     // The bloom's copy takes the deeper of the two, and the discard reads that
     // one — the larger alpha, so a shadow only the bright pass can show is not
