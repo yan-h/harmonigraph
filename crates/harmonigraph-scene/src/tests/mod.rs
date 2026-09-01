@@ -12,6 +12,7 @@ mod marks;
 mod nodes;
 mod plus;
 mod scroll;
+mod shadow;
 mod sheet;
 mod shimmer;
 mod trail;

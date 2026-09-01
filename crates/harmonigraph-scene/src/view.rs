@@ -1201,12 +1201,9 @@ pub struct ViewConfig {
     /// on a bright field. A ring standing in a pool that brightens outward is
     /// what the eye reads as the ring being the source of the light.
     ///
-    /// The ceiling is [`GLOW_SHADOW_MAX`], a whole radius where the two
-    /// paddings stop at [`GAP_MAX`]: what stops a shadow reading as a black RIM
-    /// rather than as a lack of light is a blur broad enough to come off at the
-    /// rate the skirt does, and that is a width a good deal past any padding's.
-    /// Nothing in the picture bounds it short of that — every caster's own quad
-    /// is grown by the blur's reach so that it holds the answer.
+    /// The ceiling is [`GLOW_SHADOW_MAX`], one whole node radius. Nothing in
+    /// the picture clips it there: every caster's own quad is grown by the
+    /// blur's reach so that it holds the answer.
     ///
     /// Independent of [`glow_reach`](Self::glow_reach): an item casts with no
     /// light in the picture at all, onto the ground and onto whatever ink
@@ -1256,21 +1253,17 @@ pub struct ViewConfig {
     /// on its own. At 0 nothing casts at all. At the top a hairline is as dark
     /// as a solid band, which is the whole lattice reading as one silhouette.
     pub glow_shadow_gain: f32,
-    /// The exponent the gained blur is bent by on its way to the depth,
+    /// The exponent the kernel's level is bent by on its way to the depth,
     /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`]. 1 is the straight
     /// line and is what a fresh view opens on.
     ///
-    /// The gained blur is a number in 0..=1 and the depth is spent as its
-    /// exponent, so bending it here bends where along the shadow's WIDTH the
-    /// darkness sits without moving either end: the saturated middle stays at
-    /// the depth and the far edge stays at nothing.
+    /// A gained blur or a Distance row's fixed decay is a number in 0..=1, and
+    /// the depth is spent as its exponent, so bending it here bends where along
+    /// the shadow's WIDTH the darkness sits without moving either end: the
+    /// saturated middle stays at the depth and the far edge stays at nothing.
     ///
-    /// Under 1 lifts the tail — the shadow reads as a broad even pool that
-    /// stops abruptly, the sky-like look the blur family is otherwise short of.
-    /// Over 1 presses the tail down and pulls the shadow in against the ink,
-    /// which is a Gaussian read as a rim. That the two halves have different
-    /// room to move is why the range is not symmetric about 1 (see
-    /// [`GLOW_SHADOW_CURVE_MAX`]).
+    /// Values over 1 press the tail down and pull the darkness in against the
+    /// ink as a rim; 1 leaves the selected kernel's profile intact.
     ///
     /// It is free: one `pow` in the same function that already spends the gain
     /// (`shadow_transmittance`, common.wgsl), and no atlas, cell or quad moves
@@ -1314,22 +1307,6 @@ pub struct ViewConfig {
     /// is the area packed and the taps a caster's draw takes, not the kernel
     /// any one cell is blurred by.
     pub glow_shadow_kernel: ShadowKernel,
-    /// The exponent a DISTANCE row's decay is taken over,
-    /// [`SHADOW_SHAPE_MIN`](crate::SHADOW_SHAPE_MIN)..=[`SHADOW_SHAPE_MAX`](crate::SHADOW_SHAPE_MAX).
-    /// 1 is the plain exponential and is what a fresh view opens on.
-    ///
-    /// The distance family's own profile bar, and it is NOT
-    /// [`glow_shadow_curve`](Self::glow_shadow_curve) under another name — the
-    /// two bend opposite things and would mean opposite things across the
-    /// picker. γ below 1 lifts a blur's tail and fills its middle into a pool;
-    /// `shape` below 1 steepens the decay where it leaves the ink and leaves a
-    /// haze over the rest of the width, which is a skin rather than a pool. One
-    /// bar meaning two things across a toggle is the kind of dial #520 deletes.
-    ///
-    /// The range runs entirely UNDER the exponential because that is where the
-    /// family has no knee: see [`SHADOW_SHAPE_MAX`](crate::SHADOW_SHAPE_MAX).
-    /// Inert on a blur row, and the bar is hidden there.
-    pub glow_shadow_shape: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2326,11 +2303,6 @@ impl ViewConfig {
             .clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX);
         self.glow_shadow_name = finite_or(self.glow_shadow_name, fresh.glow_shadow_name)
             .clamp(0.0, GLOW_SHADOW_NAME_MAX);
-        // And the distance family's exponent, held to its bar whatever row is
-        // picked: a blob switched back to a Gaussian still carries it, and a
-        // number out of range would be waiting there when it is switched back.
-        self.glow_shadow_shape = finite_or(self.glow_shadow_shape, fresh.glow_shadow_shape)
-            .clamp(crate::SHADOW_SHAPE_MIN, crate::SHADOW_SHAPE_MAX);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2671,9 +2643,6 @@ impl Default for ViewConfig {
             // One Gaussian, which is one cell per caster and the picture the
             // rest of the Shadow section is calibrated on.
             glow_shadow_kernel: ShadowKernel::Gaussian,
-            // The plain exponential, which is the ceiling of the shape bar and
-            // the only value in its range with no knee anywhere in the decay.
-            glow_shadow_shape: 1.0,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own

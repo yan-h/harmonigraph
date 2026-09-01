@@ -594,14 +594,10 @@ pub const REACH_SIGMAS: f32 = 3.0;
 /// it happens to hold there — a hard step at a SCREEN-ALIGNED square, which is
 /// the worst closed contour a smooth field can carry.
 ///
-/// TWO, and the exponent is what decides that. The decay is under half a code
-/// value of the deepest shadow at `u = (ln(1/eps)/TAIL)^(1/shape)`, which for
-/// half a 255th at a depth of 1 is 2.0 at the plain exponential and 17.4 at
-/// [`SHADOW_SHAPE_MIN`]. So at the shape bar's ceiling the window falls inside
-/// what was already invisible, and at its floor a cell honest enough to hold
-/// the raw tail would be seventeen Shadow widths of atlas. `SHADOW_STOP` in
-/// common.wgsl is the shader's copy, pinned by
-/// `the_standoffs_window_is_the_scenes`.
+/// TWO, where the fixed exponential is under half a code value of the deepest
+/// shadow before the window closes it. `SHADOW_STOP` in common.wgsl is the
+/// shader's copy, pinned by
+/// `the_shaders_distance_kind_and_window_are_the_packers`.
 pub const SHADOW_STOP: f32 = 2.0;
 
 /// How far down the standoff's decay is carried by one Shadow width, as the
@@ -616,33 +612,6 @@ pub const SHADOW_STOP: f32 = 2.0;
 /// fiftieth, on a curve still falling. `SHADOW_TAIL` in common.wgsl is the
 /// shader's copy.
 pub const SHADOW_TAIL: f32 = 4.0;
-
-/// The steepest the standoff's decay is bent to — the RIND, where the shadow is
-/// a thin skin on the ink and the rest of its width carries a haze.
-///
-/// A quarter rather than the 0 the family would allow, and `pow` is why: it is
-/// an `exp2(y · log2(x))` on the hardware, so an exponent of 0 against the
-/// distance's own 0 at the ink is `0 · -inf` — a NaN coverage, and a NaN
-/// multiplying the frame is a pane gone with nothing on screen to say why.
-/// WHICH of the numbers above 0 is then a choice: the picture moves about as
-/// far per halving as the top of the bar does per quarter, and a quarter of the
-/// ceiling is a range wide enough to take the shadow off a stroke altogether
-/// and short enough to stay a dial rather than a switch.
-pub const SHADOW_SHAPE_MIN: f32 = 0.25;
-
-/// The flattest, and the CEILING rather than a setting in the middle of a
-/// range: an exponent of one is where this family stops being a decay and
-/// starts being a band.
-///
-/// Exactly there, and the derivative says so. `exp(-T u^p)` has an interior
-/// inflection at `u = ((p-1)/(T p))^(1/p)`, real only for `p` above one: at or
-/// under one the coverage is steepest where it leaves the ink and shallower
-/// every step after, and over one it turns over at a radius that marches
-/// outward with the exponent — 0.07 of the width at 1.2, a third of it at 2,
-/// two thirds at 4. That turn is a KNEE, and a knee at a fixed radius is the
-/// closed contour the eye picks out of a smooth field, which is the whole
-/// reason the standoff is a decay rather than the ramp it replaced.
-pub const SHADOW_SHAPE_MAX: f32 = 1.0;
 
 /// What a shadow is made of: which row of terms every caster's ink is turned
 /// into a cell by.
@@ -681,8 +650,8 @@ pub enum ShadowKernel {
     /// Exact by construction: the row IS the kernel rather than a fit to one.
     TwoScale,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
-    /// ink, spent through the standoff's decay
-    /// ([`glow_shadow_shape`](crate::ViewConfig::glow_shadow_shape)).
+    /// ink, spent through the fixed standoff decay before the shared Shadow
+    /// curve bends it.
     ///
     /// A blur cannot hold form at a Shadow wide against the ink — a stroke of
     /// type under a σ of six points blurs to a smudge whose profile is the

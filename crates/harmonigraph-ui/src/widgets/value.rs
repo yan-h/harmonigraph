@@ -173,10 +173,9 @@ impl<'a> ValueBar<'a> {
 
     /// Draw what the value DOES across the track: `curve(value, p)` for `p`
     /// walking 0 to 1 gives the level reached that far through, and the line
-    /// is those points. For the Fade and Glow shape bars, whose numbers name
-    /// curves and say nothing about their character — the difference between a
-    /// straight line and a knee is the whole setting, and a scalar does not
-    /// carry it.
+    /// is those points. For a setting whose number names a curve and says
+    /// nothing about its character, the difference between a straight line and
+    /// a knee is the whole setting, and a scalar does not carry it.
     ///
     /// **The curve's x is not the bar's own axis**, and it spans the whole
     /// track at every value because of that: the bar's x is where the value
