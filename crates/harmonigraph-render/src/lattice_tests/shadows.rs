@@ -879,13 +879,30 @@ fn ringing_only(ring: f32, shadow: f32, depth: f32) -> Scene {
     scene
 }
 
+/// One ordinary MIDI note at one point of its envelope: its octave slice and
+/// the node presence that carries the silent remainder of the ring move
+/// together, with the analyzer and marks out of the picture.
+fn sounding_only(level: f32, shadow: f32, depth: f32) -> Scene {
+    let mut scene = on_ground(shadow, depth);
+    let node = &mut scene.nodes[0];
+    node.activation = level;
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
+    node.melody_slots = 0;
+    node.bass_slots = 0;
+    node.melody_level = 0.0;
+    node.bass_level = 0.0;
+    node.glow.level = 0.0;
+    node.audio_ring = 0.0;
+    scene
+}
+
 /// A released node's shadow fades with its ink, and ends with it.
 ///
-/// A cell carries LEVEL 1 and the coverage rasterized into it is the ink's own
-/// (`fs_node_cell`), envelopes and all — so what fades is what is blurred, and
-/// there is no second clock for a shadow to snap off on. At the bottom of the
-/// envelope the node paints nothing, ships no instance, and takes its cell
-/// with it.
+/// Spread factors the node's largest layer level out of the cell and spends it
+/// after Gain. The normalized source keeps the shadow's shape while the caster
+/// level moves its opacity on the same envelope as the ink. At the bottom the
+/// node paints nothing, ships no instance, and takes its cell with it.
 #[test]
 fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
     const SHADOW: f32 = 0.6;
@@ -893,15 +910,10 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         return;
     };
     shooter.clear = over_ground();
-    // Neutral gain isolates the source's level. A larger gain deliberately
-    // saturates high coverages before the depth spends them, so a point inside
-    // the expanded plateau can stay whole over part of a fade even though the
-    // source itself is moving continuously.
-    let scene_at = |ring, depth| {
-        let mut scene = ringing_only(ring, SHADOW, depth);
-        scene.glow_shadow_gain = 1.0;
-        scene
-    };
+    // Keep the fixture's 2.5 Gain: applying the envelope before that gain is
+    // the release bug. It pins the first samples near black and then drops
+    // abruptly when the gained source finally leaves saturation.
+    let scene_at = |level, depth| sounding_only(level, SHADOW, depth);
     let scene = scene_at(1.0, 1.0);
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     let row = centre.y.round() as u32;
@@ -911,8 +923,8 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
     assert!(ground > 500, "the ground the ring's shadow lands on reads {ground}");
 
     let mut taken = Vec::new();
-    for ring in [1.0f32, 0.6, 0.3, 0.0] {
-        let scene = scene_at(ring, 1.0);
+    for level in [1.0f32, 0.6, 0.3, 0.0] {
+        let scene = scene_at(level, 1.0);
         let call = LatticeCallback::from_scene(
             &scene,
             LatticeLabels::default(),
@@ -923,16 +935,23 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         );
         assert_eq!(
             call.instances.len(),
-            usize::from(ring > 0.0),
-            "a node at {ring} of its ring shipped {} instances",
+            usize::from(level > 0.0),
+            "a note at {level} of its release shipped {} instances",
             call.instances.len(),
         );
         assert_eq!(
             call.casters.len(),
-            usize::from(ring > 0.0),
-            "a node at {ring} of its ring packed {} cells",
+            usize::from(level > 0.0),
+            "a note at {level} of its release packed {} cells",
             call.casters.len(),
         );
+        if let Some(caster) = call.casters.first() {
+            assert!(
+                (caster.level - level).abs() < 1e-6,
+                "a note at {level} put {} inside Gain rather than carrying it as its caster level",
+                caster.level,
+            );
+        }
         let shot = shooter.shot(&scene);
         taken.push(1.0 - bright_at(&shot, at, row) as f64 / ground as f64);
     }
@@ -942,7 +961,7 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
         taken[0],
     );
     assert!(
-        taken.windows(2).all(|w| w[0] > w[1] + 0.02),
+        taken.windows(2).all(|w| w[0] > w[1] + 0.08),
         "a ring released over 1, 0.6, 0.3 and 0 of itself took {taken:?} off the ground, which \
          is not one order",
     );

@@ -1368,14 +1368,46 @@ impl LatticeCallback {
             if !(max.x > min.x && max.y > min.y) {
                 return empty;
             }
-            // LEVEL 1: the coverage the cell is filled with already carries
-            // every layer's own envelope (`node_ink`), so a released node's
-            // shadow fades with its ink and needs no second term here.
+            // Spread's source is homogeneous in the layers' levels: the union
+            // is their maximum, and both dilation and blur preserve a common
+            // scale. Factor the largest level out of that source and spend it
+            // here, AFTER `shadow_kernel` has applied Gain. Otherwise Gain's
+            // clamp pins most of a released node's shadow at full depth, then
+            // lets it collapse near the end of the fade -- the black flash at
+            // key-up. `fs_node_cell` divides every Spread layer by this same
+            // number, so a fully held node is byte-identical and layers at
+            // different levels keep their relative contribution.
+            //
+            // Count only layers the node can actually draw. A light-only node
+            // is shipped while its carried halo fades, but owes no shadow of
+            // its own; a disabled ring or mark likewise contributes nothing.
+            let mut level = 0.0f32;
+            if scene.outer_outer > scene.outer_inner {
+                level = level.max(g.params[0]);
+                level = level.max(n.octaves.iter().copied().fold(0.0, f32::max));
+            }
+            if ringing {
+                level = level.max(g.ring);
+            }
+            if scene.mark_thickness > 0.0 {
+                if g.marks[0] != 0 {
+                    level = level.max(g.params[1]);
+                }
+                if g.marks[1] != 0 {
+                    level = level.max(g.params[2]);
+                }
+            }
+            let level = match scene.glow_shadow_kernel {
+                harmonigraph_scene::ShadowKernel::Spread => level,
+                // Distance still defines its contour by an absolute half-level
+                // threshold, so it keeps the source-level convention it had.
+                harmonigraph_scene::ShadowKernel::Distance => 1.0,
+            };
             // The picture's own width: a node is what the Shadow bar is
             // calibrated on, and only a name is dialled off it.
             shadow::Caster {
                 rect: [min.x, min.y, max.x - min.x, max.y - min.y],
-                level: 1.0,
+                level,
                 sigma_scale: 1.0,
                 direct_distance: false,
             }

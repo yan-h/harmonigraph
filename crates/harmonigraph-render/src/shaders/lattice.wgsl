@@ -683,8 +683,10 @@ struct VsOut {
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
     // x: outward spread in pane points on a Spread cell draw; y: packed term
-    // kind. Zero on every scene draw and ordinary coverage cell.
-    @location(9) @interpolate(flat) shadow_meta: vec2<f32>,
+    // kind; z: the node's overall shadow level, factored out of a Spread
+    // source and spent after Gain by the scene draw. Zero on every scene draw
+    // and ordinary coverage cell.
+    @location(9) @interpolate(flat) shadow_meta: vec3<f32>,
     // The circle the node fits inside (`node_rim`), in this node's uv —
     // computed once in the vertex shader because the billboard is sized on it.
     @location(11) @interpolate(flat) rim: f32,
@@ -801,9 +803,10 @@ fn vs_node_cell(
     // interpolator; ordinary coverage cells return above with the positive
     // scale. `shadow_meta` parts the spread threshold from a stored distance.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
-    out.shadow_meta = vec2<f32>(
+    out.shadow_meta = vec3<f32>(
         select(0.0, box.who.w, spread),
         box.who.y,
+        box.terms.z,
     );
     return out;
 }
@@ -886,7 +889,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
-    out.shadow_meta = vec2<f32>(0.0);
+    out.shadow_meta = vec3<f32>(0.0);
     out.rim = rim;
     out.ring = inst.ring;
     // Neither end of the atlas, which is the answer for every draw but the two
@@ -2318,12 +2321,16 @@ struct NodeInk {
     spread: f32,
 };
 
-fn spread_layer(field: f32, layer: NodeLayer, spread: f32, aa: f32) -> f32 {
+fn spread_layer(field: f32, layer: NodeLayer, spread: f32, aa: f32, envelope: f32) -> f32 {
     if spread < 0.0 || layer.level <= 0.0 {
         return field;
     }
     let coverage = 1.0 - smoothstep(spread - aa, spread + aa, layer.sd);
-    return max(field, clamp(layer.level, 0.0, 1.0) * coverage);
+    // The CPU chose `envelope` as the largest level of any layer this node can
+    // draw. Dividing the greyscale union by it leaves a normalized SHAPE in
+    // the atlas; `ShadowCaster.level` spends the envelope after Gain and its
+    // saturation, so a release cannot stay black and then fall off a cliff.
+    return max(field, clamp(layer.level / max(envelope, 1e-6), 0.0, 1.0) * coverage);
 }
 
 /// What every node layer answers at this fragment: its visible ink and the
@@ -2341,6 +2348,7 @@ fn node_ink(
     oct: OctRing,
     analytic: bool,
     spread: f32,
+    spread_envelope: f32,
 ) -> NodeInk {
     let activation = in.params.x;
 
@@ -2472,7 +2480,7 @@ fn node_ink(
         let opacity = ink.w;
         let octave_layer = NodeLayer(shape_layer.sd, opacity, shape_layer.coverage);
         node_sd = layer_distance(node_sd, octave_layer);
-        node_spread = spread_layer(node_spread, octave_layer, spread, aa);
+        node_spread = spread_layer(node_spread, octave_layer, spread, aa, spread_envelope);
         let slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED
@@ -2564,7 +2572,7 @@ fn node_ink(
         analytic,
     );
     node_sd = layer_distance(node_sd, audio.layer);
-    node_spread = spread_layer(node_spread, audio.layer, spread, aa);
+    node_spread = spread_layer(node_spread, audio.layer, spread, aa, spread_envelope);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
     // The wedge's own reading is its lit share, on the composite the coverage
@@ -2613,8 +2621,8 @@ fn node_ink(
     let bass_cov = layer_coverage(bass_layer);
     node_sd = layer_distance(node_sd, melody_layer);
     node_sd = layer_distance(node_sd, bass_layer);
-    node_spread = spread_layer(node_spread, melody_layer, spread, aa);
-    node_spread = spread_layer(node_spread, bass_layer, spread, aa);
+    node_spread = spread_layer(node_spread, melody_layer, spread, aa, spread_envelope);
+    node_spread = spread_layer(node_spread, bass_layer, spread, aa, spread_envelope);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2739,7 +2747,7 @@ fn node_paint(in: VsOut) -> Painted {
         }
         return Painted(vec3<f32>(0.0), shadow, bloom);
     }
-    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false, -1.0);
+    var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false, -1.0, 1.0);
     if ink.alpha < INK_FLOOR {
         ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd, ink.spread);
     }
@@ -2799,7 +2807,16 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     let is_spread = abs(in.shadow_meta.y - SPREAD_KIND) < 0.5;
     let spread_uv = select(-1.0, in.shadow_meta.x / max(abs(in.shadow_at.z), 1e-6), is_spread);
-    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic, spread_uv);
+    let ink = node_ink(
+        in,
+        g.d,
+        g.aa,
+        g.field_step,
+        g.oct,
+        analytic,
+        spread_uv,
+        max(in.shadow_meta.z, 1e-6),
+    );
     if analytic {
         if is_spread {
             return vec4<f32>(ink.spread, 0.0, 0.0, 0.0);
