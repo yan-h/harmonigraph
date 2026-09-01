@@ -155,7 +155,7 @@ struct GlowOverOut {
 fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     let light = textureSample(scene_tex, scene_samp, in.uv);
     // The field WHOLE. What darkens it is every item drawn over it — each one
-    // multiplies the frame under it by its own blurred ink (lattice.wgsl's
+    // multiplies the frame under it by its own shadow field (lattice.wgsl's
     // `node_paint` and `plus_paint`, text.wgsl's `fs_shadow_box`) — so the
     // light is laid down first and takes every shadow by being under
     // everything, on both attachments. A pool round a ring is that multiply

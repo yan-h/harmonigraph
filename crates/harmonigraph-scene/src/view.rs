@@ -282,7 +282,7 @@ pub struct ViewConfig {
     // while `extent_sevens` is 0, which is where a fresh view starts. What
     // makes a small node legible over a large one is the Glow section's Shadow
     // ([`glow_shadow`](Self::glow_shadow)) — each item multiplying the frame
-    // under it by its own blurred ink, at any extent and on every sheet.
+    // under it by its own shadow field, at any extent and on every sheet.
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -1236,15 +1236,13 @@ pub struct ViewConfig {
     /// draw multiplies by 1. Independent of
     /// [`glow_reach`](Self::glow_reach).
     pub glow_shadow_depth: f32,
-    /// What a caster's blurred ink is multiplied up by before it is spent as a
-    /// shadow, 0..=[`GLOW_SHADOW_GAIN_MAX`].
+    /// What a caster's reconstructed contribution is multiplied up by before
+    /// it is spent as a shadow, 0..=[`GLOW_SHADOW_GAIN_MAX`].
     ///
-    /// The blur of a caster's coverage is at most 1, and only deep inside a
-    /// caster far wider than σ; a hairline ring or a stroke of type is a few
-    /// pixels against a σ of several, so its blur peaks at a fraction of that
-    /// and its shadow, spent as an exponent on the depth, would land at a
-    /// fraction of the depth the bar names. This is the factor that fraction is
-    /// multiplied up by, and the `min(…, 1)` under it keeps
+    /// A caster far wider than σ supplies a solid pool to the reconstruction;
+    /// a hairline ring or stroke of type supplies only a fraction of that
+    /// coverage. This is the factor that fraction is multiplied up by, and the
+    /// `min(…, 1)` under it keeps
     /// [`glow_shadow_depth`](Self::glow_shadow_depth) a true FLOOR: a caster
     /// wide against σ saturates there rather than overshooting, and the gain
     /// only deepens the thin ones.
@@ -1258,7 +1256,7 @@ pub struct ViewConfig {
     /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`]. 1 is the straight
     /// line and is what a fresh view opens on.
     ///
-    /// A gained blur or a Distance row's fixed decay is a number in 0..=1, and
+    /// A gained Spread field or a Distance row's fixed decay is a number in 0..=1, and
     /// the depth is spent as its exponent, so bending it here bends where along
     /// the shadow's WIDTH the darkness sits without moving either end: the
     /// saturated middle stays at the depth and the far edge stays at nothing.
@@ -1293,9 +1291,11 @@ pub struct ViewConfig {
     pub glow_shadow_name: f32,
     /// How the Spread + blur construction divides its calibrated Shadow reach,
     /// 0..=[`GLOW_SHADOW_SOFTNESS_MAX`]. At 0 the whole reach is an exact
-    /// outward dilation; at 1 it is an ordinary Gaussian whose three-sigma
-    /// cutoff lands at that same reach. Values between spend `(1 - softness)`
-    /// of the reach on dilation and the remainder on the Gaussian tail.
+    /// outward dilation; at 1 the whole reach is the Gaussian used to recover
+    /// a soft distance. Values between spend `(1 - softness)` of the reach on
+    /// dilation and the remainder on that reconstruction. Every nonzero
+    /// reconstruction is then spent through an exponential falloff; zero
+    /// remains the hard expanded contour.
     ///
     /// This is inert on every other kernel. Unlike the former independent
     /// Spread and Blur widths, it cannot change how far the shadow reaches:
@@ -2655,10 +2655,8 @@ impl Default for ViewConfig {
             // alike. The bar exists to ask whether a letterform wants
             // otherwise; the fresh view is the answer being no.
             glow_shadow_name: 1.0,
-            // The balanced calibration: 40% of the reach is dilation and the
-            // other 60% is the Gaussian's three-sigma tail. At the fresh
-            // Shadow above this is the same 0.08 dilation and 0.04 σ as the
-            // two retired component-width controls drew.
+            // The balanced calibration: 40% of the reach is exact dilation
+            // and the other 60% is the Gaussian distance reconstruction.
             glow_shadow_softness: GLOW_SHADOW_SOFTNESS_DEFAULT,
             glow_shadow_kernel: ShadowKernel::Spread,
             // The whole field, which is the fresh picture with no bar in it:

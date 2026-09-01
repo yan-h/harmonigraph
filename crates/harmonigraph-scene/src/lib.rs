@@ -275,15 +275,16 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
 /// The softest the Spread construction may be: the whole of its Shadow reach
-/// spent as a three-sigma Gaussian and none as outward dilation.
+/// spent reconstructing a soft distance from a three-sigma Gaussian, and none
+/// as outward dilation.
 pub const GLOW_SHADOW_SOFTNESS_MAX: f32 = 1.0;
 
 /// The fresh division of the Spread construction's reach: 40% exact dilation
-/// and 60% Gaussian tail.
+/// and 60% Gaussian distance reconstruction.
 pub const GLOW_SHADOW_SOFTNESS_DEFAULT: f32 = 0.6;
 
-/// The most a caster's blurred ink may be multiplied up by before it is spent
-/// as a shadow (see [`ViewConfig::glow_shadow_gain`]).
+/// The most a caster's reconstructed contribution may be multiplied up by
+/// before it is spent as a shadow (see [`ViewConfig::glow_shadow_gain`]).
 ///
 /// Six, which is a hairline ring reaching the depth bar's own floor at about a
 /// sixth of the blur's peak: past that the `min(…, 1)` under it has every
@@ -306,10 +307,10 @@ pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
 
 /// The kernel level a shadow spends after its Curve bar bends it.
 ///
-/// Both kernel families arrive in 0..=1: a blur as its gained coverage and a
-/// Distance row as its fixed exponential decay. Raising that level to the
-/// curve exponent keeps 0 and 1 fixed while moving everything between them,
-/// which is the same stage `shadow_transmittance` runs in common.wgsl.
+/// Both kernel families arrive in 0..=1: Spread as its gained soft-distance
+/// field and Distance as its fixed exponential decay. Raising that level to
+/// the curve exponent keeps 0 and 1 fixed while moving everything between
+/// them, which is the same stage `shadow_transmittance` runs in common.wgsl.
 pub fn shadow_curve_level(curve: f32, level: f32) -> f32 {
     let curve = if curve.is_finite() {
         curve.clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX)
@@ -960,7 +961,7 @@ pub struct Scene {
     /// The shape of the light's global falloff inside its reach (see
     /// [`ViewConfig::glow_curve`]); already sanitized.
     pub glow_curve: GlowCurve,
-    /// The Shadow: how wide every caster's blur is, in the same quad UV units
+    /// The Shadow: the reference width of every caster's field, in the same quad UV units
     /// (see [`ViewConfig::glow_shadow`]); already clamped to
     /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no
     /// light in the picture.
@@ -968,11 +969,11 @@ pub struct Scene {
     /// How dark a shadow lands where it is whole (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
-    /// What a caster's blurred ink is multiplied up by before it is spent as a
-    /// shadow (see [`ViewConfig::glow_shadow_gain`]); already clamped to
+    /// What a caster's reconstructed contribution is multiplied up by before
+    /// it is spent as a shadow (see [`ViewConfig::glow_shadow_gain`]); already clamped to
     /// 0..=[`GLOW_SHADOW_GAIN_MAX`].
     pub glow_shadow_gain: f32,
-    /// The exponent the gained blur is bent by on its way to the depth (see
+    /// The exponent the selected field is bent by on its way to the depth (see
     /// [`ViewConfig::glow_shadow_curve`]); already clamped to
     /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`].
     pub glow_shadow_curve: f32,
@@ -981,7 +982,8 @@ pub struct Scene {
     /// 0..=[`GLOW_SHADOW_NAME_MAX`].
     pub glow_shadow_name: f32,
     /// How the Spread construction divides its fixed reach between outward
-    /// dilation and Gaussian blur (see [`ViewConfig::glow_shadow_softness`]);
+    /// dilation and Gaussian distance reconstruction (see
+    /// [`ViewConfig::glow_shadow_softness`]);
     /// already clamped to 0..=[`GLOW_SHADOW_SOFTNESS_MAX`].
     pub glow_shadow_softness: f32,
     /// Which row every caster's ink is turned into a cell by (see

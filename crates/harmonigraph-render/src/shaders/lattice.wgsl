@@ -381,7 +381,7 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
     );
 }
 
-// What a caster's blur leaves of the frame under one fragment, in each of the
+// What a caster's field leaves of the frame under one fragment, in each of the
 // two pictures the scene pass writes (`SceneOut`): `seen` is the one on
 // screen, `bloom` the copy the bright pass reads, always at a whole shadow
 // (1) whatever `seen`'s own depth is.
@@ -391,7 +391,7 @@ struct ShadowThrough {
 }
 
 // A node's or a marker's own kernel, read at this point of the pane and spent
-// through `shadow_transmittance`: what its blurred ink leaves of the frame under
+// through `shadow_transmittance`: what its shadow field leaves of the frame under
 // it, 0..=1.
 //
 // A caster with no cells leaves the frame exactly whole — a frame with no atlas
@@ -867,7 +867,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     // costs while it lasts is the ring of discarded fragments between them,
     // which is what a bound is for.
     // The SHADOW's own reach is in every pane quad, the node draw's included: a
-    // node multiplies the frame by its blurred ink out to `SHADOW_REACH_SIGMAS` σ
+    // node multiplies the frame by its shadow field out to `SHADOW_REACH_SIGMAS` σ
     // past its rings (`shadow_reach_uv`), and a quad that stopped at the ink
     // would cut that Gaussian off in a straight line. `extra` is the glow's on
     // top of it. The cell draw writes the packer's one-texel sampling guard too.
@@ -2204,7 +2204,7 @@ fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f
 ///
 /// It returns a FLAG rather than discarding, because a fragment outside the
 /// ink is not a fragment with nothing to write: a node multiplies the frame
-/// under it by its own blurred ink out past every ring it draws
+/// under it by its own shadow field out past every ring it draws
 /// ([`node_paint`]), and that multiply is exactly what lives out there. Every
 /// derivative is taken before the flag is decided, in uniform control flow.
 struct NodeGeom {

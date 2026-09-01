@@ -511,8 +511,9 @@ pub enum TermKind {
     /// stands within a blur of it.
     Blur,
     /// The caster's exact signed field, thresholded after an outward spread
-    /// and then convolved with a Gaussian. The spread carries the source's
-    /// form; the narrower blur supplies the soft contribution field.
+    /// and then convolved with a Gaussian. The coverage is inverted back into
+    /// a soft distance before its exponential is spent: the spread carries the
+    /// source's form, while the convolution lets nearby pieces contribute.
     Spread,
     /// The DISTANCE, in the pane's points, from this texel to the caster's
     /// nearest ink, supplied by the caster's exact field and read back through
@@ -627,26 +628,26 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// into a cell by.
 ///
 /// Two constructions in one table. Distance holds the distance to the ink;
-/// Spread thresholds that field into an expanded source and then takes the
-/// blur chain ([`TermKind`]). What parts them in the picture is how nearby
-/// source pieces combine: Distance retains the nearest answer, while Spread
-/// unions the pieces before its final Gaussian.
+/// Spread thresholds that field into an expanded source, takes the blur chain,
+/// then reads the coverage back as a soft distance ([`TermKind`]). What parts
+/// them in the picture is how nearby source pieces combine: Distance retains
+/// the nearest answer, while Spread combines them before the exponential.
 ///
-/// Spread divides the displayed Shadow reach between dilation and a Gaussian
-/// tail. Softness 0 spends all of it on the exact outward contour; softness 1
-/// spends all of it on the Gaussian's three-sigma reach. Every value between
-/// has the same outer reach, so the Shadow bar owns size and Softness owns the
-/// construction's form.
+/// Spread divides the displayed Shadow reach between dilation and the Gaussian
+/// used to reconstruct distance. Softness 0 spends all of it on the exact
+/// outward contour; softness 1 spends all of it on reconstruction. Every value
+/// between has the same outer reach, so the Shadow bar owns size and Softness
+/// owns the construction's form; the final falloff stays exponential.
 ///
 /// The table is here and nowhere else. The packer sizes each term's cell off
 /// the same σ ratio the sampler mixes by, and two copies of one row is the
 /// mirror that rots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShadowKernel {
-    /// The caster's half-level contour spread outward, then blurred. Softness
-    /// divides one fixed reach between the exact dilation and the Gaussian's
-    /// three-sigma tail. Nearby pieces are united before the blur, while the
-    /// spread keeps a wide shadow tied to the source form.
+    /// The caster's half-level contour spread outward, blurred, and read back
+    /// as a soft distance. Softness divides one fixed reach between exact
+    /// dilation and the Gaussian reconstruction. Nearby pieces combine before
+    /// the inverse, while the result fades exponentially like a distance.
     #[default]
     Spread,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
@@ -674,8 +675,9 @@ impl ShadowKernel {
     pub fn terms(self) -> &'static [KernelTerm] {
         use TermKind::{Distance, Spread};
         // Fresh Softness is 0.6: 40% of the calibrated reach in dilation and
-        // 60% in the three-sigma Gaussian tail. The row's established reach is
-        // 2.5 picture σ, so those become 1.0 and 0.5 in this table's units.
+        // 60% in the three-sigma distance reconstruction. The row's
+        // established reach is 2.5 picture σ, so those become 1.0 and 0.5 in
+        // this table's units.
         const SPREAD_BLUR: [KernelTerm; 1] = [KernelTerm {
             weight: 1.0,
             sigma: 2.5 * crate::GLOW_SHADOW_SOFTNESS_DEFAULT / REACH_SIGMAS,

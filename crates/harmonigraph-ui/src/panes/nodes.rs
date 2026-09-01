@@ -735,12 +735,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     ShadowKernel::Spread,
                     "Spread + blur",
                     "The ink's half-level contour is spread outward, then \
-                     softened with a Gaussian. Softness divides the fixed \
-                     Shadow reach between that expansion and the Gaussian's \
-                     tail. The expansion keeps wide shadows \
-                     tied to rings, corners and letterforms; the final blur lets \
-                     nearby parts join without a nearest-distance seam. One \
-                     cell per item.",
+                     softened with a Gaussian and read back as distance. \
+                     Softness divides the fixed Shadow reach between that \
+                     expansion and the distance reconstruction. The expansion \
+                     keeps wide shadows tied to rings, corners and letterforms; \
+                     nearby parts combine before the final exponential, without \
+                     a nearest-distance seam. One cell per item.",
                 ),
                 (
                     ShadowKernel::Distance,
@@ -768,18 +768,18 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "How the fixed Shadow reach is divided between exact \
-                     outward expansion and Gaussian softness. 0% is a hard \
-                     expanded contour; 100% is an ordinary Gaussian ending at \
-                     the same reach. Intermediate values preserve corners and \
-                     rings while letting nearby pieces blend. Changing this \
-                     does not change the shadow's outer extent. Double-click \
-                     to type a value.",
+                     outward expansion and Gaussian distance reconstruction. \
+                     0% is a hard expanded contour; 100% uses the whole reach \
+                     to combine nearby pieces before recovering an exponential \
+                     fade. Intermediate values preserve more of the expanded \
+                     form. Changing this does not change the shadow's outer \
+                     extent. Double-click to type a value.",
             );
         }
         // The two that shape the depth rather than set it: how much of it the
         // picture's THINNEST ink gets, and where along the shadow's width it
         // sits.
-        // The gain is the BLUR family's: a distance field gives a hairline the
+        // The gain is the reconstructed family's: a distance field gives a hairline the
         // whole depth at its own edge by construction, so `shadow_kernel`
         // returns before the gain is ever read on a distance row.
         ui.add_enabled_ui(!view.glow_shadow_kernel.has_distance(), |ui| {
@@ -788,11 +788,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .show(ui)
                 .on_hover_text(
                     "How much of the Shadow depth the picture's THINNEST ink \
-                     gets, on the blur rows of the Kernel picker. A shadow is \
-                     a blur of the thing casting it, so a wide band blurs to a \
-                     solid pool and a hairline ring or a stroke of type blurs \
-                     to a faint smudge — and without this they would land at \
-                     wildly different darknesses from one depth. Turning it up \
+                     gets on the Spread row of the Kernel picker. A wide band \
+                     supplies a solid pool to the distance reconstruction, \
+                     while a hairline ring or stroke of type supplies less \
+                     coverage — and without this they would land at wildly \
+                     different darknesses from one depth. Turning it up \
                      brings the thin ink up toward the depth the bar names and \
                      leaves the wide ink exactly where it is, until at the top \
                      everything in the lattice is one flat silhouette. 0x is \
@@ -815,7 +815,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              edge stays at nothing — and this bends everything between them. \
              Values above 1 pull the darkness in tight against the ink and let \
              the rest go gently, which reads as a rim. 1 leaves either the \
-             selected blur or Distance decay in its own shape.",
+             selected Spread or Distance decay in its own shape.",
         );
         // The one bar in the section a single caster keeps to itself, and the
         // one that breaks "one Shadow width across the picture" — see

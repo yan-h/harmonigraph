@@ -1696,7 +1696,7 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
     assert_eq!(differing_pixels(&shot(Spread, 0.0), &shot(Distance, 0.0)), 0);
 }
 
-/// Softness moves the Spread row between its hard contour and Gaussian limit
+/// Softness moves the Spread row between its hard contour and all-blur remap
 /// without changing its reach, and remains inert when Shadow depth shuts the
 /// feature off.
 #[test]
@@ -1716,9 +1716,9 @@ fn softness_moves_the_spread_rows_picture_without_moving_its_reach() {
 
     let reference = shot(0.6, 0.85);
     let hard = differing_pixels(&reference, &shot(0.0, 0.85));
-    let gaussian = differing_pixels(&reference, &shot(1.0, 0.85));
+    let all_blur = differing_pixels(&reference, &shot(1.0, 0.85));
     assert!(hard > 200, "the hard end of Softness moved only {hard} pixels");
-    assert!(gaussian > 200, "the Gaussian end of Softness moved only {gaussian} pixels");
+    assert!(all_blur > 200, "the all-blur end of Softness moved only {all_blur} pixels");
 
     let shut = shot(0.6, 0.0);
     assert_eq!(differing_pixels(&shut, &shot(0.0, 0.0)), 0);
@@ -1824,6 +1824,59 @@ fn block_on_grey(
     (bare, cast, glam::Vec2::new(rect[0], rect[1]))
 }
 
+/// A flat Spread edge loses the Gaussian tail's accelerating fall after its
+/// coverage is read back as distance.
+///
+/// A Gaussian's equal-width log differences grow as distance grows; a distance
+/// exponential's are equal. The compact kernel and its bilinear samples make
+/// this reconstruction approximate, but its outer difference must not grow:
+/// that direction is the visual distinction the remap exists to make.
+#[test]
+fn a_spread_rows_flat_edge_has_a_distance_shaped_tail() {
+    const SHADOW: f32 = 0.8;
+    const DEPTH: f32 = 0.2;
+    const SIDE: f32 = 72.0;
+    const GREY: f32 = 0.55;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
+    scene.glow_shadow_softness = 1.0;
+    scene.glow_shadow_gain = 1.0;
+    scene.glow_shadow_curve = 1.0;
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    let at = on_screen(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
+    let rect = [at.x - SIDE / 2.0, at.y - SIDE / 2.0, SIDE, SIDE];
+    let bare = shooter.shot(&scene);
+    let cast = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
+    let row = at.y.round() as u32;
+    let edge = rect[0].round() as u32;
+    let levels: Vec<f64> = [2, 4, 6]
+        .into_iter()
+        .map(|pixels| {
+            let x = edge - pixels;
+            let through = bright_at(&cast, x, row) as f64 / bright_at(&bare, x, row) as f64;
+            (through.ln() / (1.0 - f64::from(DEPTH)).ln()).max(1e-6)
+        })
+        .collect();
+    let steps = [(levels[0] / levels[1]).ln(), (levels[1] / levels[2]).ln()];
+    eprintln!("Spread's recovered levels are {levels:?}; log steps are {steps:?}");
+    assert!(
+        levels.windows(2).all(|pair| pair[0] > pair[1]),
+        "Spread's flat-edge profile does not fall monotonically: {levels:?}",
+    );
+    assert!(steps.iter().all(|&step| step > 0.1), "Spread's tail is nearly flat: {steps:?}");
+    assert!(
+        steps[1] <= 1.15 * steps[0],
+        "Spread's equal-width log steps accelerate from {} to {}, which is still Gaussian",
+        steps[0],
+        steps[1],
+    );
+}
+
 /// A convex CORNER's shadow hugs it on a distance row, where a blur retreats
 /// from it.
 ///
@@ -1868,22 +1921,25 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
         );
         corner as f64 / edge as f64
     };
-    let blurred = ratio("Gaussian limit", Spread, 1.0);
+    let blurred = ratio("all-blur remap", Spread, 1.0);
     let distance = ratio("Distance", Distance, 0.6);
     let spread = ratio("Spread", Spread, 0.6);
     assert!(
         blurred < 0.7,
-        "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
+        "the all-blur remap darkens the corner by {blurred:.2} of the edge, so the fixture's \
+         two points \
          do not part the two geometries at all",
     );
     assert!(
         distance > blurred + 0.2,
-        "the distance row darkens the corner by {distance:.2} of the edge against the Gaussian's \
+        "the distance row darkens the corner by {distance:.2} of the edge against the all-blur \
+         remap's \
          {blurred:.2}, so it is retreating from the corner as a blur does",
     );
     assert!(
         spread > blurred + 0.2,
-        "the Spread row darkens the corner by {spread:.2} of the edge against the Gaussian's \
+        "the Spread row darkens the corner by {spread:.2} of the edge against the all-blur \
+         remap's \
          {blurred:.2}, so its narrow convolution has lost the spread contour",
     );
 }
@@ -1953,16 +2009,16 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         );
         (beside - middle) as f64 / beside as f64
     };
-    let blurred = form("Gaussian limit", Spread, 1.0);
+    let blurred = form("all-blur remap", Spread, 1.0);
     let distance = form("Distance", Distance, 0.6);
     assert!(
         blurred < 0.1,
-        "at Shadow {SHADOW} a Gaussian holds {blurred:.2} of the gap's form, so the fixture's \
-         Shadow is not wide enough for the claim to mean anything",
+        "at Shadow {SHADOW} the all-blur remap holds {blurred:.2} of the gap's form, so the \
+         fixture's Shadow is not wide enough for the claim to mean anything",
     );
     assert!(
         distance > blurred + 0.2,
-        "the distance row holds {distance:.2} of the gap's form against the Gaussian's \
+        "the distance row holds {distance:.2} of the gap's form against the all-blur remap's \
          {blurred:.2}, so the counter has closed on both",
     );
 }

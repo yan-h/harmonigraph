@@ -764,7 +764,7 @@ fn vs_shadow_box(
 }
 
 /// A name's shadow: everything already in the frame under the box, multiplied
-/// by the transmittance of the name's blurred ink.
+/// by the transmittance of the name's reconstructed shadow field.
 ///
 /// The multiply rides on the blend the scene pass already composites under.
 /// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
@@ -776,7 +776,7 @@ fn vs_shadow_box(
 /// the shadow by being there first. Drawn before the name's own glyphs, so the
 /// name's ink is the one thing its shadow never touches.
 ///
-/// `T` is `shadow_transmittance` over the blur standing at this fragment, and
+/// `T` is `shadow_transmittance` over the field standing at this fragment, and
 /// it is the same function a ring and a cross spend over their own cells
 /// (`shadow_through` in lattice.wgsl) — one Shadow bar, one darkness, whatever
 /// the caster. The name's LEVEL is spent there as a share, which is what a name

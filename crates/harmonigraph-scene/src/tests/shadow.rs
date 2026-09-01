@@ -29,10 +29,10 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
     }
 }
 
-/// Softness partitions one fixed Shadow reach between exact dilation and a
-/// three-sigma Gaussian tail. The kernel table works in picture σ, which is
-/// half the displayed reference width, so every setting must still end at the
-/// row's calibrated 2.5 table σ.
+/// Softness partitions one fixed Shadow reach between exact dilation and the
+/// three-sigma Gaussian used to reconstruct distance. The kernel table works
+/// in picture σ, which is half the displayed reference width, so every setting
+/// must still end at the row's calibrated 2.5 table σ.
 #[test]
 fn softness_divides_one_fixed_shadow_reach() {
     let fresh = ViewConfig::default();

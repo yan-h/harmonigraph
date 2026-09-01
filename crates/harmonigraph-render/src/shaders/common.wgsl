@@ -97,9 +97,9 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f
     return w * alpha + ink * (1.0 - w);
 }
 
-// The shadow atlas: every caster's own ink, blurred into a cell of its own
+// The shadow atlas: every caster's own ink, reconstructed in a cell of its own
 // (`shadow.rs`). A caster's draw reads the ONE cell that is a picture of its own
-// ink and multiplies whatever is already in the frame under it by what that blur
+// ink and multiplies whatever is already in the frame under it by what that field
 // leaves. No receiver carries any shadow code: the light is composited under
 // everything and takes every shadow by being there first.
 //
@@ -119,7 +119,8 @@ struct ShadowCaster {
     // The union of every term's padded box, in the pane's points: min, then
     // size. The quad a caster's shadow is drawn over.
     rect: vec4<f32>,
-    // x: how much of this caster's shadow lands, 0..=1. y/z/w unused.
+    // x: how much of this caster's shadow lands, 0..=1. y: the picture's
+    // reference σ in pane points. z/w unused.
     level: vec4<f32>,
     // What each term's cell HOLDS: 0 ordinary blurred ink, `DISTANCE_KIND` a
     // distance, and `SPREAD_KIND` blurred spread coverage.
@@ -127,6 +128,8 @@ struct ShadowCaster {
     // Each term's σ in the pane's POINTS, which is what a distance read out of
     // a cell is measured against — one Shadow width is 2σ.
     sigma: array<f32, SHADOW_TERMS>,
+    // Each term's outward dilation in pane points. Zero outside a Spread term.
+    spread: vec4<f32>,
     // Each term's cell in atlas texels: origin, then size. Zeroed past the
     // kernel's own term count, and zeroed whole where nothing was packed.
     cell: array<vec4<f32>, SHADOW_TERMS>,
@@ -143,6 +146,44 @@ const DISTANCE_KIND: f32 = 1.0;
 // A coverage cell rasterized from an outward threshold of the caster's exact
 // field, then sent through the same Gaussian chain as a blur cell.
 const SPREAD_KIND: f32 = 2.0;
+
+// Inverse CDF of the lowered, three-sigma kernel in shadow.wgsl, over the 2–98%
+// range that survives the compact-support taper below. The odd degree-11 fit
+// stays within 0.009σ of the analytic inverse while costing only multiplies;
+// evaluating erf and Newton iterations in every caster fragment would make the
+// remap dearer than the atlas lookup it follows.
+fn compact_gaussian_quantile(coverage: f32) -> f32 {
+    let x = 2.0 * clamp(coverage, 0.02, 0.98) - 1.0;
+    let x2 = x * x;
+    return x * (1.2214549
+        + x2 * (0.5703014
+        + x2 * (-1.8769852
+        + x2 * (6.6996884
+        + x2 * (-9.1879015 + x2 * 4.89797)))));
+}
+
+// A Spread term's blurred coverage, read back as a distance-shaped shadow.
+//
+// For a flat edge `coverage = Φ((spread - d) / sigma)`, so the inverse below
+// returns d exactly before the shared standoff gives it Distance's exponential
+// falloff. Several nearby pieces add inside `coverage` first and therefore
+// lower the recovered distance together: the contribution blend survives the
+// remap instead of collapsing to the nearest answer. A hard Spread has no
+// transition to invert and remains the exact expanded contour it names.
+fn spread_standoff_coverage(coverage: f32, spread: f32, sigma: f32, width: f32) -> f32 {
+    if coverage <= 0.0 {
+        return 0.0;
+    }
+    if coverage >= 1.0 || sigma <= 1.0e-6 {
+        return clamp(coverage, 0.0, 1.0);
+    }
+    let distance = spread - sigma * compact_gaussian_quantile(coverage);
+    // The inverse necessarily raises the compact Gaussian's last nonzero
+    // samples. Taper only that bottom tenth back onto zero, where the
+    // cell itself ends, so the exponential cannot expose its rectangular box.
+    let support = smoothstep(0.0, 0.1, coverage);
+    return support * windowed_standoff_coverage(distance, width, SPREAD_TAIL);
+}
 
 // Every caster's kernel, indexed by the caster's own index in the frame
 // (`pack`'s order).
@@ -190,10 +231,15 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
             continue;
         }
         let map = shadow_casters[who].map[t];
-        // Held inside the cell, so a quad reaching a hair past its own box
-        // takes that cell's own empty border rather than the neighbour packed
-        // beside it.
-        let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
+        // The unclamped coordinate also windows the last atlas texel. The
+        // inverse-CDF remap deliberately lifts a small Gaussian value, so
+        // clamping that value across the edge would expose the cell's box.
+        // One texel is the empty border the packer already grants every cell.
+        let wanted = map.xy + points * map.z;
+        let lo = wanted - (cell.xy + 0.5);
+        let hi = cell.xy + cell.zw - 0.5 - wanted;
+        let box_support = smoothstep(0.0, 1.0, min(min(lo.x, lo.y), min(hi.x, hi.y)));
+        let texel = clamp(wanted, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
         // One bilinear tap per term. A cell is drawn at a fraction of the
         // target's pixels once its σ is past `shadow::SIGMA_CELL_MAX`, and the
         // tap is what makes a blur wider than its own texels read smooth. A tap
@@ -201,9 +247,17 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
         // tap of coverage is — the field is smooth almost everywhere and its
         // creases are where two answers are equally right.
         let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
-        if abs(shadow_casters[who].kind[t] - DISTANCE_KIND) < 0.5 {
+        let kind = shadow_casters[who].kind[t];
+        if abs(kind - DISTANCE_KIND) < 0.5 {
             distance = true;
             cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t]);
+        } else if abs(kind - SPREAD_KIND) < 0.5 {
+            blur = blur + map.w * box_support * spread_standoff_coverage(
+                held,
+                shadow_casters[who].spread[t],
+                shadow_casters[who].sigma[t],
+                2.0 * shadow_casters[who].level.y,
+            );
         } else {
             blur = blur + map.w * held;
         }
@@ -217,10 +271,9 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
         return clamp(cov, 0.0, 1.0);
     }
     // The GAIN, which is how much of the depth a caster thin against σ is
-    // worth: a hairline's blur peaks at a fraction of 1, and without this its
-    // shadow would land at a fraction of the depth the bar names. The
-    // `min(…, 1)` is what keeps the depth a FLOOR — a caster wide against σ
-    // saturates there rather than overshooting.
+    // worth. Spread reaches here after coverage has become an exponential, so
+    // the gain can fill its near-caster core without bending the tail back into
+    // the Gaussian the remap removed. The `min(…, 1)` keeps the depth a floor.
     return min(max(gain, 0.0) * clamp(blur, 0.0, 1.0), 1.0);
 }
 
@@ -235,8 +288,12 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
 // eye's own threshold rather than at a fiftieth of its depth.
 //
 fn standoff_coverage(d: f32, w: f32) -> f32 {
+    return windowed_standoff_coverage(d, w, SHADOW_TAIL);
+}
+
+fn windowed_standoff_coverage(d: f32, w: f32, tail: f32) -> f32 {
     let u = max(d, 0.0) / max(w, 1.0e-6);
-    return exp(-SHADOW_TAIL * u)
+    return exp(-tail * u)
         * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
 }
 
@@ -246,6 +303,11 @@ fn standoff_coverage(d: f32, w: f32) -> f32 {
 // `the_shaders_kinds_and_windows_are_the_packers`.
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
+// Spread's recovered distance uses a slightly longer exponential than the
+// exact field. That holds contribution differences below the angular texture
+// they would otherwise make in a sliced ring while keeping the same dark core
+// and windowed tail.
+const SPREAD_TAIL: f32 = 3.0;
 
 // The flattest a shadow's falloff may be bent to, whatever a caller asks for.
 //
@@ -279,7 +341,7 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // which uniform the depth arrives in, and both stay with the caller.
 //
 // `full` arrives already in 0..=1 and already spent through whatever its own
-// family owes — the gain on a blur row, the standoff's decay on a distance one
+// family owes — the gain and remap on Spread, the fixed decay on Distance
 // (`shadow_kernel`). What is left here is the pair every row shares: how dark
 // the shadow lands, and where along its width that darkness sits.
 //
