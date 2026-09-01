@@ -52,10 +52,10 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
 /// two probes above are: the atlas SHRINKS as the bar opens and the quads grow,
 /// so a row's cost is not one number.
 ///
-/// A DISTANCE row runs the whole node shader once per node to fill the field
-/// (#507), so it is the expensive one to measure before a merge (#536).
-/// Its cell follows the same sigma-relative sizing as the blur rows: the atlas
-/// shrinks as the bar opens while the scene quads grow.
+/// A DISTANCE row is the expensive one to measure before a merge (#536). Its
+/// cell does not shrink past the renderer's quality floor, so its atlas stays
+/// finer as the bar opens; its fill is the whole node shader at that
+/// resolution, once per node (#507).
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_each_kernel_costs_this_much() {

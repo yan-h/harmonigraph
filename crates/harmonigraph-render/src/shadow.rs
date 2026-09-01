@@ -37,6 +37,16 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Flo
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 
+/// The least resolution an atlas-backed distance field keeps, in texels per
+/// pane point.
+///
+/// Eight tenths keeps both a projected node contour and a roughly 30-point
+/// monospace stem represented finely enough that bilinear reconstruction does
+/// not expose the cell grid. The unit is pane points so the editor and offline
+/// renderer keep the same source samples at every target scale. A direct field
+/// has no cell and therefore pays none of this floor.
+const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
+
 /// σ of a caster's blur in the target's pixels, for a Shadow of `shadow` node
 /// radii over a node of `node_points` points, on a pane at `pixels_per_point`
 /// drawn at `render_scale`.
@@ -106,7 +116,7 @@ pub(crate) struct Caster {
 /// strength the name's rim colour carries — the one number a lattice name's
 /// `rim` holds (`LABEL_SHADOW` in harmonigraph_ui), so a name easing in as the
 /// marker under it eases out grows its shadow on the clock its ink arrives on —
-/// and `sigma_scale`, which is a name's alone to be other than 1
+/// `sigma_scale`, which is a name's alone to be other than 1
 /// (`ViewConfig::glow_shadow_name`).
 ///
 /// A run with no ink in it — every rect empty — is a caster of nothing, with
@@ -371,18 +381,23 @@ pub(crate) fn pack(
     // across the whole table: the chain reads σ off each cell and clamps its
     // taps to that cell's rect, so N terms are N cells the existing pass sweeps
     // rather than N kernels any one of them is blurred by.
-    // A DISTANCE cell parts from that in pad and stored σ. Its pad is the
-    // standoff's own stop rather than the kernel's reach, that being where the
-    // curve is windowed to zero (`KernelTerm::reach_sigmas`, which is the one
-    // place the two are written down). σ in the CELL is zero because the
-    // distance cell bypasses the blur chain entirely.
+    // A DISTANCE cell parts from that in pad, stored σ and a quality floor.
+    // Its pad is the standoff's own stop rather than the kernel's reach, that
+    // being where the curve is windowed to zero
+    // (`KernelTerm::reach_sigmas`, which is the one place the two are written
+    // down). The floor keeps both fixed glyph fields and analytic node fields
+    // from being reduced to visible rectangles. σ in the CELL is zero because
+    // the distance cell bypasses the blur chain entirely.
     let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
         let sigma = sigma_of(c, t);
         // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
         // infinity the `min` answers: the cell is at the target's own
         // resolution and its kernel collapses to the centre tap.
         let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
-        let scale = fit;
+        let floor = if is_distance(t) { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
+        // More samples than the target has pixels buy no smoother contour and
+        // turn the floor into supersampling at the small end.
+        let scale = fit.max(floor).min(1.0);
         let k = scale * px_per_point;
         // This term's σ in the cell's own texels, which is what the PADDING is
         // in whatever the kind — the two families reach different multiples of
@@ -1008,13 +1023,13 @@ pub(crate) mod tests {
     /// Read at both ends because the two are not the same question. Cells are
     /// drawn at `min(1, SIGMA_CELL_MAX / σ)`, so at a NARROW Shadow the terms
     /// are all at the pane's own resolution and a row costs about N times one
-    /// Gaussian; at a wide one each cell is scaled down by its own σ and the
-    /// narrow term — the finest, and so the biggest — is what the row costs.
+    /// Gaussian. At a wide one a blur cell scales down with its own σ while a
+    /// Distance cell stops at the quality floor.
     ///
-    /// The bound is four, just above the core-and-skirt row at both ends of the
-    /// bar. Past it the row is a reason the atlas hits `max_side` rather than a
-    /// shape to compare (see
-    /// `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
+    /// TwoScale's bound is four, just above the core-and-skirt row at both ends
+    /// of the bar. Distance has a bound of its own below; past either, the row
+    /// is a reason the atlas hits `max_side` rather than a shape to compare
+    /// (see `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
         use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
@@ -1042,16 +1057,21 @@ pub(crate) mod tests {
                 "TwoScale packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
                  reaches the device's texture limit rather than a row to compare",
             );
-            // The DISTANCE row on a tighter bound because it is one term like
-            // the Gaussian and follows the same sigma-relative sizing.
-            // Its different reach changes the padding, but it must stay in the
-            // Gaussian row's neighbourhood rather than walking the atlas into
-            // `max_side`, where a caster stops casting with nothing on screen
-            // to say so.
+            // The DISTANCE row on a bound of its own, and two orders of
+            // magnitude above the blur rows' rather than beside them. A blur
+            // cell shrinks with σ and a distance cell stops at its quality
+            // floor, so the top of the bar is where the two families' costs
+            // part company by construction. This fixture measures about 87x at
+            // the top of the bar; the ceiling catches a change that walks the
+            // atlas into `max_side`, where a caster stops casting with nothing
+            // on screen to say so.
             let ratio = area(Distance) / plain;
-            eprintln!("Distance at {what}: {ratio:.2}x one Gaussian's cells");
+            eprintln!(
+                "Distance at {what}, {DISTANCE_TEXELS_PER_POINT:.2} tex/pt: {ratio:.2}x one \
+                 Gaussian's cells"
+            );
             assert!(
-                ratio <= 2.0,
+                ratio <= 120.0,
                 "Distance packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
                  reaches the device's texture limit rather than a row to compare",
             );
@@ -1387,14 +1407,14 @@ pub(crate) mod tests {
     }
 
     /// A distance term's cell is padded to exactly where its curve is windowed
-    /// to nothing and follows the same sigma-relative resolution as a blur.
+    /// to nothing and stops shrinking at the renderer's quality floor.
     ///
     /// The pad has to REACH the stop or the shadow ends in a straight line at
-    /// the cell's edge. The resolution keeps σ at three texels at every target
-    /// scale, so once σ is past `SIGMA_CELL_MAX`, editor and offline renderings
-    /// sample the same pane-point grid without a separate quality floor.
+    /// the cell's edge. The floor is in pane points so editor and offline
+    /// renderings sample the same grid at every target scale. A blur cell keeps
+    /// shrinking with σ, which is what bounds its convolution cost.
     #[test]
-    fn a_distance_cell_reaches_the_stop_at_sigma_relative_resolution() {
+    fn a_distance_cell_reaches_the_stop_and_holds_its_quality_floor() {
         use harmonigraph_scene::ShadowKernel;
         let caster = Caster {
             rect: [40.0, 40.0, 20.0, 20.0],
@@ -1402,24 +1422,19 @@ pub(crate) mod tests {
             sigma_scale: 1.0,
             direct_distance: false,
         };
-        // A σ well past `SIGMA_CELL_MAX`, so the packer's own scale rather than
-        // the target's full resolution decides the cell.
+        // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
+        // target's full resolution or the blur's fit decides the cell.
         let sigma = 40.0;
         let terms = ShadowKernel::Distance.terms();
         let out = pack(&[caster], sigma, 1.0, 4096, terms);
         let cell = out.boxes[0];
-        let want_k = SIGMA_CELL_MAX / sigma;
         for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
             let held = pack(&[caster], sigma * px_per_point, px_per_point, 8192, terms).boxes[0];
             assert!(
-                (held.terms[0] - want_k).abs() < 1e-5,
+                (held.terms[0] - DISTANCE_TEXELS_PER_POINT).abs() < 1e-5,
                 "at {px_per_point} pixels a point the cell packed {} texels per point rather \
-                 than {want_k}",
+                 than {DISTANCE_TEXELS_PER_POINT}",
                 held.terms[0],
-            );
-            assert!(
-                (held.terms[3] * sigma * px_per_point - SIGMA_CELL_MAX).abs() < 1e-5,
-                "at {px_per_point} pixels a point the cell's sigma is not held to the cap",
             );
         }
         assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ");
@@ -1429,13 +1444,13 @@ pub(crate) mod tests {
         let want = 2.0 * harmonigraph_scene::SHADOW_STOP * sigma;
         let pad = cell.who[2];
         assert!(
-            pad >= want && pad <= want + 1.0 / want_k + 1.0,
+            pad >= want && pad <= want + 1.0 / DISTANCE_TEXELS_PER_POINT + 1.0,
             "a distance cell is padded {pad} points where its curve reaches {want}",
         );
         // A blur cell belongs to the other fill and sampling branch.
         let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian.terms());
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
-        assert!((blur.boxes[0].terms[0] - want_k).abs() < 1e-5);
+        assert!((blur.boxes[0].terms[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
     }
 
     /// A caster that owns its exact distance keeps the term's profile metadata
@@ -1499,18 +1514,22 @@ pub(crate) mod tests {
         assert_eq!(name.boxes[0].who[1], DISTANCE_KIND);
     }
 
-    /// Distance and blur cells use the same sigma-relative resolution. A field
-    /// bypasses the blur chain, but its source grid still has to shrink with σ
-    /// or its atlas cost grows with the Shadow bar while every other row's
-    /// stays bounded.
+    /// Every atlas-backed distance cell keeps the quality floor while a blur
+    /// cell remains sigma-relative.
+    ///
+    /// The caster is the node path: its field is analytic when filled, but the
+    /// scene still samples that field out of an atlas cell. Letting that cell
+    /// follow σ alone makes its grid visible and changes the grid under a
+    /// moving Shadow bar.
     #[test]
-    fn distance_cells_use_the_sigma_relative_resolution() {
+    fn a_node_distance_cell_keeps_the_quality_floor_and_a_blur_does_not() {
         use harmonigraph_scene::ShadowKernel;
         let caster = caster(40.0, 40.0, 20.0, 20.0);
         for sigma_points in [1.0f32, 4.0, 40.0] {
             for px_per_point in [1.0f32, 2.0, 4.0] {
                 let sigma_px = sigma_points * px_per_point;
-                let expected = (SIGMA_CELL_MAX / sigma_px).min(1.0) * px_per_point;
+                let blur_resolution = (SIGMA_CELL_MAX / sigma_points).min(px_per_point);
+                let distance_resolution = blur_resolution.max(DISTANCE_TEXELS_PER_POINT);
                 let distance =
                     pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance.terms())
                         .boxes[0];
@@ -1518,14 +1537,16 @@ pub(crate) mod tests {
                     pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian.terms())
                         .boxes[0];
                 assert!(
-                    (distance.terms[0] - expected).abs() < 1e-5,
+                    (distance.terms[0] - distance_resolution).abs() < 1e-5,
                     "Distance at σ {sigma_points} points and {px_per_point} px/pt packed {} \
-                     texels per point instead of {expected}",
+                     texels per point instead of {distance_resolution}",
                     distance.terms[0],
                 );
                 assert!(
-                    (distance.terms[0] - gaussian.terms[0]).abs() < 1e-5,
-                    "Distance and Gaussian chose different source-grid resolutions",
+                    (gaussian.terms[0] - blur_resolution).abs() < 1e-5,
+                    "Gaussian at σ {sigma_points} points and {px_per_point} px/pt packed {} \
+                     texels per point instead of {blur_resolution}",
+                    gaussian.terms[0],
                 );
             }
         }
