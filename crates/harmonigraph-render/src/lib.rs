@@ -684,11 +684,11 @@ struct Uniforms {
     plus_shadow_rect: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
     /// Each of those boxes' cells in atlas texels: origin, then size.
     plus_shadow_cell: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
-    /// x: points to cell texels; y: σ in those texels; z: the cell's share of
-    /// the target's pixels, which is what the cross's own soft band is scaled
-    /// by where it is RASTERIZED (`aa_width` in lattice.wgsl); w: one arm in
-    /// points, which is what turns a fragment's place on a cross into a place
-    /// in the cell.
+    /// x: points to cell texels; y: outward spread in pane points; z: the
+    /// cell's share of the target's pixels, which is what the cross's own soft
+    /// band is scaled by where it is RASTERIZED (`aa_width` in lattice.wgsl);
+    /// w: one arm in points, which is what turns a fragment's place on a cross
+    /// into a place in the cell.
     ///
     /// The cell's own level is not carried at all, being 1 for every marker —
     /// each spends its own opacity as a share where it READS the cell.
@@ -981,9 +981,10 @@ struct LatticeCallback {
     /// `prepare` packs the shadow atlas from — a pure function of the frame,
     /// which the offline renderer's determinism rests on.
     casters: Vec<shadow::Caster>,
-    /// Which mixture every caster's ink is blurred with — the row `prepare`
-    /// packs a cell per term of (`ShadowKernel::terms`).
-    kernel: harmonigraph_scene::ShadowKernel,
+    /// The resolved row `prepare` packs a cell per term of. Stored as terms
+    /// because Spread's two widths are view settings rather than a fixed
+    /// preset row.
+    kernel: Vec<harmonigraph_scene::KernelTerm>,
     /// Which caster each node instance's shadow is, by index into `casters` —
     /// parallel to `instances`, since the walk interleaves the two lists.
     node_cells: Vec<u32>,
@@ -1314,11 +1315,11 @@ impl LatticeCallback {
         // The kernel's own row, read once: the packer sizes a cell off each
         // term's σ and every quad is grown by the WIDEST of them, so the table
         // is consulted here and nowhere else in this walk.
-        let kernel = scene.glow_shadow_kernel.terms();
-        let shadow_reach = 0.5
-            * scene.glow_shadow.max(0.0)
-            * scene.glow_shadow_kernel.reach_sigmas()
-            * node_points.max(0.0);
+        let kernel =
+            scene.glow_shadow_kernel.terms_with(scene.glow_shadow_spread, scene.glow_shadow_blur);
+        let kernel_reach = kernel.iter().fold(0.0f32, |reach, term| reach.max(term.reach_sigmas()));
+        let kernel_len = kernel.len();
+        let shadow_reach = 0.5 * scene.glow_shadow.max(0.0) * kernel_reach * node_points.max(0.0);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
@@ -1456,7 +1457,7 @@ impl LatticeCallback {
             glyphs,
             casters,
             node_cells,
-            kernel: scene.glow_shadow_kernel,
+            kernel,
             marker_arm_points,
             draws,
             node_points,
@@ -1527,8 +1528,8 @@ impl LatticeCallback {
                 shadow_curve: [
                     scene.glow_shadow_gain,
                     scene.glow_shadow_curve,
-                    kernel.len() as f32,
-                    scene.glow_shadow_kernel.reach_sigmas(),
+                    kernel_len as f32,
+                    kernel_reach,
                 ],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
@@ -1684,6 +1685,7 @@ struct LatticeResources {
     /// multiplies the scene by off its finished cell.
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_cell_pipeline: wgpu::RenderPipeline,
+    glyph_spread_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipelines: shadow::CellPipelines,
     shadow_box_pipeline: wgpu::RenderPipeline,
@@ -3266,6 +3268,7 @@ impl LatticeResources {
         let (
             glyph_coverage_cell_pipeline,
             glyph_distance_cell_pipeline,
+            glyph_spread_cell_pipeline,
             glyph_distance_pad_pipeline,
         ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
         let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
@@ -3363,6 +3366,7 @@ impl LatticeResources {
             sampler,
             glyph_coverage_cell_pipeline,
             glyph_distance_cell_pipeline,
+            glyph_spread_cell_pipeline,
             glyph_distance_pad_pipeline,
             shadow_cell_pipelines,
             shadow_box_pipeline,
@@ -3796,6 +3800,7 @@ impl CallbackTrait for LatticeCallback {
                     let (
                         glyph_coverage_cell_pipeline,
                         glyph_distance_cell_pipeline,
+                        glyph_spread_cell_pipeline,
                         glyph_distance_pad_pipeline,
                     ) = text::create_glyph_cell_pipelines(
                         device,
@@ -3814,6 +3819,7 @@ impl CallbackTrait for LatticeCallback {
                     resources.glyph_fill_pipeline = glyph_fill_pipeline;
                     resources.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
                     resources.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
+                    resources.glyph_spread_cell_pipeline = glyph_spread_cell_pipeline;
                     resources.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
                     resources.shadow_box_pipeline = shadow_box_pipeline;
 
@@ -3889,7 +3895,7 @@ impl CallbackTrait for LatticeCallback {
         // own σ asks for (`pack`). The blur chain over them is the same chain a
         // single Gaussian took: every cell's σ is capped in TEXELS, so what N
         // terms cost is atlas area and taps, never a wider kernel.
-        let kernel = self.kernel.terms();
+        let kernel = self.kernel.as_slice();
         let packed = if self.uniforms.misc11[3] > 0.0 {
             shadow::pack(&self.casters, sigma, ppp * self.render_scale, max_dim, kernel)
         } else {
@@ -4147,8 +4153,10 @@ impl CallbackTrait for LatticeCallback {
             for (t, cell) in packed.boxes.iter().take(terms).enumerate() {
                 uniforms.plus_shadow_rect[t] = cell.rect;
                 uniforms.plus_shadow_cell[t] = cell.cell;
+                let surface_scale =
+                    if cell.who[1] == shadow::SPREAD_KIND { -cell.terms[3] } else { cell.terms[3] };
                 uniforms.plus_shadow_terms[t] =
-                    [cell.terms[0], cell.terms[1], cell.terms[3], self.marker_arm_points];
+                    [cell.terms[0], cell.who[3], surface_scale, self.marker_arm_points];
             }
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -4239,6 +4247,9 @@ impl CallbackTrait for LatticeCallback {
                             harmonigraph_scene::TermKind::Blur => {
                                 &resources.glyph_coverage_cell_pipeline
                             }
+                            harmonigraph_scene::TermKind::Spread => {
+                                &resources.glyph_spread_cell_pipeline
+                            }
                             harmonigraph_scene::TermKind::Distance => {
                                 &resources.glyph_distance_cell_pipeline
                             }
@@ -4248,7 +4259,7 @@ impl CallbackTrait for LatticeCallback {
                     }
                 }
                 drop(pass);
-                if kernel.iter().any(|term| term.kind == harmonigraph_scene::TermKind::Blur) {
+                if kernel.iter().any(|term| term.kind != harmonigraph_scene::TermKind::Distance) {
                     let cells = &resources.shadow_cell_pipelines;
                     atlas.blur(
                         egui_encoder,

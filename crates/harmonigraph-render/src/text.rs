@@ -66,6 +66,7 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_glyph_ink",
     "vs_glyph_distance_cell",
     "fs_glyph_distance",
+    "fs_glyph_spread",
     "vs_distance_pad",
     "fs_distance_pad",
     "vs_shadow_box",
@@ -606,7 +607,7 @@ pub(crate) fn create_glyph_cell_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::One,
@@ -645,6 +646,20 @@ pub(crate) fn create_glyph_cell_pipelines(
         })],
         None,
     );
+    let spread = glyph_pipeline(
+        device,
+        shader,
+        "glyph_spread_cell",
+        &[Some(layout)],
+        ("vs_glyph_distance_cell", "fs_glyph_spread"),
+        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
+        &[Some(wgpu::ColorTargetState {
+            format: crate::shadow::ATLAS_FORMAT,
+            blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
+        None,
+    );
     let pad = glyph_pipeline(
         device,
         shader,
@@ -659,7 +674,7 @@ pub(crate) fn create_glyph_cell_pipelines(
         })],
         None,
     );
-    (coverage, distance, pad)
+    (coverage, distance, spread, pad)
 }
 
 /// A name's shadow into the scene pass, over the name's own box

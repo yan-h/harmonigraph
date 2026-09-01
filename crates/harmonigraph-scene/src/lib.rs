@@ -274,6 +274,14 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// so the fill the scene pass pays. `timing.rs` is what reads that back.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
+/// The largest outward spread available to the Spread + blur shadow, as a
+/// share of the displayed Shadow width.
+pub const GLOW_SHADOW_SPREAD_MAX: f32 = 1.0;
+
+/// The largest Gaussian σ available after the Spread + blur shadow's
+/// dilation, as a share of the displayed Shadow width.
+pub const GLOW_SHADOW_BLUR_MAX: f32 = 1.0;
+
 /// The most a caster's blurred ink may be multiplied up by before it is spent
 /// as a shadow (see [`ViewConfig::glow_shadow_gain`]).
 ///
@@ -972,6 +980,14 @@ pub struct Scene {
     /// [`ViewConfig::glow_shadow_name`]); already clamped to
     /// 0..=[`GLOW_SHADOW_NAME_MAX`].
     pub glow_shadow_name: f32,
+    /// How far a Spread source is expanded before it is blurred, as a share of
+    /// the displayed Shadow width (see [`ViewConfig::glow_shadow_spread`]);
+    /// already clamped to 0..=[`GLOW_SHADOW_SPREAD_MAX`].
+    pub glow_shadow_spread: f32,
+    /// The Gaussian σ applied after a Spread source is expanded, as a share
+    /// of the displayed Shadow width (see [`ViewConfig::glow_shadow_blur`]);
+    /// already clamped to 0..=[`GLOW_SHADOW_BLUR_MAX`].
+    pub glow_shadow_blur: f32,
     /// Which row every caster's ink is turned into a cell by (see
     /// [`ViewConfig::glow_shadow_kernel`]). Carried whole: the renderer takes
     /// the row off it rather than a copy of the numbers.

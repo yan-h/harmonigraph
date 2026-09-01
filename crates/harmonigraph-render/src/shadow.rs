@@ -163,11 +163,12 @@ pub(crate) struct ShadowBox {
     /// Shadow bar times a constant rather than a screen width.
     pub terms: [f32; 4],
     /// x: which caster this box belongs to, as an index into
-    /// [`Packed::casters`]; y: what this cell HOLDS, 0 blurred ink and 1 a
-    /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
-    /// reaches, in the pane's points — the pad the rect was grown by, which is
+    /// [`Packed::casters`]; y: what this cell HOLDS, 0 ordinary coverage, 1 a
+    /// distance ([`DISTANCE_KIND`]), or 2 spread coverage ([`SPREAD_KIND`]); z:
+    /// how far past the caster's ink this cell reaches, in the pane's points —
+    /// the pad the rect was grown by, which is
     /// where the standoff's curve is windowed to nothing and so the value a
-    /// texel past its encoded reach holds; w: unused.
+    /// texel past its encoded reach holds; w: outward spread in pane points.
     ///
     /// x is read by the node's SCENE draw, which needs every term at once and
     /// so reaches the array rather than the box; y and z by the passes that
@@ -182,12 +183,17 @@ pub(crate) struct ShadowBox {
 /// What `ShadowBox::who`'s y and `ShadowCaster::kind` hold for a term whose
 /// cell is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
 /// and common.wgsl, pinned by
-/// `the_shaders_distance_kind_and_window_are_the_packers`.
+/// `the_shaders_kinds_and_windows_are_the_packers`.
 ///
 /// A float and not a flag because it rides in a vertex attribute and a storage
-/// array that are floats already; compared with a `> 0.5` wherever it is read,
-/// so nothing turns on the exact bits surviving an interpolator.
+/// array that are floats already. Readers compare it against this exact kind
+/// with a half-unit window, so the neighbouring Spread kind is not mistaken
+/// for Distance.
 pub(crate) const DISTANCE_KIND: f32 = 1.0;
+/// [`harmonigraph_scene::TermKind::Spread`] in the packed GPU representation.
+/// Kept distinct from [`DISTANCE_KIND`]: both rasterize an analytic field, but
+/// a spread cell holds coverage and goes through the blur chain.
+pub(crate) const SPREAD_KIND: f32 = 2.0;
 
 impl ShadowBox {
     pub(crate) const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -268,8 +274,9 @@ pub(crate) struct ShadowCaster {
     /// could not hold every one of its cells, which is a caster that darkens
     /// nothing rather than one that darkens by part of its kernel. y/z/w unused.
     pub level: [f32; 4],
-    /// What each term's cell HOLDS: 0 blurred ink, [`DISTANCE_KIND`] a
-    /// distance. Zeroed past the kernel's own term count.
+    /// What each term's cell HOLDS: 0 ordinary blurred ink,
+    /// [`DISTANCE_KIND`] a distance, and [`SPREAD_KIND`] blurred spread
+    /// coverage. Zeroed past the kernel's own term count.
     ///
     /// Per caster rather than in a uniform, though every caster in a frame is
     /// packed off one row and so carries the same kinds: the two shader modules
@@ -364,13 +371,15 @@ pub(crate) fn pack(
             0.0
         }
     };
-    // One term's σ for one caster, in the target's pixels: the frame's, scaled
-    // by what the caster asked for and by what the term is. `max` and not a
-    // branch, so a NaN out of a corrupt blob comes out as 0 — a hard-edged
+    // The picture's σ for one caster, in the target's pixels: the frame's,
+    // scaled by what the caster asked for. A term's Gaussian and its outward
+    // spread are independent ratios of this one width.
+    let picture_sigma_of = |c: &Caster| (sigma_px * c.sigma_scale).max(0.0);
+    // One term's blur σ for one caster, in the target's pixels. `max` and not
+    // a branch, so a NaN out of a corrupt blob comes out as 0 — a hard-edged
     // shadow of the caster's own ink rather than a kernel of nothing.
-    let sigma_of = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
-        (sigma_px * c.sigma_scale * t.sigma).max(0.0)
-    };
+    let sigma_of =
+        |c: &Caster, t: &harmonigraph_scene::KernelTerm| (picture_sigma_of(c) * t.sigma).max(0.0);
     // A cell, sized off ITS OWN σ: drawn at `min(1, SIGMA_CELL_MAX / σ)` of the
     // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the term
     // or the caster asked for, and padded by the kernel's reach in those same
@@ -399,15 +408,17 @@ pub(crate) fn pack(
         // turn the floor into supersampling at the small end.
         let scale = fit.max(floor).min(1.0);
         let k = scale * px_per_point;
-        // This term's σ in the cell's own texels, which is what the PADDING is
-        // in whatever the kind — the two families reach different multiples of
-        // it and `KernelTerm::reach_sigmas` is the one place that is written
-        // down.
+        // This term's σ in the cell's own texels. Padding is measured from
+        // the original caster and therefore includes both the outward spread
+        // and the blur's tail, expressed together by `KernelTerm::reach_sigmas`.
         let texels = sigma * scale;
-        let pad = ((t.kind.reach_sigmas() * texels).ceil() + 1.0) / k;
+        let spread_texels = picture_sigma_of(c) * t.spread * scale;
+        let reach = spread_texels + t.kind.reach_sigmas() * texels;
+        let pad = (reach.ceil() + 1.0) / k;
+        let spread = picture_sigma_of(c) * t.spread / px_per_point;
         // The BLUR chain's σ, which a distance cell has none of because it
         // bypasses that chain.
-        (scale, k, if is_distance(t) { 0.0 } else { texels }, pad)
+        (scale, k, if is_distance(t) { 0.0 } else { texels }, pad, spread)
     };
     // What a caster's level comes to where it is spent: a level at zero, or a
     // NaN out of the same corrupt blob, darkens nothing.
@@ -432,7 +443,7 @@ pub(crate) fn pack(
                 sizes.push([0, 0]);
                 continue;
             }
-            let (_, k, _, pad) = shape(caster, term);
+            let (_, k, _, pad, _) = shape(caster, term);
             let r = caster.rect;
             let rect = [r[0] - pad, r[1] - pad, r[2] + 2.0 * pad, r[3] + 2.0 * pad];
             let texels = |points: f32| ((points * k).ceil() as u32).max(1);
@@ -496,9 +507,13 @@ pub(crate) fn pack(
             // padding metadata. Keeping either here would make the packed frame
             // churn when an atlas-only setting changes even though the scene
             // draw cannot read it.
-            let (scale, k, sigma_cell, pad) =
-                if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster, term) };
-            let kind = if is_distance(term) { DISTANCE_KIND } else { 0.0 };
+            let (scale, k, sigma_cell, pad, spread) =
+                if direct { (0.0, 0.0, 0.0, 0.0, 0.0) } else { shape(caster, term) };
+            let kind = match term.kind {
+                harmonigraph_scene::TermKind::Blur => 0.0,
+                harmonigraph_scene::TermKind::Distance => DISTANCE_KIND,
+                harmonigraph_scene::TermKind::Spread => SPREAD_KIND,
+            };
             let rect = rects[i];
             let [w, h] = sizes[i];
             let [x, y] = placed[i];
@@ -508,7 +523,7 @@ pub(crate) fn pack(
                 rect,
                 cell,
                 terms: [k, sigma_cell, level, scale],
-                who: [c as f32, kind, pad, 0.0],
+                who: [c as f32, kind, pad, spread],
             });
             if !whole {
                 continue;
@@ -625,8 +640,9 @@ impl ShadowTarget {
     /// The two blur passes over `count` cells of `boxes`, leaving the finished
     /// atlas in `views[0]`.
     ///
-    /// Both targets are cleared first: every shipped kernel is either entirely
-    /// blur or entirely distance, and this chain only runs for a blur row.
+    /// Both targets are cleared first. Distance cells collapse their quads and
+    /// retain the field already in texture 0; ordinary and Spread coverage
+    /// cells run through both passes.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -755,7 +771,7 @@ pub(crate) fn caster_buffer(
     (buffer, bind_group)
 }
 
-/// The two pipelines that sweep blur cells.
+/// The two pipelines that sweep coverage cells.
 ///
 /// One module and one constructor because they share a cell quad off the same
 /// box stream and differ only in which axis they read. No blend anywhere here:
@@ -859,8 +875,8 @@ pub(crate) mod tests {
         harmonigraph_scene::ShadowKernel::Gaussian.terms()
     }
 
-    /// Every row of the kernel table is a mixture the atlas and the sampler are
-    /// built to hold, and every one is scaled to the same reach.
+    /// Every row of the kernel table is a construction the atlas and sampler
+    /// are built to hold, with its calibration stated explicitly.
     ///
     /// The table is arithmetic nothing else checks: a row is four numbers typed
     /// out of a least-squares fit, and a transposed digit in one draws a
@@ -877,9 +893,9 @@ pub(crate) mod tests {
     /// that carry a blur term; a distance row has no mixture to sum and is
     /// measured by the two readings in `lattice_tests::shadows` instead.
     #[test]
-    fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
+    fn every_kernel_row_has_the_calibration_it_claims() {
         use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Distance] {
+        for kernel in [Gaussian, TwoScale, Spread, Distance] {
             if kernel.has_distance() {
                 continue;
             }
@@ -899,6 +915,26 @@ pub(crate) mod tests {
                 terms.iter().all(|t| t.weight > 0.0 && t.sigma > 0.0),
                 "{kernel:?} carries a term that draws nothing: {terms:?}",
             );
+            if kernel == Spread {
+                assert_eq!(
+                    terms,
+                    &[harmonigraph_scene::KernelTerm {
+                        weight: 1.0,
+                        sigma: 0.5,
+                        spread: 1.0,
+                        kind: harmonigraph_scene::TermKind::Spread,
+                    }],
+                    "Spread must default to a quarter-Shadow-width Gaussian behind a \
+                     half-Shadow-width dilation",
+                );
+                assert!(
+                    (kernel.reach_sigmas() - 2.5).abs() < 1e-6,
+                    "Spread reaches {} picture sigmas rather than its one-sigma dilation plus a \
+                     three-sigma blur",
+                    kernel.reach_sigmas(),
+                );
+                continue;
+            }
             let widest = terms.iter().fold(0.0f32, |w, t| w.max(t.sigma));
             let narrowest = terms.iter().fold(f32::INFINITY, |w, t| w.min(t.sigma));
             assert!(
@@ -912,11 +948,35 @@ pub(crate) mod tests {
             &[harmonigraph_scene::KernelTerm {
                 weight: 1.0,
                 sigma: 1.0,
+                spread: 0.0,
                 kind: harmonigraph_scene::TermKind::Blur,
             }],
             "the fresh row is not one Gaussian at the bar's own width, so every other reading \
              in this suite is against a different picture",
         );
+    }
+
+    /// The packer carries the independently configured spread to every
+    /// analytic caster in pane points; changing the blur must not move that
+    /// threshold, and a zero blur must remain a finite, full-resolution cell.
+    #[test]
+    fn spread_and_blur_pack_as_independent_lengths() {
+        use harmonigraph_scene::ShadowKernel;
+        let caster = caster(20.0, 30.0, 40.0, 12.0);
+        let picture_sigma = 10.0;
+        let px_per_point = 2.0;
+        for blur in [0.0, 0.25, 0.8] {
+            let terms = ShadowKernel::Spread.terms_with(0.2, blur);
+            let packed = pack(&[caster], picture_sigma, px_per_point, 4096, &terms);
+            let cell = packed.boxes[0];
+            assert_eq!(cell.who[1], SPREAD_KIND);
+            assert!((cell.who[3] - 2.0).abs() < 1e-6, "Blur moved the Spread threshold");
+            assert!(cell.terms.iter().all(|value| value.is_finite()));
+            if blur == 0.0 {
+                assert_eq!(cell.terms[0], px_per_point, "a hard spread was downsampled");
+                assert_eq!(cell.terms[1], 0.0, "a hard spread acquired a Gaussian");
+            }
+        }
     }
 
     /// A mixture packs one cell per caster per term, each at the resolution its
@@ -1032,7 +1092,7 @@ pub(crate) mod tests {
     /// (see `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
+        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread, TwoScale};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1055,7 +1115,13 @@ pub(crate) mod tests {
             assert!(
                 ratio <= 4.0,
                 "TwoScale packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
-                 reaches the device's texture limit rather than a row to compare",
+                reaches the device's texture limit rather than a row to compare",
+            );
+            let ratio = area(Spread) / plain;
+            eprintln!("Spread at {what}: {ratio:.2}x one Gaussian's cells");
+            assert!(
+                ratio <= 5.0,
+                "Spread packs {ratio:.2}x one Gaussian's cells at {what}, beyond its cost bound",
             );
             // The DISTANCE row on a bound of its own, and two orders of
             // magnitude above the blur rows' rather than beside them. A blur
@@ -1391,12 +1457,17 @@ pub(crate) mod tests {
     /// drifted pads a cell to one radius and cuts its curve off at another,
     /// which is a screen-aligned step in the halo.
     #[test]
-    fn the_shaders_distance_kind_and_window_are_the_packers() {
+    fn the_shaders_kinds_and_windows_are_the_packers() {
         let common = crate::with_common("");
         for src in [SHADOW_SRC, common.as_str()] {
             let kind: f32 = shader_const(src, "DISTANCE_KIND").parse().expect("a number");
             assert_eq!(kind, DISTANCE_KIND, "a module reads a different kind than the packer");
         }
+        let spread_kind: f32 = shader_const(&common, "SPREAD_KIND").parse().expect("a number");
+        assert_eq!(
+            spread_kind, SPREAD_KIND,
+            "common.wgsl reads a different Spread kind than the packer"
+        );
         for (name, want) in [
             ("SHADOW_TAIL", harmonigraph_scene::SHADOW_TAIL),
             ("SHADOW_STOP", harmonigraph_scene::SHADOW_STOP),
@@ -1478,11 +1549,13 @@ pub(crate) mod tests {
             harmonigraph_scene::KernelTerm {
                 weight: 1.0,
                 sigma: 1.0,
+                spread: 0.0,
                 kind: harmonigraph_scene::TermKind::Blur,
             },
             harmonigraph_scene::KernelTerm {
                 weight: 0.0,
                 sigma: 1.0,
+                spread: 0.0,
                 kind: harmonigraph_scene::TermKind::Distance,
             },
         ];

@@ -121,7 +121,8 @@ struct ShadowCaster {
     rect: vec4<f32>,
     // x: how much of this caster's shadow lands, 0..=1. y/z/w unused.
     level: vec4<f32>,
-    // What each term's cell HOLDS: 0 blurred ink, `DISTANCE_KIND` a distance.
+    // What each term's cell HOLDS: 0 ordinary blurred ink, `DISTANCE_KIND` a
+    // distance, and `SPREAD_KIND` blurred spread coverage.
     kind: array<f32, SHADOW_TERMS>,
     // Each term's σ in the pane's POINTS, which is what a distance read out of
     // a cell is measured against — one Shadow width is 2σ.
@@ -139,6 +140,9 @@ struct ShadowCaster {
 // `shadow::DISTANCE_KIND`, and spelled again in shadow.wgsl because there is no
 // linkage between shader modules here.
 const DISTANCE_KIND: f32 = 1.0;
+// A coverage cell rasterized from an outward threshold of the caster's exact
+// field, then sent through the same Gaussian chain as a blur cell.
+const SPREAD_KIND: f32 = 2.0;
 
 // Every caster's kernel, indexed by the caster's own index in the frame
 // (`pack`'s order).
@@ -163,7 +167,8 @@ const DISTANCE_KIND: f32 = 1.0;
 // N taps into one, and the kernel's core keeps the sharpness that is the whole
 // reason a mixture is worth drawing.
 //
-// One loop across both FAMILIES, branching per term on what its cell holds. The
+// One loop across all source constructions, branching per term on what its
+// cell holds. The
 // gain enters here rather than at the transmittance because whether it applies
 // is a property of the ROW: a blur row is gained and a distance row is not, and
 // a function taking the finished exponent cannot tell them apart.
@@ -175,7 +180,7 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
         return 0.0;
     }
     let atlas = vec2<f32>(textureDimensions(shadow_atlas));
-    // The blur terms, summed by weight; and the distance term's own coverage.
+    // Coverage terms, summed by weight; and the distance term's own coverage.
     var blur = 0.0;
     var cov = 0.0;
     var distance = false;
@@ -196,7 +201,7 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
         // tap of coverage is — the field is smooth almost everywhere and its
         // creases are where two answers are equally right.
         let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
-        if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
+        if abs(shadow_casters[who].kind[t] - DISTANCE_KIND) < 0.5 {
             distance = true;
             cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t]);
         } else {
@@ -238,7 +243,7 @@ fn standoff_coverage(d: f32, w: f32) -> f32 {
 // How many e-folds the decay has spent by one Shadow width, and how many widths
 // out its window has shut — `SHADOW_TAIL` and `SHADOW_STOP` in
 // harmonigraph_scene, pinned to them by
-// `the_shaders_distance_kind_and_window_are_the_packers`.
+// `the_shaders_kinds_and_windows_are_the_packers`.
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
 

@@ -1,8 +1,10 @@
 // What turns every caster's ink, drawn into a cell of its own (`vs_glyph_cell`
-// in text.wgsl), into what that cell HOLDS — which is one of two things.
+// in text.wgsl), into what that cell HOLDS.
 //
 // A BLUR cell holds the ink convolved with a Gaussian of that cell's σ, once
 // along x into the atlas's second texture and once along y back into the first.
+// A SPREAD cell starts as the caster's field thresholded outward and takes the
+// same two passes, so it too ends as coverage.
 // A DISTANCE cell holds how far each texel stands from the caster's nearest
 // ink, in pane points. Nodes write that field analytically and names MIN-blend
 // their fixed glyph SDFs.
@@ -26,6 +28,10 @@
 /// blurred ink — `shadow::DISTANCE_KIND`, and spelled again in common.wgsl
 /// because there is no linkage between shader modules here.
 const DISTANCE_KIND: f32 = 1.0;
+
+fn is_distance_kind(kind: f32) -> bool {
+    return abs(kind - DISTANCE_KIND) < 0.5;
+}
 
 struct CellOut {
     @builtin(position) position: vec4<f32>,
@@ -74,8 +80,8 @@ fn cell_quad(
     return out;
 }
 
-/// The BLUR cells alone: the x pass. A distance cell already holds its final
-/// field in the target this reads, so neither blur pass touches it.
+/// The coverage cells alone: the x pass. A distance cell already holds its
+/// final field in the target this reads, so neither blur pass touches it.
 @vertex
 fn vs_cell(
     @builtin(vertex_index) vertex: u32,
@@ -84,10 +90,10 @@ fn vs_cell(
     @location(2) terms: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
+    return cell_quad(vertex, cell, terms, !is_distance_kind(who.y));
 }
 
-/// The BLUR cells alone: the y pass.
+/// The coverage cells alone: the y pass.
 @vertex
 fn vs_cell_blur(
     @builtin(vertex_index) vertex: u32,
@@ -96,7 +102,7 @@ fn vs_cell_blur(
     @location(2) terms: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
+    return cell_quad(vertex, cell, terms, !is_distance_kind(who.y));
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is

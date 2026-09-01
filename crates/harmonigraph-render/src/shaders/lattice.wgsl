@@ -196,10 +196,10 @@ struct Uniforms {
     plus_shadow_rect: array<vec4<f32>, SHADOW_TERMS>,
     // Each of those boxes' cells in atlas texels: origin, then size.
     plus_shadow_cell: array<vec4<f32>, SHADOW_TERMS>,
-    // x: points to cell texels; y: σ in those texels; z: the cell's share of
-    // the target's pixels, which is the softness the cross is cut with where it
-    // is RASTERIZED (`aa_width`, `vs_plus_cell`); w: one arm in points, which
-    // is what turns a fragment's place on a cross into a place in the cell.
+    // x: points to cell texels; y: outward spread in pane points; z: the cell's
+    // share of the target's pixels, which is the softness the cross is cut with
+    // where it is RASTERIZED (`aa_width`, `vs_plus_cell`); w: one arm in points,
+    // which turns a fragment's place on a cross into a place in the cell.
     //
     // No level among them: it is 1 for every marker, a marker's own opacity
     // being the share it spends when it READS the cell (`plus_paint`).
@@ -345,12 +345,12 @@ fn glow_shadow_curve() -> f32 {
 // straight line at the box, which is the trap `shadow_reach_uv` exists for and
 // is ×N here.
 //
-// A reach and not a σ RATIO, because the two families do not end at the same
-// multiple of their own width: the ratio times a constant answers for a blur
-// row and would cut a distance row's window off a third of the way in. The
-// multiple is `KernelTerm::reach_sigmas`, spent on the CPU, so a quad here is
-// one number. Floored at `SHADOW_REACH_SIGMAS` so a frame with no kernel packed
-// sizes its quads as one Gaussian does.
+// A reach and not a σ RATIO, because the constructions do not end at the same
+// multiple of one width: Spread adds a separately adjustable dilation, and a
+// blur ratio times a constant would cut a distance row's window off a third of
+// the way in. `KernelTerm::reach_sigmas` resolves those parts on the CPU, so a
+// quad here is one number. Floored at `SHADOW_REACH_SIGMAS` so a frame with no
+// kernel packed sizes its quads as one Gaussian does.
 fn glow_shadow_terms() -> u32 {
     return u32(max(u.shadow_curve.z, 0.0));
 }
@@ -428,7 +428,7 @@ fn plus_distance_term(who: f32) -> u32 {
         return SHADOW_TERMS;
     }
     for (var t = 0u; t < min(glow_shadow_terms(), SHADOW_TERMS); t = t + 1u) {
-        if shadow_casters[caster].kind[t] >= 0.5 * DISTANCE_KIND {
+        if abs(shadow_casters[caster].kind[t] - DISTANCE_KIND) < 0.5 {
             return t;
         }
     }
@@ -682,6 +682,9 @@ struct VsOut {
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
+    // x: outward spread in pane points on a Spread cell draw; y: packed term
+    // kind. Zero on every scene draw and ordinary coverage cell.
+    @location(9) @interpolate(flat) shadow_meta: vec2<f32>,
     // The circle the node fits inside (`node_rim`), in this node's uv —
     // computed once in the vertex shader because the billboard is sized on it.
     @location(11) @interpolate(flat) rim: f32,
@@ -757,7 +760,9 @@ fn vs_node_cell(
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
-    if box.who.y < 0.5 {
+    let distance = abs(box.who.y - DISTANCE_KIND) < 0.5;
+    let spread = abs(box.who.y - SPREAD_KIND) < 0.5;
+    if !distance && !spread {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
@@ -793,8 +798,13 @@ fn vs_node_cell(
         select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
     // The negative sign carries the distance kind without consuming another
-    // interpolator; coverage cells return above with the positive scale.
+    // interpolator; ordinary coverage cells return above with the positive
+    // scale. `shadow_meta` parts the spread threshold from a stored distance.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
+    out.shadow_meta = vec2<f32>(
+        select(0.0, box.who.w, spread),
+        box.who.y,
+    );
     return out;
 }
 
@@ -876,6 +886,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
+    out.shadow_meta = vec2<f32>(0.0);
     out.rim = rim;
     out.ring = inst.ring;
     // Neither end of the atlas, which is the answer for every draw but the two
@@ -2766,6 +2777,16 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic);
     if analytic {
+        if abs(in.shadow_meta.y - SPREAD_KIND) < 0.5 {
+            let points = ink.sd * abs(in.shadow_at.z);
+            let aa_points = max(g.aa * abs(in.shadow_at.z), 1e-4);
+            let coverage = 1.0 - smoothstep(
+                in.shadow_meta.x - aa_points,
+                in.shadow_meta.x + aa_points,
+                points,
+            );
+            return vec4<f32>(coverage, 0.0, 0.0, 0.0);
+        }
         // Stabilize the value before the R16 attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a
         // last f32 ulp may otherwise land on opposite sides of an f16 tie.
@@ -3019,9 +3040,16 @@ fn vs_plus_cell(
     out.color = vec4<f32>(1.0);
     // No caster to READ — this draw is the one that fills the cells — and the
     // cell's own scale, which is what the cross is cut with here rather than
-    // the pane's.
-    out.shadow_box = vec4<f32>(0.0);
-    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.plus_shadow_terms[term].z);
+    // the pane's. A negative scale tags the Spread row in this private uniform;
+    // its magnitude remains the antialiasing scale.
+    let spread = u.plus_shadow_terms[term].z < 0.0;
+    let spread_arms = select(
+        0.0,
+        u.plus_shadow_terms[term].y / arm_points,
+        spread,
+    );
+    out.shadow_box = vec4<f32>(spread_arms, select(0.0, 1.0, spread), 0.0, 0.0);
+    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, abs(u.plus_shadow_terms[term].z));
     return out;
 }
 
@@ -3670,6 +3698,18 @@ fn plus_paint(in: PlusVsOut) -> Painted {
 @fragment
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
+    if in.shadow_box.y > 0.5 {
+        let start = min(u.misc5.y, 1.0 - 1e-3);
+        let half_level_end = 0.5 * (start + 1.0);
+        let distance = plus_box_sd(in.uv, half_level_end);
+        let spread = in.shadow_box.x;
+        return vec4<f32>(
+            1.0 - smoothstep(spread - aa, spread + aa, distance),
+            0.0,
+            0.0,
+            0.0,
+        );
+    }
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
 }
 

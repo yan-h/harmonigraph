@@ -6,9 +6,10 @@ use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
-    GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX,
-    GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
-    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    GLOW_REACH_MAX, GLOW_SHADOW_BLUR_MAX, GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN,
+    GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_SHADOW_SPREAD_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1290,15 +1291,31 @@ pub struct ViewConfig {
     /// three times as wide. What it does cost is the name's own quad, which
     /// grows with its reach like every other caster's.
     pub glow_shadow_name: f32,
-    /// Which mixture of Gaussians every caster's ink is blurred with — the
-    /// SHAPE of a shadow's falloff, where [`glow_shadow`](Self::glow_shadow) is
-    /// how far it reaches and [`glow_shadow_depth`](Self::glow_shadow_depth)
-    /// how dark it lands.
+    /// How far the Spread + blur kernel expands the caster before blurring it,
+    /// as a share of the displayed Shadow width,
+    /// 0..=[`GLOW_SHADOW_SPREAD_MAX`]. Half a width is the fresh value.
     ///
-    /// Every row is scaled to the same reach, so switching one does not move
-    /// the Shadow bar under it: what changes is where the darkness sits between
-    /// the ink and the edge. See [`ShadowKernel`] for why the shapes worth
-    /// comparing arrive as mixtures rather than as kernels of their own.
+    /// This is inert on every other kernel. It is independent of the blur so
+    /// either component can be inspected on its own: zero Blur is a hard
+    /// dilation, while zero Spread is an ordinary Gaussian of the chosen
+    /// width.
+    pub glow_shadow_spread: f32,
+    /// The Gaussian σ applied after the Spread + blur kernel expands the
+    /// caster, as a share of the displayed Shadow width,
+    /// 0..=[`GLOW_SHADOW_BLUR_MAX`]. A quarter width is the fresh value.
+    ///
+    /// This is inert on every other kernel. It controls softness without
+    /// changing the expanded source contour that preserves the caster's form.
+    pub glow_shadow_blur: f32,
+    /// Which construction turns every caster's ink into a shadow — the SHAPE
+    /// of its falloff, where [`glow_shadow`](Self::glow_shadow) is the shared
+    /// reference width and [`glow_shadow_depth`](Self::glow_shadow_depth) how
+    /// dark it lands.
+    ///
+    /// The fixed rows are calibrated against the same displayed width. Spread
+    /// begins at its matching calibration, then the two controls above let its
+    /// dilation and softness depart from it deliberately. See [`ShadowKernel`]
+    /// for the constructions being compared.
     ///
     /// It is the one setting in the Shadow section that costs ATLAS: a row of
     /// N terms packs N cells for every caster, each at the resolution its own σ
@@ -2303,6 +2320,10 @@ impl ViewConfig {
             .clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX);
         self.glow_shadow_name = finite_or(self.glow_shadow_name, fresh.glow_shadow_name)
             .clamp(0.0, GLOW_SHADOW_NAME_MAX);
+        self.glow_shadow_spread = finite_or(self.glow_shadow_spread, fresh.glow_shadow_spread)
+            .clamp(0.0, GLOW_SHADOW_SPREAD_MAX);
+        self.glow_shadow_blur = finite_or(self.glow_shadow_blur, fresh.glow_shadow_blur)
+            .clamp(0.0, GLOW_SHADOW_BLUR_MAX);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2640,6 +2661,10 @@ impl Default for ViewConfig {
             // alike. The bar exists to ask whether a letterform wants
             // otherwise; the fresh view is the answer being no.
             glow_shadow_name: 1.0,
+            // The balanced calibration: expand by half the displayed width,
+            // then soften with a quarter-width Gaussian.
+            glow_shadow_spread: 0.5,
+            glow_shadow_blur: 0.25,
             // One Gaussian, which is one cell per caster and the picture the
             // rest of the Shadow section is calibrated on.
             glow_shadow_kernel: ShadowKernel::Gaussian,

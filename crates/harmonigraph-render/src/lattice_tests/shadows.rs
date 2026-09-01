@@ -115,7 +115,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     );
     assert_eq!(cb.instances.len(), 1, "the fixture must ship exactly one node");
     assert_eq!(cb.casters.len(), 1, "the fixture must pack exactly one caster");
-    let terms = cb.kernel.terms();
+    let terms = cb.kernel.as_slice();
     let sigma_px = shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, cb.render_scale);
     let packed = shadow::pack(
         &cb.casters,
@@ -1336,9 +1336,11 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
         shooter.shot(&scene)
     };
 
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
+    for kernel in [
+        harmonigraph_scene::ShadowKernel::Gaussian,
+        harmonigraph_scene::ShadowKernel::Spread,
+        harmonigraph_scene::ShadowKernel::Distance,
+    ] {
         let alone = differing_pixels(&shot(kernel, false, 0.0), &shot(kernel, false, SHADOW));
         let with_cross = differing_pixels(&shot(kernel, true, 0.0), &shot(kernel, true, SHADOW));
         assert!(
@@ -1684,7 +1686,7 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
 /// row here because each is packed differently.
 #[test]
 fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread, TwoScale};
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1697,12 +1699,12 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         shooter.shot_with(&scene, named)
     };
     let plain = shot(Gaussian, 0.4);
-    for kernel in [TwoScale, Distance] {
+    for kernel in [TwoScale, Spread, Distance] {
         let moved = differing_pixels(&plain, &shot(kernel, 0.4));
         assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
     }
     let shut = shot(Gaussian, 0.0);
-    for kernel in [TwoScale, Distance] {
+    for kernel in [TwoScale, Spread, Distance] {
         assert_eq!(
             differing_pixels(&shut, &shot(kernel, 0.0)),
             0,
@@ -1710,6 +1712,35 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
              said not to",
         );
     }
+}
+
+/// The Spread row's two component widths each reach the final picture, while
+/// both remain inert when Shadow depth shuts the feature off.
+#[test]
+fn spread_and_blur_each_move_the_spread_rows_picture() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let mut shot = |spread, blur, depth| {
+        let mut scene = on_ground(0.4, depth);
+        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
+        scene.glow_shadow_spread = spread;
+        scene.glow_shadow_blur = blur;
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+        shooter.shot_with(&scene, named)
+    };
+
+    let reference = shot(0.2, 0.1, 0.85);
+    let spread = differing_pixels(&reference, &shot(0.8, 0.1, 0.85));
+    let blur = differing_pixels(&reference, &shot(0.2, 0.6, 0.85));
+    assert!(spread > 200, "the Spread control moved only {spread} pixels");
+    assert!(blur > 200, "the Blur control moved only {blur} pixels");
+
+    let shut = shot(0.2, 0.1, 0.0);
+    assert_eq!(differing_pixels(&shut, &shot(0.8, 0.1, 0.0)), 0);
+    assert_eq!(differing_pixels(&shut, &shot(0.2, 0.6, 0.0)), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1825,7 +1856,7 @@ fn block_on_grey(
 /// move together with the depth, the gain and the ground.
 #[test]
 fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread};
     const SHADOW: f32 = 0.5;
     const DEPTH: f32 = 0.85;
     const SIDE: f32 = 26.0;
@@ -1854,6 +1885,7 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
     };
     let blurred = ratio(Gaussian);
     let distance = ratio(Distance);
+    let spread = ratio(Spread);
     assert!(
         blurred < 0.7,
         "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
@@ -1863,6 +1895,11 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
         distance > blurred + 0.2,
         "the distance row darkens the corner by {distance:.2} of the edge against the Gaussian's \
          {blurred:.2}, so it is retreating from the corner as a blur does",
+    );
+    assert!(
+        spread > blurred + 0.2,
+        "the Spread row darkens the corner by {spread:.2} of the edge against the Gaussian's \
+         {blurred:.2}, so its narrow convolution has lost the spread contour",
     );
 }
 
@@ -2010,5 +2047,111 @@ fn a_distance_rows_crease_is_no_deeper_than_a_lone_edge() {
         (crease as f64) < 1.5 * edge as f64,
         "the distance row leaves {crease} in the crease against {edge} at the same distance on \
          the open side, so a distance term is summing rather than answering with the nearest ink",
+    );
+}
+
+/// Spread + blur closes a distance row's nearest-edge crease without giving
+/// up the source's contour before the final, narrow convolution.
+///
+/// Two slabs face each other across two picture σ. The Spread row dilates by
+/// one picture σ, so their expanded contours meet in the middle. A narrow
+/// Gaussian then sees ink on both sides there, while the point the same
+/// distance off the open edge sees one side only. That is the contribution a
+/// nearest-distance field cannot express and the `G` pocket this row exists to
+/// recover.
+#[test]
+fn a_spread_rows_crease_is_deeper_than_a_lone_edge_at_the_same_distance() {
+    use harmonigraph_scene::ShadowKernel::Spread;
+    const SHADOW: f32 = 1.2;
+    const DEPTH: f32 = 0.55;
+    const GREY: f32 = 0.55;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+    scene.glow_shadow_kernel = Spread;
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    let s = sigma(&scene);
+    let (gap, wide, tall) = (2.0 * s, 2.0 * s, 4.0 * s);
+    let at = on_screen(&scene, SIZE, name_on_the_band(&scene));
+    let (x, row) = (at.x.round() as u32, at.y.round() as u32);
+    let mid = x as f32 + 0.5;
+    let slab = |x: f32| name_glyph(&scene, [x, at.y - tall / 2.0, wide, tall]);
+    let left = mid - gap / 2.0 - wide;
+    let bare = shooter.shot(&scene);
+    let cast = shooter.shot_with(&scene, a_name(vec![slab(left), slab(mid + gap / 2.0)]));
+    let dark = |x: f32| {
+        let x = x.round() as u32;
+        bright_at(&bare, x, row) - bright_at(&cast, x, row)
+    };
+    let (crease, edge) = (dark(mid), dark(left - gap / 2.0));
+    assert!(
+        edge > 20,
+        "the open side darkens by {edge}, which is too little to compare a crease against",
+    );
+    assert!(
+        crease as f64 > 1.15 * edge as f64,
+        "Spread leaves {crease} in the crease against {edge} at the same distance on the open \
+         side, so the two facing strokes are still not combining",
+    );
+}
+
+/// A ring assembled from octave slices casts an almost circular Spread shadow.
+///
+/// The source deliberately keeps its normal angular gaps. At the radius where
+/// the expanded contour ends, the narrow Gaussian should see one annulus, not
+/// a pinwheel of independently blurred slices. Angular standard deviation is
+/// the visible departure from a circle; the mean is bounded so a flat or
+/// vanished result cannot pass for circularity.
+#[test]
+fn a_spread_shadow_of_octave_slices_is_almost_circular() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let sample = |shot: &[u8], p: glam::Vec2| {
+        let x = p.x.clamp(0.0, SIZE[0] as f32 - 2.0);
+        let y = p.y.clamp(0.0, SIZE[1] as f32 - 2.0);
+        let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+        let (tx, ty) = (f64::from(x - x.floor()), f64::from(y - y.floor()));
+        let at = |x, y| bright_at(shot, x, y) as f64;
+        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    };
+    let mut scene = on_ground(0.4, 0.75);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
+    scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    scene.nodes[0].audio_ring = 0.0;
+    scene.octave_gap = 0.08;
+    let deep = shooter.shot(&scene);
+    scene.glow_shadow_depth = 0.0;
+    let flat = shooter.shot(&scene);
+    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+    // The Spread row's dilation is one picture σ. Its boundary is therefore
+    // here, one σ outside the original band's outer edge.
+    let radius = ink_radius(&scene) + sigma(&scene);
+    let values: Vec<f64> = (0..720)
+        .map(|i| {
+            let a = std::f32::consts::TAU * i as f32 / 720.0;
+            let p = centre + radius * glam::Vec2::new(a.cos(), a.sin());
+            1.0 - sample(&deep, p) / sample(&flat, p)
+        })
+        .collect();
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance =
+        values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
+    let deviation = variance.sqrt();
+    assert!(
+        mean > 0.10 && mean < 0.90,
+        "the sliced ring takes {mean:.3} of the ground at the sampled radius, outside the range \
+         where angular variation measures its shape",
+    );
+    assert!(
+        deviation < 0.12 * mean,
+        "the sliced ring's Spread shadow varies by {deviation:.3} around a mean of {mean:.3}, \
+         which is visibly less circular than an annulus",
     );
 }

@@ -498,18 +498,22 @@ pub enum NoteNames {
 /// shaders, so it is the representation's bound rather than a per-row setting.
 pub const SHADOW_TERMS_MAX: usize = 2;
 
-/// What a term of a kernel PUTS IN a cell, which is what parts the two families
-/// a Shadow can be drawn from.
+/// What a term of a kernel PUTS IN a cell, which is what parts the three source
+/// constructions a Shadow can be drawn from.
 ///
-/// The atlas, the packer and the sampler's loop are one path across both: a row
-/// is a slice of terms whatever the kinds in it, and this is a branch inside
-/// that path rather than a second path beside it.
+/// The atlas, the packer and the sampler's loop are one path across all three:
+/// a row is a slice of terms whatever the kinds in it, and this is a branch
+/// inside that path rather than a second path beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TermKind {
     /// The caster's ink, convolved with a Gaussian of this term's σ. The cell
     /// holds coverage, and what a fragment reads back is how much of the ink
     /// stands within a blur of it.
     Blur,
+    /// The caster's exact signed field, thresholded after an outward spread
+    /// and then convolved with a Gaussian. The spread carries the source's
+    /// form; the narrower blur supplies the soft contribution field.
+    Spread,
     /// The DISTANCE, in the pane's points, from this texel to the caster's
     /// nearest ink, supplied by the caster's exact field and read back through
     /// the standoff's own curve.
@@ -534,34 +538,40 @@ pub enum TermKind {
 /// distance row by the ratio it already dials its Gaussian by.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KernelTerm {
-    /// This term's share of the mixture, which only a [`Blur`](TermKind::Blur)
-    /// term has. The shares are normalized over the BLUR terms alone where they
-    /// are read (`pack` in `harmonigraph-render`'s `shadow.rs`), so a row that
-    /// does not sum to 1 is a rounding rather than a brightness change — and a
-    /// lone Gaussian standing beside a distance term is the whole Gaussian
-    /// rather than half of one.
+    /// This term's share of the mixture, which coverage terms
+    /// ([`TermKind::Blur`] and [`TermKind::Spread`]) have. The shares are
+    /// normalized over those terms alone where they are read (`pack` in
+    /// `harmonigraph-render`'s `shadow.rs`), so a row that does not sum to 1 is
+    /// a rounding rather than a brightness change — and a lone Gaussian
+    /// standing beside a distance term is the whole Gaussian rather than half
+    /// of one.
     pub weight: f32,
     /// This term's σ over the picture's σ. 1 is the width the Shadow bar names.
     pub sigma: f32,
-    /// Whether this term's cell holds blurred ink or a distance to it.
+    /// How far the source is spread outward before it is blurred, over the
+    /// picture's σ. Zero for every construction but [`TermKind::Spread`].
+    pub spread: f32,
+    /// Whether this term's cell holds blurred ink, blurred spread coverage, or
+    /// a distance to the ink.
     pub kind: TermKind,
 }
 
 impl TermKind {
-    /// How far a term of this kind reaches past a caster's ink, in its own σ.
+    /// How far a term of this kind reaches past its source, in its own σ.
     ///
-    /// The two families end at different multiples of their own width, and both
-    /// end EXACTLY: a Gaussian is lowered onto zero at [`REACH_SIGMAS`] σ
-    /// (`PEDESTAL` in shadow.wgsl) and the standoff's curve is windowed to zero
-    /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because a
-    /// width is 2σ.
+    /// The constructions end at different multiples of their own width, and
+    /// all end EXACTLY: a Gaussian is lowered onto zero at [`REACH_SIGMAS`] σ
+    /// (`PEDESTAL` in shadow.wgsl), and the standoff's curve is windowed to zero
+    /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because
+    /// a width is 2σ.
     ///
-    /// One expression for both, so a quad and its cell's padding are sized off
-    /// one number — a cell padded short of what its quad reaches is a shadow
-    /// cut off in a straight line at the box.
+    /// One expression for all three, so a quad and its cell's padding are sized
+    /// off one number — a cell padded short of what its quad reaches is a
+    /// shadow cut off in a straight line at the box.
     pub fn reach_sigmas(self) -> f32 {
         match self {
             TermKind::Blur => REACH_SIGMAS,
+            TermKind::Spread => REACH_SIGMAS,
             TermKind::Distance => 2.0 * SHADOW_STOP,
         }
     }
@@ -569,9 +579,9 @@ impl TermKind {
 
 impl KernelTerm {
     /// How far this term reaches past a caster's ink, in the PICTURE's σ —
-    /// [`TermKind::reach_sigmas`] taken at this term's own width.
+    /// its own width, plus any outward spread that precedes it.
     pub fn reach_sigmas(self) -> f32 {
-        self.sigma * self.kind.reach_sigmas()
+        self.spread + self.sigma * self.kind.reach_sigmas()
     }
 }
 
@@ -597,7 +607,7 @@ pub const REACH_SIGMAS: f32 = 3.0;
 /// TWO, where the fixed exponential is under half a code value of the deepest
 /// shadow before the window closes it. `SHADOW_STOP` in common.wgsl is the
 /// shader's copy, pinned by
-/// `the_shaders_distance_kind_and_window_are_the_packers`.
+/// `the_shaders_kinds_and_windows_are_the_packers`.
 pub const SHADOW_STOP: f32 = 2.0;
 
 /// How far down the standoff's decay is carried by one Shadow width, as the
@@ -616,12 +626,12 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// What a shadow is made of: which row of terms every caster's ink is turned
 /// into a cell by.
 ///
-/// TWO FAMILIES in one table, and the picker is the toggle between them. The
-/// blur rows are mixtures of Gaussians; the distance rows hold the distance to
-/// the ink instead ([`TermKind`]), which is a different answer to the same
-/// question rather than a different width of the same one. What parts them in
-/// the picture is FORM at a wide Shadow: a blur's profile at a hairline carries
-/// the stroke's width, a distance's carries its shape.
+/// Three constructions in one table. The blur rows are mixtures of Gaussians;
+/// the distance row holds the distance to the ink instead; Spread thresholds
+/// that field into an expanded source and then takes the blur chain
+/// ([`TermKind`]). What parts them in the picture is FORM at a wide Shadow: a
+/// blur's profile at a hairline carries the stroke's width, a distance's carries
+/// its shape, and Spread is the hybrid being tested between them.
 ///
 /// The non-Gaussian blur row is a MIXTURE and not a kernel of its own, because
 /// the atlas blurs separably — once along x, once along y (`blur` in
@@ -630,10 +640,11 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// caster reads them. It is a row of this table rather than a branch in the
 /// shader.
 ///
-/// The rows are scaled so a straight edge reads 2.3% of the depth at one
+/// The fixed rows are scaled so a straight edge reads 2.3% of the depth at one
 /// Shadow width — the same rule that puts a plain Gaussian's σ at half the bar
-/// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`), so switching rows
-/// changes the shadow's SHAPE and not how far it reaches.
+/// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`). Spread begins on that
+/// calibration, then exposes its dilation and Gaussian as independent shares
+/// of the same displayed width.
 ///
 /// The table is here and nowhere else. The packer sizes each term's cell off
 /// the same σ ratio the sampler mixes by, and two copies of one row is the
@@ -649,6 +660,11 @@ pub enum ShadowKernel {
     /// which is #521's option 6 and the cheapest departure from one Gaussian.
     /// Exact by construction: the row IS the kernel rather than a fit to one.
     TwoScale,
+    /// The caster's half-level contour spread outward, then blurred. It starts
+    /// at half a Shadow width of spread and a quarter-width Gaussian; both
+    /// components are adjustable. Nearby pieces are united before the blur,
+    /// while the spread keeps a wide shadow tied to the source form.
+    Spread,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
     /// ink, spent through the fixed standoff decay before the shared Shadow
     /// curve bends it.
@@ -672,20 +688,40 @@ impl ShadowKernel {
     /// is twice its published one. One conversion at one site, so the packer
     /// and the sampler cannot come to read the table differently.
     pub fn terms(self) -> &'static [KernelTerm] {
-        use TermKind::{Blur, Distance};
-        const GAUSSIAN: [KernelTerm; 1] = [KernelTerm { weight: 1.0, sigma: 1.0, kind: Blur }];
+        use TermKind::{Blur, Distance, Spread};
+        const GAUSSIAN: [KernelTerm; 1] =
+            [KernelTerm { weight: 1.0, sigma: 1.0, spread: 0.0, kind: Blur }];
         const TWO_SCALE: [KernelTerm; 2] = [
-            KernelTerm { weight: 0.70, sigma: 0.465, kind: Blur },
-            KernelTerm { weight: 0.30, sigma: 1.3948, kind: Blur },
+            KernelTerm { weight: 0.70, sigma: 0.465, spread: 0.0, kind: Blur },
+            KernelTerm { weight: 0.30, sigma: 1.3948, spread: 0.0, kind: Blur },
         ];
+        const SPREAD_BLUR: [KernelTerm; 1] =
+            [KernelTerm { weight: 1.0, sigma: 0.5, spread: 1.0, kind: Spread }];
         // σ 1: a distance term's own width IS the Shadow bar's, so a second
         // ratio here would be a second width to keep in step for nothing.
-        const DISTANCE: [KernelTerm; 1] = [KernelTerm { weight: 0.0, sigma: 1.0, kind: Distance }];
+        const DISTANCE: [KernelTerm; 1] =
+            [KernelTerm { weight: 0.0, sigma: 1.0, spread: 0.0, kind: Distance }];
         match self {
             ShadowKernel::Gaussian => &GAUSSIAN,
             ShadowKernel::TwoScale => &TWO_SCALE,
+            ShadowKernel::Spread => &SPREAD_BLUR,
             ShadowKernel::Distance => &DISTANCE,
         }
+    }
+
+    /// This kernel's terms with the Spread row's two component widths set as
+    /// shares of the displayed Shadow width.
+    ///
+    /// The table is expressed in picture σ and one Shadow width is two of
+    /// those, hence the factor of two at this one conversion site. Other rows
+    /// ignore the values and retain their fixed calibration.
+    pub fn terms_with(self, spread: f32, blur: f32) -> Vec<KernelTerm> {
+        let mut terms = self.terms().to_vec();
+        if self == ShadowKernel::Spread {
+            terms[0].spread = 2.0 * spread.max(0.0).min(crate::GLOW_SHADOW_SPREAD_MAX);
+            terms[0].sigma = 2.0 * blur.max(0.0).min(crate::GLOW_SHADOW_BLUR_MAX);
+        }
+        terms
     }
 
     /// How far the widest term of this kernel reaches past a caster's ink, in

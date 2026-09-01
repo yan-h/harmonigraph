@@ -183,6 +183,9 @@ struct SdfOut {
     @location(2) @interpolate(flat) near_bounds: vec4<f32>,
     @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
     @location(4) @interpolate(flat) scales: vec2<f32>,
+    // Outward spread and one half-cell antialiasing width, in pane points.
+    // Zero on a Distance draw, whose fragment stores the field itself.
+    @location(5) @interpolate(flat) spread_aa: vec2<f32>,
 };
 
 const SDF_NEAR_PAD: f32 = 32.0;
@@ -241,6 +244,14 @@ fn vs_glyph_distance_cell(
         0.5 * (sdf_rect.z / max(coarse_span.x, 1.0e-6)
             + sdf_rect.w / max(coarse_span.y, 1.0e-6)),
     );
+    out.spread_aa = vec2<f32>(
+        select(
+            0.0,
+            box_who.w,
+            abs(box_who.y - SPREAD_KIND) < 0.5,
+        ),
+        0.5 / max(box_meta.x, 1.0e-6),
+    );
     return out;
 }
 
@@ -251,7 +262,7 @@ struct PadOut {
 
 /// Set every distance cell to its own finite far value before glyphs
 /// MIN-blend into it. Nodes overwrite the same initialization with their full
-/// analytic quad; blur cells stay on the render pass's zero clear.
+/// analytic quad; coverage cells stay on the render pass's zero clear.
 @vertex
 fn vs_distance_pad(
     @builtin(vertex_index) vertex: u32,
@@ -269,7 +280,7 @@ fn vs_distance_pad(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        box_who.y >= 0.5 && cell_packed(box_cell),
+        abs(box_who.y - DISTANCE_KIND) < 0.5 && cell_packed(box_cell),
     );
     out.pad = box_who.z;
     return out;
@@ -665,8 +676,7 @@ fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> f32 {
     return mix(a, b, f.y);
 }
 
-@fragment
-fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+fn glyph_distance(in: SdfOut) -> f32 {
     let coarse_at = clamp(
         in.coarse_texel,
         in.coarse_bounds.xy + vec2<f32>(0.5),
@@ -691,8 +701,23 @@ fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
     // The coarse mask is deliberately conservative at its sparse resolution,
     // so its absolute distance does not meet the near field exactly. Hand off
     // inside the near tile instead of exposing that difference as a hard ring.
-    let distance = mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
-    return vec4<f32>(distance, 0.0, 0.0, 1.0);
+    return mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
+}
+
+@fragment
+fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(glyph_distance(in), 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_glyph_spread(in: SdfOut) -> @location(0) vec4<f32> {
+    let distance = glyph_distance(in);
+    let coverage = 1.0 - smoothstep(
+        in.spread_aa.x - in.spread_aa.y,
+        in.spread_aa.x + in.spread_aa.y,
+        distance,
+    );
+    return vec4<f32>(coverage, 0.0, 0.0, 0.0);
 }
 
 @fragment
