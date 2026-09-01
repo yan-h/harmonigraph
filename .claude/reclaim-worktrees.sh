@@ -323,10 +323,18 @@ usable() {
 
   # A lock naming a live pid means a session still owns this worktree. A lock we
   # cannot attribute to a pid is left alone rather than guessed at.
+  #
+  # Attributable means written by the harness, in its own format, and the whole
+  # string has to match — a bare `pid <n>` anywhere in the reason is not enough.
+  # Prose naming a number is what a PERSON writes, and a person's lock is the
+  # one this script must never answer for: CLAUDE.md tells sessions a
+  # hand-written lock stands until a human clears it, so reading a pid out of
+  # its prose and finding it dead would delete the worktree that promise covers.
   if [ "$locked" = 1 ]; then
-    pid=$(printf '%s' "$reason" | sed -n 's/.*pid \([0-9][0-9]*\).*/\1/p')
+    pid=$(printf '%s' "$reason" | \
+      sed -n 's/^ *claude session .* (pid \([0-9][0-9]*\) start .*)$/\1/p')
     if [ -z "$pid" ]; then
-      note "skip $name: locked, no pid in the reason to check"
+      note "skip $name: locked by a reason this script did not write"
       return 1
     fi
     if ps -p "$pid" >/dev/null 2>&1; then

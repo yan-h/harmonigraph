@@ -169,6 +169,59 @@ check_codex_ownership() {
   fi
 }
 
+# A lock this script did not write names nobody it can check, so it is left
+# alone whatever its text happens to contain. The reason below carries a dead
+# pid in prose, which is the shape that reads as attributable without being so:
+# only a lock in the harness's own format says which session is holding it.
+#
+# CLAUDE.md sends people here — it tells a session that a hand-written lock
+# stands until a human clears it, and a hand-locked worktree that the reclaimer
+# deletes at the next SessionStart is that promise broken with work inside it.
+check_handmade_lock() {
+  desc="a hand-written lock is left for a human"
+  work="$TMP/handmade"
+  mkdir -p "$work/main" "$work/bin"
+
+  # The pid is dead: the liveness probe fails, so nothing but the reason's own
+  # shape stands between this worktree and the removal gate.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$work/bin/ps"
+  chmod +x "$work/bin/ps"
+
+  (
+    cd "$work/main" || exit 1
+    git init -q . 2>/dev/null
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
+    git config user.email t@t; git config user.name t
+    git commit -q --allow-empty -m base
+    git worktree add -q -b w1 .claude/worktrees/w1 HEAD 2>/dev/null
+    git worktree lock --reason "held by hand for pid 4242, mid-investigation" \
+      .claude/worktrees/w1 2>/dev/null
+  ) || { echo "✗ $desc: could not build the fixture" >&2; failures=$((failures + 1)); return; }
+
+  # A worktree made a moment ago is held back by the idle guard, which sits
+  # AFTER the lock check and would carry this case on a reason that has nothing
+  # to do with the lock. Backdating it puts the lock on its own.
+  find "$work/main/.claude/worktrees/w1" -maxdepth 2 -exec touch -t 202001010000 {} + 2>/dev/null
+  touch -t 202001010000 "$work/main/.claude/worktrees/w1"
+
+  out=$(cd "$work/main" && PATH="$work/bin:$PATH" CLAUDE_PROJECT_DIR="$work/main" \
+    RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 \
+    "$SCRIPT" </dev/null 2>&1)
+
+  if printf '%s' "$out" | grep -q "would remove"; then
+    echo "✗ $desc" >&2
+    printf '%s' "$out" | sed 's/^/    got: /' >&2
+    failures=$((failures + 1))
+  else
+    echo "✓ $desc"
+  fi
+}
+
 case_n=0
 
 # A CLAIMED spare is a live session. Its argv is fixed at exec and still names
@@ -193,6 +246,7 @@ check "an unrecognised holder's lock is live" \
   "locked by live pid"
 
 check_codex_ownership
+check_handmade_lock
 
 echo
 if [ "$failures" -gt 0 ]; then
