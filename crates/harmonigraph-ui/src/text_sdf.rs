@@ -17,8 +17,9 @@ const SOURCE_EM: f32 = 480.0;
 pub(crate) const NEAR_TEXELS_PER_EM: f32 = 64.0;
 pub(crate) const NEAR_PAD: u32 = harmonigraph_render::GLYPH_SDF_NEAR_PAD;
 /// The coarse field carries the smooth far range without making the near tile
-/// many thousands of source pixels across.
-pub(crate) const COARSE_TEXELS_PER_EM: f32 = 4.0;
+/// many thousands of source pixels across. Sixteen samples per em keep its
+/// conservative contour within a twentieth of an em of the near field.
+pub(crate) const COARSE_TEXELS_PER_EM: f32 = 16.0;
 pub(crate) const COARSE_PAD: u32 = harmonigraph_render::GLYPH_SDF_COARSE_PAD;
 const SHEET_WIDTH: u32 = 1024;
 
@@ -419,9 +420,10 @@ mod tests {
         assert_eq!(d, vec![0.5, -0.5, 0.5]);
     }
 
-    /// The sparse far field is conservative rather than contour-exact, so a
-    /// hard handoff exposes their disagreement as a ring. The shipped blend
-    /// turns that mismatch into an ordinary distance gradient.
+    /// The far field is conservative rather than contour-exact, but its edge
+    /// stays within a twentieth of an em of the near field. A larger mismatch
+    /// becomes a second dark shelf after the blend, even when the transition
+    /// itself has no step.
     #[test]
     fn the_near_and_coarse_fields_handoff_without_a_step() {
         let (_, source) = type_sources()
@@ -458,7 +460,10 @@ mod tests {
         };
         let hard = worst(1);
         let blended = worst(0);
-        assert!(hard > 20.0, "the fixture's hard handoff moved only {hard} source pixels");
+        assert!(
+            hard < SOURCE_EM / 20.0,
+            "the near and far contours part by {hard} source pixels at their handoff"
+        );
         assert!(
             blended < 4.0,
             "the blended field moves {blended} source pixels between adjacent samples"
