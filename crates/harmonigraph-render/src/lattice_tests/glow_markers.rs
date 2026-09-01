@@ -167,21 +167,9 @@ fn a_crosss_shadow_is_worth_its_ink() {
     assert_eq!(none, 0, "a marker with no ink still took {none} of light off the halo");
 }
 
-/// A marker's shadow is cast by the WHOLE arm, tip and taper alike: a tapered
-/// cross shadows nearly as far out as a square-ended one of its length, and far
-/// past what its SOLID length alone would cast.
-///
-/// The taper is a length beside the reach, not a share of it, and the fresh one
-/// is nearly half the arm — so a shadow blurred off the taper's SOLID length
-/// alone comes off a cross barely longer than the square its arms cross in, and
-/// one Shadow of blur rounds that into a dark square standing under a plus.
-/// What the eye reads a marker by is its ARMS, and this is the claim that keeps
-/// them in the shadow.
-///
-/// Three arms and not two, because the taper also thins the INK the blur is
-/// taken of, and a reach read off a threshold gives a little of itself up with
-/// it. The third is the ruler that says how little: an arm cut to the tapered
-/// one's solid length, which is the shadow the truncation drew.
+/// A marker's shadow finishes with the taper of its arm: adding a fade brings
+/// the shadow's last visible pixel inward, and a deeper fade never pushes it
+/// back out.
 ///
 /// Read along the arm rather than as a pixel count, and that is what makes it a
 /// claim about the SHAPE: a count also moves when the taper moves the ink's own
@@ -189,48 +177,36 @@ fn a_crosss_shadow_is_worth_its_ink() {
 /// shadow's reach unchanged. Each cross is walked against its OWN depth-0 frame,
 /// which is what cancels that ink; what is left is the shadow alone.
 #[test]
-fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
+fn a_markers_shadow_fades_out_with_the_taper_of_its_arm() {
     const SIZE: [u32; 2] = [256, 256];
     // `one_shadow_is_one_distance_whatever_the_cross_it_stands_off`'s numbers,
     // and for its reasons: an arm wide enough on screen to rule a shadow by,
     // and a Shadow that finishes well inside the halo doing the ruling.
     const SHADOW: f32 = 0.30;
     const ARM: f32 = 0.9;
-    const SQUARE: f32 = 1.0;
-    const TAPERED: f32 = 0.25;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     for kernel in
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
     {
-        let row = SIZE[1] as usize / 2;
+        let ruler = with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, 1.0), kernel);
+        let centre = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
+        let tip = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
+        let arm = tip - centre;
+        let side = glam::Vec2::new(-arm.y, arm.x).normalize()
+            * (arm.length() * ruler.plus_half_width + 2.0);
+        let row = (centre + side).y.round() as usize;
+        let mid = centre.x.round() as usize;
         let at = |buf: &[u8], x: usize| -> i64 {
             let i = (row * SIZE[0] as usize + x) * 4;
             brightness(&buf[i..i + 3])
         };
-        // The crossing's own column, off the square-ended cross's ink against a
-        // frame with no cross in it: the marker stands in the same place at every
-        // arm here, so one reading of it starts all three walks.
-        let bare = shooter.shot(&{
-            let mut s = with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE), kernel);
-            s.pluses.clear();
-            s
-        });
-        let flat_square = shooter
-            .shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE), kernel));
-        let cols: Vec<usize> = (0..SIZE[0] as usize)
-            .filter(|&x| {
-                let i = (row * SIZE[0] as usize + x) * 4;
-                flat_square[i..i + 4] != bare[i..i + 4]
-            })
-            .collect();
-        let mid = cols.first().unwrap().midpoint(*cols.last().unwrap());
 
-        // The outermost column right of the crossing where the shadow reads
-        // darker than the same frame without one. Rightward because the node
-        // lighting the frame is to the LEFT: that half holds no other ink and no
-        // other shadow.
+        // The outermost column just outside the arm's side where the shadow
+        // reads darker than the same frame without one. Rightward because the
+        // node lighting the frame is to the LEFT: that half holds no other ink
+        // and no other shadow.
         let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
             let cold = shooter
                 .shot(&with_shadow_kernel(lone_tapered_marker(arm, SHADOW, 0.0, taper), kernel));
@@ -244,34 +220,17 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
             }
             out
         };
-        let square = reach(&mut shooter, ARM, SQUARE);
-        let tapered = reach(&mut shooter, ARM, TAPERED);
-        let solid = reach(&mut shooter, ARM * TAPERED, SQUARE);
+        let square = reach(&mut shooter, ARM, 1.0);
+        let some = reach(&mut shooter, ARM, 0.6);
+        let most = reach(&mut shooter, ARM, 0.25);
         assert!(
             square > mid,
             "{kernel:?}: the square-ended cross cast no shadow past its own crossing",
         );
         assert!(
-            solid < square,
-            "{kernel:?}: the solid length cast as far as the whole arm ({solid} against \
-             {square}), so there is no span here for the tapered cross to be placed along",
-        );
-        // The taper has to reach the kernel, or the claim below is met by a
-        // shadow that never saw it: a shadow drawn off the arm's box rather
-        // than off its ink puts the tapered cross exactly on the square one.
-        assert!(
-            tapered < square,
-            "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed as far as a square \
-             end ({tapered} against {square}), so the taper is not in the shadow",
-        );
-        // Two thirds of the way, where the taper is three quarters of the arm: the
-        // claim is which of the two lengths the shadow is cast from, and a third of
-        // that span is more room than the depth's own share of the threshold needs.
-        let span = square - solid;
-        assert!(
-            tapered >= solid + span * 2 / 3,
-            "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed out to {tapered}, \
-             against {solid} for its solid length alone and {square} for the whole arm",
+            square > some && some >= most && most > mid,
+            "{kernel:?}: arms fading over none, two fifths and three quarters of their length \
+             shadowed out to {square}, {some} and {most} from a crossing at {mid}",
         );
     }
 }
@@ -282,12 +241,9 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
 ///
 /// An arm's ink fades to nothing over its last stretch so that it arrives at
 /// nothing rather than stopping at something (`plus_coverage`), and the shadow
-/// is a blur of that ink — so the taper reaches the shadow by thinning what is
-/// blurred and there is no coupling of its own to tune. Not the stretch WHOLE,
-/// which is the shape constraint rather than a taste: an arm fading from a
-/// fifth of its length still casts about a third of what a square end casts,
-/// where a shadow cut back to the solid length would cap each arm in dark
-/// exactly where its ink has gone — the arrival the taper is there to prevent.
+/// takes that same ramp outside the arm. A taper running through four fifths of
+/// the arm still leaves a measurable shadow from the visible inner cross; it
+/// does not delete the caster whole.
 ///
 /// The steps are a tenth of the square's apart rather than merely ordered: an
 /// order alone is met by one code value, which is what a taper that moved the
@@ -350,21 +306,23 @@ fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
              tenth a step",
         );
         assert!(
-            most * 100 > square * 32,
+            most * 100 > square * 10,
             "{kernel:?}: an arm fading from a fifth of its length took {most} against the square \
-             end's {square}, which is the taper given up whole rather than thinned",
+             end's {square}, which leaves no measurable shadow from the visible inner cross",
         );
     }
 }
 
-/// A marker's shadow does not show through the share of its arm the taper
-/// makes transparent.
+/// A marker's shadow neither shows through nor outlines the share of its arm
+/// the taper makes transparent.
 ///
 /// The arm's full box is the marker's own surface even where its ink is
-/// fading, so its shadow belongs only outside that box. The tapered pixels are
-/// identified from the difference against a square-ended copy rather than
-/// from coordinates: that proves the fixture reaches the alpha ramp, and a
-/// grey pane makes any shadow leaking through it visible as lost light.
+/// fading, so its shadow belongs only outside that box. The shadow outside the
+/// sides gives up its depth on the same ramp, or the transparent tip remains
+/// visible as a hollow silhouette. The tapered pixels are identified from the
+/// difference against a square-ended copy rather than from coordinates: that
+/// proves the fixture reaches the alpha ramp, and a grey pane makes any shadow
+/// leaking through it visible as lost light.
 #[test]
 fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
     const SIZE: [u32; 2] = [256, 256];
@@ -439,6 +397,29 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
             "{kernel:?}: the Shadow depth moved {moved} of the marker's {} fading arm pixels, \
              by up to {worst}",
             fading.len(),
+        );
+
+        let measured = scene(0.0, TAPERED);
+        let centre = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
+        let tip = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
+        let arm = tip - centre;
+        let side = glam::Vec2::new(-arm.y, arm.x).normalize()
+            * (arm.length() * measured.plus_half_width + 2.0);
+        let loss_at = |along: f32| {
+            let p = centre + arm * along + side;
+            let i = ((p.y.round() as usize * SIZE[0] as usize + p.x.round() as usize) * 4) as usize;
+            brightness(&flat[i..i + 3]) - brightness(&deep[i..i + 3])
+        };
+        let body_loss = loss_at(0.45);
+        let tip_loss = loss_at(0.97);
+        assert!(
+            body_loss > 20,
+            "{kernel:?}: the shadow beside the fading arm took only {body_loss} of light",
+        );
+        assert!(
+            tip_loss <= 1,
+            "{kernel:?}: the shadow still outlines the transparent arm tip by {tip_loss}, \
+             against {body_loss} beside the visible arm",
         );
 
         let ground: Vec<usize> = (0..flat_square.len())
