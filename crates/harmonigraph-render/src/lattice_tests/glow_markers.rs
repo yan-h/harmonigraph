@@ -4,6 +4,11 @@
 use super::fixtures::*;
 use crate::*;
 
+fn with_shadow_kernel(mut scene: Scene, kernel: harmonigraph_scene::ShadowKernel) -> Scene {
+    scene.glow_shadow_kernel = kernel;
+    scene
+}
+
 /// Which pixels of `ground` the markers DARKEN, against the same frame with no
 /// marker in it.
 ///
@@ -196,69 +201,79 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let row = SIZE[1] as usize / 2;
-    let at = |buf: &[u8], x: usize| -> i64 {
-        let i = (row * SIZE[0] as usize + x) * 4;
-        brightness(&buf[i..i + 3])
-    };
-    // The crossing's own column, off the square-ended cross's ink against a
-    // frame with no cross in it: the marker stands in the same place at every
-    // arm here, so one reading of it starts all three walks.
-    let bare = shooter.shot(&{
-        let mut s = lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE);
-        s.pluses.clear();
-        s
-    });
-    let flat_square = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE));
-    let cols: Vec<usize> = (0..SIZE[0] as usize)
-        .filter(|&x| {
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let row = SIZE[1] as usize / 2;
+        let at = |buf: &[u8], x: usize| -> i64 {
             let i = (row * SIZE[0] as usize + x) * 4;
-            flat_square[i..i + 4] != bare[i..i + 4]
-        })
-        .collect();
-    let mid = cols.first().unwrap().midpoint(*cols.last().unwrap());
+            brightness(&buf[i..i + 3])
+        };
+        // The crossing's own column, off the square-ended cross's ink against a
+        // frame with no cross in it: the marker stands in the same place at every
+        // arm here, so one reading of it starts all three walks.
+        let bare = shooter.shot(&{
+            let mut s = with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE), kernel);
+            s.pluses.clear();
+            s
+        });
+        let flat_square = shooter
+            .shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, SQUARE), kernel));
+        let cols: Vec<usize> = (0..SIZE[0] as usize)
+            .filter(|&x| {
+                let i = (row * SIZE[0] as usize + x) * 4;
+                flat_square[i..i + 4] != bare[i..i + 4]
+            })
+            .collect();
+        let mid = cols.first().unwrap().midpoint(*cols.last().unwrap());
 
-    // The outermost column right of the crossing where the shadow reads
-    // darker than the same frame without one. Rightward because the node
-    // lighting the frame is to the LEFT: that half holds no other ink and no
-    // other shadow.
-    let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
-        let cold = shooter.shot(&lone_tapered_marker(arm, SHADOW, 0.0, taper));
-        let hot = shooter.shot(&lone_tapered_marker(arm, SHADOW, 1.0, taper));
-        let mut out = mid;
-        for x in mid..SIZE[0] as usize {
-            if at(&hot, x) < at(&cold, x) {
-                out = x;
+        // The outermost column right of the crossing where the shadow reads
+        // darker than the same frame without one. Rightward because the node
+        // lighting the frame is to the LEFT: that half holds no other ink and no
+        // other shadow.
+        let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
+            let cold = shooter
+                .shot(&with_shadow_kernel(lone_tapered_marker(arm, SHADOW, 0.0, taper), kernel));
+            let hot = shooter
+                .shot(&with_shadow_kernel(lone_tapered_marker(arm, SHADOW, 1.0, taper), kernel));
+            let mut out = mid;
+            for x in mid..SIZE[0] as usize {
+                if at(&hot, x) < at(&cold, x) {
+                    out = x;
+                }
             }
-        }
-        out
-    };
-    let square = reach(&mut shooter, ARM, SQUARE);
-    let tapered = reach(&mut shooter, ARM, TAPERED);
-    let solid = reach(&mut shooter, ARM * TAPERED, SQUARE);
-    assert!(square > mid, "the square-ended cross cast no shadow past its own crossing");
-    assert!(
-        solid < square,
-        "the solid length cast as far as the whole arm ({solid} against {square}), so there is \
-         no span here for the tapered cross to be placed along",
-    );
-    // The taper has to reach the CELL, or the claim below is met by a blur
-    // that never saw it: a shadow drawn off the arm's box rather than off its
-    // ink puts the tapered cross exactly on the square one and passes.
-    assert!(
-        tapered < square,
-        "a cross tapering from {TAPERED} of its arm shadowed as far as a square end \
-         ({tapered} against {square}), so the taper is not in the ink being blurred",
-    );
-    // Two thirds of the way, where the taper is three quarters of the arm: the
-    // claim is which of the two lengths the shadow is cast from, and a third of
-    // that span is more room than the depth's own share of the threshold needs.
-    let span = square - solid;
-    assert!(
-        tapered >= solid + span * 2 / 3,
-        "a cross tapering from {TAPERED} of its arm shadowed out to {tapered}, against {solid} \
-         for its solid length alone and {square} for the whole arm",
-    );
+            out
+        };
+        let square = reach(&mut shooter, ARM, SQUARE);
+        let tapered = reach(&mut shooter, ARM, TAPERED);
+        let solid = reach(&mut shooter, ARM * TAPERED, SQUARE);
+        assert!(
+            square > mid,
+            "{kernel:?}: the square-ended cross cast no shadow past its own crossing",
+        );
+        assert!(
+            solid < square,
+            "{kernel:?}: the solid length cast as far as the whole arm ({solid} against \
+             {square}), so there is no span here for the tapered cross to be placed along",
+        );
+        // The taper has to reach the kernel, or the claim below is met by a
+        // shadow that never saw it: a shadow drawn off the arm's box rather
+        // than off its ink puts the tapered cross exactly on the square one.
+        assert!(
+            tapered < square,
+            "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed as far as a square \
+             end ({tapered} against {square}), so the taper is not in the shadow",
+        );
+        // Two thirds of the way, where the taper is three quarters of the arm: the
+        // claim is which of the two lengths the shadow is cast from, and a third of
+        // that span is more room than the depth's own share of the threshold needs.
+        let span = square - solid;
+        assert!(
+            tapered >= solid + span * 2 / 3,
+            "{kernel:?}: a cross tapering from {TAPERED} of its arm shadowed out to {tapered}, \
+             against {solid} for its solid length alone and {square} for the whole arm",
+        );
+    }
 }
 
 /// A tapered arm gives up its shadow with its INK, and with nothing else: the
@@ -270,9 +285,9 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
 /// is a blur of that ink — so the taper reaches the shadow by thinning what is
 /// blurred and there is no coupling of its own to tune. Not the stretch WHOLE,
 /// which is the shape constraint rather than a taste: an arm fading from a
-/// fifth of its length still casts a third of what a square end casts, where a
-/// shadow cut back to the solid length would cap each arm in dark exactly where
-/// its ink has gone — the arrival the taper is there to prevent.
+/// fifth of its length still casts about a third of what a square end casts,
+/// where a shadow cut back to the solid length would cap each arm in dark
+/// exactly where its ink has gone — the arrival the taper is there to prevent.
 ///
 /// The steps are a tenth of the square's apart rather than merely ordered: an
 /// order alone is met by one code value, which is what a taper that moved the
@@ -291,44 +306,55 @@ fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let bare = |shooter: &mut Shooter, depth: f32| {
-        shooter.shot(&{
-            let mut s = lone_tapered_marker(ARM, SHADOW, depth, 1.0);
-            s.pluses.clear();
-            s
-        })
-    };
-    let flat_bare = bare(&mut shooter, 0.0);
-    let flat = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 0.0, 1.0));
-    let ground: Vec<usize> =
-        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
-    assert!(
-        ground.len() > 1000,
-        "the fixture must leave halo for a bite to land in, not {}",
-        ground.len(),
-    );
-    let deep_bare = bare(&mut shooter, 1.0);
-    let taken = |shooter: &mut Shooter, taper: f32| -> i64 {
-        let frame = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 1.0, taper));
-        ground
-            .iter()
-            .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
-            .sum()
-    };
-    let square = taken(&mut shooter, 1.0);
-    let some = taken(&mut shooter, 0.6);
-    let most = taken(&mut shooter, 0.2);
-    assert!(square > 0, "a square-ended cross took no light off the halo it stands in");
-    assert!(
-        some * 10 < square * 9 && most * 10 < some * 9,
-        "an arm fading over none, two fifths and four fifths of its length took {square}, {some} \
-         and {most} of light off the halo, which is not one order by a tenth a step",
-    );
-    assert!(
-        most * 3 > square,
-        "an arm fading from a fifth of its length took {most} against the square end's {square}, \
-         which is the taper given up whole rather than thinned",
-    );
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let bare = |shooter: &mut Shooter, depth: f32| {
+            shooter.shot(&{
+                let mut s =
+                    with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, depth, 1.0), kernel);
+                s.pluses.clear();
+                s
+            })
+        };
+        let flat_bare = bare(&mut shooter, 0.0);
+        let flat =
+            shooter.shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, 1.0), kernel));
+        let ground: Vec<usize> =
+            (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
+        assert!(
+            ground.len() > 1000,
+            "{kernel:?}: the fixture must leave halo for a bite to land in, not {}",
+            ground.len(),
+        );
+        let deep_bare = bare(&mut shooter, 1.0);
+        let taken = |shooter: &mut Shooter, taper: f32| -> i64 {
+            let frame = shooter
+                .shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 1.0, taper), kernel));
+            ground
+                .iter()
+                .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
+                .sum()
+        };
+        let square = taken(&mut shooter, 1.0);
+        let some = taken(&mut shooter, 0.6);
+        let most = taken(&mut shooter, 0.2);
+        assert!(
+            square > 0,
+            "{kernel:?}: a square-ended cross took no light off the halo it stands in",
+        );
+        assert!(
+            some * 10 < square * 9 && most * 10 < some * 9,
+            "{kernel:?}: an arm fading over none, two fifths and four fifths of its length took \
+             {square}, {some} and {most} of light off the halo, which is not one order by a \
+             tenth a step",
+        );
+        assert!(
+            most * 100 > square * 32,
+            "{kernel:?}: an arm fading from a fifth of its length took {most} against the square \
+             end's {square}, which is the taper given up whole rather than thinned",
+        );
+    }
 }
 
 /// One Shadow is ONE distance: what a marker's shadow reaches past the ink casting
