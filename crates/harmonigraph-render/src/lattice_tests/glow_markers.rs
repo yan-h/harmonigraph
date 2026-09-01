@@ -202,7 +202,7 @@ fn a_markers_shadow_is_cast_by_the_whole_arm_however_it_ends() {
         return;
     };
     for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+        [harmonigraph_scene::ShadowKernel::Spread, harmonigraph_scene::ShadowKernel::Distance]
     {
         let row = SIZE[1] as usize / 2;
         let at = |buf: &[u8], x: usize| -> i64 {
@@ -307,7 +307,7 @@ fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
         return;
     };
     for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+        [harmonigraph_scene::ShadowKernel::Spread, harmonigraph_scene::ShadowKernel::Distance]
     {
         let bare = |shooter: &mut Shooter, depth: f32| {
             shooter.shot(&{

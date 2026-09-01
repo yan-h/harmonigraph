@@ -732,21 +732,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             &mut view.glow_shadow_kernel,
             &[
                 (
-                    ShadowKernel::Gaussian,
-                    "Gaussian",
-                    "One plain blur. The shape a shadow has had all along, and \
-                     what every other setting here is calibrated against. One \
-                     cell of the shadow atlas per item.",
-                ),
-                (
-                    ShadowKernel::TwoScale,
-                    "Two-scale",
-                    "A tight core with a wide skirt under it, 70/30 at 1:3. The \
-                     cheapest departure from a plain blur: the shadow keeps a \
-                     definite edge near the ink and carries a faint pool well \
-                     past where a Gaussian has stopped. Two cells per item.",
-                ),
-                (
                     ShadowKernel::Spread,
                     "Spread + blur",
                     "The ink's half-level contour is spread outward, then \

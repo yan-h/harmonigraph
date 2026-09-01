@@ -35,6 +35,7 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
 #[test]
 fn spread_and_blur_are_independent_width_controls() {
     let fresh = ViewConfig::default();
+    assert_eq!(fresh.glow_shadow_kernel, ShadowKernel::Spread);
     assert_eq!(fresh.glow_shadow_spread, 0.5);
     assert_eq!(fresh.glow_shadow_blur, 0.25);
     assert_eq!(

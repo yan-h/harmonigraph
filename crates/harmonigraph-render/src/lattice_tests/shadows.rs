@@ -1162,13 +1162,9 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
-    // At every row of the kernel table, because a row of N terms packs N cells
-    // per caster and so reaches the device's limit N times sooner. The clip
-    // that keeps a near node's box on the pane is per caster and has to hold
-    // for each of its cells (#505).
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::TwoScale]
-    {
+    // At every atlas-backed coverage row. The clip that keeps a near node's
+    // box on the pane is per caster and has to hold its cell (#505).
+    for kernel in [harmonigraph_scene::ShadowKernel::Spread] {
         let terms = kernel.terms();
         let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
         // Read over the casters that darken something: one at level 0 is packed
@@ -1336,11 +1332,9 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
         shooter.shot(&scene)
     };
 
-    for kernel in [
-        harmonigraph_scene::ShadowKernel::Gaussian,
-        harmonigraph_scene::ShadowKernel::Spread,
-        harmonigraph_scene::ShadowKernel::Distance,
-    ] {
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Spread, harmonigraph_scene::ShadowKernel::Distance]
+    {
         let alone = differing_pixels(&shot(kernel, false, 0.0), &shot(kernel, false, SHADOW));
         let with_cross = differing_pixels(&shot(kernel, true, 0.0), &shot(kernel, true, SHADOW));
         assert!(
@@ -1604,24 +1598,10 @@ fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
     assert!(cast > 200, "a name at no width of its own cast {cast} pixels, which is no shadow");
 }
 
-/// Every row of the kernel table draws a shadow, and the heavier-tailed rows
-/// carry further out from the ink than one Gaussian does at the same Shadow.
-///
-/// The reading that says the mixture is really a mixture. Each row is scaled so
-/// a straight edge reads the same 2.3% of the depth at one Shadow width, so a
-/// row cannot be told from a Gaussian by how DARK it is — what parts them is
-/// where the darkness sits, and the visible end of that is the tail: a row's
-/// widest term reaches `REACH_SIGMAS` times ITS σ, which for two-scale is
-/// 1.39 of the picture's own against a Gaussian's 1.
-///
-/// Read as the last column the shadow writes at all, which is where the
-/// shader's `INK_FLOOR` cuts it — a quantity every row is measured by the same
-/// way, and one the quad has to be grown for (`shadow_reach_uv` takes the
-/// WIDEST term). A row whose quad were still sized for one Gaussian would come
-/// out reaching exactly as far as one, which is the failure this catches.
+/// Every selectable construction casts a measurable shadow past the ink.
 #[test]
-fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
-    use harmonigraph_scene::ShadowKernel::{Gaussian, TwoScale};
+fn every_kernel_row_casts() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Spread};
     const SHADOW: f32 = 0.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -1632,9 +1612,9 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
         scene.glow_shadow_kernel = kernel;
         scene
     };
-    let flat = shooter.shot(&scene_of(Gaussian, 0.0));
-    let edge = ink_radius(&scene_of(Gaussian, 1.0));
-    let centre = on_screen(&scene_of(Gaussian, 1.0), SIZE, glam::Vec3::ZERO);
+    let flat = shooter.shot(&scene_of(Spread, 0.0));
+    let edge = ink_radius(&scene_of(Spread, 1.0));
+    let centre = on_screen(&scene_of(Spread, 1.0), SIZE, glam::Vec3::ZERO);
     let row = centre.y.round() as u32;
     let start = (centre.x + edge).round() as u32 + 2;
     // How far out from the ink this kernel's shadow is still writing, in
@@ -1651,33 +1631,18 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
         let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
         (last, profile[0])
     };
-    let readings: Vec<(harmonigraph_scene::ShadowKernel, usize, f64)> = [Gaussian, TwoScale]
-        .into_iter()
-        .map(|k| {
-            let (last, at_ink) = walk(k);
-            (k, last, at_ink)
-        })
-        .collect();
-    for (kernel, last, at_ink) in &readings {
+    for kernel in [Spread, Distance] {
+        let (last, at_ink) = walk(kernel);
         eprintln!("{kernel:?} takes {at_ink:.3} at the ink and reaches {last} px");
         assert!(
-            *at_ink > 10.0 * INK_FLOOR && *last > 2,
+            at_ink > 10.0 * INK_FLOOR && last > 2,
             "{kernel:?} cast {at_ink:.3} at the ink and reached {last} px, which is no shadow",
-        );
-    }
-    let plain = readings[0].1;
-    for (kernel, last, _) in readings.iter().skip(1) {
-        assert!(
-            *last > plain,
-            "{kernel:?} reaches {last} px where one Gaussian reaches {plain}, so either the \
-             mixture is not being mixed or the quad is still sized for one term",
         );
     }
 }
 
-/// Switching kernels moves the picture and nothing else does: a frame at each
-/// row differs from the Gaussian's, and a frame with the Shadow SHUT is
-/// byte-identical at every row.
+/// Switching between the two constructions moves the picture, while a frame
+/// with the Shadow shut is byte-identical on both.
 ///
 /// The second half is the one worth having. A row costs cells, a pass over
 /// them and taps in every caster's draw, and all of that is supposed to be
@@ -1686,7 +1651,7 @@ fn every_kernel_row_casts_and_the_wide_tailed_rows_reach_further() {
 /// row here because each is packed differently.
 #[test]
 fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread, TwoScale};
+    use harmonigraph_scene::ShadowKernel::{Distance, Spread};
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1698,20 +1663,10 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
         shooter.shot_with(&scene, named)
     };
-    let plain = shot(Gaussian, 0.4);
-    for kernel in [TwoScale, Spread, Distance] {
-        let moved = differing_pixels(&plain, &shot(kernel, 0.4));
-        assert!(moved > 200, "{kernel:?} moved {moved} pixels off a Gaussian, which is no row");
-    }
-    let shut = shot(Gaussian, 0.0);
-    for kernel in [TwoScale, Spread, Distance] {
-        assert_eq!(
-            differing_pixels(&shut, &shot(kernel, 0.0)),
-            0,
-            "{kernel:?} drew something with the Shadow shut, so a row is packing cells the bar \
-             said not to",
-        );
-    }
+    let spread = shot(Spread, 0.4);
+    let moved = differing_pixels(&spread, &shot(Distance, 0.4));
+    assert!(moved > 200, "Distance moved only {moved} pixels off Spread, which is no alternative");
+    assert_eq!(differing_pixels(&shot(Spread, 0.0), &shot(Distance, 0.0)), 0);
 }
 
 /// The Spread row's two component widths each reach the final picture, while
@@ -1820,6 +1775,8 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
 fn block_on_grey(
     shooter: &mut Shooter,
     kernel: harmonigraph_scene::ShadowKernel,
+    spread: f32,
+    blur: f32,
     shadow: f32,
     depth: f32,
     side: f32,
@@ -1827,6 +1784,8 @@ fn block_on_grey(
     const GREY: f32 = 0.55;
     let mut scene = lit_node_and_a_name(0.0, shadow, depth);
     scene.glow_shadow_kernel = kernel;
+    scene.glow_shadow_spread = spread;
+    scene.glow_shadow_blur = blur;
     scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
     shooter.clear =
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
@@ -1856,19 +1815,22 @@ fn block_on_grey(
 /// move together with the depth, the gain and the ground.
 #[test]
 fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread};
+    use harmonigraph_scene::ShadowKernel::{Distance, Spread};
     const SHADOW: f32 = 0.5;
     const DEPTH: f32 = 0.85;
     const SIDE: f32 = 26.0;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let mut ratio = |kernel| {
-        let (bare, cast, min) = block_on_grey(&mut shooter, kernel, SHADOW, DEPTH, SIDE);
+    let mut ratio = |label, kernel, spread, blur| {
+        let (bare, cast, min) =
+            block_on_grey(&mut shooter, kernel, spread, blur, SHADOW, DEPTH, SIDE);
         // One σ out, which is half a Shadow width: far enough off the ink for
         // the two geometries to have parted and well inside either row's reach.
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
         scene.glow_shadow_kernel = kernel;
+        scene.glow_shadow_spread = spread;
+        scene.glow_shadow_blur = blur;
         let d = sigma(&scene);
         let diag = d / std::f32::consts::SQRT_2;
         let dark = |p: glam::Vec2| {
@@ -1879,13 +1841,15 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
         let edge = dark(glam::Vec2::new(min.x + SIDE / 2.0, min.y + SIDE + d));
         assert!(
             edge > 20,
-            "{kernel:?} darkens the edge point by {edge}, which is too little to take a ratio of",
+            "{label} darkens the edge point by {edge}, which is too little to take a ratio of",
         );
         corner as f64 / edge as f64
     };
-    let blurred = ratio(Gaussian);
-    let distance = ratio(Distance);
-    let spread = ratio(Spread);
+    // Zero spread at a half-width blur is the Gaussian limit of the remaining
+    // construction, without keeping a separate picker row for it.
+    let blurred = ratio("Gaussian limit", Spread, 0.0, 0.5);
+    let distance = ratio("Distance", Distance, 0.5, 0.25);
+    let spread = ratio("Spread", Spread, 0.5, 0.25);
     assert!(
         blurred < 0.7,
         "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
@@ -1924,7 +1888,7 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
 /// frame.
 #[test]
 fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    use harmonigraph_scene::ShadowKernel::{Distance, Spread};
     const SHADOW: f32 = 0.8;
     const DEPTH: f32 = 0.85;
     /// Two strokes, and the counter between them, in points — a 30pt
@@ -1938,9 +1902,11 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
     const GREY: f32 = 0.55;
     shooter.clear =
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
-    let mut form = |kernel| {
+    let mut form = |label, kernel, spread, blur| {
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
         scene.glow_shadow_kernel = kernel;
+        scene.glow_shadow_spread = spread;
+        scene.glow_shadow_blur = blur;
         // Grey under the whole counter, and the name still standing on the
         // node's band: a shadow with nothing beneath it to darken measures an
         // empty frame (#450), and a counter this wide runs past the band's own
@@ -1962,13 +1928,13 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         let middle = dark(at.x);
         assert!(
             beside > 20,
-            "{kernel:?} darkens the point beside the stroke by {beside}, which is too little to \
+            "{label} darkens the point beside the stroke by {beside}, which is too little to \
              take a share of — the fixture is not reaching the shadow",
         );
         (beside - middle) as f64 / beside as f64
     };
-    let blurred = form(Gaussian);
-    let distance = form(Distance);
+    let blurred = form("Gaussian limit", Spread, 0.0, 0.5);
+    let distance = form("Distance", Distance, 0.5, 0.25);
     assert!(
         blurred < 0.1,
         "at Shadow {SHADOW} a Gaussian holds {blurred:.2} of the gap's form, so the fixture's \

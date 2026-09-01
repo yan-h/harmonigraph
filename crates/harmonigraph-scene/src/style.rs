@@ -493,8 +493,8 @@ pub enum NoteNames {
 
 /// The most terms a shadow's kernel may be built out of.
 ///
-/// Two is the core-and-skirt pair [`ShadowKernel::TwoScale`] is built from, the
-/// longest row in the table. This sizes the fixed arrays shared with the
+/// Two leaves room for a mixed coverage row even though the two current
+/// constructions each use one term. It sizes the fixed arrays shared with the
 /// shaders, so it is the representation's bound rather than a per-row setting.
 pub const SHADOW_TERMS_MAX: usize = 2;
 
@@ -626,44 +626,25 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// What a shadow is made of: which row of terms every caster's ink is turned
 /// into a cell by.
 ///
-/// Three constructions in one table. The blur rows are mixtures of Gaussians;
-/// the distance row holds the distance to the ink instead; Spread thresholds
-/// that field into an expanded source and then takes the blur chain
-/// ([`TermKind`]). What parts them in the picture is FORM at a wide Shadow: a
-/// blur's profile at a hairline carries the stroke's width, a distance's carries
-/// its shape, and Spread is the hybrid being tested between them.
+/// Two constructions in one table. Distance holds the distance to the ink;
+/// Spread thresholds that field into an expanded source and then takes the
+/// blur chain ([`TermKind`]). What parts them in the picture is how nearby
+/// source pieces combine: Distance retains the nearest answer, while Spread
+/// unions the pieces before its final Gaussian.
 ///
-/// The non-Gaussian blur row is a MIXTURE and not a kernel of its own, because
-/// the atlas blurs separably — once along x, once along y (`blur` in
-/// shadow.wgsl). Two-scale gets its tight core and wide skirt from two cells,
-/// each blurred by the chain that already exists and mixed by weight where a
-/// caster reads them. It is a row of this table rather than a branch in the
-/// shader.
-///
-/// The fixed rows are scaled so a straight edge reads 2.3% of the depth at one
-/// Shadow width — the same rule that puts a plain Gaussian's σ at half the bar
-/// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`). Spread begins on that
-/// calibration, then exposes its dilation and Gaussian as independent shares
-/// of the same displayed width.
+/// Spread begins with a half-Shadow-width dilation and a quarter-width
+/// Gaussian, then exposes both as independent shares of the displayed width.
 ///
 /// The table is here and nowhere else. The packer sizes each term's cell off
 /// the same σ ratio the sampler mixes by, and two copies of one row is the
 /// mirror that rots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShadowKernel {
-    /// One Gaussian at half the Shadow's width. The shape a separable blur
-    /// makes on its own, and what every reading of the Shadow bar is
-    /// calibrated against.
-    #[default]
-    Gaussian,
-    /// Two Gaussians at 1:3, 70/30 — a tight core with a wide skirt under it,
-    /// which is #521's option 6 and the cheapest departure from one Gaussian.
-    /// Exact by construction: the row IS the kernel rather than a fit to one.
-    TwoScale,
     /// The caster's half-level contour spread outward, then blurred. It starts
     /// at half a Shadow width of spread and a quarter-width Gaussian; both
     /// components are adjustable. Nearby pieces are united before the blur,
     /// while the spread keeps a wide shadow tied to the source form.
+    #[default]
     Spread,
     /// The other FAMILY: one cell holding the distance to the caster's nearest
     /// ink, spent through the fixed standoff decay before the shared Shadow
@@ -688,13 +669,7 @@ impl ShadowKernel {
     /// is twice its published one. One conversion at one site, so the packer
     /// and the sampler cannot come to read the table differently.
     pub fn terms(self) -> &'static [KernelTerm] {
-        use TermKind::{Blur, Distance, Spread};
-        const GAUSSIAN: [KernelTerm; 1] =
-            [KernelTerm { weight: 1.0, sigma: 1.0, spread: 0.0, kind: Blur }];
-        const TWO_SCALE: [KernelTerm; 2] = [
-            KernelTerm { weight: 0.70, sigma: 0.465, spread: 0.0, kind: Blur },
-            KernelTerm { weight: 0.30, sigma: 1.3948, spread: 0.0, kind: Blur },
-        ];
+        use TermKind::{Distance, Spread};
         const SPREAD_BLUR: [KernelTerm; 1] =
             [KernelTerm { weight: 1.0, sigma: 0.5, spread: 1.0, kind: Spread }];
         // σ 1: a distance term's own width IS the Shadow bar's, so a second
@@ -702,8 +677,6 @@ impl ShadowKernel {
         const DISTANCE: [KernelTerm; 1] =
             [KernelTerm { weight: 0.0, sigma: 1.0, spread: 0.0, kind: Distance }];
         match self {
-            ShadowKernel::Gaussian => &GAUSSIAN,
-            ShadowKernel::TwoScale => &TWO_SCALE,
             ShadowKernel::Spread => &SPREAD_BLUR,
             ShadowKernel::Distance => &DISTANCE,
         }

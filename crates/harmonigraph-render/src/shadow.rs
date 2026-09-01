@@ -868,11 +868,37 @@ pub(crate) mod tests {
         Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0, direct_distance: false }
     }
 
-    /// One Gaussian: one cell per caster, which is what every claim about the
-    /// packing that is not about the MIXTURE is asked at. The rows with more
-    /// terms in them name themselves.
+    /// One Gaussian term for low-level packing tests. The selectable Spread
+    /// construction reaches the same convolution after thresholding its field;
+    /// this isolates the cell sizing from that source construction.
     fn one() -> &'static [harmonigraph_scene::KernelTerm] {
-        harmonigraph_scene::ShadowKernel::Gaussian.terms()
+        const ONE: [harmonigraph_scene::KernelTerm; 1] = [harmonigraph_scene::KernelTerm {
+            weight: 1.0,
+            sigma: 1.0,
+            spread: 0.0,
+            kind: harmonigraph_scene::TermKind::Blur,
+        }];
+        &ONE
+    }
+
+    /// A two-term coverage mixture that exercises the packer's fixed-capacity
+    /// representation even though no current picker row uses one.
+    fn two() -> &'static [harmonigraph_scene::KernelTerm] {
+        const TWO: [harmonigraph_scene::KernelTerm; 2] = [
+            harmonigraph_scene::KernelTerm {
+                weight: 0.70,
+                sigma: 0.465,
+                spread: 0.0,
+                kind: harmonigraph_scene::TermKind::Blur,
+            },
+            harmonigraph_scene::KernelTerm {
+                weight: 0.30,
+                sigma: 1.3948,
+                spread: 0.0,
+                kind: harmonigraph_scene::TermKind::Blur,
+            },
+        ];
+        &TWO
     }
 
     /// Every row of the kernel table is a construction the atlas and sampler
@@ -895,7 +921,7 @@ pub(crate) mod tests {
     #[test]
     fn every_kernel_row_has_the_calibration_it_claims() {
         use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Spread, Distance] {
+        for kernel in [Spread, Distance] {
             if kernel.has_distance() {
                 continue;
             }
@@ -935,25 +961,7 @@ pub(crate) mod tests {
                 );
                 continue;
             }
-            let widest = terms.iter().fold(0.0f32, |w, t| w.max(t.sigma));
-            let narrowest = terms.iter().fold(f32::INFINITY, |w, t| w.min(t.sigma));
-            assert!(
-                narrowest <= 1.0 && widest >= 1.0,
-                "{kernel:?} spans {narrowest}..{widest}, which does not straddle the width the \
-                 Shadow bar names",
-            );
         }
-        assert_eq!(
-            Gaussian.terms(),
-            &[harmonigraph_scene::KernelTerm {
-                weight: 1.0,
-                sigma: 1.0,
-                spread: 0.0,
-                kind: harmonigraph_scene::TermKind::Blur,
-            }],
-            "the fresh row is not one Gaussian at the bar's own width, so every other reading \
-             in this suite is against a different picture",
-        );
     }
 
     /// The packer carries the independently configured spread to every
@@ -991,7 +999,7 @@ pub(crate) mod tests {
     /// holds the blur's tap count flat.
     #[test]
     fn a_mixtures_cells_are_each_at_their_own_terms_resolution() {
-        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
+        let terms = two();
         // Past the cap at every term, so each cell is really drawn smaller than
         // the pane and the resolutions below are the packer's own choice rather
         // than the pane's.
@@ -1053,7 +1061,7 @@ pub(crate) mod tests {
     /// shelves — a different kernel, chosen by the packing order.
     #[test]
     fn a_caster_the_atlas_cannot_hold_every_term_of_casts_none_of_it() {
-        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
+        let terms = two();
         // Each term's cell fits alone, while the pair cannot both be shelved in
         // this atlas. That reaches the partial-kernel branch rather than the
         // simpler case where the whole row fits.
@@ -1086,13 +1094,13 @@ pub(crate) mod tests {
     /// Gaussian. At a wide one a blur cell scales down with its own σ while a
     /// Distance cell stops at the quality floor.
     ///
-    /// TwoScale's bound is four, just above the core-and-skirt row at both ends
-    /// of the bar. Distance has a bound of its own below; past either, the row
-    /// is a reason the atlas hits `max_side` rather than a shape to compare
-    /// (see `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
+    /// The synthetic two-term mixture's bound is four, just above its cost at
+    /// both ends of the bar. Distance has a bound of its own below; past either,
+    /// the row is a reason the atlas hits `max_side` rather than a shape to
+    /// compare (see `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, Spread, TwoScale};
+        use harmonigraph_scene::ShadowKernel::{Distance, Spread};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1101,23 +1109,23 @@ pub(crate) mod tests {
             // The CELLS' own area, not the texture's: a target is rounded up to
             // a power of two in each direction, which quantizes every reading
             // to a factor of two and hides what a row actually asked for.
-            let area = |kernel: harmonigraph_scene::ShadowKernel| -> f64 {
-                pack(&casters, sigma, 2.0, 16384, kernel.terms())
+            let area = |terms: &[harmonigraph_scene::KernelTerm]| -> f64 {
+                pack(&casters, sigma, 2.0, 16384, terms)
                     .boxes
                     .iter()
                     .map(|b| f64::from(b.cell[2]) * f64::from(b.cell[3]))
                     .sum()
             };
-            let plain = area(Gaussian);
+            let plain = area(one());
             assert!(plain > 0.0, "one Gaussian packed nothing at {what}");
-            let ratio = area(TwoScale) / plain;
-            eprintln!("TwoScale at {what}: {ratio:.2}x one Gaussian's cells");
+            let ratio = area(two()) / plain;
+            eprintln!("Two-term mixture at {what}: {ratio:.2}x one Gaussian's cells");
             assert!(
                 ratio <= 4.0,
-                "TwoScale packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
-                reaches the device's texture limit rather than a row to compare",
+                "the two-term mixture packs {ratio:.2}x one Gaussian's cells at {what}, which \
+                 reaches the device's texture limit rather than testing the representation",
             );
-            let ratio = area(Spread) / plain;
+            let ratio = area(Spread.terms()) / plain;
             eprintln!("Spread at {what}: {ratio:.2}x one Gaussian's cells");
             assert!(
                 ratio <= 5.0,
@@ -1131,7 +1139,7 @@ pub(crate) mod tests {
             // the top of the bar; the ceiling catches a change that walks the
             // atlas into `max_side`, where a caster stops casting with nothing
             // on screen to say so.
-            let ratio = area(Distance) / plain;
+            let ratio = area(Distance.terms()) / plain;
             eprintln!(
                 "Distance at {what}, {DISTANCE_TEXELS_PER_POINT:.2} tex/pt: {ratio:.2}x one \
                  Gaussian's cells"
@@ -1519,7 +1527,7 @@ pub(crate) mod tests {
             "a distance cell is padded {pad} points where its curve reaches {want}",
         );
         // A blur cell belongs to the other fill and sampling branch.
-        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian.terms());
+        let blur = pack(&[caster], sigma, 1.0, 4096, one());
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
         assert!((blur.boxes[0].terms[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
     }
@@ -1542,7 +1550,7 @@ pub(crate) mod tests {
         assert_eq!(distance.casters[0].sigma[0], 20.0);
         assert_eq!(distance.casters[0].level[0], 1.0);
 
-        let blur = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Gaussian.terms());
+        let blur = pack(&[caster], 40.0, 2.0, 4096, one());
         assert!(blur.boxes[0].cell[2] > 0.0 && blur.boxes[0].cell[3] > 0.0);
 
         let mixed = [
@@ -1606,9 +1614,7 @@ pub(crate) mod tests {
                 let distance =
                     pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance.terms())
                         .boxes[0];
-                let gaussian =
-                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian.terms())
-                        .boxes[0];
+                let gaussian = pack(&[caster], sigma_px, px_per_point, 8192, one()).boxes[0];
                 assert!(
                     (distance.terms[0] - distance_resolution).abs() < 1e-5,
                     "Distance at σ {sigma_points} points and {px_per_point} px/pt packed {} \

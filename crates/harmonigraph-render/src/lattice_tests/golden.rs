@@ -274,7 +274,7 @@ pub(super) fn the_live_view() -> Scene {
 /// rather than a fixture: the two families are calibrated to the same reach and
 /// differ in SHAPE, so what a row is worth is a question about the picture Yan
 /// is actually looking at. A diff here on a later PR is the distance row moving
-/// — which is what a freeze PR is for — and the Gaussian frames beside it stay
+/// — which is what a freeze PR is for — and the Spread frames beside it stay
 /// still, that being the contract this family arrived under.
 fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();

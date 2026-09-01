@@ -2665,9 +2665,7 @@ impl Default for ViewConfig {
             // then soften with a quarter-width Gaussian.
             glow_shadow_spread: 0.5,
             glow_shadow_blur: 0.25,
-            // One Gaussian, which is one cell per caster and the picture the
-            // rest of the Shadow section is calibrated on.
-            glow_shadow_kernel: ShadowKernel::Gaussian,
+            glow_shadow_kernel: ShadowKernel::Spread,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own
