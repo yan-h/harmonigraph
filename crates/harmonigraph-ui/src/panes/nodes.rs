@@ -15,11 +15,11 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
-    GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_CURVE_MAX,
-    GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX,
-    GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, SHADOW_SHAPE_MAX,
-    SHADOW_SHAPE_MIN, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    shadow_curve_level, GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX,
+    GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
+    GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
+    GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
     SPECTRAL_WIDTH_MIN,
 };
@@ -709,8 +709,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  laid over whatever is already behind it, so a thin ring casts \
                  a fainter one than a wide band and a nearer item darkens a \
                  farther one wherever the two overlap. Nothing darkens itself. \
-                 0% is the picture with no shadow at all. Double-click to \
-                 restore.",
+                 0% is the picture with no shadow at all and 100% is one node \
+                 radius. Double-click to restore.",
             );
         ValueBar::new(&mut view.glow_shadow_depth, 0.0..=1.0, "Shadow depth")
             .display(|v| format!("{:.0}%", v * 100.0))
@@ -750,7 +750,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     ShadowKernel::Distance,
                     "Distance",
                     "Not a blur at all: how far each point stands from the \
-                     nearest ink, spent through the Shadow shape bar. A blur \
+                     nearest ink, spent through the Shadow curve bar. A blur \
                      of a hairline is a smudge whose width is the hairline's, \
                      so at a wide Shadow the whole lattice reads as one soft \
                      blob; a distance is the same at a hairline as at a slab, \
@@ -762,13 +762,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 ),
             ],
         );
-        // The two that shape the depth rather than set it, under the pair they
-        // act on: how much of it the picture's THINNEST ink gets, and where
-        // along the shadow's width it sits.
-        // The gain is the BLUR family's, on the same rule the bar below it
-        // are gated by: a distance field gives a hairline the whole depth at
-        // its own edge by construction, so `shadow_kernel` returns before the
-        // gain is ever read on a distance row and the bar moves nothing there.
+        // The two that shape the depth rather than set it: how much of it the
+        // picture's THINNEST ink gets, and where along the shadow's width it
+        // sits.
+        // The gain is the BLUR family's: a distance field gives a hairline the
+        // whole depth at its own edge by construction, so `shadow_kernel`
+        // returns before the gain is ever read on a distance row.
         ui.add_enabled_ui(!view.glow_shadow_kernel.has_distance(), |ui| {
             ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
                 .display(|v| format!("{v:.2}x"))
@@ -794,41 +793,16 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "Shadow curve",
         )
         .display(|v| format!("{v:.2}"))
+        .curve(shadow_curve_level)
         .show(ui)
         .on_hover_text(
             "Where along a shadow's width its darkness sits. Both ends stay \
              put — the pool under solid ink stays at the depth, and the far \
              edge stays at nothing — and this bends everything between them. \
-             Below 1 fills the middle out into a broad even pool that gives \
-             way suddenly at its edge; above 1 pulls the darkness in tight \
-             against the ink and lets the rest go gently, which reads as a \
-             rim. 1 is the plain blur, and the shadow is exactly the shape of \
-             the blur that made it.",
+             Values above 1 pull the darkness in tight against the ink and let \
+             the rest go gently, which reads as a rim. 1 leaves either the \
+             selected blur or Distance decay in its own shape.",
         );
-        // The distance family's own profile bar, live only where a distance
-        // row is picked: a blur row reads it not at all, and a bar that moves
-        // nothing is worse than one that is plainly not for this row. Grayed
-        // rather than hidden, so the section does not change height under the
-        // picker and the hover text is there to say what would switch it on.
-        ui.add_enabled_ui(view.glow_shadow_kernel.has_distance(), |ui| {
-            ValueBar::new(
-                &mut view.glow_shadow_shape,
-                SHADOW_SHAPE_MIN..=SHADOW_SHAPE_MAX,
-                "Shadow shape",
-            )
-            .display(|v| format!("{v:.2}"))
-            .show(ui)
-            .on_hover_text(
-                "How a distance shadow gives way as it leaves the ink, on the \
-                 Distance rows of the Kernel picker. 1 spends the darkness \
-                 evenly across the whole width — the shadow eases off the way \
-                 a blur does. Lower steepens it right against the ink and \
-                 leaves the rest of the width carrying a faint haze, which \
-                 reads as a thin dark skin on the shape rather than a pool \
-                 around it. Both ends stay put: solid at the ink, nothing at \
-                 the far edge.",
-            );
-        });
         // The one bar in the section a single caster keeps to itself, and the
         // one that breaks "one Shadow width across the picture" — see
         // `ViewConfig::glow_shadow_name` for why a letterform is the ink

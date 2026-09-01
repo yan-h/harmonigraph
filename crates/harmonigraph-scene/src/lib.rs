@@ -53,7 +53,7 @@ pub use spectral::{
 };
 pub use style::{
     Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, TermKind, REACH_SIGMAS,
-    SHADOW_SHAPE_MAX, SHADOW_SHAPE_MIN, SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
+    SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
@@ -261,13 +261,10 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// [`ViewConfig::glow_shadow`]), in the quad UV units the layer sizes above are
 /// in — the far end of the Glow section's Shadow bar.
 ///
-/// Three node radii, where the two paddings above stop at [`GAP_MAX`]: a
-/// padding is room between two layers of one node and has no business being
-/// wider than a layer, but a shadow is a blur of an item's whole ink, and a
-/// blur says which KERNEL it is only where σ is wide against the ink casting
-/// it. A 3 pt stroke of type under a σ of two points is one blob whatever the
-/// kernel; the same stroke under a σ of six is the kernel's own profile drawn
-/// large, which is the comparison the Shadow section is for.
+/// One node radius, so the percentage printed on the bar is its literal share
+/// of the node and its far end is 100%. That still takes the blur well past the
+/// gaps between a node's layers while keeping the control about the shadow
+/// around the node rather than empty room beyond it.
 ///
 /// It is the cheap direction of the two the bar moves in. A cell is drawn at
 /// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack`), so the
@@ -275,7 +272,7 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// the quad every caster is billboarded onto, each one reaching
 /// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
 /// so the fill the scene pass pays. `timing.rs` is what reads that back.
-pub const GLOW_SHADOW_MAX: f32 = 3.0;
+pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
 /// The most a caster's blurred ink may be multiplied up by before it is spent
 /// as a shadow (see [`ViewConfig::glow_shadow_gain`]).
@@ -285,27 +282,35 @@ pub const GLOW_SHADOW_MAX: f32 = 3.0;
 /// caster in the picture saturated and the bar's last stretch moves nothing.
 pub const GLOW_SHADOW_GAIN_MAX: f32 = 6.0;
 
-/// The flattest a shadow's falloff may be bent (see
-/// [`ViewConfig::glow_shadow_curve`]), and the one bar in the Glow section
-/// whose bottom is not an off switch.
-///
-/// The exponent acts on a number in 0..=1, so at 0 every fragment the blur
-/// touched at all goes to the full depth and the shadow is a black rectangle
-/// over the caster's padded box. A quarter is where the pool has flattened as
-/// far as it can while the profile is still the caster's shape; the shader
-/// holds its own floor under this (`SHADOW_CURVE_FLOOR` in common.wgsl) for a
-/// value that arrives from anywhere but the bar.
-pub const GLOW_SHADOW_CURVE_MIN: f32 = 0.25;
+/// The shallowest a shadow's falloff may be bent (see
+/// [`ViewConfig::glow_shadow_curve`]). One is neutral: it leaves the selected
+/// kernel's profile intact and is what a fresh view opens on. The bar only
+/// tightens the profile from there.
+pub const GLOW_SHADOW_CURVE_MIN: f32 = 1.0;
 
 /// The steepest a shadow's falloff may be bent (see
 /// [`ViewConfig::glow_shadow_curve`]).
 ///
-/// Four either way about the neutral 1 would be the symmetric range, and the
-/// bar is NOT symmetric: the exponent acts on a number under 1, so γ below 1
-/// lifts the whole tail toward the depth and γ above it pushes the tail down
-/// while leaving the saturated middle exactly where it is. The half that has
-/// room to move is the one that goes further.
+/// Four presses the middle of the profile down to a sixteenth of its neutral
+/// level while keeping the saturated middle and empty edge fixed, which is the
+/// useful end of the control before most of its travel reads as the same rim.
 pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
+
+/// The kernel level a shadow spends after its Curve bar bends it.
+///
+/// Both kernel families arrive in 0..=1: a blur as its gained coverage and a
+/// Distance row as its fixed exponential decay. Raising that level to the
+/// curve exponent keeps 0 and 1 fixed while moving everything between them,
+/// which is the same stage `shadow_transmittance` runs in common.wgsl.
+pub fn shadow_curve_level(curve: f32, level: f32) -> f32 {
+    let curve = if curve.is_finite() {
+        curve.clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX)
+    } else {
+        1.0
+    };
+    let level = if level.is_finite() { level.clamp(0.0, 1.0) } else { 0.0 };
+    level.powf(curve)
+}
 
 /// The widest a note name's own shadow may be dialled against the rest of the
 /// picture's (see [`ViewConfig::glow_shadow_name`]).
@@ -971,10 +976,6 @@ pub struct Scene {
     /// [`ViewConfig::glow_shadow_kernel`]). Carried whole: the renderer takes
     /// the row off it rather than a copy of the numbers.
     pub glow_shadow_kernel: ShadowKernel,
-    /// The exponent a DISTANCE row's decay is taken over (see
-    /// [`ViewConfig::glow_shadow_shape`]); already clamped to
-    /// [`SHADOW_SHAPE_MIN`]..=[`SHADOW_SHAPE_MAX`]. Inert on a blur row.
-    pub glow_shadow_shape: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///

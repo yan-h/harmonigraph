@@ -960,15 +960,10 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
 fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
     const ARM: f32 = 0.5;
-    // The camera far enough back that the whole blur lands on the pane, which
-    // at the top of the bar it does not from where the other fixtures here
-    // stand: σ is 42 px there against 87 px of pane from the ink to the edge,
-    // and a reading that runs off the side reports the PANE's width where it
-    // means the quad's. Pulling back is the move that keeps the claim exactly —
-    // a caster's quad is sized in the node's own uv (`shadow_reach_uv`) and so
-    // is the reach it has to hold, so the two scale together and the ratio
-    // under test does not move. At half the size it is 21 px of σ under 106 px
-    // of room, which holds the kernel's whole three σ with a third to spare.
+    // Pull the camera back so every family's tail lands comfortably inside the
+    // pane. A caster's quad and the reach it has to hold are both sized in the
+    // node's own uv (`shadow_reach_uv`), so this leaves the ratio under test
+    // unchanged while keeping the pane's edge out of the measurement.
     const PULL_BACK: f32 = 2.0;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -1033,6 +1028,9 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
             profile.push(1.0 - bright_at(&deep, x, row) as f64 / ground as f64);
         }
         let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+        // `profile[0]` starts two points past the ink, so its index alone is
+        // two points short of the physical reach being tested.
+        let reach = last as f32 + 2.0;
         // A DECADE above the floor the walk has to arrive at, so that `last`
         // is the end of a descent rather than the one column a faint caster
         // wrote. Not a fixed half of the ground: the two casters here are
@@ -1043,8 +1041,8 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // what this fixture stands on; a bound that ruled it out would be
         // asking the cross to be a node.
         assert!(
-            profile[0] > 10.0 * INK_FLOOR && last as f32 > 2.0 * sigma(&deep_scene),
-            "{what} cast {:.3} at its ink and out to {last} px, against a σ of {}",
+            profile[0] > 10.0 * INK_FLOOR && reach > 2.0 * sigma(&deep_scene),
+            "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
         );

@@ -170,7 +170,7 @@ const DISTANCE_KIND: f32 = 1.0;
 //
 // `terms` is the kernel's own count, off a uniform: a term past it carries
 // weight 0 and would cost a tap for nothing.
-fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32) -> f32 {
+fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
     if who >= arrayLength(&shadow_casters) {
         return 0.0;
     }
@@ -198,7 +198,7 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32)
         let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
         if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
             distance = true;
-            cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t], shape);
+            cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t]);
         } else {
             blur = blur + map.w * held;
         }
@@ -223,35 +223,24 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32, shape: f32)
 // whose Shadow is `w` points wide — the standoff's own decay, windowed to
 // exactly nothing at [`SHADOW_STOP`] widths.
 //
-// `exp(-TAIL u^shape)` and not a ramp: a ramp ending at the width ends at a
-// closed contour of one radius, and a closed contour is the shape the eye picks
-// out of a smooth field best however gently the ramp meets it. What ends the
-// tail instead is the window, a couple of widths out, where the decay is under
-// the eye's own threshold rather than at a fiftieth of its depth.
+// `exp(-TAIL u)` and not a ramp: a ramp ending at the width ends at a closed
+// contour of one radius, and a closed contour is the shape the eye picks out of
+// a smooth field best however gently the ramp meets it. What ends the tail
+// instead is the window, a couple of widths out, where the decay is under the
+// eye's own threshold rather than at a fiftieth of its depth.
 //
-// `pow` is 0 at 0 for every exponent above it, so the coverage is exactly 1 at
-// the ink whatever the shape bar says — the bar bends the profile between the
-// two ends and moves neither.
-fn standoff_coverage(d: f32, w: f32, shape: f32) -> f32 {
+fn standoff_coverage(d: f32, w: f32) -> f32 {
     let u = max(d, 0.0) / max(w, 1.0e-6);
-    return exp(-SHADOW_TAIL * pow(u, max(shape, SHADOW_SHAPE_FLOOR)))
+    return exp(-SHADOW_TAIL * u)
         * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
 }
 
 // How many e-folds the decay has spent by one Shadow width, and how many widths
 // out its window has shut — `SHADOW_TAIL` and `SHADOW_STOP` in
-// harmonigraph_scene, pinned to them by `the_standoffs_window_is_the_scenes`.
+// harmonigraph_scene, pinned to them by
+// `the_shaders_distance_kind_and_window_are_the_packers`.
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
-
-// The steepest the decay may be bent to, whatever a caller asks for.
-//
-// `pow` is an `exp2(y · log2(x))` on the hardware, so an exponent of 0 against
-// the distance's own 0 at the ink is `0 · -inf` — a NaN coverage, and a NaN
-// multiplying the frame is a pane gone with nothing on screen to say why. A
-// floor here rather than only in the bar, so a hand-edited blob cannot reach it
-// either.
-const SHADOW_SHAPE_FLOOR: f32 = 0.05;
 
 // The flattest a shadow's falloff may be bent to, whatever a caller asks for.
 //

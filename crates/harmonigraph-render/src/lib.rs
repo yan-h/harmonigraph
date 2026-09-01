@@ -600,13 +600,11 @@ struct Uniforms {
     /// (`Scene::glow_shadow`) — the σ every caster's ink is blurred at
     /// ([`shadow::sigma_px`]) and the reach every quad is grown by; w: how dark
     /// it lands (`Scene::glow_shadow_depth`), 1 taking the frame under a solid
-    /// caster to the shader's own floor; y: the exponent a DISTANCE row's decay
-    /// is taken over (`Scene::glow_shadow_shape`), which nothing reads unless a
-    /// term of the row holds a distance. z unused.
+    /// caster to the shader's own floor. y/z unused.
     ///
     /// A row of its own rather than slots scattered over the ones beside it,
-    /// because they are one control: the Shadow bar, the Shadow depth bar under
-    /// it, and the shape the distance family alone is drawn through.
+    /// because they are one control: the Shadow bar and the Shadow depth bar
+    /// under it.
     ///
     /// NOT zeroed with `misc10`, which is where this row parts company with
     /// every other one under the glow: an item casts whether or not there is a
@@ -1525,7 +1523,7 @@ impl LatticeCallback {
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
                 // lattice has. y/z unused.
-                misc11: [scene.glow_shadow, scene.glow_shadow_shape, 0.0, scene.glow_shadow_depth],
+                misc11: [scene.glow_shadow, 0.0, 0.0, scene.glow_shadow_depth],
                 shadow_curve: [
                     scene.glow_shadow_gain,
                     scene.glow_shadow_curve,
@@ -4092,10 +4090,7 @@ impl CallbackTrait for LatticeCallback {
                         // Shadow's WIDTH is not here: it is σ, spent on the
                         // CPU where the cells are packed.
                         shadow_depth: self.uniforms.misc11[3],
-                        // The exponent a DISTANCE row's decay is taken over,
-                        // off the same row the lattice's own draws take it from
-                        // (`u.misc11`): one row, one shape, whatever the caster.
-                        shadow_shape: self.uniforms.misc11[1],
+                        shadow_atlas_pad: 0.0,
                         // How many taps a name's box makes, which is the
                         // kernel's own term count: a term past it carries
                         // weight 0 and would cost a tap for nothing.

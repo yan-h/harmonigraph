@@ -132,20 +132,15 @@ struct Uniforms {
     // normalized exponential in x. The fixed full/zero endpoints are supplied
     // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
     glow_curve: vec4<f32>,
-    // The SHADOW's three dials. x: how wide it is, as a share of a node's
+    // The SHADOW's two dials. x: how wide it is, as a share of a node's
     // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
-    // the reach every quad is grown by (`shadow_reach_uv`); y: the exponent a
-    // DISTANCE row's decay is taken over (`Scene::glow_shadow_shape`); w: how
-    // dark it lands, 1 taking the frame under a solid caster down to
-    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
+    // the reach every quad is grown by (`shadow_reach_uv`); w: how dark it
+    // lands, 1 taking the frame under a solid caster down to
+    // `SHADOW_KEEP_FLOOR`. y/z unused and zeroed by the CPU.
     //
     // Every number on it is the FRAME's, one Shadow across the picture: what a
     // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
     // where its cells are packed.
-    //
-    // The shape sits HERE and not on the curve row beside it because it belongs
-    // to a ROW rather than to the depth: it is not read at all unless a term of
-    // this frame's kernel holds a distance.
     //
     // Read wherever a caster spends its cell (`shadow_through`), which is every
     // ink draw of the scene pass. NOT zeroed with misc10: a shadow is cast with
@@ -341,13 +336,6 @@ fn glow_shadow_curve() -> f32 {
     return max(u.shadow_curve.y, 0.0);
 }
 
-// The exponent a DISTANCE row's decay is taken over (`u.misc11.y`). Inert on a
-// blur row — `shadow_kernel` never reaches it unless a term of the row holds a
-// distance.
-fn glow_shadow_shape() -> f32 {
-    return max(u.misc11.y, 0.0);
-}
-
 // How many terms this frame's kernel has (`u.shadow_curve.z`), and how far the
 // widest of them reaches past a caster's ink in the picture's own σ
 // (`u.shadow_curve.w`, `ShadowKernel::reach_sigmas`).
@@ -423,7 +411,6 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
         points,
         glow_shadow_terms(),
         glow_shadow_gain(),
-        glow_shadow_shape(),
     );
     let depth = glow_shadow_depth();
     let curve = glow_shadow_curve();
@@ -463,7 +450,6 @@ fn plus_shadow_through(who: f32, d_points: f32, points: vec2<f32>, level: f32) -
     let full = standoff_coverage(
         d_points,
         2.0 * shadow_casters[caster].sigma[term],
-        glow_shadow_shape(),
     );
     return ShadowThrough(
         shadow_transmittance(full, glow_shadow_depth(), level, glow_shadow_curve()),
