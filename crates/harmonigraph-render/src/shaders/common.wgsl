@@ -119,8 +119,7 @@ struct ShadowCaster {
     // The union of every term's padded box, in the pane's points: min, then
     // size. The quad a caster's shadow is drawn over.
     rect: vec4<f32>,
-    // x: how much of this caster's shadow lands, 0..=1. y: the picture's
-    // reference σ in pane points. z/w unused.
+    // x: how much of this caster's shadow lands, 0..=1. y/z/w unused.
     level: vec4<f32>,
     // What each term's cell HOLDS: 0 ordinary blurred ink, `DISTANCE_KIND` a
     // distance, and `SPREAD_KIND` blurred spread coverage.
@@ -128,8 +127,6 @@ struct ShadowCaster {
     // Each term's σ in the pane's POINTS, which is what a distance read out of
     // a cell is measured against — one Shadow width is 2σ.
     sigma: array<f32, SHADOW_TERMS>,
-    // Each term's outward dilation in pane points. Zero outside a Spread term.
-    spread: vec4<f32>,
     // Each term's cell in atlas texels: origin, then size. Zeroed past the
     // kernel's own term count, and zeroed whole where nothing was packed.
     cell: array<vec4<f32>, SHADOW_TERMS>,
@@ -162,27 +159,34 @@ fn compact_gaussian_quantile(coverage: f32) -> f32 {
         + x2 * (-9.1879015 + x2 * 4.89797)))));
 }
 
-// A Spread term's blurred coverage, read back as a distance-shaped shadow.
+// How far inside the expanded contour a Spread field becomes whole, in blur
+// sigmas. The half-level contour needs headroom for a second nearby piece to
+// deepen it; fixing that headroom in sigmas makes the transition shrink onto
+// the hard contour as Softness approaches zero.
+const SPREAD_CORE_SIGMAS: f32 = 1.25;
+
+// A Spread term's blurred coverage, remapped to an exponential edge outside
+// its own half-level contour.
 //
-// For a flat edge `coverage = Φ((spread - d) / sigma)`, so the inverse below
-// returns d exactly before the shared standoff gives it Distance's exponential
-// falloff. Several nearby pieces add inside `coverage` first and therefore
-// lower the recovered distance together: the contribution blend survives the
-// remap instead of collapsing to the nearest answer. A hard Spread has no
-// transition to invert and remains the exact expanded contour it names.
-fn spread_standoff_coverage(coverage: f32, spread: f32, sigma: f32, width: f32) -> f32 {
+// For a flat edge `q = Φ⁻¹(coverage)` is signed distance from the expanded
+// contour in blur sigmas. `exp(q - SPREAD_CORE_SIGMAS)`, capped at one, gives
+// one e-fold per sigma while leaving room for nearby pieces to deepen the
+// half-level contour. Those pieces add inside coverage first, so their blend
+// survives the monotone remap. A hard Spread has no transition to invert and
+// keeps its antialiased coverage.
+fn spread_standoff_coverage(coverage: f32, sigma: f32) -> f32 {
     if coverage <= 0.0 {
         return 0.0;
     }
     if coverage >= 1.0 || sigma <= 1.0e-6 {
         return clamp(coverage, 0.0, 1.0);
     }
-    let distance = spread - sigma * compact_gaussian_quantile(coverage);
+    let q = compact_gaussian_quantile(coverage);
     // The inverse necessarily raises the compact Gaussian's last nonzero
     // samples. Taper only that bottom tenth back onto zero, where the
     // cell itself ends, so the exponential cannot expose its rectangular box.
     let support = smoothstep(0.0, 0.1, coverage);
-    return support * windowed_standoff_coverage(distance, width, SPREAD_TAIL);
+    return support * min(exp(q - SPREAD_CORE_SIGMAS), 1.0);
 }
 
 // Every caster's kernel, indexed by the caster's own index in the frame
@@ -252,12 +256,8 @@ fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
             distance = true;
             cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t]);
         } else if abs(kind - SPREAD_KIND) < 0.5 {
-            blur = blur + map.w * box_support * spread_standoff_coverage(
-                held,
-                shadow_casters[who].spread[t],
-                shadow_casters[who].sigma[t],
-                2.0 * shadow_casters[who].level.y,
-            );
+            blur = blur + map.w * box_support
+                * spread_standoff_coverage(held, shadow_casters[who].sigma[t]);
         } else {
             blur = blur + map.w * held;
         }
@@ -303,11 +303,6 @@ fn windowed_standoff_coverage(d: f32, w: f32, tail: f32) -> f32 {
 // `the_shaders_kinds_and_windows_are_the_packers`.
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
-// Spread's recovered distance uses a slightly longer exponential than the
-// exact field. That holds contribution differences below the angular texture
-// they would otherwise make in a sliced ring while keeping the same dark core
-// and windowed tail.
-const SPREAD_TAIL: f32 = 3.0;
 
 // The flattest a shadow's falloff may be bent to, whatever a caller asks for.
 //

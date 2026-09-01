@@ -462,6 +462,16 @@ fn two_strokes_of_one_name() -> Shot {
     Shot { labels, ..scene.into() }
 }
 
+/// The same pair where most of the fixed reach belongs to the expanded
+/// contour. This is the endpoint regime in which a remap stretched to the
+/// global Shadow width exposes atlas texture instead of approaching a hard
+/// outline.
+fn two_strokes_at_low_softness() -> Shot {
+    let mut shot = two_strokes_of_one_name();
+    shot.scene.glow_shadow_softness = 0.2;
+    shot
+}
+
 /// Two names on ONE sheet, on nodes that cover each other on screen.
 ///
 /// The case only the any-to-any design gets right (#498) and the one #469
@@ -651,6 +661,12 @@ fn a_name_at_render_scale_2_draws_the_frame_on_record() {
 #[test]
 fn two_strokes_of_one_name_draw_the_frame_on_record() {
     check("two-strokes-at-a-wide-shadow", two_strokes_of_one_name());
+}
+
+/// A low-Softness contour and the pocket between its strokes stay on record.
+#[test]
+fn two_strokes_at_low_softness_draw_the_frame_on_record() {
+    check("two-strokes-at-low-softness", two_strokes_at_low_softness());
 }
 
 /// Two names on one sheet, on nodes that cover each other.

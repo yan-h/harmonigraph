@@ -735,9 +735,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     ShadowKernel::Spread,
                     "Spread + blur",
                     "The ink's half-level contour is spread outward, then \
-                     softened with a Gaussian and read back as distance. \
+                     softened with a Gaussian whose coverage is remapped to \
+                     an exponential edge. \
                      Softness divides the fixed Shadow reach between that \
-                     expansion and the distance reconstruction. The expansion \
+                     expansion and the soft transition. The expansion \
                      keeps wide shadows tied to rings, corners and letterforms; \
                      nearby parts combine before the final exponential, without \
                      a nearest-distance seam. One cell per item.",
@@ -768,19 +769,19 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "How the fixed Shadow reach is divided between exact \
-                     outward expansion and Gaussian distance reconstruction. \
+                     outward expansion and a remapped Gaussian transition. \
                      0% is a hard expanded contour; 100% uses the whole reach \
-                     to combine nearby pieces before recovering an exponential \
-                     fade. Intermediate values preserve more of the expanded \
-                     form. Changing this does not change the shadow's outer \
+                     for an exponential soft edge. Intermediate values preserve \
+                     more of the expanded form, and approach the hard contour \
+                     continuously near 0%. Changing this does not change the shadow's outer \
                      extent. Double-click to type a value.",
             );
         }
         // The two that shape the depth rather than set it: how much of it the
         // picture's THINNEST ink gets, and where along the shadow's width it
         // sits.
-        // The gain is the reconstructed family's: a distance field gives a hairline the
-        // whole depth at its own edge by construction, so `shadow_kernel`
+        // The gain is the coverage family's: a distance field gives a hairline
+        // the whole depth at its own edge by construction, so `shadow_kernel`
         // returns before the gain is ever read on a distance row.
         ui.add_enabled_ui(!view.glow_shadow_kernel.has_distance(), |ui| {
             ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
@@ -789,7 +790,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .on_hover_text(
                     "How much of the Shadow depth the picture's THINNEST ink \
                      gets on the Spread row of the Kernel picker. A wide band \
-                     supplies a solid pool to the distance reconstruction, \
+                     supplies a solid pool to the remapped transition, \
                      while a hairline ring or stroke of type supplies less \
                      coverage — and without this they would land at wildly \
                      different darknesses from one depth. Turning it up \

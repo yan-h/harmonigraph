@@ -281,9 +281,7 @@ pub(crate) struct ShadowCaster {
     pub rect: [f32; 4],
     /// x: how much of this caster's shadow lands, 0..=1 — zero where the atlas
     /// could not hold every one of its cells, which is a caster that darkens
-    /// nothing rather than one that darkens by part of its kernel. y: the
-    /// picture's reference σ in pane points, from which the Spread remap gets
-    /// the same displayed width as Distance. z/w unused.
+    /// nothing rather than one that darkens by part of its kernel. y/z/w unused.
     pub level: [f32; 4],
     /// What each term's cell HOLDS: 0 ordinary blurred ink,
     /// [`DISTANCE_KIND`] a distance, and [`SPREAD_KIND`] blurred spread
@@ -303,10 +301,6 @@ pub(crate) struct ShadowCaster {
     /// so a Render scale moves neither.
     /// Per caster because [`Caster::sigma_scale`] is.
     pub sigma: [f32; harmonigraph_scene::SHADOW_TERMS_MAX],
-    /// How far each term's source is dilated in pane points. Zero except on a
-    /// Spread term, whose blurred half-level contour is shifted back by this
-    /// amount when it is read as a soft distance.
-    pub spread: [f32; 4],
     /// Each term's cell in atlas texels: origin, then size. Zeroed past the
     /// kernel's own term count, and zeroed whole where the caster casts
     /// nothing.
@@ -331,7 +325,6 @@ pub(crate) const NO_CASTER: ShadowCaster = ShadowCaster {
     level: [0.0; 4],
     kind: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
     sigma: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
-    spread: [0.0; 4],
     cell: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
     map: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
 };
@@ -514,7 +507,6 @@ pub(crate) fn pack(
         let level = if whole { caster.level.clamp(0.0, 1.0) } else { 0.0 };
         let mut entry = NO_CASTER;
         entry.level[0] = level;
-        entry.level[1] = picture_sigma_of(caster) / px_per_point;
         let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
         for (t, term) in kernel.iter().enumerate() {
             let i = c * n + t;
@@ -546,7 +538,6 @@ pub(crate) fn pack(
             }
             entry.kind[t] = kind;
             entry.sigma[t] = sigma_of(caster, term) / px_per_point;
-            entry.spread[t] = spread;
             entry.cell[t] = cell;
             if direct {
                 continue;
@@ -968,7 +959,7 @@ pub(crate) mod tests {
                         spread: 2.5 * (1.0 - harmonigraph_scene::GLOW_SHADOW_SOFTNESS_DEFAULT),
                         kind: harmonigraph_scene::TermKind::Spread,
                     }],
-                    "Spread must default to 40% dilation and 60% distance reconstruction",
+                    "Spread must default to 40% dilation and 60% soft transition",
                 );
                 assert!(
                     (kernel.reach_sigmas() - 2.5).abs() < 1e-6,
@@ -995,12 +986,9 @@ pub(crate) mod tests {
             let terms = ShadowKernel::Spread.terms_with(softness);
             let packed = pack(&[caster], picture_sigma, px_per_point, 4096, &terms);
             let cell = packed.boxes[0];
-            let sampled = packed.casters[0];
             assert_eq!(cell.who[1], SPREAD_KIND);
             let expected_spread = picture_sigma * 2.5 * (1.0 - softness) / px_per_point;
             assert!((cell.who[3] - expected_spread).abs() < 1e-6);
-            assert!((sampled.level[1] - picture_sigma / px_per_point).abs() < 1e-6);
-            assert!((sampled.spread[0] - expected_spread).abs() < 1e-6);
             assert!((terms[0].reach_sigmas() - 2.5).abs() < 1e-6);
             assert!(cell.terms.iter().all(|value| value.is_finite()));
             if softness == 0.0 {

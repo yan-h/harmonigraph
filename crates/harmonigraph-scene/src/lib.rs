@@ -275,12 +275,11 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
 
 /// The softest the Spread construction may be: the whole of its Shadow reach
-/// spent reconstructing a soft distance from a three-sigma Gaussian, and none
-/// as outward dilation.
+/// spent on the remapped three-sigma transition, and none as outward dilation.
 pub const GLOW_SHADOW_SOFTNESS_MAX: f32 = 1.0;
 
 /// The fresh division of the Spread construction's reach: 40% exact dilation
-/// and 60% Gaussian distance reconstruction.
+/// and 60% Gaussian transition.
 pub const GLOW_SHADOW_SOFTNESS_DEFAULT: f32 = 0.6;
 
 /// The most a caster's reconstructed contribution may be multiplied up by
@@ -982,7 +981,7 @@ pub struct Scene {
     /// 0..=[`GLOW_SHADOW_NAME_MAX`].
     pub glow_shadow_name: f32,
     /// How the Spread construction divides its fixed reach between outward
-    /// dilation and Gaussian distance reconstruction (see
+    /// dilation and its remapped Gaussian transition (see
     /// [`ViewConfig::glow_shadow_softness`]);
     /// already clamped to 0..=[`GLOW_SHADOW_SOFTNESS_MAX`].
     pub glow_shadow_softness: f32,

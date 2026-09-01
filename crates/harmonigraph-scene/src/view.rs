@@ -1291,11 +1291,10 @@ pub struct ViewConfig {
     pub glow_shadow_name: f32,
     /// How the Spread + blur construction divides its calibrated Shadow reach,
     /// 0..=[`GLOW_SHADOW_SOFTNESS_MAX`]. At 0 the whole reach is an exact
-    /// outward dilation; at 1 the whole reach is the Gaussian used to recover
-    /// a soft distance. Values between spend `(1 - softness)` of the reach on
-    /// dilation and the remainder on that reconstruction. Every nonzero
-    /// reconstruction is then spent through an exponential falloff; zero
-    /// remains the hard expanded contour.
+    /// outward dilation; at 1 the whole reach is a Gaussian transition remapped
+    /// to an exponential edge. Values between spend `(1 - softness)` of the
+    /// reach on dilation and the remainder on that transition. Its width
+    /// approaches zero with Softness, leaving the hard expanded contour.
     ///
     /// This is inert on every other kernel. Unlike the former independent
     /// Spread and Blur widths, it cannot change how far the shadow reaches:
@@ -2656,7 +2655,7 @@ impl Default for ViewConfig {
             // otherwise; the fresh view is the answer being no.
             glow_shadow_name: 1.0,
             // The balanced calibration: 40% of the reach is exact dilation
-            // and the other 60% is the Gaussian distance reconstruction.
+            // and the other 60% is the remapped Gaussian transition.
             glow_shadow_softness: GLOW_SHADOW_SOFTNESS_DEFAULT,
             glow_shadow_kernel: ShadowKernel::Spread,
             // The whole field, which is the fresh picture with no bar in it:

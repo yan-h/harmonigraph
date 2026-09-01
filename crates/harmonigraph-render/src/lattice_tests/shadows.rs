@@ -1824,8 +1824,46 @@ fn block_on_grey(
     (bare, cast, glam::Vec2::new(rect[0], rect[1]))
 }
 
+/// Low Softness keeps the interior of its expanded contour at full depth.
+///
+/// The sampled point is outside the caster but inside the analytic dilation.
+/// A remap whose limit is the original caster's distance makes that point a
+/// tail and introduces a discontinuity above zero Softness; the
+/// contour-relative limit keeps it in the solid pool.
+#[test]
+fn low_softness_keeps_the_expanded_contour_whole() {
+    const SHADOW: f32 = 0.8;
+    const DEPTH: f32 = 0.85;
+    const SOFTNESS: f32 = 0.2;
+    const SIDE: f32 = 72.0;
+    const GREY: f32 = 0.55;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear =
+        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
+    let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Spread;
+    scene.glow_shadow_softness = SOFTNESS;
+    scene.glow_shadow_gain = 1.0;
+    scene.glow_shadow_curve = 1.0;
+    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
+    let at = on_screen(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
+    let rect = [at.x - SIDE / 2.0, at.y - SIDE / 2.0, SIDE, SIDE];
+    let bare = shooter.shot(&scene);
+    let cast = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
+    let x = (rect[0] - 1.75 * sigma(&scene)).round() as u32;
+    let row = at.y.round() as u32;
+    let through = bright_at(&cast, x, row) as f64 / bright_at(&bare, x, row) as f64;
+    let level = through.ln() / (1.0 - f64::from(DEPTH)).ln();
+    assert!(
+        level > 0.9,
+        "a point inside the expanded contour receives only {level:.3} of the shadow depth",
+    );
+}
+
 /// A flat Spread edge loses the Gaussian tail's accelerating fall after its
-/// coverage is read back as distance.
+/// coverage is remapped to a contour-relative exponential.
 ///
 /// A Gaussian's equal-width log differences grow as distance grows; a distance
 /// exponential's are equal. The compact kernel and its bilinear samples make
@@ -1834,7 +1872,7 @@ fn block_on_grey(
 #[test]
 fn a_spread_rows_flat_edge_has_a_distance_shaped_tail() {
     const SHADOW: f32 = 0.8;
-    const DEPTH: f32 = 0.2;
+    const DEPTH: f32 = 0.85;
     const SIDE: f32 = 72.0;
     const GREY: f32 = 0.55;
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -1854,7 +1892,7 @@ fn a_spread_rows_flat_edge_has_a_distance_shaped_tail() {
     let cast = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
     let row = at.y.round() as u32;
     let edge = rect[0].round() as u32;
-    let levels: Vec<f64> = [2, 4, 6]
+    let levels: Vec<f64> = [1, 2, 3]
         .into_iter()
         .map(|pixels| {
             let x = edge - pixels;
@@ -1863,7 +1901,10 @@ fn a_spread_rows_flat_edge_has_a_distance_shaped_tail() {
         })
         .collect();
     let steps = [(levels[0] / levels[1]).ln(), (levels[1] / levels[2]).ln()];
-    eprintln!("Spread's recovered levels are {levels:?}; log steps are {steps:?}");
+    eprintln!(
+        "Spread's recovered levels are {levels:?}; log steps are {steps:?}; picture sigma is {}",
+        sigma(&scene),
+    );
     assert!(
         levels.windows(2).all(|pair| pair[0] > pair[1]),
         "Spread's flat-edge profile does not fall monotonically: {levels:?}",
@@ -1944,15 +1985,14 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
     );
 }
 
-/// A distance row's shadow still has the letterform's own STRUCTURE in it at a
-/// Shadow wide enough to erase it from a blur.
+/// A distance row's shadow retains materially more of a letterform's STRUCTURE
+/// than the all-soft Spread construction at a wide Shadow.
 ///
 /// #521's form metric, which is what a distance row is in the tree for: how
 /// much darker the shadow is beside a stroke than midway between two strokes,
-/// as a share of the first. The table there gives a Gaussian 100% at the fresh
-/// Shadow and 0% at the top of the bar — one slab under the whole word — and
-/// the reason is that a blur is a low-pass filter, so detail finer than σ is
-/// gone whatever the depth. A distance is not a filter and has no such scale.
+/// as a share of the first. Spread retains contributions from both strokes and
+/// therefore closes part of the gap; Distance is not a low-pass filter and
+/// keeps the full distinction.
 ///
 /// The reading is beside a stroke rather than UNDER one, and it has to be: a
 /// caster's own ink is the one thing its shadow never darkens, so the shadow
@@ -2009,17 +2049,18 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         );
         (beside - middle) as f64 / beside as f64
     };
-    let blurred = form("all-blur remap", Spread, 1.0);
+    let spread = form("all-soft Spread", Spread, 1.0);
     let distance = form("Distance", Distance, 0.6);
+    eprintln!("wide-shadow form: Spread {spread:.2}, Distance {distance:.2}");
     assert!(
-        blurred < 0.1,
-        "at Shadow {SHADOW} the all-blur remap holds {blurred:.2} of the gap's form, so the \
-         fixture's Shadow is not wide enough for the claim to mean anything",
+        spread > 0.2,
+        "at Shadow {SHADOW} Spread holds only {spread:.2} of the gap's form, so its remap has \
+         collapsed back into a plain blur",
     );
     assert!(
-        distance > blurred + 0.2,
-        "the distance row holds {distance:.2} of the gap's form against the all-blur remap's \
-         {blurred:.2}, so the counter has closed on both",
+        distance > 0.8 && distance > spread + 0.3,
+        "Distance holds {distance:.2} of the gap's form against Spread's {spread:.2}, so the \
+         fixture no longer distinguishes their geometries",
     );
 }
 
