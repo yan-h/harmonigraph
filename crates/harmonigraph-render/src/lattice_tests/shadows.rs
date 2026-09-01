@@ -1171,38 +1171,37 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
-    // At every atlas-backed coverage row. The clip that keeps a near node's
-    // box on the pane is per caster and has to hold its cell (#505).
-    for kernel in [harmonigraph_scene::ShadowKernel::Spread] {
-        let terms = kernel.terms();
-        let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
-        // Read over the casters that darken something: one at level 0 is packed
-        // as no cell on purpose (`pack`), and most of this fixture's nodes
-        // project clean off the pane.
-        let casting: Vec<crate::shadow::ShadowBox> = cb
-            .casters
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.level > 0.0)
-            .flat_map(|(i, _)| (0..terms.len()).map(move |t| i * terms.len() + t))
-            .map(|i| packed.boxes[i])
-            .collect();
-        let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
-        assert_eq!(
-            unfit,
-            0,
-            "{kernel:?}: {unfit} of {} cells that darken something got none, and a zeroed cell is \
-             drawn at the atlas origin over the markers' own",
-            casting.len(),
-        );
-        assert!(
-            packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
-            "{kernel:?}: the atlas came out {:?} for a {:?} pane: a caster's box is sized off a \
-             projection the pane cannot show",
-            packed.size,
-            SIZE,
-        );
-    }
+    // The clip that keeps a near node's box on the pane is per caster and has
+    // to hold the atlas-backed coverage row's cell (#505).
+    let kernel = harmonigraph_scene::ShadowKernel::Spread;
+    let terms = kernel.terms();
+    let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, terms);
+    // Read over the casters that darken something: one at level 0 is packed
+    // as no cell on purpose (`pack`), and most of this fixture's nodes project
+    // clean off the pane.
+    let casting: Vec<crate::shadow::ShadowBox> = cb
+        .casters
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.level > 0.0)
+        .flat_map(|(i, _)| (0..terms.len()).map(move |t| i * terms.len() + t))
+        .map(|i| packed.boxes[i])
+        .collect();
+    let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+    assert_eq!(
+        unfit,
+        0,
+        "{kernel:?}: {unfit} of {} cells that darken something got none, and a zeroed cell is \
+         drawn at the atlas origin over the markers' own",
+        casting.len(),
+    );
+    assert!(
+        packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
+        "{kernel:?}: the atlas came out {:?} for a {:?} pane: a caster's box is sized off a \
+         projection the pane cannot show",
+        packed.size,
+        SIZE,
+    );
 }
 
 /// A name's shadow reaches the BLOOM.

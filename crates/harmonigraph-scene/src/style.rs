@@ -691,8 +691,15 @@ impl ShadowKernel {
     pub fn terms_with(self, spread: f32, blur: f32) -> Vec<KernelTerm> {
         let mut terms = self.terms().to_vec();
         if self == ShadowKernel::Spread {
-            terms[0].spread = 2.0 * spread.max(0.0).min(crate::GLOW_SHADOW_SPREAD_MAX);
-            terms[0].sigma = 2.0 * blur.max(0.0).min(crate::GLOW_SHADOW_BLUR_MAX);
+            let bounded = |value: f32, max| {
+                if value.is_nan() {
+                    0.0
+                } else {
+                    value.clamp(0.0, max)
+                }
+            };
+            terms[0].spread = 2.0 * bounded(spread, crate::GLOW_SHADOW_SPREAD_MAX);
+            terms[0].sigma = 2.0 * bounded(blur, crate::GLOW_SHADOW_BLUR_MAX);
         }
         terms
     }

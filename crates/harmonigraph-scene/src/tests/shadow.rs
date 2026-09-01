@@ -43,6 +43,9 @@ fn spread_and_blur_are_independent_width_controls() {
         ShadowKernel::Spread.terms(),
         "the adjustable row must reproduce its calibrated defaults",
     );
+    let non_finite = ShadowKernel::Spread.terms_with(f32::NAN, f32::INFINITY);
+    assert_eq!(non_finite[0].spread, 0.0);
+    assert_eq!(non_finite[0].sigma, 2.0 * GLOW_SHADOW_BLUR_MAX);
 
     for (asked_spread, spread, asked_blur, blur) in
         [(-1.0, 0.0, 0.40, 0.40), (0.20, 0.20, 2.0, 1.0)]
