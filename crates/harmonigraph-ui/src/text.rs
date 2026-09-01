@@ -260,9 +260,9 @@ pub(crate) const SIZE_STEP: f32 = 1.04;
 /// Retina display — so it bounds the accidents (a hand-edited blob, a camera
 /// and a bar and a pane all at their limits at once) without reaching any
 /// size a person would ask for. Held under the NARROWEST atlas epaint builds —
-/// 2048, what it takes when a context is told no limit — rather than under the
-/// 8192 both shells report off their wgpu device, so the bound holds for a
-/// context that is told nothing as well as for the ones that are.
+/// 2048, what it takes when a context is told no limit — rather than under any
+/// figure a shell reports off its device, so the bound holds for a context that
+/// is told nothing as well as for the ones that are told a limit.
 const MAX_GLYPH_PX: f32 = 512.0;
 
 /// Which batch a flush belongs to. Unique per FLUSH drawn in one frame, since

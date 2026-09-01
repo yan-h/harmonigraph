@@ -872,10 +872,10 @@ pub(crate) mod tests {
     /// reach" means for a mixture: a row entirely under 1 is a shadow narrower
     /// than the bar says. And it fits in what a caster carries.
     ///
-    /// Walked off the ENUM and not off a list, so a row added to the table is
-    /// checked by having been added. The rows the claims are about are the ones
-    /// that carry a blur term; a distance row has no mixture to sum and is
-    /// measured by the two readings in `lattice_tests::shadows` instead.
+    /// The rows are listed by hand, so a row added to the table has to be
+    /// added here too. The claims are about the rows carrying a blur term; a
+    /// distance row has no mixture to sum and is measured by the two readings
+    /// in `lattice_tests::shadows` instead.
     #[test]
     fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
         use harmonigraph_scene::ShadowKernel::*;

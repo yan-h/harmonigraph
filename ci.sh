@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local mirror of .github/workflows/ci.yml: the formatting check, clippy across
 # all targets with warnings denied, the full test suite, the plugin package
-# check, baseview's own tests, the doc-link check, the harmonigraph-core
+# check, the two vendored crates' own tests, the doc-link check, the harmonigraph-core
 # dependency guard, then the script gates — worktree-reclaim ownership and lock
 # cases, the registered-worktree bundle swap, and pre-push skips.
 # Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
@@ -132,7 +132,7 @@ run .claude/tests/plugin-swap.sh
 run .claude/tests/pre-push-skip.sh
 
 echo
-echo "✅ local CI passed (fmt + clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap + pre-push skips)"
+echo "✅ local CI passed (fmt + clippy + tests + plugin check + vendored crates + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap + pre-push skips)"
 
 # Record what passed, so the next push of the same content does not pay for it
 # again. The key is the TREE and not the commit: a rebase, an amended message

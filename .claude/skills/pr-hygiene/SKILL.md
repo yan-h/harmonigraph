@@ -7,9 +7,10 @@ description: How review, squashing, and agent definitions work in this repo. Use
 
 Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
 repo and branch protection is not available on this plan, so `ci.sh` via
-the `.githooks/pre-push` hook is the only automatic gate, and it checks
-formatting, clippy, the tests, the plugin package check, baseview's own tests,
-the rustdoc doc links, the `harmonigraph-core` dependency guard,
+the `.githooks/pre-push` hook is the only automatic gate — one the hook
+skips for a push that cannot change its answer — and it checks formatting,
+clippy, the tests, the plugin package check, the two vendored crates' own
+tests, the rustdoc doc links, the `harmonigraph-core` dependency guard,
 worktree-reclaim ownership and lock cases, and the registered-worktree bundle
 swap, and pre-push skip cases — not judgement. `ci.sh`'s own header is the list
 to copy when this one looks stale.

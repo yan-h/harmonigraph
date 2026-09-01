@@ -1,5 +1,5 @@
 ---
-description: Hand an implementation task to Codex (gpt-5.6-sol) and keep the brief and the verification here
+description: Hand an implementation task to Codex (gpt-5.6-luna) and keep the brief and the verification here
 argument-hint: [--wait] [what Codex should implement]
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 ---
@@ -102,7 +102,7 @@ node "$CC" result <job-id>
 ```
 
 Leave `--model` and `--effort` unset. `~/.codex/config.toml` already selects
-`gpt-5.6-sol` at `xhigh`, and naming them here means a config change stops
+`gpt-5.6-luna` at `xhigh`, and naming them here means a config change stops
 reaching the one caller that most needs it.
 
 Use `task --resume-last` for a follow-up on the same thread, and send only
