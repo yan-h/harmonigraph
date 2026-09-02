@@ -1582,6 +1582,16 @@ struct Foot {
     // up to the last bits: the two are computed by the same arithmetic and the
     // scalar is the one the picture is drawn from.
     offset: vec2<f32>,
+    // How far along its own segment the nearest point stands from the nearest
+    // CONVEX end of it, in node uv like `sd`. Zero says the foot IS that end —
+    // a corner — which is what tells a gap's MOUTH from a concave junction:
+    // both put their feet at 90°, and only the mouth's are segment ends
+    // (`pocket` in common.wgsl).
+    //
+    // A producer that does not compute one writes zero, which reads as a corner
+    // and so leaves the fragment the nearest field alone. Octave gaps are the
+    // only shapes that carry one in this build.
+    clear: f32,
 }
 
 // The contour threshold the exact field treats as ink. The marker uses the
@@ -1592,7 +1602,7 @@ const EMPTY_DISTANCE: f32 = 65504.0;
 // A foot no shape claims: past every cell's pad, and pointing nowhere in
 // particular.
 fn no_foot() -> Foot {
-    return Foot(EMPTY_DISTANCE, vec2<f32>(EMPTY_DISTANCE, 0.0));
+    return Foot(EMPTY_DISTANCE, vec2<f32>(EMPTY_DISTANCE, 0.0), 0.0);
 }
 
 // The two nearest feet the node's layers put under one fragment: the winner,
@@ -1672,8 +1682,11 @@ fn glyph_band(d: f32, dir: vec2<f32>, inner: f32, outer: f32, level: f32, aa: f3
     // falls, inside the band and out: `sd` is `inner - d` below the middle and
     // `d - outer` above it, so the offset is that step along the radius.
     let circle = select(outer, inner, d < mid);
+    // No clearance: a whole circle has no end for a foot to stand at, but this
+    // build corrects octave gaps only, so the band reads as a corner and the
+    // fragments it wins are the nearest field.
     return NodeLayer(
-        Foot(abs(d - mid) - 0.5 * (outer - inner), (circle - d) * dir),
+        Foot(abs(d - mid) - 0.5 * (outer - inner), (circle - d) * dir, 0.0),
         level,
         aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa)),
     );
@@ -1789,7 +1802,11 @@ fn outer_glyph(
         // shape, exactly as far off as this `max` is from the Euclidean
         // distance it stands in for.
         let normal = vec2<f32>(fold.e.y, -fold.e.x);
-        let side_foot = Foot(side, sector_unfold(fold, -side * normal));
+        // No clearance on any of the three: an intersection's winning
+        // constraint stands off the shape past a corner, so the segment its
+        // foot belongs to is not a segment of the sector's boundary at all and
+        // has no end to measure from. Octave gaps only, this build.
+        let side_foot = Foot(side, sector_unfold(fold, -side * normal), 0.0);
         foot = farther_foot(farther_foot(band.foot, pie), side_foot);
     } else {
         foot = annular_sector_distance(fold, inner, outer, slice_gap_half());
@@ -2257,9 +2274,12 @@ fn sector_pie(f: SectorFold, r: f32) -> Foot {
     // stands in for a direction there rather than a normalize of nothing.
     let out = select(vec2<f32>(0.0, 1.0), f.q / max(radius, 1e-6), radius > 1e-6) * r;
     let takes_arc = arc >= signed_edge;
+    // No clearance: a pie is only ever a constraint of the wide-sector
+    // intersection above, which carries none. Octave gaps only, this build.
     return Foot(
         select(signed_edge, arc, takes_arc),
         sector_unfold(f, select(on_edge, out, takes_arc) - f.q),
+        0.0,
     );
 }
 
@@ -2274,6 +2294,10 @@ fn sector_side(f: SectorFold) -> f32 {
 // runs between the inner and outer circles, while each circle contributes only
 // the arc on the inside of that line. Measuring against those three features
 // keeps the Euclidean corner a Distance shadow is defined by.
+//
+// The one shape here whose foot carries a CLEARANCE, and every ring cut into
+// slices reaches it — the octave band, the audio ring and the mark strip alike,
+// their gaps all being this shape.
 fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> Foot {
     if outer <= inner {
         return no_foot();
@@ -2293,29 +2317,45 @@ fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> F
     }
 
     let side_t = clamp(dot(f.q, f.e), segment_start, outer_t);
-    // Each candidate is kept as the POINT it stands at, and the winner is the
-    // one the running minimum ends on: a length is what the three features are
-    // compared by, and the vector is what the point they were measured to is.
+    // Each candidate is kept as the POINT it stands at and the CLEARANCE it
+    // stands with, and the winner is the one the running minimum ends on: a
+    // length is what the three features are compared by, the vector is what the
+    // point they were measured to is, and the clearance is what says whether
+    // that point is the middle of a feature or the end of one.
     var at = side_t * f.e - gap * normal;
     var distance = length(f.q - at);
+    // Both ends of the cut are convex corners of the slice, so the margin runs
+    // to the nearer of them and a clamped `t` leaves none.
+    var clear = min(side_t - segment_start, outer_t - side_t);
 
     // A radial projection reaches a circle's arc only while it remains inside
     // the angular cut. Otherwise that arc's nearest point is its endpoint,
-    // already carried by the side segment above.
+    // already carried by the side segment above. That same test is the arc
+    // foot's clearance: the quantity it compares against zero is how far the
+    // foot stands INSIDE the cut, which is the chord to the corner where the
+    // arc ends.
     let direction = f.q / max(radius, 1e-6);
     let outer_at = direction * outer;
-    if dot(normal, outer_at) + gap <= 0.0 && abs(radius - outer) < distance {
+    let outer_clear = -(dot(normal, outer_at) + gap);
+    if outer_clear >= 0.0 && abs(radius - outer) < distance {
         distance = abs(radius - outer);
         at = outer_at;
+        clear = outer_clear;
     }
     let inner_at = direction * inner;
-    if dot(normal, inner_at) + gap <= 0.0 && abs(radius - inner) < distance {
+    let inner_clear = -(dot(normal, inner_at) + gap);
+    if inner_clear >= 0.0 && abs(radius - inner) < distance {
         distance = abs(radius - inner);
         at = inner_at;
+        clear = inner_clear;
     }
 
     let inside = radius >= inner && radius <= outer && dot(normal, f.q) + gap <= 0.0;
-    return Foot(select(distance, -distance, inside), sector_unfold(f, at - f.q));
+    return Foot(
+        select(distance, -distance, inside),
+        sector_unfold(f, at - f.q),
+        max(clear, 0.0),
+    );
 }
 
 /// The three derivatives-and-geometry answers every layer of a node is drawn
@@ -2915,10 +2955,21 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
         // well as of the geometry it is cut from: any cross-frame cache of a
         // cell keys on `in.params.w` beside every layer it was drawn from.
         let scale = abs(in.shadow_at.z);
+        // Both gates on the second foot: how squarely it faces, and how far
+        // both feet stand from the ends of their own segments. The clearances
+        // are scaled exactly as the distances are — they arrive in node uv like
+        // `sd`, and a taper measured in uv would follow the node's SIZE while
+        // `w` stays in points.
+        let k = facing(ink.feet.near.offset, ink.feet.next.offset)
+            * pocket(
+                ink.feet.near.clear * scale,
+                ink.feet.next.clear * scale,
+                taper_length(in.params.w),
+            );
         let united = union_distance(
             ink.feet.near.sd * scale,
             ink.feet.next.sd * scale,
-            facing(ink.feet.near.offset, ink.feet.next.offset),
+            k,
             in.params.w,
         );
         // Stabilize the value before the R16 attachment rounds it. The fast
@@ -3354,7 +3405,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                     slot,
                     oct,
                     p,
-                    NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), 1.0, 1.0),
+                    NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0), 0.0), 1.0, 1.0),
                     band_in,
                     EMPTY_DISTANCE,
                     arc,
@@ -3393,7 +3444,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 in.marks.x,
                 oct,
                 p,
-                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), clamp(in.params.y, 0.0, 1.0), 1.0),
+                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0), 0.0), clamp(in.params.y, 0.0, 1.0), 1.0),
                 mark_in,
                 EMPTY_DISTANCE,
                 arc,
@@ -3405,7 +3456,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 in.marks.y,
                 oct,
                 p,
-                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), clamp(in.params.z, 0.0, 1.0), 1.0),
+                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0), 0.0), clamp(in.params.z, 0.0, 1.0), 1.0),
                 mark_in,
                 EMPTY_DISTANCE,
                 arc,

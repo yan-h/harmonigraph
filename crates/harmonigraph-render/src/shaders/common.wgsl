@@ -296,6 +296,39 @@ fn facing(near: vec2<f32>, foot: vec2<f32>) -> f32 {
 // `the_shaders_distance_kind_and_window_are_the_packers`.
 const BEYOND_RAMP: f32 = 0.5;
 
+// One e-fold of the standoff, in the units `w` is given in: the length a
+// pocket's correction tapers over as its foot approaches the end of the segment
+// it stands on.
+//
+// The decay length of `p` itself and not a length read off the gap, because
+// what the taper has to be small compared to is the distance over which the
+// second term is worth anything at all.
+fn taper_length(w: f32) -> f32 {
+    return w / SHADOW_TAIL;
+}
+
+// How much of a facing pair counts, 0..=1, from each foot's clearance to the
+// nearest CONVEX end of its own segment: zero, with zero slope, where either
+// foot IS that end.
+//
+// [`facing`] alone admits two convex corners seen from outside a gap. The
+// exterior bisector of a mouth puts the far corner within the ramp at every
+// width — the same reading a concave junction gives, both standing their feet
+// at 90° — so no ramp separates the two. What does is that a mouth's feet are
+// segment ENDS and a junction's are segment interiors.
+//
+// Both clearances arrive in the units the distances are in, so a caller
+// converts them by the same scale it converts `sd` with; otherwise the taper's
+// length follows the node's size while `w` does not.
+//
+// The PRODUCT and not a taper of the smaller clearance: a pair is worth what
+// both of its feet are worth, so two feet each half a taper from their ends
+// count for a quarter rather than a half. `harmonigraph_scene::crease::pocket`
+// is the same arithmetic, and `lattice_tests::crease` is what settles it.
+fn pocket(h_near: f32, h_foot: f32, l: f32) -> f32 {
+    return smoothstep(0.0, l, h_near) * smoothstep(0.0, l, h_foot);
+}
+
 // The flattest a shadow's falloff may be bent to, whatever a caller asks for.
 //
 // The exponent acts on a number in 0..=1, so as it approaches zero every

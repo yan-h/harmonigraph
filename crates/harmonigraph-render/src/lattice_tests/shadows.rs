@@ -190,11 +190,14 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     let unfold = |mid: glam::Vec2, flip: f32, v: glam::Vec2| {
         v.y * mid + (flip * v.x) * glam::Vec2::new(-mid.y, mid.x)
     };
-    // `no_foot`: past every cell's pad, and pointing nowhere in particular.
-    let nowhere = (EMPTY_DISTANCE, glam::Vec2::new(EMPTY_DISTANCE, 0.0));
-    // One layer's foot: how far its nearest point stands, and the offset to it.
-    // The direction is what the runner-up's facing weight is taken from, so the
-    // reference carries the same POINT the shader took the length of.
+    // `no_foot`: past every cell's pad, pointing nowhere in particular, and
+    // standing at a corner.
+    let nowhere = (EMPTY_DISTANCE, glam::Vec2::new(EMPTY_DISTANCE, 0.0), 0.0f32);
+    // One layer's foot: how far its nearest point stands, the offset to it, and
+    // how far that point stands from the end of its own segment. The direction
+    // is what the runner-up's facing weight is taken from and the clearance is
+    // what tapers it, so the reference carries the same POINT the shader took
+    // the length of and the same margin it measured along the same segment.
     let sector_foot = |uv: glam::Vec2, inner: f32, outer: f32, edges: [f32; 2]| {
         if outer <= inner {
             return nowhere;
@@ -211,7 +214,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
             let band_mid = 0.5 * (inner + outer);
             let circle = if d < band_mid { inner } else { outer };
             let dir = if d > 1e-6 { uv / d } else { glam::Vec2::X };
-            let band = ((d - band_mid).abs() - 0.5 * (outer - inner), (circle - d) * dir);
+            let band = ((d - band_mid).abs() - 0.5 * (outer - inner), (circle - d) * dir, 0.0);
             let arc = radius - outer;
             let on_edge = edge * q.dot(edge).clamp(0.0, outer);
             let sign = if side < 0.0 {
@@ -227,11 +230,17 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
             let pie = (
                 if takes_arc { arc } else { signed_edge },
                 unfold(mid, flip, if takes_arc { out } else { on_edge } - q),
+                0.0,
             );
             let gap = if q.dot(edge) > 0.0 { scene.octave_gap * 0.5 } else { 0.0 };
-            let cut = (side + gap, unfold(mid, flip, -(side + gap) * normal));
-            let farther =
-                |a: (f32, glam::Vec2), b: (f32, glam::Vec2)| if b.0 > a.0 { b } else { a };
+            let cut = (side + gap, unfold(mid, flip, -(side + gap) * normal), 0.0);
+            let farther = |a: (f32, glam::Vec2, f32), b: (f32, glam::Vec2, f32)| {
+                if b.0 > a.0 {
+                    b
+                } else {
+                    a
+                }
+            };
             return farther(farther(band, pie), cut);
         }
 
@@ -248,19 +257,27 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         let side_t = q.dot(edge).clamp(segment_start, outer_t);
         let mut at = side_t * edge - gap * normal;
         let mut distance = (q - at).length();
+        // Both ends of the cut are convex corners of the slice, and each arc
+        // ends where its own eligibility test does — so the chord that test
+        // compares against zero IS the arc foot's margin to that corner.
+        let mut clear = (side_t - segment_start).min(outer_t - side_t);
         let direction = q / radius.max(1e-6);
         let outer_at = direction * outer;
-        if normal.dot(outer_at) + gap <= 0.0 && (radius - outer).abs() < distance {
+        let outer_clear = -(normal.dot(outer_at) + gap);
+        if outer_clear >= 0.0 && (radius - outer).abs() < distance {
             distance = (radius - outer).abs();
             at = outer_at;
+            clear = outer_clear;
         }
         let inner_at = direction * inner;
-        if normal.dot(inner_at) + gap <= 0.0 && (radius - inner).abs() < distance {
+        let inner_clear = -(normal.dot(inner_at) + gap);
+        if inner_clear >= 0.0 && (radius - inner).abs() < distance {
             distance = (radius - inner).abs();
             at = inner_at;
+            clear = inner_clear;
         }
         let inside = radius >= inner && radius <= outer && normal.dot(q) + gap <= 0.0;
-        (if inside { -distance } else { distance }, unfold(mid, flip, at - q))
+        (if inside { -distance } else { distance }, unfold(mid, flip, at - q), clear.max(0.0))
     };
     let marked_slot = harmonigraph_scene::MIDDLE_C_SLOT as i32;
     let marked_edges = sector(marked_slot);
@@ -276,7 +293,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     let truth = |uv: glam::Vec2| {
         let mut near = nowhere;
         let mut next = nowhere;
-        let mut keep = |foot: (f32, glam::Vec2)| {
+        let mut keep = |foot: (f32, glam::Vec2, f32)| {
             if foot.0 < near.0 {
                 next = near;
                 near = foot;
@@ -316,6 +333,8 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     let mut saw_facing = false;
     let mut saw_excluded = false;
     let mut saw_ramp = false;
+    let mut saw_clamped = false;
+    let mut saw_taper = false;
     for ty in y..y + h {
         for tx in x..x + w {
             let point = glam::Vec2::new(
@@ -332,15 +351,21 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
             if want_points > cell.who[2] - 0.5 / k {
                 continue;
             }
-            // The cosine is scale-free, so the weight is taken off the feet in
-            // the node's own uv where the two distances are taken in points.
+            // The cosine is scale-free, so the facing weight is taken off the
+            // feet in the node's own uv where the two distances are taken in
+            // points. The CLEARANCES are not scale-free — they are lengths
+            // against a taper in points — so they cross into points with the
+            // same scale the distances do.
+            let scale = screen_right.length();
             let facing = harmonigraph_scene::crease::facing(near.1, next.1);
-            let united = harmonigraph_scene::crease::union_distance(
-                want_points,
-                next.0 * screen_right.length(),
-                facing,
-                width,
+            let pocket = harmonigraph_scene::crease::pocket(
+                near.2 * scale,
+                next.2 * scale,
+                harmonigraph_scene::crease::taper_length(width),
             );
+            let k = facing * pocket;
+            let united =
+                harmonigraph_scene::crease::union_distance(want_points, next.0 * scale, k, width);
             let err = (held(tx, ty) - united).abs();
             if err > worst {
                 worst = err;
@@ -353,15 +378,23 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
             let side = edge.y * q.x - edge.x * q.y + scene.octave_gap * 0.5;
             saw_mark_corner |=
                 radius > mark_out && radius < mark_out + 0.15 && side > 0.0 && side < 0.15;
-            // The three states the runner-up can be in, which is what says the
+            // The five states the runner-up can be in, which is what says the
             // union arithmetic is measured rather than merely compiled (#450):
             // a foot squarely facing the point and moving the answer, one
             // excluded by standing behind the plane, and one on the RAMP
             // between them, which is the only reading that holds the ramp's own
-            // width to the shader's.
-            saw_facing |= facing > 0.99 && united < want_points - 0.25;
+            // width to the shader's — and then the taper's own two, a corner
+            // that hands the texel back to the nearest field though a runner-up
+            // faces it squarely, and a foot part way along its taper, which is
+            // what holds the taper's LENGTH to the shader's.
+            saw_facing |= k > 0.99 && united < want_points - 0.25;
             saw_excluded |= facing == 0.0 && next.0 < 2.0 * want;
             saw_ramp |= facing > 0.01 && facing < 0.99;
+            saw_clamped |= facing > 0.5
+                && near.2 == 0.0
+                && next.0 < 2.0 * want
+                && (held(tx, ty) - want_points).abs() < tolerance;
+            saw_taper |= pocket > 0.01 && pocket < 0.99;
             checked += 1;
         }
     }
@@ -372,6 +405,12 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     assert!(saw_facing, "no texel of the fixture unions a second facing layer in");
     assert!(saw_excluded, "no texel of the fixture has a near second layer facing away");
     assert!(saw_ramp, "no texel of the fixture stands on the facing ramp");
+    assert!(
+        saw_clamped,
+        "no texel of the fixture stands off a CORNER with a facing runner-up, so nothing here \
+         measures the taper handing a mouth back to the nearest field",
+    );
+    assert!(saw_taper, "no texel of the fixture stands part way along a taper");
     assert!(
         worst <= tolerance,
         "the node cell is off by {worst:.4} points at {worst_at:?}; tolerance is {tolerance:.4}, \
@@ -1980,10 +2019,16 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
         .expect("the node packed a shadow atlas");
     assert_eq!(atlas.size, packed.size, "the packing this reads is not the one prepare drew");
 
-    // The rule as it ships, the same rule with a HARD facing test, and the
-    // union switched off — one fixture, three fills of its cell.
+    // The rule as it ships; the same rule with every clearance counted whole,
+    // which is the facing ramp on its own; that rule again with the facing
+    // ramp a HARD test; and the union switched off — one fixture, four fills of
+    // its cell.
     let base = crate::with_common(SHADER_SRC);
-    let hard = base.replace(
+    let no_taper = base.replace(
+        "    return smoothstep(0.0, l, h_near) * smoothstep(0.0, l, h_foot);",
+        "    return 1.0;",
+    );
+    let hard = no_taper.replace(
         "    return smoothstep(-BEYOND_RAMP, 0.0, dot(foot, -near / n) / f);",
         "    return select(0.0, 1.0, dot(foot, -near / n) / f >= 0.0);",
     );
@@ -1991,7 +2036,8 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
         "fn union_distance(d1: f32, d2: f32, k: f32, w: f32) -> f32 {\n    if d1 <= 0.0",
         "fn union_distance(d1: f32, d2: f32, k: f32, w: f32) -> f32 {\n    if true || d1 <= 0.0",
     );
-    assert_ne!(hard, base, "the facing weight was renamed; the hard test compiles the same rule");
+    assert_ne!(no_taper, base, "`pocket` was renamed; the untapered build compiles the same rule");
+    assert_ne!(hard, no_taper, "the facing weight was renamed; the hard test is the same rule");
     assert_ne!(alone, base, "`union_distance` was renamed; the sabotage compiles the same rule");
     let fill = |src: &str| {
         let (pipeline, _) = create_cell_pipelines(&device, src, &res.bind_group_layout);
@@ -2011,7 +2057,8 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
         );
         crate::gpu_harness::readback_r16(&device, &queue, &target, atlas.size)
     };
-    let (ramped, stepped, nearest) = (fill(&base), fill(&hard), fill(&alone));
+    let (ramped, untapered, stepped, nearest) =
+        (fill(&base), fill(&no_taper), fill(&hard), fill(&alone));
 
     // The node's uv, in the pane's points: one uv along each billboard axis.
     let node = &scene.nodes[0];
@@ -2039,6 +2086,17 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
         1.0 / k,
     );
 
+    // The RAW texel a point falls in, as the bits the attachment holds: what a
+    // byte-for-byte claim about the fill is a claim about, before the sampler
+    // blends four of them.
+    let raw = |held: &[u8], point: glam::Vec2| {
+        let origin = glam::Vec2::new(cell.cell[0], cell.cell[1]);
+        let texel = (origin + (point - glam::Vec2::new(cell.rect[0], cell.rect[1])) * k)
+            .floor()
+            .clamp(origin, origin + glam::Vec2::new(cell.cell[2], cell.cell[3]) - 1.0);
+        let i = ((texel.y as u32 * atlas.size[0] + texel.x as u32) * 2) as usize;
+        u16::from_le_bytes([held[i], held[i + 1]])
+    };
     // One bilinear tap of a cell, which is exactly what the scene pass takes,
     // held inside the cell the same way (`shadow_kernel`).
     let sample = |held: &[u8], point: glam::Vec2| {
@@ -2116,17 +2174,59 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
          {creased:.3}, so the ridge between the two slices is still there",
     );
 
-    // The MOUTH is inside the sweep (#450): the hard test and the ramp part
-    // company somewhere on it, which they do only where the plane the far
-    // slice is tested against has swept past that slice's own corner.
+    // The MOUTH is inside the sweep (#450): with every clearance counted whole
+    // the hard test and the ramp part company somewhere on it, which they do
+    // only where the plane the far slice is tested against has swept past that
+    // slice's own corner.
     let parted = line
         .iter()
-        .map(|&r| (coverage(&stepped, r) - coverage(&ramped, r)).abs())
+        .map(|&r| (coverage(&stepped, r) - coverage(&untapered, r)).abs())
         .fold(0.0f32, f32::max);
     assert!(
         parted > 0.01,
         "the hard test and the ramp read within {parted:.4} of each other the whole way out, so \
          the sweep never passes the mouth",
+    );
+
+    // Past the mouth the taper is zero at BOTH feet, so `union_distance`
+    // returns `d1` itself and the cell holds the number the min-distance row
+    // wrote — the same bits, not merely the same value. One texel out is where
+    // the last texel whose own centre stands inside the ink has been left
+    // behind; two is where a bilinear stencil has.
+    let past_raw: Vec<f32> = line.iter().copied().filter(|&r| r >= ring_outer + 1.0 / k).collect();
+    let past_tap: Vec<f32> = line.iter().copied().filter(|&r| r >= ring_outer + 2.0 / k).collect();
+    assert!(
+        past_raw.len() > 20 && past_tap.len() > 20,
+        "the sweep leaves only {} raw and {} sampled readings past the mouth",
+        past_raw.len(),
+        past_tap.len(),
+    );
+    let differing =
+        past_raw.iter().filter(|&&r| raw(&ramped, at(r)) != raw(&nearest, at(r))).count();
+    assert_eq!(
+        differing,
+        0,
+        "{differing} of {} texels past the mouth hold a different value under the taper than \
+         under the min-distance row",
+        past_raw.len(),
+    );
+    let sampled = past_tap
+        .iter()
+        .map(|&r| (sample(&ramped, at(r)) - sample(&nearest, at(r))).abs())
+        .fold(0.0f32, f32::max);
+    assert_eq!(
+        sampled, 0.0,
+        "a bilinear tap past the mouth reads {sampled} points off the min-distance row",
+    );
+    // And the same comparison for the rule WITHOUT the taper, which is what
+    // says the equality above is a claim about the taper rather than about an
+    // exterior the union never reached (#450).
+    let untapered_out =
+        past_raw.iter().filter(|&&r| raw(&untapered, at(r)) != raw(&nearest, at(r))).count();
+    assert!(
+        untapered_out > 0,
+        "the untapered rule already writes the min-distance row at every texel past the mouth, \
+         so the sweep does not reach a mouth the taper has anything to shut",
     );
     // And neither writes a step past what the union's own compression allows.
     // A distance field moves a point per point; the union stands at most
