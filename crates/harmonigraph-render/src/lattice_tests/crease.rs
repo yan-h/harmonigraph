@@ -8,12 +8,17 @@
 //! squarely its foot faces the point — and carries the pair as one effective
 //! distance, so the consumer still reads one exponential.
 //!
-//! No GPU and no shader. This is the oracle the producers are written against,
-//! so the ramp that decides how squarely a foot has to face is settled against
+//! No GPU and no shader: the rule's arithmetic is
+//! [`harmonigraph_scene::crease`] and what this module adds is the ink to
+//! evaluate it over. It is the oracle the producers are written against, so the
+//! ramp that decides how squarely a foot has to face is settled against
 //! measured shapes before a pipeline is touched.
 
 use glam::Vec2;
-use harmonigraph_scene::{BEYOND_RAMP, SHADOW_STOP, SHADOW_TAIL};
+use harmonigraph_scene::crease::{
+    facing, facing_at, smoothstep, spend, standoff_coverage, union_distance,
+};
+use harmonigraph_scene::{BEYOND_RAMP, SHADOW_TAIL};
 
 /// The Shadow width every reading here is taken at, in points.
 ///
@@ -45,65 +50,6 @@ const SMOOTH: f32 = (SHADOW_TAIL * PX / W) * (SHADOW_TAIL * PX / W);
 /// the field the rule is answerable for, and one point still reaches the mouth
 /// of the ring's gap, where the nearest ink stands 1.8 points off.
 const CLEARANCE: f32 = 1.0;
-
-// ---------------------------------------------------------------- the rule
-
-/// The share of the standoff a distance of `d` spends, unwindowed:
-/// `standoff_coverage`'s exponential without its window.
-fn spend(d: f32, w: f32) -> f32 {
-    (-SHADOW_TAIL * d.max(0.0) / w).exp()
-}
-
-/// common.wgsl's `standoff_coverage`: that decay, closed by its window.
-fn standoff_coverage(d: f32, w: f32) -> f32 {
-    let u = d.max(0.0) / w.max(1.0e-6);
-    (-SHADOW_TAIL * u).exp() * (1.0 - smoothstep(1.0, SHADOW_STOP, u))
-}
-
-/// WGSL's `smoothstep`.
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/// The one distance whose standoff coverage equals the union of two — #568
-/// §2's `union_distance`, in the form the shader will carry.
-///
-/// Equals `d1` exactly where the second term is past the window or faces away,
-/// so a lone feature round-trips; and never more than `(w/SHADOW_TAIL)·ln 2`
-/// under `d1`, so the pad a cell is packed with still holds the whole shadow.
-fn union_distance(d1: f32, d2: f32, k: f32, w: f32) -> f32 {
-    if d1 <= 0.0 || d2 >= SHADOW_STOP * w || k <= 0.0 {
-        return d1;
-    }
-    let a = spend(d1, w);
-    let b = k * spend(d2, w);
-    -(w / SHADOW_TAIL) * (1.0 - (1.0 - a) * (1.0 - b)).ln()
-}
-
-/// How much of a second foot counts at a ramp of `ramp`: 1 on or beyond the
-/// plane facing away from the nearest ink, 0 at `ramp` behind it.
-///
-/// Both arguments are offsets FROM the point — `near` to its nearest ink,
-/// `foot` to the second feature's nearest point — which is the vector the
-/// producers carry. `ramp` 0 is the hard predicate #568's first comment
-/// measures the step of, and is a parameter so one test can evaluate both.
-fn facing_at(near: Vec2, foot: Vec2, ramp: f32) -> f32 {
-    let (n, f) = (near.length(), foot.length());
-    if n <= 0.0 || f <= 0.0 {
-        return 0.0;
-    }
-    let c = foot.dot(-near / n) / f;
-    if ramp <= 0.0 {
-        return f32::from(c >= 0.0);
-    }
-    smoothstep(-ramp, 0.0, c)
-}
-
-/// [`facing_at`] at the ramp the picture is drawn with.
-fn facing(near: Vec2, foot: Vec2) -> f32 {
-    facing_at(near, foot, BEYOND_RAMP)
-}
 
 // ---------------------------------------------------------------- the ink
 

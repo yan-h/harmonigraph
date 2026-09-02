@@ -17,6 +17,8 @@
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
 //! - [`color`] — the pitch ramp every note is colored off, and the idle color.
+//! - [`crease`] — the two-distance rule's arithmetic, shared by the CPU model,
+//!   the glyph bake and the shader that reads what the bake stored.
 //! - [`spectral`] — the lattice's audio channel, and the second of the two
 //!   colour schemes the plugin has (the analyzer's, by loudness).
 //! - [`skin`] — the static palette the UI and renderer share.
@@ -27,6 +29,7 @@
 
 pub mod camera;
 pub mod color;
+pub mod crease;
 pub mod derive;
 pub mod octaves;
 pub mod skin;
