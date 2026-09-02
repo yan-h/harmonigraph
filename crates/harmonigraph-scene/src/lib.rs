@@ -52,8 +52,8 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, TermKind, REACH_SIGMAS,
-    SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
+    Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, TermKind, BEYOND_RAMP,
+    REACH_SIGMAS, SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 

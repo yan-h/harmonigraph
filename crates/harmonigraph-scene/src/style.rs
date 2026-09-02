@@ -613,6 +613,22 @@ pub const SHADOW_STOP: f32 = 2.0;
 /// shader's copy.
 pub const SHADOW_TAIL: f32 = 4.0;
 
+/// How far behind the plane facing away from the nearest ink a second feature's
+/// foot still counts, as the cosine of the angle it stands at: 1 on or beyond
+/// the plane, 0 at this much behind it, smooth between.
+///
+/// A cosine and not an angle, so a junction's own geometry names it: for a
+/// point on the bisector of a concave junction of interior angle θ the second
+/// arm's foot stands at `cos θ`, so this value is the widest junction that is
+/// filled at all. HALF, which shuts the fill exactly at a 120° junction and
+/// leaves the 90° one — the L, the crossbar meeting its bowl — at full weight.
+///
+/// A ramp and not a step because where the nearest ink is a convex CORNER the
+/// plane rotates about a fixed foot, and a step there switches the second
+/// feature on along a curve: a quarter of the depth, one texel wide, at the
+/// mouth of every gap between two pieces of ink.
+pub const BEYOND_RAMP: f32 = 0.5;
+
 /// What a shadow is made of: which row of terms every caster's ink is turned
 /// into a cell by.
 ///
