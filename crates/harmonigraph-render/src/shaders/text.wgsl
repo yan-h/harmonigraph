@@ -173,104 +173,68 @@ fn vs_glyph_cell(
     return out;
 }
 
-/// One glyph's fixed signed field over the whole name cell. The visible
-/// coverage rect and these atlas rectangles come from the UI together, so the
-/// renderer maps coordinates without learning the character or its face.
-struct SdfOut {
+/// One NAME's distance cell: the whole cell in one quad, and the run of glyphs
+/// whose fields the fragment takes the nearest of.
+struct NameOut {
     @builtin(position) position: vec4<f32>,
-    @location(0) near_texel: vec2<f32>,
-    @location(1) coarse_texel: vec2<f32>,
-    @location(2) @interpolate(flat) near_bounds: vec4<f32>,
-    @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
-    @location(4) @interpolate(flat) scales: vec2<f32>,
+    /// Where this fragment stands on the PANE, in points — the space each
+    /// glyph's own field is mapped from, and the one thing a glyph's rects and
+    /// the cell's have in common.
+    @location(0) at: vec2<f32>,
+    /// The name's run in [`name_glyphs`], and what a texel no glyph of the name
+    /// reaches holds: the cell's own pad, where the standoff's curve is
+    /// windowed to nothing.
+    @location(1) @interpolate(flat) start: u32,
+    @location(2) @interpolate(flat) count: u32,
+    @location(3) @interpolate(flat) pad: f32,
 };
+
+/// One glyph as the name's fill reads it: where its fixed field maps onto the
+/// pane, and the two texel rectangles that field is cut from. The subset of
+/// `GlyphInstance` (text.rs) this draw needs, in a buffer of its own — the
+/// glyph stream is stepped per instance, and one fill covers a whole name.
+struct NameGlyph {
+    sdf_rect: vec4<f32>,
+    sdf_near: vec4<f32>,
+    sdf_coarse: vec4<f32>,
+};
+
+/// The name's glyphs, at the group `common.wgsl` gives the light: this draw
+/// reads no light, and four bind groups is the device limit, so the rows take
+/// the next binding of a group that is already declared rather than a fifth.
+@group(1) @binding(1) var<storage, read> name_glyphs: array<NameGlyph>;
 
 const SDF_NEAR_PAD: f32 = 32.0;
 const SDF_COARSE_PAD: f32 = 48.0;
 const SDF_NEAR_BLEND: f32 = 8.0;
 
+/// The whole cell, mapped back into pane points at its own corners, so every
+/// texel the packer reserved is written — including the one-texel sampling
+/// guard past the shadow's reach, which the cell is a ceiling wider than the
+/// box for.
 @vertex
-fn vs_glyph_distance_cell(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) uv: vec4<f32>,
-    @location(2) sdf_rect: vec4<f32>,
-    @location(3) sdf_near: vec4<f32>,
-    @location(4) sdf_coarse: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(6) rim: vec4<f32>,
-    @location(7) sheet: u32,
-    @location(8) box_rect: vec4<f32>,
-    @location(9) box_cell: vec4<f32>,
-    @location(10) box_meta: vec4<f32>,
-    @location(11) box_who: vec4<f32>,
-) -> SdfOut {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    let point = box_rect.xy + corner * box_rect.zw;
-    let near_span = sdf_near.zw - sdf_near.xy;
-    let coarse_span = sdf_coarse.zw - sdf_coarse.xy;
-    let valid = near_span.x > 0.0 && near_span.y > 0.0
-        && coarse_span.x > 0.0 && coarse_span.y > 0.0
-        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0
-        && box_who.y >= 0.5;
-
-    var out: SdfOut;
-    let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
-    out.position = select(
-        no_quad(),
-        cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        valid && cell_packed(box_cell),
-    );
-    let relative = (point - sdf_rect.xy) / max(sdf_rect.zw, vec2<f32>(1.0e-6));
-    out.near_texel = sdf_near.xy + relative * near_span;
-    out.coarse_texel = sdf_coarse.xy + relative * coarse_span;
-    out.near_bounds = vec4<f32>(
-        sdf_near.xy - vec2<f32>(SDF_NEAR_PAD),
-        sdf_near.zw + vec2<f32>(SDF_NEAR_PAD),
-    );
-    out.coarse_bounds = vec4<f32>(
-        sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
-        sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
-    );
-    out.scales = vec2<f32>(
-        0.5 * (sdf_rect.z / max(near_span.x, 1.0e-6)
-            + sdf_rect.w / max(near_span.y, 1.0e-6)),
-        0.5 * (sdf_rect.z / max(coarse_span.x, 1.0e-6)
-            + sdf_rect.w / max(coarse_span.y, 1.0e-6)),
-    );
-    return out;
-}
-
-struct PadOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) pad: f32,
-};
-
-/// Set every distance cell to its own finite far value before glyphs
-/// MIN-blend into it. Nodes overwrite the same initialization with their full
-/// analytic quad; blur cells stay on the render pass's zero clear.
-@vertex
-fn vs_distance_pad(
+fn vs_name_distance_cell(
     @builtin(vertex_index) vertex: u32,
     @location(0) box_rect: vec4<f32>,
     @location(1) box_cell: vec4<f32>,
     @location(2) box_meta: vec4<f32>,
     @location(3) box_who: vec4<f32>,
-) -> PadOut {
+    @location(4) run: vec4<f32>,
+) -> NameOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
     let texel = box_cell.xy + corner * box_cell.zw;
-    var out: PadOut;
+    var out: NameOut;
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
         box_who.y >= 0.5 && cell_packed(box_cell),
     );
+    out.at = box_rect.xy + (texel - box_cell.xy) / max(box_meta.x, 1.0e-6);
+    out.start = u32(max(run.x, 0.0));
+    out.count = u32(max(run.y, 0.0));
     out.pad = box_who.z;
     return out;
 }
@@ -642,62 +606,88 @@ fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
 }
 
-/// Bilinear sampling written over textureLoad because R32Float is not a
-/// filterable format on the baseline device feature set.
-fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> f32 {
+/// One bilinear tap of the sheet, held inside a glyph's own patch: the texels
+/// past its bounds are a different letter, and a rim of pad texels is what the
+/// clamp reads instead.
+///
+/// The sheet is filterable (`SDF_FORMAT` in text.rs), so this is the sampler's
+/// own tap rather than four loads mixed by hand.
+fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> vec4<f32> {
     let safe = clamp(texel, bounds.xy + vec2<f32>(0.5), bounds.zw - vec2<f32>(0.5));
-    let p = safe - vec2<f32>(0.5);
-    let first = vec2<i32>(ceil(bounds.xy));
-    let last = vec2<i32>(ceil(bounds.zw)) - vec2<i32>(1, 1);
-    let lo = clamp(vec2<i32>(floor(p)), first, last);
-    let hi = clamp(lo + vec2<i32>(1, 1), first, last);
-    let f = fract(p);
-    let a = mix(
-        textureLoad(sdf_atlas, lo, 0).r,
-        textureLoad(sdf_atlas, vec2<i32>(hi.x, lo.y), 0).r,
-        f.x,
-    );
-    let b = mix(
-        textureLoad(sdf_atlas, vec2<i32>(lo.x, hi.y), 0).r,
-        textureLoad(sdf_atlas, hi, 0).r,
-        f.x,
-    );
-    return mix(a, b, f.y);
+    let size = vec2<f32>(textureDimensions(sdf_atlas, 0));
+    return textureSampleLevel(sdf_atlas, atlas_sampler, safe / max(size, vec2<f32>(1.0)), 0.0);
 }
 
-@fragment
-fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+/// One glyph's fixed signed field at a point of the pane, in points.
+///
+/// The near tile is exact around the contour and the coarse one carries the far
+/// range; which is read is where the point stands in the near tile, and the two
+/// are mixed rather than switched between.
+fn glyph_distance(g: NameGlyph, at: vec2<f32>) -> f32 {
+    let near_span = g.sdf_near.zw - g.sdf_near.xy;
+    let coarse_span = g.sdf_coarse.zw - g.sdf_coarse.xy;
+    let relative = (at - g.sdf_rect.xy) / max(g.sdf_rect.zw, vec2<f32>(1.0e-6));
+    let near_texel = g.sdf_near.xy + relative * near_span;
+    let coarse_texel = g.sdf_coarse.xy + relative * coarse_span;
+    let near_bounds = vec4<f32>(
+        g.sdf_near.xy - vec2<f32>(SDF_NEAR_PAD),
+        g.sdf_near.zw + vec2<f32>(SDF_NEAR_PAD),
+    );
+    let coarse_bounds = vec4<f32>(
+        g.sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
+        g.sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
+    );
+    // A texel of each level, in the pane's points.
+    let near_scale = 0.5 * (g.sdf_rect.z / max(near_span.x, 1.0e-6)
+        + g.sdf_rect.w / max(near_span.y, 1.0e-6));
+    let coarse_scale = 0.5 * (g.sdf_rect.z / max(coarse_span.x, 1.0e-6)
+        + g.sdf_rect.w / max(coarse_span.y, 1.0e-6));
+
     let coarse_at = clamp(
-        in.coarse_texel,
-        in.coarse_bounds.xy + vec2<f32>(0.5),
-        in.coarse_bounds.zw - vec2<f32>(0.5),
+        coarse_texel,
+        coarse_bounds.xy + vec2<f32>(0.5),
+        coarse_bounds.zw - vec2<f32>(0.5),
     );
     // Past the coarse tile, carry its boundary value outward by the remaining
     // Euclidean distance instead of clamping it into a flat shelf. A flat far
     // field is precisely the ray a wide, fading shadow would expose.
-    let coarse = sdf_sample(coarse_at, in.coarse_bounds) * in.scales.y
-        + length(in.coarse_texel - coarse_at) * in.scales.y;
-    let near = sdf_sample(in.near_texel, in.near_bounds) * in.scales.x;
+    let coarse = sdf_sample(coarse_at, coarse_bounds).r * coarse_scale
+        + length(coarse_texel - coarse_at) * coarse_scale;
+    let near = sdf_sample(near_texel, near_bounds).r * near_scale;
     let near_edge = min(
-        min(
-            in.near_texel.x - in.near_bounds.x - 0.5,
-            in.near_texel.y - in.near_bounds.y - 0.5,
-        ),
-        min(
-            in.near_bounds.z - 0.5 - in.near_texel.x,
-            in.near_bounds.w - 0.5 - in.near_texel.y,
-        ),
+        min(near_texel.x - near_bounds.x - 0.5, near_texel.y - near_bounds.y - 0.5),
+        min(near_bounds.z - 0.5 - near_texel.x, near_bounds.w - 0.5 - near_texel.y),
     );
     // The coarse mask is deliberately conservative at its sparse resolution,
     // so its absolute distance does not meet the near field exactly. Hand off
     // inside the near tile instead of exposing that difference as a hard ring.
-    let distance = mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
-    return vec4<f32>(distance, 0.0, 0.0, 1.0);
+    return mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
 }
 
+/// A NAME's distance cell: the nearest of its glyphs' fields at every texel,
+/// capped by the cell's own pad.
+///
+/// One draw over the whole cell with the union INSIDE the fragment, rather than
+/// a quad per glyph blended by `min`. What that buys is the loser: a blend keeps
+/// the smaller of two numbers and nothing about which glyph it came from, and
+/// the crease rule (#568) is a reading of the two nearest pieces of ink at once.
 @fragment
-fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
+fn fs_name_distance(in: NameOut) -> @location(0) vec4<f32> {
+    let rows = arrayLength(&name_glyphs);
+    var nearest = in.pad;
+    for (var i = 0u; i < in.count; i = i + 1u) {
+        let g = name_glyphs[min(in.start + i, rows - 1u)];
+        // A glyph the UI cut no distance entry for: it contributes nothing, as
+        // its own quad drew nothing.
+        let near_span = g.sdf_near.zw - g.sdf_near.xy;
+        let coarse_span = g.sdf_coarse.zw - g.sdf_coarse.xy;
+        if near_span.x > 0.0 && near_span.y > 0.0
+            && coarse_span.x > 0.0 && coarse_span.y > 0.0
+            && g.sdf_rect.z > 0.0 && g.sdf_rect.w > 0.0 {
+            nearest = min(nearest, glyph_distance(g, in.at));
+        }
+    }
+    return vec4<f32>(nearest, 0.0, 0.0, 1.0);
 }
 
 struct BoxOut {

@@ -70,12 +70,24 @@ struct SourceGlyph {
     map: [f32; 4],
 }
 
+/// One packed level of one glyph: [`CHANNELS`] floats per texel, in the sheet's
+/// own layout.
 struct Level {
     size: [u32; 2],
     pixels: Vec<f32>,
     /// Local texel coordinates corresponding to the source bitmap.
     ink: [f32; 4],
 }
+
+/// Floats per sheet texel, as the renderer uploads them
+/// (`harmonigraph_render::GlyphSdfAtlas`).
+///
+/// What this file decides is what goes in them: R the signed distance in this
+/// level's own texels, G the ANGLE of the offset to the nearest contour point.
+/// An angle and not a pair of components, because a vector's components
+/// straddling a medial axis average to a direction pointing along neither, and
+/// the sheet is read through a bilinear tap. The coarse level carries R alone.
+pub(crate) const CHANNELS: usize = harmonigraph_render::GLYPH_SDF_CHANNELS;
 
 #[derive(Default)]
 struct FloatAtlas {
@@ -95,14 +107,14 @@ impl FloatAtlas {
         }
         let rows = top + h;
         if rows > self.height {
-            self.pixels.resize((SHEET_WIDTH * rows) as usize, 0.0);
+            self.pixels.resize((SHEET_WIDTH * rows) as usize * CHANNELS, 0.0);
             self.height = rows;
         }
         for y in 0..h as usize {
-            let from = y * w as usize;
-            let to = (top as usize + y) * SHEET_WIDTH as usize + x as usize;
-            self.pixels[to..to + w as usize]
-                .copy_from_slice(&level.pixels[from..from + w as usize]);
+            let from = y * w as usize * CHANNELS;
+            let to = ((top as usize + y) * SHEET_WIDTH as usize + x as usize) * CHANNELS;
+            let run = w as usize * CHANNELS;
+            self.pixels[to..to + run].copy_from_slice(&level.pixels[from..from + run]);
         }
         self.shelf = (top, row_h.max(h), x + w);
         [
@@ -213,16 +225,25 @@ fn near_level(source: &SourceGlyph) -> Level {
             inside[(y + source_pad) * w + x + source_pad] = source.coverage[y * sw + x] >= 128;
         }
     }
-    let distance = signed_distance(&inside, [w, h]);
+    let nearest = signed_distance(&inside, [w, h]);
     let scale = SOURCE_EM / NEAR_TEXELS_PER_EM;
     let span = [sw as f32 / scale, sh as f32 / scale];
     let size = [2 * NEAR_PAD + span[0].ceil() as u32, 2 * NEAR_PAD + span[1].ceil() as u32];
-    let mut pixels = Vec::with_capacity((size[0] * size[1]) as usize);
+    let mut pixels = Vec::with_capacity((size[0] * size[1]) as usize * CHANNELS);
     for y in 0..size[1] {
         for x in 0..size[0] {
             let sx = source_pad as f32 + (x as f32 + 0.5 - NEAR_PAD as f32) * scale - 0.5;
             let sy = source_pad as f32 + (y as f32 + 0.5 - NEAR_PAD as f32) * scale - 0.5;
-            pixels.push(sample(&distance, [w, h], sx, sy) / scale);
+            pixels.push(sample(&nearest.distance, 1, [w, h], sx, sy) / scale);
+            // The direction is read at ONE source pixel rather than filtered
+            // out of four. Across a medial axis the two sides' offsets point
+            // opposite ways and their mean points along neither — a direction
+            // that would say a stroke stands where no stroke does. The nearest
+            // sample is the exact answer for the pixel it lands on, and either
+            // side of the axis is exact at the axis itself.
+            let at = [(sx.round() as usize).min(w - 1), (sy.round() as usize).min(h - 1)];
+            let [ox, oy] = nearest.offset[at[1] * w + at[0]];
+            pixels.extend([oy.atan2(ox), 0.0, 0.0]);
         }
     }
     Level {
@@ -255,9 +276,10 @@ fn coarse_level(source: &SourceGlyph) -> Level {
             inside[at as usize] = ink;
         }
     }
+    let coarse = signed_distance(&inside, [size[0] as usize, size[1] as usize]);
     Level {
         size,
-        pixels: signed_distance(&inside, [size[0] as usize, size[1] as usize]),
+        pixels: coarse.distance.iter().flat_map(|&d| [d, 0.0, 0.0, 0.0]).collect(),
         ink: [
             COARSE_PAD as f32 + source.map[0] / scale,
             COARSE_PAD as f32 + source.map[1] / scale,
@@ -267,50 +289,92 @@ fn coarse_level(source: &SourceGlyph) -> Level {
     }
 }
 
+/// The field one transform answers with: how far the nearest seed is, and
+/// where it stands.
+struct Nearest {
+    /// Signed distance in source pixels, negative inside the ink.
+    distance: Vec<f32>,
+    /// From the pixel TO the seed it was measured against, in source pixels.
+    /// Its LENGTH is the raw transform's, half a pixel off the signed distance
+    /// beside it; what the sheet keeps of it is the direction alone.
+    offset: Vec<[f32; 2]>,
+}
+
 /// Felzenszwalb-Huttenlocher's exact squared Euclidean distance transform,
 /// once to ink and once to clear. The half-pixel correction places zero on the
 /// threshold contour between the two pixel centres rather than on either one.
-fn signed_distance(inside: &[bool], [w, h]: [usize; 2]) -> Vec<f32> {
+fn signed_distance(inside: &[bool], [w, h]: [usize; 2]) -> Nearest {
     let to_ink = edt(inside, [w, h], true);
     let to_clear = edt(inside, [w, h], false);
-    inside
-        .iter()
-        .enumerate()
-        .map(|(i, &ink)| if ink { -(to_clear[i].sqrt() - 0.5) } else { to_ink[i].sqrt() - 0.5 })
-        .collect()
+    let mut distance = Vec::with_capacity(w * h);
+    let mut offset = Vec::with_capacity(w * h);
+    for (i, &ink) in inside.iter().enumerate() {
+        let from = if ink { &to_clear } else { &to_ink };
+        distance.push(if ink { -(to_clear.d2[i].sqrt() - 0.5) } else { to_ink.d2[i].sqrt() - 0.5 });
+        let [sx, sy] = from.site[i];
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        offset.push([(sx - x) as f32, (sy - y) as f32]);
+    }
+    Nearest { distance, offset }
 }
 
-fn edt(mask: &[bool], [w, h]: [usize; 2], seeds: bool) -> Vec<f32> {
+/// One transform's raw answer: squared distance to the nearest seed, and that
+/// seed's own pixel.
+struct Transform {
+    d2: Vec<f32>,
+    site: Vec<[i32; 2]>,
+}
+
+fn edt(mask: &[bool], [w, h]: [usize; 2], seeds: bool) -> Transform {
     const FAR: f32 = 1.0e20;
     let mut first = vec![0.0; w * h];
+    // Which x each row's own transform landed on, kept for the column pass:
+    // the pass below picks a ROW, and the seed is that row's winner at this
+    // column. Reconstructing it from the distance instead would be a square
+    // root of a sum that has already lost which side it came from.
+    let mut first_site = vec![0i32; w * h];
     let mut line = vec![0.0; w.max(h)];
     let mut out = vec![0.0; w.max(h)];
     let mut sites = vec![0usize; w.max(h)];
+    let mut winners = vec![0usize; w.max(h)];
     let mut bounds = vec![0.0f32; w.max(h) + 1];
     for y in 0..h {
         for x in 0..w {
             line[x] = if mask[y * w + x] == seeds { 0.0 } else { FAR };
         }
-        edt_line(&line[..w], &mut out[..w], &mut sites[..w], &mut bounds[..=w]);
+        edt_line(&line[..w], &mut out[..w], &mut sites[..w], &mut winners[..w], &mut bounds[..=w]);
         first[y * w..(y + 1) * w].copy_from_slice(&out[..w]);
+        for x in 0..w {
+            first_site[y * w + x] = winners[x] as i32;
+        }
     }
-    let mut result = vec![0.0; w * h];
+    let mut d2 = vec![0.0; w * h];
+    let mut site = vec![[0i32; 2]; w * h];
     for x in 0..w {
         for y in 0..h {
             line[y] = first[y * w + x];
         }
-        edt_line(&line[..h], &mut out[..h], &mut sites[..h], &mut bounds[..=h]);
+        edt_line(&line[..h], &mut out[..h], &mut sites[..h], &mut winners[..h], &mut bounds[..=h]);
         for y in 0..h {
-            result[y * w + x] = out[y];
+            d2[y * w + x] = out[y];
+            let row = winners[y];
+            site[y * w + x] = [first_site[row * w + x], row as i32];
         }
     }
-    result
+    Transform { d2, site }
 }
 
-fn edt_line(input: &[f32], output: &mut [f32], sites: &mut [usize], bounds: &mut [f32]) {
+fn edt_line(
+    input: &[f32],
+    output: &mut [f32],
+    sites: &mut [usize],
+    winners: &mut [usize],
+    bounds: &mut [f32],
+) {
     let n = input.len();
     debug_assert_eq!(output.len(), n);
     debug_assert_eq!(sites.len(), n);
+    debug_assert_eq!(winners.len(), n);
     debug_assert_eq!(bounds.len(), n + 1);
     let mut k = 0usize;
     sites[0] = 0;
@@ -339,17 +403,21 @@ fn edt_line(input: &[f32], output: &mut [f32], sites: &mut [usize], bounds: &mut
         }
         let d = q as f32 - sites[k] as f32;
         *value = d * d + input[sites[k]];
+        winners[q] = sites[k];
     }
 }
 
-fn sample(values: &[f32], [w, h]: [usize; 2], x: f32, y: f32) -> f32 {
+/// Bilinear over the first channel of `values`, whose texels are `stride`
+/// floats apart.
+fn sample(values: &[f32], stride: usize, [w, h]: [usize; 2], x: f32, y: f32) -> f32 {
     let x = x.clamp(0.0, w.saturating_sub(1) as f32);
     let y = y.clamp(0.0, h.saturating_sub(1) as f32);
     let (x0, y0) = (x.floor() as usize, y.floor() as usize);
     let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
     let (fx, fy) = (x - x0 as f32, y - y0 as f32);
-    let a = values[y0 * w + x0] * (1.0 - fx) + values[y0 * w + x1] * fx;
-    let b = values[y1 * w + x0] * (1.0 - fx) + values[y1 * w + x1] * fx;
+    let at = |x: usize, y: usize| values[(y * w + x) * stride];
+    let a = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+    let b = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
     a * (1.0 - fy) + b * fy
 }
 
@@ -375,6 +443,7 @@ mod tests {
             (
                 sample(
                     &level.pixels,
+                    CHANNELS,
                     [level.size[0] as usize, level.size[1] as usize],
                     safe[0] - 0.5,
                     safe[1] - 0.5,
@@ -417,7 +486,7 @@ mod tests {
     #[test]
     fn the_exact_transform_puts_zero_between_ink_and_clear() {
         let d = signed_distance(&[false, true, false], [3, 1]);
-        assert_eq!(d, vec![0.5, -0.5, 0.5]);
+        assert_eq!(d.distance, vec![0.5, -0.5, 0.5]);
     }
 
     /// The far field is conservative rather than contour-exact, but its edge

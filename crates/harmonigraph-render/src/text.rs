@@ -64,10 +64,8 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_fill_lit",
     "vs_glyph_cell",
     "fs_glyph_ink",
-    "vs_glyph_distance_cell",
-    "fs_glyph_distance",
-    "vs_distance_pad",
-    "fs_distance_pad",
+    "vs_name_distance_cell",
+    "fs_name_distance",
     "vs_shadow_box",
     "fs_shadow_box",
 ];
@@ -141,6 +139,92 @@ impl GlyphInstance {
     };
 }
 
+/// One NAME's distance cell, as its fill draw is instanced over: the caster's
+/// box, and where that name's glyphs sit in [`NameGlyph`]'s buffer.
+///
+/// Its own row rather than a free slot of the box, because the run is two
+/// numbers and the box has one to spare.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct NameCell {
+    pub(crate) cell: crate::shadow::ShadowBox,
+    /// `[start, count, 0, 0]` — the name's run of glyphs, as floats because
+    /// that is what a vertex attribute carries.
+    pub(crate) run: [f32; 4],
+}
+
+impl NameCell {
+    pub(crate) const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<NameCell>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![
+            0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4
+        ],
+    };
+}
+
+/// What a name's fill reads of one glyph: the pane rect its fixed field maps
+/// onto, and the two sheet rectangles that field is cut from.
+///
+/// A copy of three of [`GlyphInstance`]'s rows rather than a storage view of
+/// the glyph stream itself: the shader's array stride would then have to match
+/// a 76-byte vertex layout WGSL rounds to 80, and the copy is what keeps the
+/// instance a vertex buffer whose growth no bind group names.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct NameGlyph {
+    pub(crate) sdf_rect: [f32; 4],
+    pub(crate) sdf_near: [f32; 4],
+    pub(crate) sdf_coarse: [f32; 4],
+}
+
+impl From<&GlyphInstance> for NameGlyph {
+    fn from(g: &GlyphInstance) -> Self {
+        Self { sdf_rect: g.sdf_rect, sdf_near: g.sdf_near, sdf_coarse: g.sdf_coarse }
+    }
+}
+
+/// The binding a name's fill reads its glyphs through — group 1, where the
+/// shader declares them.
+pub(crate) fn name_glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("text_name_glyph_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+/// A buffer of [`NameGlyph`] rows and the bind group naming it. The two are
+/// made together and replaced together: a storage binding is an allocation the
+/// bind group holds, so growing the buffer without rebuilding it would leave
+/// the fill reading a freed one.
+pub(crate) fn name_glyph_rows(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("text_name_glyphs"),
+        size: (capacity.max(1) * std::mem::size_of::<NameGlyph>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("text_name_glyph_bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() }],
+    });
+    (buffer, bind_group)
+}
+
 /// One ring of the rim: how far out it sits (points), how opaque each stamp
 /// is, and how many stamps go round it.
 ///
@@ -164,14 +248,26 @@ pub struct FontAtlas {
 }
 
 /// The process-stable signed-distance sheet used by lattice name shadows.
-/// Values are signed distances in atlas texels; each instance carries the
-/// mapping that turns them back into pane points.
+///
+/// Four floats per texel, interleaved: R the signed distance in atlas texels,
+/// G the angle of the offset to the nearest contour point, B and A reserved.
+/// Each instance carries the mapping that turns R back into pane points.
+/// Uploaded as [`SDF_FORMAT`], which is filterable, so the shader takes one
+/// bilinear tap rather than four loads.
 #[derive(Clone)]
 pub struct GlyphSdfAtlas {
     pub image: std::sync::Arc<Vec<f32>>,
     pub size: [u32; 2],
     pub key: u64,
 }
+
+/// Floats per texel of [`GlyphSdfAtlas::image`].
+pub const GLYPH_SDF_CHANNELS: usize = 4;
+
+/// What the sheet is uploaded as. Half floats hold the near field's distances
+/// to well under a texel and an angle to about a milliradian, and the format is
+/// filterable on the baseline feature set where `R32Float` is not.
+const SDF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Draw `glyphs` into `rect`. `pane_id` must be unique per pane drawing text
 /// in the same frame (each keeps its own instance buffer; the pipeline and
@@ -490,16 +586,21 @@ impl SdfTexture {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
+            format: SDF_FORMAT,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        // The generator works in f32 and the texture holds halves, so the
+        // narrowing happens here — once per sheet, the sheet being built once
+        // per process.
+        let halves: Vec<u16> =
+            atlas.image.iter().map(|&v| half::f16::from_f32(v).to_bits()).collect();
         queue.write_texture(
             texture.as_image_copy(),
-            bytemuck::cast_slice(atlas.image.as_slice()),
+            bytemuck::cast_slice(&halves),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(atlas.size[0] * 4),
+                bytes_per_row: Some(atlas.size[0] * 2 * GLYPH_SDF_CHANNELS as u32),
                 rows_per_image: Some(atlas.size[1]),
             },
             wgpu::Extent3d {
@@ -569,16 +670,7 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
                 count: None,
             },
             sheet(3),
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
+            sheet(4),
         ],
     })
 }
@@ -596,26 +688,22 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
     })
 }
 
-/// The three draws that prepare a name's shadow cell.
+/// The two draws that prepare a name's shadow cell.
 ///
-/// Blur terms keep the coverage union they already use. A distance term first
-/// fills every analytic cell with its own pad, then MIN-blends each glyph's
-/// true signed field over that value. The latter is the exact union of the
-/// letterforms and cannot double-darken where two glyph quads overlap.
+/// A blur term unions its glyphs' coverage under a MAX blend, one quad each. A
+/// distance term is ONE quad over the whole cell whose fragment walks the
+/// name's glyphs, so the union is arithmetic the shader can see both sides of
+/// rather than a blend that keeps only the winner.
 pub(crate) fn create_glyph_cell_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    rows: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Max,
-    };
-    const MIN_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Min,
     };
     let coverage = glyph_pipeline(
         device,
@@ -634,24 +722,10 @@ pub(crate) fn create_glyph_cell_pipelines(
     let distance = glyph_pipeline(
         device,
         shader,
-        "glyph_distance_cell",
-        &[Some(layout)],
-        ("vs_glyph_distance_cell", "fs_glyph_distance"),
-        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
-        &[Some(wgpu::ColorTargetState {
-            format: crate::shadow::ATLAS_FORMAT,
-            blend: Some(wgpu::BlendState { color: MIN_COMPONENT, alpha: MIN_COMPONENT }),
-            write_mask: wgpu::ColorWrites::ALL,
-        })],
-        None,
-    );
-    let pad = glyph_pipeline(
-        device,
-        shader,
-        "glyph_distance_cell_pad",
-        &[Some(layout)],
-        ("vs_distance_pad", "fs_distance_pad"),
-        &[crate::shadow::ShadowBox::LAYOUT],
+        "name_distance_cell",
+        &[Some(layout), Some(rows)],
+        ("vs_name_distance_cell", "fs_name_distance"),
+        &[NameCell::LAYOUT],
         &[Some(wgpu::ColorTargetState {
             format: crate::shadow::ATLAS_FORMAT,
             blend: None,
@@ -659,7 +733,7 @@ pub(crate) fn create_glyph_cell_pipelines(
         })],
         None,
     );
-    (coverage, distance, pad)
+    (coverage, distance)
 }
 
 /// A name's shadow into the scene pass, over the name's own box
@@ -1045,14 +1119,18 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R32Float,
+        format: SDF_FORMAT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     queue.write_texture(
         texture.as_image_copy(),
-        bytemuck::bytes_of(&0.0f32),
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+        bytemuck::cast_slice(&[0u16; GLYPH_SDF_CHANNELS]),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(2 * GLYPH_SDF_CHANNELS as u32),
+            rows_per_image: Some(1),
+        },
         wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
     );
     texture
@@ -1622,14 +1700,25 @@ pub(crate) mod tests {
     /// both fixed sampling ranges around it.
     pub(crate) fn sdf_atlas() -> GlyphSdfAtlas {
         const SIDE: u32 = 128;
-        let mut image = Vec::with_capacity((SIDE * SIDE) as usize);
+        let mut image = Vec::with_capacity((SIDE * SIDE) as usize * GLYPH_SDF_CHANNELS);
         for y in 0..SIDE {
             for x in 0..SIDE {
                 let p = glam::Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
                 let q = (p - glam::Vec2::splat(64.0)).abs() - glam::Vec2::splat(4.0);
                 let outside = q.max(glam::Vec2::ZERO).length();
                 let inside = q.x.max(q.y).min(0.0);
-                image.push(outside + inside);
+                // The square's own outward normal, which for a box is the sign
+                // of the corner term where it is positive and the dominant axis
+                // where it is not; the sheet stores the angle back TOWARD the
+                // ink, so it is that direction reversed.
+                let away = if q.x > 0.0 || q.y > 0.0 {
+                    q.max(glam::Vec2::ZERO) * (p - glam::Vec2::splat(64.0)).signum()
+                } else if q.x > q.y {
+                    glam::Vec2::new((p.x - 64.0).signum(), 0.0)
+                } else {
+                    glam::Vec2::new(0.0, (p.y - 64.0).signum())
+                };
+                image.extend([(outside + inside), (-away.y).atan2(-away.x), 0.0, 0.0]);
             }
         }
         GlyphSdfAtlas { image: std::sync::Arc::new(image), size: [SIDE, SIDE], key: 1 }

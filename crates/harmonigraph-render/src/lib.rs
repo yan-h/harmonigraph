@@ -67,7 +67,7 @@ pub use glow::{glow_paint_callback, GlowDot};
 mod text;
 pub use text::{
     text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, SlideAxis, TextRing,
-    GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
+    GLYPH_SDF_CHANNELS, GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
 };
 
 /// A name's shadow: its ink blurred into a cell of an atlas, which the name's
@@ -1683,8 +1683,8 @@ struct LatticeResources {
     /// into its cell, the passes that sweep the cells, and the box each name
     /// multiplies the scene by off its finished cell.
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
+    name_distance_cell_pipeline: wgpu::RenderPipeline,
+    name_glyph_layout: wgpu::BindGroupLayout,
     shadow_cell_pipelines: shadow::CellPipelines,
     shadow_box_pipeline: wgpu::RenderPipeline,
     /// The other two rasterizers of a cell: a node's ink into its own, and one
@@ -1935,6 +1935,18 @@ struct PaneBuffers {
     box_capacity: usize,
     box_count: u32,
     cell_buffer: wgpu::Buffer,
+    /// A DISTANCE term's own pair, which the blur's per-glyph stream cannot
+    /// carry: one box per NAME with its run of glyphs beside it, and the rows
+    /// that run indexes ([`text::NameCell`], [`text::NameGlyph`]). One draw per
+    /// name, whose fragment reads every glyph of the name at once.
+    ///
+    /// The rows are a storage binding, so the bind group naming them is rebuilt
+    /// with the buffer rather than left pointing at a freed allocation.
+    name_cell_buffer: wgpu::Buffer,
+    name_cell_capacity: usize,
+    name_count: u32,
+    name_glyph_buffer: wgpu::Buffer,
+    name_glyph_bind_group: wgpu::BindGroup,
     /// Each node instance's own box, beside the instance buffer: the second
     /// instance-step buffer both the node draw and the cell draw bind
     /// (`shadow::ShadowBox::BESIDE_NODES`). Kept at the instance buffer's own
@@ -3263,11 +3275,14 @@ impl LatticeResources {
             Some(DEPTH_FORMAT),
             EGUI_BLEND,
         );
-        let (
-            glyph_coverage_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
-        ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
+        let name_glyph_layout = text::name_glyph_bind_group_layout(device);
+        let (glyph_coverage_cell_pipeline, name_distance_cell_pipeline) =
+            text::create_glyph_cell_pipelines(
+                device,
+                &glyph_shader,
+                &glyph_layout,
+                &name_glyph_layout,
+            );
         let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
         let shadow_box_pipeline = text::create_shadow_box_pipeline(
             device,
@@ -3362,8 +3377,8 @@ impl LatticeResources {
             strip_layout,
             sampler,
             glyph_coverage_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
+            name_distance_cell_pipeline,
+            name_glyph_layout,
             shadow_cell_pipelines,
             shadow_box_pipeline,
             node_cell_pipeline,
@@ -3472,7 +3487,10 @@ impl LatticeResources {
             sampler: &self.sampler,
         };
         let want_casters = wants.casters;
+        let name_glyph_layout = &self.name_glyph_layout;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
+            let name_glyph_buffer =
+                text::name_glyph_rows(device, name_glyph_layout, INITIAL_GLYPH_CAPACITY);
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lattice_uniforms"),
                 size: std::mem::size_of::<Uniforms>() as u64,
@@ -3525,6 +3543,15 @@ impl LatticeResources {
                     "lattice_shadow_cells",
                     INITIAL_GLYPH_CAPACITY * harmonigraph_scene::SHADOW_TERMS_MAX,
                 ),
+                name_cell_buffer: create_vertex_buffer::<text::NameCell>(
+                    device,
+                    "lattice_name_cells",
+                    INITIAL_NAME_CAPACITY * harmonigraph_scene::SHADOW_TERMS_MAX,
+                ),
+                name_cell_capacity: INITIAL_NAME_CAPACITY,
+                name_count: 0,
+                name_glyph_buffer: name_glyph_buffer.0,
+                name_glyph_bind_group: name_glyph_buffer.1,
                 node_cell_buffer: create_vertex_buffer::<shadow::ShadowBox>(
                     device,
                     "lattice_node_cells",
@@ -3624,6 +3651,10 @@ const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// And for the names' shadow boxes: one per named node.
 const INITIAL_BOX_CAPACITY: usize = 64;
+
+/// And for the distance row's per-name cells, which are the same names again,
+/// once per term.
+const INITIAL_NAME_CAPACITY: usize = INITIAL_BOX_CAPACITY;
 
 /// Which of a pane's optional targets this frame wants, and how tall the ink
 /// strip has to be — the three answers `pane_buffers` acts on that come off the
@@ -3793,15 +3824,13 @@ impl CallbackTrait for LatticeCallback {
                         Some(DEPTH_FORMAT),
                         EGUI_BLEND,
                     );
-                    let (
-                        glyph_coverage_cell_pipeline,
-                        glyph_distance_cell_pipeline,
-                        glyph_distance_pad_pipeline,
-                    ) = text::create_glyph_cell_pipelines(
-                        device,
-                        &glyph_shader,
-                        &resources.glyph_layout,
-                    );
+                    let (glyph_coverage_cell_pipeline, name_distance_cell_pipeline) =
+                        text::create_glyph_cell_pipelines(
+                            device,
+                            &glyph_shader,
+                            &resources.glyph_layout,
+                            &resources.name_glyph_layout,
+                        );
                     let shadow_box_pipeline = text::create_shadow_box_pipeline(
                         device,
                         &glyph_shader,
@@ -3813,8 +3842,7 @@ impl CallbackTrait for LatticeCallback {
                     );
                     resources.glyph_fill_pipeline = glyph_fill_pipeline;
                     resources.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
-                    resources.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
-                    resources.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
+                    resources.name_distance_cell_pipeline = name_distance_cell_pipeline;
                     resources.shadow_box_pipeline = shadow_box_pipeline;
 
                     // And the text CALLBACK's own glyph pipelines, in an entry
@@ -3901,6 +3929,10 @@ impl CallbackTrait for LatticeCallback {
         // atlas; a markers-only Distance frame therefore allocates no atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
+        // Cloned off the resources before the pane's own mutable borrow: the
+        // rows' bind group is rebuilt when their buffer grows, and that happens
+        // inside that borrow.
+        let name_glyph_layout = resources.name_glyph_layout.clone();
         let pane = resources.pane_buffers(
             device,
             self.pane_id,
@@ -4031,8 +4063,22 @@ impl CallbackTrait for LatticeCallback {
                     "lattice_shadow_cells",
                     pane.glyph_capacity * harmonigraph_scene::SHADOW_TERMS_MAX,
                 );
+                let (buffer, bind_group) =
+                    text::name_glyph_rows(device, &name_glyph_layout, pane.glyph_capacity);
+                pane.name_glyph_buffer = buffer;
+                pane.name_glyph_bind_group = bind_group;
             }
             pane.glyph_count = self.glyphs.len() as u32;
+            let names = self.draws.iter().filter(|d| matches!(d, Draw::Label(..))).count();
+            if names > pane.name_cell_capacity {
+                pane.name_cell_capacity = names.next_power_of_two();
+                pane.name_cell_buffer = create_vertex_buffer::<text::NameCell>(
+                    device,
+                    "lattice_name_cells",
+                    pane.name_cell_capacity * harmonigraph_scene::SHADOW_TERMS_MAX,
+                );
+            }
+            pane.name_count = names as u32;
             if !packed.boxes.is_empty() {
                 // Each glyph's own name's box beside it, for the cell draw. The
                 // runs are contiguous in draw order, so this is the boxes
@@ -4059,9 +4105,35 @@ impl CallbackTrait for LatticeCallback {
                         bytemuck::cast_slice(&cells),
                     );
                 }
+                // And one row per NAME for the distance draw, in the same
+                // per-term blocks: the box, and where the name's glyphs sit in
+                // the rows below.
+                let stride = std::mem::size_of::<text::NameCell>() * pane.name_cell_capacity;
+                for t in 0..terms {
+                    let cells: Vec<text::NameCell> = self
+                        .draws
+                        .iter()
+                        .filter_map(|draw| match *draw {
+                            Draw::Label(a, b, l) => Some(text::NameCell {
+                                cell: packed.boxes[l as usize * terms + t],
+                                run: [a as f32, (b - a) as f32, 0.0, 0.0],
+                            }),
+                            _ => None,
+                        })
+                        .collect();
+                    debug_assert_eq!(cells.len(), names, "one cell per name");
+                    queue.write_buffer(
+                        &pane.name_cell_buffer,
+                        (t * stride) as u64,
+                        bytemuck::cast_slice(&cells),
+                    );
+                }
             }
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
+                let rows: Vec<text::NameGlyph> =
+                    self.glyphs.iter().map(text::NameGlyph::from).collect();
+                queue.write_buffer(&pane.name_glyph_buffer, 0, bytemuck::cast_slice(&rows));
                 // The glyphs' own points, not the screen's: the rects arrive
                 // in this pane's space because the pass they are drawn in is
                 // this pane's. `pixels_per_point` stays the DEVICE's — it is
@@ -4114,6 +4186,7 @@ impl CallbackTrait for LatticeCallback {
             }
         } else {
             pane.glyph_count = 0;
+            pane.name_count = 0;
         }
 
         // The order, held to what actually reached the buffers: every index in
@@ -4198,14 +4271,6 @@ impl CallbackTrait for LatticeCallback {
             if let Some(atlas) = atlas {
                 let mut pass = atlas.ink_pass(egui_encoder);
                 let box_bytes = std::mem::size_of::<shadow::ShadowBox>() as u64;
-                if let Some(glyphs) =
-                    pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
-                {
-                    pass.set_pipeline(&resources.glyph_distance_pad_pipeline);
-                    pass.set_bind_group(0, glyphs, &[]);
-                    pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
-                    pass.draw(0..4, 0..pane.box_count);
-                }
                 if pane.instance_count > 0 {
                     pass.set_pipeline(&resources.node_cell_pipeline);
                     pass.set_bind_group(0, &pane.bind_group, &[]);
@@ -4231,20 +4296,34 @@ impl CallbackTrait for LatticeCallback {
                     pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0)
                 {
                     pass.set_bind_group(0, glyphs, &[]);
-                    pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
-                    let stride = box_bytes * pane.glyph_capacity as u64;
+                    let glyph_stride = box_bytes * pane.glyph_capacity as u64;
+                    let name_bytes = std::mem::size_of::<text::NameCell>() as u64;
+                    let name_stride = name_bytes * pane.name_cell_capacity as u64;
                     for t in 0..terms as u64 {
-                        pass.set_vertex_buffer(1, pane.cell_buffer.slice(t * stride..));
-                        let pipeline = match kernel[t as usize].kind {
+                        // A blur term rasterizes each GLYPH into the cell and
+                        // unions them in the blend; a distance term draws the
+                        // whole cell ONCE per name and unions inside the
+                        // fragment (`fs_name_distance`).
+                        match kernel[t as usize].kind {
                             harmonigraph_scene::TermKind::Blur => {
-                                &resources.glyph_coverage_cell_pipeline
+                                pass.set_pipeline(&resources.glyph_coverage_cell_pipeline);
+                                pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                                pass.set_vertex_buffer(
+                                    1,
+                                    pane.cell_buffer.slice(t * glyph_stride..),
+                                );
+                                pass.draw(0..4, 0..pane.glyph_count);
                             }
                             harmonigraph_scene::TermKind::Distance => {
-                                &resources.glyph_distance_cell_pipeline
+                                pass.set_pipeline(&resources.name_distance_cell_pipeline);
+                                pass.set_bind_group(1, &pane.name_glyph_bind_group, &[]);
+                                pass.set_vertex_buffer(
+                                    0,
+                                    pane.name_cell_buffer.slice(t * name_stride..),
+                                );
+                                pass.draw(0..4, 0..pane.name_count);
                             }
-                        };
-                        pass.set_pipeline(pipeline);
-                        pass.draw(0..4, 0..pane.glyph_count);
+                        }
                     }
                 }
                 drop(pass);

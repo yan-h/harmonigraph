@@ -70,6 +70,8 @@ color_space = "0.5"
 # Shader validation for hot-reload (dev only); version tracks wgpu's.
 naga = "29"
 bytemuck = { version = "1", features = ["derive"] }
+# IEEE binary16, for the one texture uploaded as `Rgba16Float`.
+half = { version = "2", default-features = false }
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"

@@ -1554,9 +1554,27 @@ fn slice_gap_half() -> f32 {
 // readout preserves the Gaussian control exactly while the distance path keeps
 // the unsoftened field — there is no `aa` in a distance cell.
 struct NodeLayer {
-    sd: f32,
+    foot: Foot,
     level: f32,
     coverage: f32,
+}
+
+// Where the nearest ink of a shape stands, in node uv: how far, and which way.
+//
+// The direction is carried rather than derived, because the only two ways to
+// recover it from a field of distances are wrong. A gradient of the field
+// averages the two sides at a medial axis and points along their bisector, and
+// a difference of two cells is that gradient with a coarser step. Every
+// producer here knows the nearest POINT exactly — it is what it took the length
+// of — so it hands the vector over instead.
+struct Foot {
+    // Signed distance, negative inside the shape.
+    sd: f32,
+    // From the fragment TO that nearest point, so `-normalize(offset)` is the
+    // direction the ink faces the fragment from. `length(offset)` is `abs(sd)`
+    // up to the last bits: the two are computed by the same arithmetic and the
+    // scalar is the one the picture is drawn from.
+    offset: vec2<f32>,
 }
 
 // The contour threshold the exact field treats as ink. The marker uses the
@@ -1564,20 +1582,53 @@ struct NodeLayer {
 const DISTANCE_LEVEL_FLOOR: f32 = 0.5;
 const EMPTY_DISTANCE: f32 = 65504.0;
 
+// A foot no shape claims: past every cell's pad, and pointing nowhere in
+// particular.
+fn no_foot() -> Foot {
+    return Foot(EMPTY_DISTANCE, vec2<f32>(EMPTY_DISTANCE, 0.0));
+}
+
 fn layer_coverage(layer: NodeLayer) -> f32 {
     return layer.coverage * layer.level;
 }
 
-fn layer_distance(field: f32, layer: NodeLayer) -> f32 {
-    return select(field, min(field, layer.sd), layer.level >= DISTANCE_LEVEL_FLOOR);
+// The nearer of two feet: a UNION of the shapes they stand on.
+fn nearer_foot(a: Foot, b: Foot) -> Foot {
+    if b.sd < a.sd {
+        return b;
+    }
+    return a;
 }
 
-// The signed distance to an annulus. A collapsed pair is the caller's to skip:
-// it is no layer rather than a zero-width contour.
-fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer {
+// The farther of two feet: an INTERSECTION of the half-spaces they bound.
+fn farther_foot(a: Foot, b: Foot) -> Foot {
+    if b.sd > a.sd {
+        return b;
+    }
+    return a;
+}
+
+fn layer_distance(field: Foot, layer: NodeLayer) -> Foot {
+    if layer.level >= DISTANCE_LEVEL_FLOOR && layer.foot.sd < field.sd {
+        return layer.foot;
+    }
+    return field;
+}
+
+// The signed distance to an annulus, and `dir` the fragment's own radial
+// direction — the unit vector `d` was the length of, which is the axis every
+// foot of a circle stands on.
+//
+// A collapsed pair is the caller's to skip: it is no layer rather than a
+// zero-width contour.
+fn glyph_band(d: f32, dir: vec2<f32>, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer {
     let mid = 0.5 * (inner + outer);
+    // Which circle is nearer is which side of the mid-radius the fragment
+    // falls, inside the band and out: `sd` is `inner - d` below the middle and
+    // `d - outer` above it, so the offset is that step along the radius.
+    let circle = select(outer, inner, d < mid);
     return NodeLayer(
-        abs(d - mid) - 0.5 * (outer - inner),
+        Foot(abs(d - mid) - 0.5 * (outer - inner), (circle - d) * dir),
         level,
         aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa)),
     );
@@ -1685,11 +1736,18 @@ fn outer_glyph(
     let side = sector_side(fold) + gap;
     let pie = sector_pie(fold, outer);
     let width = edges.x - edges.y;
-    var sd: f32;
+    var foot: Foot;
     if width > TAU * 0.5 {
-        sd = max(max(band.sd, pie), side);
+        // The intersection's foot is the WINNING constraint's own, which is the
+        // nearest point of the sector only where one constraint decides the
+        // answer. Past a corner the switch line carries a foot standing off the
+        // shape, exactly as far off as this `max` is from the Euclidean
+        // distance it stands in for.
+        let normal = vec2<f32>(fold.e.y, -fold.e.x);
+        let side_foot = Foot(side, sector_unfold(fold, -side * normal));
+        foot = farther_foot(farther_foot(band.foot, pie), side_foot);
     } else {
-        sd = annular_sector_distance(fold, inner, outer, slice_gap_half());
+        foot = annular_sector_distance(fold, inner, outer, slice_gap_half());
     }
     // The control readout is the existing rasterization exactly: softened
     // ownership and two forward-ray gap cuts, multiplied by the radial band.
@@ -1704,7 +1762,7 @@ fn outer_glyph(
     let gaps =
         (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
         * (1.0 - aa_inside(gap_half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)));
-    return NodeLayer(sd, band.level, band.coverage * own * gaps);
+    return NodeLayer(foot, band.level, band.coverage * own * gaps);
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
@@ -1894,7 +1952,7 @@ fn spectral_ring(
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(no_foot(), 0.0, 0.0));
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
@@ -1905,13 +1963,13 @@ fn spectral_ring(
     // wedge of it — and it could not be rediscovered here in any case, that
     // window never reaching the GPU.
     if in.ring <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(no_foot(), 0.0, 0.0));
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
     if EARLY_OUT && !analytic && layer_coverage(band) <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(no_foot(), 0.0, 0.0));
     }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
@@ -1919,7 +1977,7 @@ fn spectral_ring(
     // times to throw all but one away.
     var cov = 0.0;
     var owner = oct.base;
-    var sd = EMPTY_DISTANCE;
+    var foot = no_foot();
     for (var i = 0u; i < oct_span(); i = i + 1u) {
         let slot = oct.base + i32(i);
         // `outer_glyph` whole: the sector's own edges and the same constant
@@ -1927,14 +1985,14 @@ fn spectral_ring(
         // rings instead of each drawing its own.
         let layer = outer_glyph(slot, oct, uv, band, radii.x, radii.y, aa);
         let c = layer_coverage(layer);
-        sd = min(sd, layer.sd);
+        foot = nearer_foot(foot, layer.foot);
         if c > cov {
             cov = c;
             owner = slot;
         }
     }
     if cov <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(sd, in.ring, cov));
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(foot, in.ring, cov));
     }
     // WHERE in the wedge the grid is read, which is the whole of what the two
     // readings differ by. The fold answers one number for the octave, so every
@@ -1960,7 +2018,7 @@ fn spectral_ring(
         spectral_lut_color(color_level),
         cov * in.ring,
         clamp(color_level, 0.0, 1.0),
-        NodeLayer(sd, in.ring, cov),
+        NodeLayer(foot, in.ring, cov),
     );
 }
 
@@ -2058,20 +2116,20 @@ fn mark_extension(
     // QUAD_MARGIN — the margin it lives in is the one the marks are the reason
     // for — so that is nearly all of them.
     if EARLY_OUT && !analytic && layer_coverage(strip) <= 0.0 {
-        return NodeLayer(EMPTY_DISTANCE, strip.level, 0.0);
+        return NodeLayer(no_foot(), strip.level, 0.0);
     }
     let top = ring.base + i32(oct_span()) - 1;
-    var sd = EMPTY_DISTANCE;
+    var foot = no_foot();
     var coverage = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
             let layer = outer_glyph(s, ring, uv, strip, inner, outer, aa);
-            sd = min(sd, layer.sd);
+            foot = nearer_foot(foot, layer.foot);
             coverage = max(coverage, layer.coverage);
         }
     }
-    return NodeLayer(sd, strip.level, coverage);
+    return NodeLayer(foot, strip.level, coverage);
 }
 
 // Distance from `uv` to the filled wedge between `edges` (`oct_sector`'s pair,
@@ -2084,7 +2142,7 @@ fn mark_extension(
 // the strip's inner edge; what is shared is the ANGULAR half of the shape,
 // which is the part with a case in it.
 fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
-    return sector_pie(sector_fold(uv, edges), r);
+    return sector_pie(sector_fold(uv, edges), r).sd;
 }
 
 // One wedge's own frame, which both readings below are taken in.
@@ -2094,6 +2152,10 @@ struct SectorFold {
     q: vec2<f32>,
     // That edge's direction, half the wedge's width off the middle.
     e: vec2<f32>,
+    // The wedge's middle as a unit vector, and which side of it the fragment
+    // came from: what [`sector_unfold`] needs to carry a foot back out.
+    mid: vec2<f32>,
+    flip: f32,
 }
 
 // `uv` into the wedge's own frame — its middle up the y axis — folded onto one
@@ -2110,10 +2172,26 @@ fn sector_fold(uv: vec2<f32>, edges: vec2<f32>) -> SectorFold {
     let half = clamp(0.5 * (edges.x - edges.y), 0.0, TAU * 0.5);
     let c = cos(mid);
     let s = sin(mid);
+    let across = uv.y * c - uv.x * s;
     return SectorFold(
-        vec2<f32>(abs(uv.y * c - uv.x * s), uv.x * c + uv.y * s),
+        vec2<f32>(abs(across), uv.x * c + uv.y * s),
         vec2<f32>(sin(half), cos(half)),
+        vec2<f32>(c, s),
+        select(-1.0, 1.0, across >= 0.0),
     );
+}
+
+// A vector measured in the folded frame, back in node uv.
+//
+// The REFLECTION is what makes this a step of its own: `sector_fold` takes an
+// absolute value across the wedge's middle, so a foot found on the folded side
+// points the wrong way across that axis for every fragment that came from the
+// other one — a direction the union rule reads as a shape standing opposite the
+// fragment when it stands beside it. The rotation alone would be a matrix; the
+// sign is the part a reader has to be told about.
+fn sector_unfold(f: SectorFold, v: vec2<f32>) -> vec2<f32> {
+    let across = vec2<f32>(-f.mid.y, f.mid.x);
+    return v.y * f.mid + (f.flip * v.x) * across;
 }
 
 // Distance out of the pie `f` folds, out to radius `r`.
@@ -2124,10 +2202,20 @@ fn sector_fold(uv: vec2<f32>, edges: vec2<f32>) -> SectorFold {
 // The sign is what says which, so a wedge past a half turn (which the extras can
 // hand out — see `outer_glyph`) needs no case of its own: the fold puts the
 // point on the far side of one edge either way.
-fn sector_pie(f: SectorFold, r: f32) -> f32 {
-    let arc = length(f.q) - r;
-    let edge = length(f.q - f.e * clamp(dot(f.q, f.e), 0.0, r));
-    return max(arc, edge * sign(sector_side(f)));
+fn sector_pie(f: SectorFold, r: f32) -> Foot {
+    let radius = length(f.q);
+    let arc = radius - r;
+    let on_edge = f.e * clamp(dot(f.q, f.e), 0.0, r);
+    let edge = length(f.q - on_edge);
+    let signed_edge = edge * sign(sector_side(f));
+    // The apex is a tie all the way round the arc, so the wedge's own middle
+    // stands in for a direction there rather than a normalize of nothing.
+    let out = select(vec2<f32>(0.0, 1.0), f.q / max(radius, 1e-6), radius > 1e-6) * r;
+    let takes_arc = arc >= signed_edge;
+    return Foot(
+        select(signed_edge, arc, takes_arc),
+        sector_unfold(f, select(on_edge, out, takes_arc) - f.q),
+    );
 }
 
 // Signed perpendicular distance from the folded point to its wedge's edge LINE:
@@ -2141,9 +2229,9 @@ fn sector_side(f: SectorFold) -> f32 {
 // runs between the inner and outer circles, while each circle contributes only
 // the arc on the inside of that line. Measuring against those three features
 // keeps the Euclidean corner a Distance shadow is defined by.
-fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f32 {
+fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> Foot {
     if outer <= inner {
-        return EMPTY_DISTANCE;
+        return no_foot();
     }
     let normal = vec2<f32>(f.e.y, -f.e.x);
     let radius = length(f.q);
@@ -2156,27 +2244,33 @@ fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f
     let outer_t = sqrt(max(outer * outer - gap * gap, 0.0));
     let segment_start = max(axis_t, inner_t);
     if segment_start > outer_t {
-        return EMPTY_DISTANCE;
+        return no_foot();
     }
 
     let side_t = clamp(dot(f.q, f.e), segment_start, outer_t);
-    var distance = length(f.q - (side_t * f.e - gap * normal));
+    // Each candidate is kept as the POINT it stands at, and the winner is the
+    // one the running minimum ends on: a length is what the three features are
+    // compared by, and the vector is what the point they were measured to is.
+    var at = side_t * f.e - gap * normal;
+    var distance = length(f.q - at);
 
     // A radial projection reaches a circle's arc only while it remains inside
     // the angular cut. Otherwise that arc's nearest point is its endpoint,
     // already carried by the side segment above.
     let direction = f.q / max(radius, 1e-6);
     let outer_at = direction * outer;
-    if dot(normal, outer_at) + gap <= 0.0 {
-        distance = min(distance, abs(radius - outer));
+    if dot(normal, outer_at) + gap <= 0.0 && abs(radius - outer) < distance {
+        distance = abs(radius - outer);
+        at = outer_at;
     }
     let inner_at = direction * inner;
-    if dot(normal, inner_at) + gap <= 0.0 {
-        distance = min(distance, abs(radius - inner));
+    if dot(normal, inner_at) + gap <= 0.0 && abs(radius - inner) < distance {
+        distance = abs(radius - inner);
+        at = inner_at;
     }
 
     let inside = radius >= inner && radius <= outer && dot(normal, f.q) + gap <= 0.0;
-    return select(distance, -distance, inside);
+    return Foot(select(distance, -distance, inside), sector_unfold(f, at - f.q));
 }
 
 /// The three derivatives-and-geometry answers every layer of a node is drawn
@@ -2299,8 +2393,9 @@ struct NodeInk {
     // A share and not a switch, so a slice fading in carries its wash in with
     // it and no seam appears at a threshold nothing else in the picture has.
     lit: f32,
-    // The nearest layer whose level reaches the distance contour.
-    sd: f32,
+    // The nearest layer whose level reaches the distance contour, and the way
+    // to it.
+    foot: Foot,
 };
 
 /// What every node layer answers at this fragment: its visible ink and the
@@ -2353,7 +2448,10 @@ fn node_ink(
     // thing in the picture that asks a node's ink what it is rather than only
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
-    var node_sd = EMPTY_DISTANCE;
+    var node_foot = no_foot();
+    // The axis every annular layer's foot stands on. The node's own centre is a
+    // tie all the way round each ring, so any ray does there.
+    let radial = select(vec2<f32>(1.0, 0.0), in.uv / d, d > 1e-6);
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2407,9 +2505,9 @@ fn node_ink(
     // it takes the whole layer with it: the slot loop below only ever scales
     // this coverage, the backdrop rides it, and the shimmer reaches the
     // slices through it.
-    var band = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    var band = NodeLayer(no_foot(), 0.0, 0.0);
     if band_out > band_in {
-        band = glyph_band(d, band_in, band_out, 1.0, aa);
+        band = glyph_band(d, radial, band_in, band_out, 1.0, aa);
     }
     // How much of this pixel is a slice some note currently lights, and how
     // strongly: the weight the shimmer reaches the octave glyphs with, below.
@@ -2445,9 +2543,9 @@ fn node_ink(
         // place of the other.
         let ink = oct_slot_ink(in, slot);
         let opacity = ink.w;
-        node_sd = layer_distance(
-            node_sd,
-            NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
+        node_foot = layer_distance(
+            node_foot,
+            NodeLayer(shape_layer.foot, opacity, shape_layer.coverage),
         );
         let slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
@@ -2535,11 +2633,11 @@ fn node_ink(
         in,
         oct,
         in.uv,
-        glyph_band(d, audio_radii.x, audio_radii.y, 1.0, aa),
+        glyph_band(d, radial, audio_radii.x, audio_radii.y, 1.0, aa),
         aa,
         analytic,
     );
-    node_sd = layer_distance(node_sd, audio.layer);
+    node_foot = layer_distance(node_foot, audio.layer);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
     // The wedge's own reading is its lit share, on the composite the coverage
@@ -2560,15 +2658,15 @@ fn node_ink(
     // the edge in and the edge out are the same smoothstep, and the product of
     // one with the other's complement peaks at a quarter halfway through it.
     // That is a quarter-covered mark on a node whose marks are switched off.
-    var mark_strip = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    var mark_strip = NodeLayer(no_foot(), 0.0, 0.0);
     if mark_out > mark_in {
-        mark_strip = glyph_band(d, mark_in, mark_out, 1.0, aa);
+        mark_strip = glyph_band(d, radial, mark_in, mark_out, 1.0, aa);
     }
     let melody_layer = mark_extension(
         in.marks.x,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
+        NodeLayer(mark_strip.foot, in.params.y, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -2578,7 +2676,7 @@ fn node_ink(
         in.marks.y,
         oct,
         in.uv,
-        NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
+        NodeLayer(mark_strip.foot, in.params.z, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
@@ -2586,8 +2684,8 @@ fn node_ink(
     );
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
-    node_sd = layer_distance(node_sd, melody_layer);
-    node_sd = layer_distance(node_sd, bass_layer);
+    node_foot = layer_distance(node_foot, melody_layer);
+    node_foot = layer_distance(node_foot, bass_layer);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2629,7 +2727,7 @@ fn node_ink(
     // is as lit as a whole one. The floor is the discard's own threshold read
     // from the other side — at no ink there is no share to take, and the
     // caller multiplies the answer by that same nothing.
-    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_sd);
+    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_foot);
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that
@@ -2708,7 +2806,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.foot);
     }
     let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
     let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
@@ -2772,7 +2870,7 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
         // 1/32 point is far below both the cell's texel and the numeric
         // reference's tolerance, so this decides representation rather than
         // geometry.
-        let points = clamp(ink.sd * abs(in.shadow_at.z), -EMPTY_DISTANCE, EMPTY_DISTANCE);
+        let points = clamp(ink.foot.sd * abs(in.shadow_at.z), -EMPTY_DISTANCE, EMPTY_DISTANCE);
         let stable = round(points * 32.0) / 32.0;
         return vec4<f32>(stable, 0.0, 0.0, 0.0);
     }
@@ -3199,7 +3297,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                     slot,
                     oct,
                     p,
-                    NodeLayer(-EMPTY_DISTANCE, 1.0, 1.0),
+                    NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), 1.0, 1.0),
                     band_in,
                     EMPTY_DISTANCE,
                     arc,
@@ -3238,7 +3336,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 in.marks.x,
                 oct,
                 p,
-                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.y, 0.0, 1.0), 1.0),
+                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), clamp(in.params.y, 0.0, 1.0), 1.0),
                 mark_in,
                 EMPTY_DISTANCE,
                 arc,
@@ -3250,7 +3348,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 in.marks.y,
                 oct,
                 p,
-                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.z, 0.0, 1.0), 1.0),
+                NodeLayer(Foot(-EMPTY_DISTANCE, vec2<f32>(0.0)), clamp(in.params.z, 0.0, 1.0), 1.0),
                 mark_in,
                 EMPTY_DISTANCE,
                 arc,
