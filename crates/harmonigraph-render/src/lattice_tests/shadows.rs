@@ -2151,6 +2151,230 @@ fn a_distance_rows_gap_fills_and_its_mouth_carries_no_jump() {
     );
 }
 
+/// A resting cross's distance shadow fills the inner corners its two arms make,
+/// and stands where a min-distance row does everywhere the second arm is out of
+/// reach.
+///
+/// `plus_sd` folds the cross into ONE box, and a standoff spending that spends
+/// the nearer arm alone — deaf to the other one standing square across the
+/// fragment (#568 §5-B4). The reading walks a row at a constant distance out
+/// from the flat arm's flank, from just outside an inner corner along to the
+/// tip: `d1` is the same at every column of it and `d2`, the upright arm, grows,
+/// so the union's lift is the only thing that varies along the walk.
+///
+/// Two renders of one fixture, the second with the facing weight forced to zero
+/// where the marker asks for it — the min-distance row this family shipped with,
+/// `union_distance` handing back `d1` at `k <= 0`. That leg being FLAT the whole
+/// way along is what says the walk arrives at a corner (#450): a row the union
+/// could not reach would read the same field twice and pass on the agreement.
+///
+/// Off the composited frame rather than out of a cell, a marker's distance term
+/// having none — it is evaluated in the scene draw. The cross stands on a white
+/// pane with no light in it, so every pixel of the walk is the multiply itself,
+/// and at a curve of 1 and an opacity of 1 one logarithm inverts the depth back
+/// to the coverage that produced it.
+#[test]
+fn a_distance_rows_marker_fills_its_inner_corner() {
+    /// Wide enough that the union lifts the corner by a fifth of the ground,
+    /// and narrow enough that its window shuts before the flank runs out of arm
+    /// — the far end of the walk is then the second arm out of reach, which is
+    /// the reading the corner is held against.
+    const SHADOW: f32 = 0.40;
+    /// The cross's arm, in world units: a marker tens of points across, so the
+    /// walk is a row of pixels rather than a pair of them.
+    const ARM: f32 = 1.4;
+    /// The Shadow depth. `keep` is a tenth here, well clear of its own floor, so
+    /// the transmittance the frame carries inverts on a grid finer than the
+    /// claims below.
+    const DEPTH: f32 = 0.9;
+    /// Where the walk stands off the flat arm's flank, in the arm's own length:
+    /// the one pitch `d1` is held at. Twice the soft band the ink is cut with,
+    /// so the row carries the shadow alone and none of the marker's own edge —
+    /// which is what `worst_alone` below reads, the band having cost the field
+    /// a fortieth of its coverage at half this pitch.
+    const OUT: f32 = 0.12;
+    /// Where the walk stops, short of the arm's tip: past it the nearest ink is
+    /// the arm's END corner and `d1` starts to grow.
+    const ALONG: f32 = 0.95;
+    /// The most the two fields may part from their CPU arithmetic, in coverage.
+    /// The frame is 8-bit and the depth spends it steeply, so one code value of
+    /// the darkest column of the walk is worth about 0.003 of a coverage.
+    const TOLERANCE: f64 = 0.01;
+    const PANE: u64 = 47;
+    let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+
+    let mut scene = crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, DEPTH);
+    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    let cb = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        format,
+        PANE,
+        None,
+    );
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+    queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    let res: &LatticeResources = resources.get().expect("prepare created resources");
+    let pane = res.panes.get(&PANE).expect("prepare created the pane");
+    assert_eq!(pane.plus_count, 1, "the fixture must ship exactly one cross");
+
+    let base = crate::with_common(SHADER_SRC);
+    let unfaced =
+        base.replace("            facing(feet.near.offset, feet.next.offset),", "            0.0,");
+    assert_ne!(unfaced, base, "the marker's facing weight moved; this leg forces nothing to zero");
+    let layouts = SceneLayouts {
+        uniforms: &res.bind_group_layout,
+        glow: &res.filter_layout,
+        shadow: &res.shadow_layout,
+        casters: &res.caster_layout,
+    };
+    // A markers-only distance frame packs no atlas and this fixture carries no
+    // light, so both stand-ins are bound and the cross's own multiply is the
+    // whole of what lands on the pane.
+    let cells = pane
+        .offscreen
+        .as_ref()
+        .and_then(|o| o.shadow.as_ref())
+        .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
+    let draw = |src: &str| {
+        let (_, plus) = create_pipelines(&device, src, format, layouts, false);
+        let target = crate::gpu_harness::render_to_texture(
+            &device,
+            &queue,
+            SIZE,
+            format,
+            wgpu::Color::WHITE,
+            |pass| {
+                pass.set_pipeline(&plus);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_bind_group(1, &res.glow_dummy_bind_group, &[]);
+                pass.set_bind_group(2, cells, &[]);
+                pass.set_bind_group(3, &pane.caster_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+                pass.draw(0..4, 0..pane.plus_count);
+            },
+        );
+        crate::gpu_harness::readback(&device, &queue, &target, SIZE)
+    };
+    let (united, alone) = (draw(&base), draw(&unfaced));
+
+    // The marker's uv on the pane: uv 1 is one arm along the camera's right, and
+    // the pane's rows run the other way from its up.
+    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+    let arm_points = ARM * points_per_world(&scene);
+    let half = scene.plus_half_width;
+    // One Shadow width in points, off the arithmetic the packer hands a caster:
+    // a width is two σ, and the marker asks for the picture's own.
+    let width = 2.0 * shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, cb.render_scale)
+        / cb.render_scale;
+    let reach = (ALONG - half) * arm_points;
+    assert!(
+        reach > harmonigraph_scene::SHADOW_STOP * width,
+        "the walk ends {reach:.1} points from the upright arm against a {:.1}-point window, so \
+         its far end still unions something in and holds the corner against nothing",
+        harmonigraph_scene::SHADOW_STOP * width,
+    );
+
+    // One arm's box, as `plus_arm_foot` reads it: how far, and which way.
+    let foot = |uv: glam::Vec2, extent: glam::Vec2| {
+        let corner = uv.abs() - extent;
+        (
+            corner.max(glam::Vec2::ZERO).length() + corner.max_element().min(0.0),
+            uv.clamp(-extent, extent) - uv,
+        )
+    };
+    let feet = |uv: glam::Vec2| {
+        let flat = foot(uv, glam::Vec2::new(1.0, half));
+        let upright = foot(uv, glam::Vec2::new(half, 1.0));
+        if upright.0 < flat.0 {
+            (upright, flat)
+        } else {
+            (flat, upright)
+        }
+    };
+    // What the frame's transmittance says the coverage under it was: the depth
+    // is spent as an exponent on `keep`, and a curve of 1 leaves it alone.
+    let keep = f64::from(1.0 - DEPTH);
+    let coverage = |shot: &[u8], column: u32, row: u32| {
+        (bright_at(shot, column, row) as f64 / (3.0 * 255.0)).ln() / keep.ln()
+    };
+
+    let row = (centre.y - (half + OUT) * arm_points).round() as u32;
+    // The uv this row of pixels actually samples, off the pixel CENTRE the
+    // fragment stands at rather than off the uv the row was chosen for.
+    let pitch = (centre.y - row as f32 - 0.5) / arm_points;
+    let uv_at = |column: u32| glam::Vec2::new((column as f32 + 0.5 - centre.x) / arm_points, pitch);
+    // The walk STARTS on the diagonal, where the two arms stand at one distance:
+    // that is the inner corner, and it is where the union has its whole lift to
+    // give.
+    let first = (centre.x + pitch * arm_points - 0.5).round() as u32;
+    let last = (centre.x + ALONG * arm_points).floor() as u32;
+    assert!(last > first + 8, "the walk is {} columns long", i64::from(last) - i64::from(first));
+    let (corner_near, corner_next) = feet(uv_at(first));
+    let apart = (corner_next.0 - corner_near.0).abs() * arm_points;
+    assert!(apart < 1.0, "the walk starts with the arms {apart:.2} points apart, off the corner");
+
+    let mut worst = (0.0f64, first);
+    let mut worst_alone = (0.0f64, first);
+    for column in first..=last {
+        let uv = uv_at(column);
+        let (near, next) = feet(uv);
+        let (d1, d2) = (near.0 * arm_points, next.0 * arm_points);
+        let k = harmonigraph_scene::crease::facing(near.1, next.1);
+        let want = harmonigraph_scene::crease::standoff_coverage(
+            harmonigraph_scene::crease::union_distance(d1, d2, k, width),
+            width,
+        );
+        let err = (coverage(&united, column, row) - f64::from(want)).abs();
+        if err > worst.0 {
+            worst = (err, column);
+        }
+        // The same row with the weight forced to zero is `standoff_coverage` of
+        // the nearer arm alone — one number, `d1` being the pitch the walk holds.
+        let bare = harmonigraph_scene::crease::standoff_coverage(d1, width);
+        let err = (coverage(&alone, column, row) - f64::from(bare)).abs();
+        if err > worst_alone.0 {
+            worst_alone = (err, column);
+        }
+    }
+    assert!(
+        worst_alone.0 < TOLERANCE,
+        "with the facing weight forced to zero the walk is off the min-distance field by \
+         {:.4} at column {}, so the row is not the clean flank it is read as",
+        worst_alone.0,
+        worst_alone.1,
+    );
+    assert!(
+        worst.0 < TOLERANCE,
+        "the marker's field is off the two-distance rule by {:.4} at column {}",
+        worst.0,
+        worst.1,
+    );
+
+    // The corner against the same distance square off one arm, which is the
+    // pair the walk exists to put side by side.
+    let lift = |column: u32| coverage(&united, column, row) - coverage(&alone, column, row);
+    assert!(
+        lift(first) > 0.1,
+        "the union lifts the inner corner by {:.4} of coverage, so the fixture's walk starts \
+         somewhere the second arm hardly counts",
+        lift(first),
+    );
+    assert!(
+        lift(last).abs() < TOLERANCE,
+        "square off the arm with the upright one past the window the two rules part by {:.4}, \
+         so the union is spending something where a lone edge is all there is",
+        lift(last),
+    );
+}
+
 /// A block of ink standing on grey, well clear of the node the fixture's name
 /// belongs to: the square caster the two readings below are taken off.
 ///

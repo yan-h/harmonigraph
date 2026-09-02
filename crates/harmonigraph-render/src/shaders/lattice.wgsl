@@ -440,7 +440,8 @@ fn plus_distance_term(who: f32) -> u32 {
 // above unchanged.
 fn plus_shadow_through(
     who: f32,
-    d_points: f32,
+    uv: vec2<f32>,
+    arm_points: f32,
     points: vec2<f32>,
     level: f32,
     distance_level: f32,
@@ -453,9 +454,24 @@ fn plus_shadow_through(
     if term >= SHADOW_TERMS {
         return shadow_through(who, points, level);
     }
+    // The cross's two arms unioned ([`plus_feet`]) rather than the nearer one
+    // alone, and past the branch above, so a blur row pays for none of it. Here
+    // because here is where the Shadow WIDTH the rule is spent against arrives:
+    // per caster and per term, off the array a blur row reads its own σ from.
+    //
+    // The weight is taken off the feet in the marker's own uv while the two
+    // distances go to the rule in points. A cosine is scale-free, so the units
+    // never have to meet.
+    let feet = plus_feet(uv);
+    let width = 2.0 * shadow_casters[caster].sigma[term];
     let full = standoff_coverage(
-        d_points,
-        2.0 * shadow_casters[caster].sigma[term],
+        union_distance(
+            feet.near.sd * arm_points,
+            feet.next.sd * arm_points,
+            facing(feet.near.offset, feet.next.offset),
+            width,
+        ),
+        width,
     );
     return ShadowThrough(
         shadow_transmittance(full, glow_shadow_depth(), distance_level, glow_shadow_curve()),
@@ -3032,6 +3048,41 @@ fn plus_sd(uv: vec2<f32>) -> f32 {
     return plus_box_sd(uv, 1.0);
 }
 
+// One arm's own box: the exact signed distance to it, and the offset from `uv`
+// to its nearest point. `half` is the box's half-extents in the arm's length,
+// so the flat arm is (1, half-thickness) and the upright one is that swapped.
+//
+// The offset is exact wherever the fragment stands OUTSIDE the box, which is
+// the whole of where a shadow is read; a fragment on the arm hands back a zero
+// vector and is spent by `union_distance`'s own `d1 <= 0`.
+fn plus_arm_foot(uv: vec2<f32>, half: vec2<f32>) -> Foot {
+    let corner = abs(uv) - half;
+    return Foot(
+        length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0),
+        clamp(uv, -half, half) - uv,
+    );
+}
+
+// The two arms a marker's cross is the union of, nearer first — the pair the
+// crease rule unions (`union_distance` in `plus_shadow_through`).
+//
+// [`plus_sd`]'s fold answers with the nearer arm alone, and a standoff spending
+// that alone is deaf to the other arm standing SQUARE across it: inside each of
+// the four inner corners the two feet are perpendicular, so they meet on the
+// plane facing away from the nearer one and the second is counted whole.
+//
+// The fold stays where the INK is cut, which is what keeps the two soft edges
+// from doubling up along the diagonals; this is the same shape read as the two
+// boxes it is made of, so the nearer foot's distance is the fold's own.
+fn plus_feet(uv: vec2<f32>) -> TwoFeet {
+    let flat = plus_arm_foot(uv, vec2<f32>(1.0, u.misc5.x));
+    let upright = plus_arm_foot(uv, vec2<f32>(u.misc5.x, 1.0));
+    if upright.sd < flat.sd {
+        return TwoFeet(upright, flat);
+    }
+    return TwoFeet(flat, upright);
+}
+
 // The longitudinal taper of a marker's ink, folded onto the nearest arm.
 fn plus_taper(uv: vec2<f32>) -> f32 {
     let p = abs(uv);
@@ -3769,16 +3820,16 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let alpha = in.color.a * plus_coverage(in.uv, aa);
     // The SHADOW, multiplied into everything already in the frame under it. A
     // blur row reads the field's shared cell; a distance row spends this
-    // fragment's exact folded-box distance, measured by this marker's own arm
-    // on screen. A cross in front of a node darkens that node's rings wherever
-    // it reaches them, and a node drawn after it darkens the cross the same way
-    // — the painter's order the pass already has is the whole of what decides
-    // which.
-    let d_points = plus_sd(in.uv) * in.shadow_box.y;
+    // fragment's exact distance to each of the marker's two arms, in the uv
+    // they are measured in and scaled by this marker's own arm on screen. A
+    // cross in front of a node darkens that node's rings wherever it reaches
+    // them, and a node drawn after it darkens the cross the same way — the
+    // painter's order the pass already has is the whole of what decides which.
     let distance_level = in.shadow_at.z;
     let t = plus_shadow_through(
         in.shadow_box.x,
-        d_points,
+        in.uv,
+        in.shadow_box.y,
         in.shadow_at.xy,
         in.shadow_at.z,
         distance_level,
