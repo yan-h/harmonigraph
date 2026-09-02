@@ -242,6 +242,60 @@ fn standoff_coverage(d: f32, w: f32) -> f32 {
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
 
+// The one distance whose standoff coverage equals the UNION of two, in the
+// units `d1`, `d2` and `w` share.
+//
+// [`standoff_coverage`] spends the distance to the NEAREST ink, and nearest is
+// a `min`: where two pieces of one caster face each other the second spends
+// nothing and the medial axis between them carries a crease. Unioning the two
+// coverages — `1 - (1 - p(d1))(1 - k·p(d2))`, the second weighted by how
+// squarely its foot faces the point ([`facing`]) — and inverting `p` carries
+// the pair as ONE distance, so the consumer reads one exponential and the
+// window is still applied once, at the read.
+//
+// `d1` exactly wherever the second foot is past the window, faces away, or the
+// point stands on ink, so a lone feature round-trips; and never more than
+// `(w/SHADOW_TAIL)·ln 2` under `d1`, so a cell padded to `SHADOW_STOP·w` still
+// holds the whole shadow.
+//
+// The UNWINDOWED exponentials on both terms, which is what makes the pair
+// invertible at all: the window shuts to exactly zero a couple of widths out
+// and stays there, and zero coverage names no distance to carry.
+fn union_distance(d1: f32, d2: f32, k: f32, w: f32) -> f32 {
+    if d1 <= 0.0 || d2 >= SHADOW_STOP * w || k <= 0.0 {
+        return d1;
+    }
+    let a = exp(-SHADOW_TAIL * d1 / w);
+    let b = k * exp(-SHADOW_TAIL * d2 / w);
+    return -(w / SHADOW_TAIL) * log(1.0 - (1.0 - a) * (1.0 - b));
+}
+
+// How much of a second foot counts, 0..=1: 1 on or beyond the plane through the
+// point that faces away from its nearest ink, ramping to 0 at [`BEYOND_RAMP`]
+// behind it.
+//
+// Both arguments are offsets FROM the point — `near` to its nearest ink, `foot`
+// to the second feature's nearest point — which is the vector every producer
+// of a distance carries.
+//
+// A ramp and not a step. Where the nearest ink is a convex CORNER the plane
+// rotates about a fixed foot, so a step switches the second feature on along a
+// curve rather than sliding it in: a quarter of the depth in one texel, at the
+// mouth of every gap between two pieces of one caster.
+fn facing(near: vec2<f32>, foot: vec2<f32>) -> f32 {
+    let n = length(near);
+    let f = length(foot);
+    if n <= 0.0 || f <= 0.0 {
+        return 0.0;
+    }
+    return smoothstep(-BEYOND_RAMP, 0.0, dot(foot, -near / n) / f);
+}
+
+// How far behind that plane a foot still counts, as the cosine of the angle it
+// stands at — `BEYOND_RAMP` in harmonigraph_scene, pinned to it by
+// `the_shaders_distance_kind_and_window_are_the_packers`.
+const BEYOND_RAMP: f32 = 0.5;
+
 // The flattest a shadow's falloff may be bent to, whatever a caller asks for.
 //
 // The exponent acts on a number in 0..=1, so as it approaches zero every

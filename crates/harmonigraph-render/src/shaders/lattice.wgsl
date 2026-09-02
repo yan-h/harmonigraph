@@ -669,7 +669,11 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>, // -1..1 across the quad
     @location(1) color: vec4<f32>,
-    @location(2) params: vec3<f32>,
+    // xyz: the node's own levels, `Instance::params`. w: the Shadow width this
+    // caster's cell will be READ at, in pane points, on the draw that fills a
+    // distance cell ([`vs_node_cell`]); 0 on every other draw, none of which
+    // has a width to answer with.
+    @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
     // Which ROW of the ink strip is this node's — the row the light's own clock
@@ -795,6 +799,9 @@ fn vs_node_cell(
     // The negative sign carries the distance kind without consuming another
     // interpolator; coverage cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
+    // One Shadow width in pane points, which the fill needs because the cell it
+    // writes is a function of it (`fs_node_cell`).
+    out.params.w = box.who.w;
     return out;
 }
 
@@ -868,7 +875,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner * margin;
     out.color = inst.color;
-    out.params = inst.params;
+    out.params = vec4<f32>(inst.params, 0.0);
     out.octaves = inst.octaves;
     out.cents = inst.cents;
     out.strip_row = inst.glow.y;
@@ -1588,6 +1595,24 @@ fn no_foot() -> Foot {
     return Foot(EMPTY_DISTANCE, vec2<f32>(EMPTY_DISTANCE, 0.0));
 }
 
+// The two nearest feet the node's layers put under one fragment: the winner,
+// and the runner-up the crease rule unions with it (`union_distance`).
+//
+// TWO and not one because the standoff spends a `min`, and a `min` is deaf to
+// the second piece of ink: between two layers facing each other — the two
+// slices either side of an octave gap, a mark strip and the band it stands off
+// — nothing but the nearer one is spent, and the medial axis between them
+// carries a crease.
+struct TwoFeet {
+    near: Foot,
+    next: Foot,
+}
+
+// Feet no shape claims, for a fragment no layer has reached yet.
+fn no_feet() -> TwoFeet {
+    return TwoFeet(no_foot(), no_foot());
+}
+
 fn layer_coverage(layer: NodeLayer) -> f32 {
     return layer.coverage * layer.level;
 }
@@ -1608,9 +1633,29 @@ fn farther_foot(a: Foot, b: Foot) -> Foot {
     return a;
 }
 
-fn layer_distance(field: Foot, layer: NodeLayer) -> Foot {
-    if layer.level >= DISTANCE_LEVEL_FLOOR && layer.foot.sd < field.sd {
-        return layer.foot;
+// The running top two of the feet handed in, over the layers standing at the
+// half-level contour.
+//
+// The RUNNER-UP and not "the nearest foot beyond the plane", which is the rule
+// `union_distance` is an implementation of: they differ only where a nearer
+// layer faces away and a farther one faces the fragment, and the second term is
+// then dropped rather than found. For the shapes a node is made of — radial
+// gaps between slices, concentric strips — the runner-up is the facing feature
+// or a collinear neighbour the facing weight excludes anyway, and no third
+// layer is beyond the plane.
+//
+// One layer answers with one foot, so a layer whose OWN two sides face each
+// other keeps its crease: a sector wider than half a turn is cut by two gaps
+// that see each other across the node, and both cuts are this one layer's.
+fn layer_distance(field: TwoFeet, layer: NodeLayer) -> TwoFeet {
+    if layer.level < DISTANCE_LEVEL_FLOOR {
+        return field;
+    }
+    if layer.foot.sd < field.near.sd {
+        return TwoFeet(layer.foot, field.near);
+    }
+    if layer.foot.sd < field.next.sd {
+        return TwoFeet(field.near, layer.foot);
     }
     return field;
 }
@@ -2393,9 +2438,9 @@ struct NodeInk {
     // A share and not a switch, so a slice fading in carries its wash in with
     // it and no seam appears at a threshold nothing else in the picture has.
     lit: f32,
-    // The nearest layer whose level reaches the distance contour, and the way
-    // to it.
-    foot: Foot,
+    // The two nearest layers whose level reaches the distance contour, and the
+    // way to each.
+    feet: TwoFeet,
 };
 
 /// What every node layer answers at this fragment: its visible ink and the
@@ -2448,7 +2493,7 @@ fn node_ink(
     // thing in the picture that asks a node's ink what it is rather than only
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
-    var node_foot = no_foot();
+    var node_feet = no_feet();
     // The axis every annular layer's foot stands on. The node's own centre is a
     // tie all the way round each ring, so any ray does there.
     let radial = select(vec2<f32>(1.0, 0.0), in.uv / d, d > 1e-6);
@@ -2543,8 +2588,8 @@ fn node_ink(
         // place of the other.
         let ink = oct_slot_ink(in, slot);
         let opacity = ink.w;
-        node_foot = layer_distance(
-            node_foot,
+        node_feet = layer_distance(
+            node_feet,
             NodeLayer(shape_layer.foot, opacity, shape_layer.coverage),
         );
         let slot_rgb = ink.xyz;
@@ -2637,7 +2682,7 @@ fn node_ink(
         aa,
         analytic,
     );
-    node_foot = layer_distance(node_foot, audio.layer);
+    node_feet = layer_distance(node_feet, audio.layer);
     glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
         / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
     // The wedge's own reading is its lit share, on the composite the coverage
@@ -2684,8 +2729,8 @@ fn node_ink(
     );
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
-    node_foot = layer_distance(node_foot, melody_layer);
-    node_foot = layer_distance(node_foot, bass_layer);
+    node_feet = layer_distance(node_feet, melody_layer);
+    node_feet = layer_distance(node_feet, bass_layer);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2727,7 +2772,7 @@ fn node_ink(
     // is as lit as a whole one. The floor is the discard's own threshold read
     // from the other side — at no ink there is no share to take, and the
     // caller multiplies the answer by that same nothing.
-    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_foot);
+    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_feet);
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that
@@ -2806,7 +2851,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.foot);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.feet);
     }
     let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
     let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
@@ -2837,8 +2882,8 @@ fn node_paint(in: VsOut) -> Painted {
 
 /// A node's shadow source, into its own cell of the atlas (`shadow.rs`). A blur
 /// term stores the byte-identical coverage it convolves. A Distance term stores
-/// the exact union in pane points, with only layers at the half-level contour
-/// included.
+/// the union of its two nearest layers in pane points, with only layers at the
+/// half-level contour included.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2864,13 +2909,25 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, analytic);
     if analytic {
+        // The UNION of the two nearest layers, carried as the one distance
+        // whose standoff coverage equals it, so the consumer still reads one
+        // exponential. That makes the cell a function of the Shadow WIDTH as
+        // well as of the geometry it is cut from: any cross-frame cache of a
+        // cell keys on `in.params.w` beside every layer it was drawn from.
+        let scale = abs(in.shadow_at.z);
+        let united = union_distance(
+            ink.feet.near.sd * scale,
+            ink.feet.next.sd * scale,
+            facing(ink.feet.near.offset, ink.feet.next.offset),
+            in.params.w,
+        );
         // Stabilize the value before the R16 attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a
         // last f32 ulp may otherwise land on opposite sides of an f16 tie.
         // 1/32 point is far below both the cell's texel and the numeric
         // reference's tolerance, so this decides representation rather than
         // geometry.
-        let points = clamp(ink.foot.sd * abs(in.shadow_at.z), -EMPTY_DISTANCE, EMPTY_DISTANCE);
+        let points = clamp(united, -EMPTY_DISTANCE, EMPTY_DISTANCE);
         let stable = round(points * 32.0) / 32.0;
         return vec4<f32>(stable, 0.0, 0.0, 0.0);
     }

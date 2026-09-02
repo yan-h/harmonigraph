@@ -167,15 +167,19 @@ pub(crate) struct ShadowBox {
     /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
     /// reaches, in the pane's points — the pad the rect was grown by, which is
     /// where the standoff's curve is windowed to nothing and so the value a
-    /// texel past its encoded reach holds; w: unused.
+    /// texel past its encoded reach holds; w: this term's Shadow WIDTH in the
+    /// pane's points, 2σ, which is what a distance read out of the cell is
+    /// measured against ([`ShadowCaster::sigma`], `shadow_kernel`).
     ///
     /// x is read by the node's SCENE draw, which needs every term at once and
     /// so reaches the array rather than the box; y and z by the passes that
     /// sweep the CELLS, which take one at a time and have to know which chain
-    /// this one belongs to. Carried on the box rather than in a buffer of its
-    /// own because the node's two draws — the one that fills a cell and the one
-    /// that reads the atlas — bind the same stream, and one row is cheaper than
-    /// a second binding.
+    /// this one belongs to; w by the draw that FILLS a distance cell, which
+    /// unions two distances into one (`union_distance` in common.wgsl) and so
+    /// needs the width the union is taken at. Carried on the box rather than in
+    /// a buffer of its own because the node's two draws — the one that fills a
+    /// cell and the one that reads the atlas — bind the same stream, and one
+    /// row is cheaper than a second binding.
     pub who: [f32; 4],
 }
 
@@ -508,7 +512,7 @@ pub(crate) fn pack(
                 rect,
                 cell,
                 terms: [k, sigma_cell, level, scale],
-                who: [c as f32, kind, pad, 0.0],
+                who: [c as f32, kind, pad, 2.0 * sigma_of(caster, term) / px_per_point],
             });
             if !whole {
                 continue;
@@ -1382,14 +1386,17 @@ pub(crate) mod tests {
     }
 
     /// The two shader modules that spell a distance term's kind agree on it,
-    /// and the scene and consumer agree on the standoff's window.
+    /// and the scene and consumer agree on the standoff's window and on how
+    /// squarely a second feature has to face before it is unioned in.
     ///
     /// Each has to be written more than once — there is no linkage between
     /// shader modules here, and the scene crate has no shader at all — and each
     /// fails SILENTLY if the copies part. A kind that has drifted collapses
     /// every distance cell's quad and draws no shadow at all; a window that has
     /// drifted pads a cell to one radius and cuts its curve off at another,
-    /// which is a screen-aligned step in the halo.
+    /// which is a screen-aligned step in the halo; a facing ramp that has
+    /// drifted draws a crease the CPU model says is filled, the model being
+    /// what settles the ramp (`lattice_tests::crease`).
     #[test]
     fn the_shaders_distance_kind_and_window_are_the_packers() {
         let common = crate::with_common("");
@@ -1400,6 +1407,7 @@ pub(crate) mod tests {
         for (name, want) in [
             ("SHADOW_TAIL", harmonigraph_scene::SHADOW_TAIL),
             ("SHADOW_STOP", harmonigraph_scene::SHADOW_STOP),
+            ("BEYOND_RAMP", harmonigraph_scene::BEYOND_RAMP),
         ] {
             let held: f32 = shader_const(&common, name).parse().expect("a number");
             assert_eq!(held, want, "common.wgsl's {name} and the scene's have parted");
