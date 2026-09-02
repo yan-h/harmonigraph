@@ -1564,6 +1564,11 @@ mod tests {
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
         let mut state = fresh();
+        // These fixtures measure lattice spellings themselves. The shipped
+        // comma locks are a view choice that would respell the same positions
+        // before the naming rule under test sees them.
+        state.view.meantone = false;
+        state.view.marvel = false;
         state.spectrum_config = SpectrumConfig {
             orientation,
             low_midi: 60.0 - range * 0.5,
@@ -3378,7 +3383,12 @@ mod tests {
     #[test]
     fn a_plain_spelling_beats_an_off_sheet_one_at_the_same_pitch() {
         // A view with depth, so off-sheet nodes are candidates at all.
-        let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+        let view = harmonigraph_scene::ViewConfig {
+            extent_sevens: 1,
+            meantone: false,
+            marvel: false,
+            ..Default::default()
+        };
         let equal = harmonigraph_core::Tuning::default();
         let name = |midi| note_name(&view, &view.reach(), &equal, midi).to_string();
 

@@ -1273,7 +1273,7 @@ mod tests {
     /// transients, in charge of whether the band works at all. On the curve a
     /// half-open level is 28.7% of the way through the Fade at the fresh shape,
     /// which at the Fade's top of 1 s is 287 ms of continuous above-gate
-    /// reading before the band engages, and 43 ms at the fresh 0.15 s.
+    /// reading before the band engages, and 29 ms at the fresh 0.10 s.
     ///
     /// Run here at two Fades an order of magnitude apart, on one gate, one
     /// band and one pair of readings: a level clear of the gate, then a level

@@ -503,8 +503,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // above it is drawn with.
     //
     // The one bar in the pane carrying a picture of itself, and the reason is
-    // that its number says nothing: a Fade of 0.15 is a length anyone can feel
-    // and a Fade curve of 0.35 is a position on a scale with no unit and no
+    // that its number says nothing: the Fade's seconds are a length anyone can
+    // feel, while a Fade curve is a position on a scale with no unit and no
     // landmarks. The line is drawn RISING, as an arrival, because that is the
     // function itself — a release is the same curve upside down, and picking
     // the falling one would be picking a direction the setting does not have.

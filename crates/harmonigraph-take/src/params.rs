@@ -156,18 +156,15 @@ impl ParamKey {
             // enough to take the hard edge off a note-on, and as a release
             // long enough to read as a fade rather than a cut while still
             // clearing the node before the next one lands at playing tempo.
-            // 0.15 is where those two agree. A whole second keeps released
+            // 0.10 is where those two agree. A whole second keeps released
             // notes up long enough to blur which of them are still sounding,
             // and puts a stab's arrival behind the ear by a beat.
-            ParamKey::Fade => 0.15,
-            // G♯0 to F6 — a shade under six octaves, set inside the MIDI
-            // range rather than at its ends (C0 to C7 is the whole of what a
-            // keyboard reaches, and the octaves nobody plays spend the
-            // gradient's arc on nothing). Notes outside it are not lost: the
-            // ramp holds its end color past either end, so an outlying bass
-            // note reads as the bottom of the range rather than wrapping.
-            ParamKey::DarkestPitch => 32.478_26,
-            ParamKey::BrightestPitch => 100.691_56,
+            ParamKey::Fade => 0.1,
+            // C1 to C8, the seven-octave keyboard range. Notes outside it are
+            // not lost: the ramp holds its end color past either end, so an
+            // outlying note reads as the nearest end rather than wrapping.
+            ParamKey::DarkestPitch => 24.0,
+            ParamKey::BrightestPitch => 108.0,
         }
     }
 

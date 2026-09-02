@@ -615,10 +615,10 @@ pub(super) const PROBE_RANGE: f32 = 200.0;
 /// dialled-in look is captured, and it moves the readings the wrong way:
 /// [`PROBE_BAND_WIDTH`] is the outermost ring, so a retune of the audio ring
 /// INSIDE it can push the band off the quad edge, and a refused
-/// band leaves these measurements nothing to find. That the shipped stack
-/// draws three visible layers inside the quad is held where it belongs, on the
-/// fresh view itself, by `harmonigraph_scene`'s
-/// `the_fresh_node_stacks_three_visible_layers_inside_the_quad`.
+/// band leaves these measurements nothing to find. The shipped stack's active
+/// layers are held where they belong, on the fresh view itself, by
+/// `harmonigraph_scene`'s
+/// `the_fresh_node_spends_its_stack_on_octaves_and_marks`.
 ///
 /// The PADDING is the probe's for a second reason: the Ring gap is what
 /// separates every layer of a node, and a gap of the order the fresh view

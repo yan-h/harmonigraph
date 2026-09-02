@@ -914,7 +914,7 @@ pub(crate) mod tests {
                 sigma: 1.0,
                 kind: harmonigraph_scene::TermKind::Blur,
             }],
-            "the fresh row is not one Gaussian at the bar's own width, so every other reading \
+            "the Gaussian row is not one Gaussian at the bar's own width, so every other reading \
              in this suite is against a different picture",
         );
     }

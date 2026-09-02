@@ -171,10 +171,9 @@ fn drawable(c: glam::Vec4) -> bool {
 ///
 /// Two resolves, not three — the markers are off
 /// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink) and the other two
-/// off [`Scene::lattice_ground`] — so the sweeps below poison BOTH bars and
-/// check each answer against its own. Poisoning one alone proves nothing here:
-/// both repair to the same fresh `L*`, so a marker reading the wrong field
-/// would still come out the right colour.
+/// off [`Scene::lattice_ground`] — so the sweeps below poison one bar at a time
+/// and check each answer against its own while the other stays at a distinct
+/// drawable grey.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
     let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
@@ -216,19 +215,20 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
 /// nothing.
 #[test]
 fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
-    let fresh = ViewConfig::default().lattice_ground;
-    let fresh_grey = crate::grey_of_lightness(fresh);
+    let fresh = ViewConfig::default();
+    let fresh_ground = crate::grey_of_lightness(fresh.lattice_ground);
+    let fresh_marker = crate::grey_of_lightness(fresh.marker_ink);
     let parked = crate::grey_of_lightness(PARKED);
     for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let rings = ViewConfig { lattice_ground: broken, marker_ink: PARKED, ..plain_view() };
         assert_eq!(
             rings.lattice_ground_lightness(),
-            fresh,
+            fresh.lattice_ground,
             "a ground of {broken} resolves to an L* no colour can be solved for",
         );
         let (ground, pluses, idle) = ground_of(&rings);
         assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
-        assert_eq!(ground, fresh_grey, "a ground of {broken} is not repaired to the fresh grey");
+        assert_eq!(ground, fresh_ground, "a ground of {broken} is not repaired to the fresh grey",);
         assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
         for marker in pluses {
             assert_eq!(marker, parked, "a ground of {broken} drew a marker {marker:?}");
@@ -248,7 +248,7 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
         let markers = ViewConfig { lattice_ground: PARKED, marker_ink: broken, ..plain_view() };
         assert_eq!(
             markers.marker_ink_lightness(),
-            fresh,
+            fresh.marker_ink,
             "a marker ink of {broken} resolves to an L* no colour can be solved for",
         );
         let (ground, pluses, idle) = ground_of(&markers);
@@ -257,7 +257,7 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
         for marker in pluses {
             assert!(drawable(marker), "a marker ink of {broken} drew a marker {marker:?}");
             assert_eq!(
-                marker, fresh_grey,
+                marker, fresh_marker,
                 "a marker ink of {broken} is not repaired to the fresh grey",
             );
         }
@@ -265,7 +265,7 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
 }
 
 /// A grey to park one of the two at-rest bars at while the other is swept: far
-/// from the fresh `L*` both repair to, and from either end of the axis, so a
+/// from both fresh `L*` values, and from either end of the axis, so a
 /// surface reading the wrong bar draws a visibly wrong colour rather than the
 /// right one by coincidence.
 const PARKED: f32 = 64.0;
@@ -347,23 +347,23 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
 /// the accessor having already made it drawable.
 #[test]
 fn a_broken_ground_reads_back_as_the_grey_it_draws() {
-    let fresh = ViewConfig::default().lattice_ground;
+    let fresh = ViewConfig::default();
     let broken_grounds = [
-        (f32::NAN, fresh),
-        (f32::INFINITY, fresh),
-        (f32::NEG_INFINITY, fresh),
-        (-50.0, 0.0),
-        (500.0, 100.0),
+        (f32::NAN, fresh.lattice_ground, fresh.marker_ink),
+        (f32::INFINITY, fresh.lattice_ground, fresh.marker_ink),
+        (f32::NEG_INFINITY, fresh.lattice_ground, fresh.marker_ink),
+        (-50.0, 0.0, 0.0),
+        (500.0, 100.0, 100.0),
     ];
-    for (broken, want) in broken_grounds {
+    for (broken, want_ground, want_marker) in broken_grounds {
         let mut view = ViewConfig { lattice_ground: broken, marker_ink: broken, ..plain_view() };
         view.sanitize();
         assert_eq!(
-            view.lattice_ground, want,
+            view.lattice_ground, want_ground,
             "the blob's door left a ground of {broken} as it was",
         );
         assert_eq!(
-            view.marker_ink, want,
+            view.marker_ink, want_marker,
             "the blob's door left a marker ink of {broken} as it was",
         );
         let (ground, pluses, ..) = ground_of(&view);
@@ -920,6 +920,7 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
 fn window_center_pans_which_nodes_display() {
     let view = ViewConfig {
         center_threes: 5,
+        center_fives: 0,
         extent_threes: 1,
         extent_fives: 0,
         extent_sevens: 0,
@@ -1236,8 +1237,9 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     );
 }
 
-/// A fresh node's middle and its three layers are all THERE, each clear of the
-/// last, and the whole stack fits inside the quad.
+/// A fresh node spends its ring stack on the octave band and marks, keeps the
+/// analyzer width at the control's floor, and fits the active layers inside the
+/// quad.
 ///
 /// The fresh view's own arithmetic rather than a picture, because that is what
 /// the stack is — and it is worth pinning because the sizes are widths: nothing
@@ -1245,7 +1247,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
 /// moves every layer outside it, and a stack that has walked off the quad edge
 /// draws a node with its outer rings quietly clipped away.
 #[test]
-fn the_fresh_node_stacks_three_visible_layers_around_its_middle() {
+fn the_fresh_node_spends_its_stack_on_octaves_and_marks() {
     let view = ViewConfig::default();
     let rings = view.rings();
     // A gap a reader can see, not merely a positive number. A twentieth of the
@@ -1257,14 +1259,13 @@ fn the_fresh_node_stacks_three_visible_layers_around_its_middle() {
     // node glow is what fills it, and a fresh view that started the rings at 0
     // would have nowhere to put that light but over its own ink.
     assert!(rings.inner > CLEAR, "the fresh stack starts at {}, on the centre", rings.inner);
-    // The innermost layer seats on that start — there is nothing inside it to
-    // stand off — and the band is a gap out from where it ended.
+    // The analyzer width is at its floor, so the octave band is the innermost
+    // layer and seats directly on the stack's start.
+    assert_eq!(rings.audio, (0.0, 0.0), "the fresh analyzer width moved off its floor");
     assert_eq!(
-        rings.audio,
-        (rings.inner, rings.band.0 - rings.gap),
-        "the fresh audio ring does not run from the stack's start to the band",
+        rings.band.0, rings.inner,
+        "the fresh octave band did not take the innermost available slot",
     );
-    assert!(rings.audio.1 - rings.audio.0 > CLEAR, "the fresh audio ring is a hairline");
     assert!(rings.band.1 - rings.band.0 > CLEAR, "the fresh octave band is a hairline");
     assert!(rings.mark_thickness > 0.0, "the fresh marks are off");
     // The marks are the one layer allowed past the quad edge — they draw in the
@@ -1347,7 +1348,7 @@ fn gated_scene(gate: f32, pitch: f32) -> Scene {
 /// [`gated_scene`] over a tracker of the caller's, for the claims that are
 /// about what the KEYS have to say about a ring.
 fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
-    let view = ViewConfig { spectral_ring_gate: gate, ..plain_view() };
+    let view = ViewConfig { spectral_ring_width: 0.1, spectral_ring_gate: gate, ..plain_view() };
     let mut scene = scene_of(tracker, &Tuning::just(), &view, &plain_frame(), 0.5);
     let mut paint = SpectralPaint::new(&view, Gradient::default());
     for (bucket, level) in paint.levels.iter_mut().enumerate() {
@@ -1425,7 +1426,11 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
 /// the key.
 #[test]
 fn a_node_the_keys_have_lit_rings_whatever_the_gate_says() {
-    let view = ViewConfig { spectral_ring_gate: SPECTRAL_GATE_MAX, ..plain_view() };
+    let view = ViewConfig {
+        spectral_ring_width: 0.1,
+        spectral_ring_gate: SPECTRAL_GATE_MAX,
+        ..plain_view()
+    };
     let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
     scene.spectral = SpectralPaint::new(&view, Gradient::default());
     scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
@@ -1464,7 +1469,11 @@ fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
     tracker.handle_event(NoteEvent::off(1.0, 0, 60));
-    let view = ViewConfig { spectral_ring_gate: SPECTRAL_GATE_MAX, ..plain_view() };
+    let view = ViewConfig {
+        spectral_ring_width: 0.1,
+        spectral_ring_gate: SPECTRAL_GATE_MAX,
+        ..plain_view()
+    };
     // A fade to sample along, where the shared fixture's is 0 — and an arrival
     // of the same length with it, which the note has had by the time it is
     // released.

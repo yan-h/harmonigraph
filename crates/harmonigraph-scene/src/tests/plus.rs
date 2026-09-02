@@ -1,5 +1,5 @@
 //! The lattice structure standing AT the nodes: which positions carry a marker,
-//! how big it is, and the one grey it shares with everything else at rest.
+//! how big it is, and the independent grey it uses at rest.
 //!
 //! Nothing is drawn BETWEEN the positions, and several tests here exist to
 //! hold that: the field's regularity is what the rows and columns are read
@@ -194,7 +194,7 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
 fn the_width_reaches_the_scene_as_a_share_of_the_arm() {
     // (arm, width) -> half the thickness, as a share of one arm.
     for (arm, width, want) in [
-        // The fresh proportion: a little over half an arm across.
+        // A representative proportion: a little over half an arm across.
         (0.2f32, 0.11f32, 0.275f32),
         // Half of it, taken from either end of the bar — the shader measures
         // out from the arm's own centre line, so the whole thickness is never
@@ -479,22 +479,20 @@ fn the_ring_and_an_idle_node_are_one_grey() {
     }
 }
 
-/// A FRESH lattice draws its whole resting picture in one grey: the two at-rest
-/// bars open on the same `L*`, so nothing about a fresh install says the
-/// markers and the rings are dialled separately.
+/// A fresh lattice holds its marker field above the ring ground, and the scene
+/// spends each bar on its own surface.
 ///
-/// The pair is what a person is meant to compare, and a fresh view that opened
-/// them apart would be the panel arguing for a split before anyone asked for
-/// one. It is also the difference between a second bar and a changed picture —
-/// retuning one fresh value and not the other is exactly the drift this
-/// catches, and it is invisible in every other test here, all of which set both
-/// bars.
+/// The split keeps the resting positions legible through the broad node glow.
+/// Both the values and their consumers are part of the look: equal defaults or
+/// a crossed wire would flatten the pair back to one grey.
 #[test]
-fn a_fresh_lattice_rests_in_one_grey() {
+fn a_fresh_lattice_holds_its_markers_above_the_ring_ground() {
     let fresh = ViewConfig::default();
-    assert_eq!(
-        fresh.marker_ink, fresh.lattice_ground,
-        "a fresh lattice opens with its markers and its unlit rings on two greys",
+    assert!(
+        fresh.marker_ink > fresh.lattice_ground,
+        "the fresh marker ink {} does not stand above the ring ground {}",
+        fresh.marker_ink,
+        fresh.lattice_ground,
     );
     let scene = scene_of(
         &NoteTracker::new(),
@@ -505,9 +503,12 @@ fn a_fresh_lattice_rests_in_one_grey() {
     );
     let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
     assert_eq!(
-        marker.color, scene.lattice_ground,
-        "the fresh bars agree and the picture still draws two greys",
+        marker.color,
+        crate::grey_of_lightness(fresh.marker_ink),
+        "the fresh marker does not draw at its own ink",
     );
+    assert_eq!(scene.lattice_ground, crate::grey_of_lightness(fresh.lattice_ground));
+    assert_ne!(marker.color, scene.lattice_ground, "the fresh pair collapsed to one grey");
 }
 
 /// The markers and the node's unlit rings are dialled by two bars, and neither
@@ -588,10 +589,10 @@ fn a_marker_that_survives_a_chord_is_painted_exactly_as_it_was() {
         assert_eq!(a.strength, b.strength, "a chord lit a marker: {b:?}");
         assert_eq!(a.radius, b.radius, "a chord resized a marker: {b:?}");
     }
-    // And every survivor stands on the plain ground.
+    // And every survivor keeps the marker field's own resting ink.
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     for marker in &scene.pluses {
-        assert_eq!(marker.color, scene.lattice_ground, "{marker:?}");
+        assert_eq!(marker.color, crate::grey_of_lightness(view.marker_ink), "{marker:?}");
         assert_eq!(marker.strength, 1.0, "{marker:?}");
     }
     assert!(

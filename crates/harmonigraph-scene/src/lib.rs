@@ -206,8 +206,7 @@ pub const GAP_MAX: f32 = 0.2;
 /// of the ring stack and owes it no room, so at the top of the arm bar it
 /// reaches past the middle a node's rings stand around, and the lattice at
 /// rest is a field of crosses rather than of points. That is the far end being
-/// a different picture, which is what a bar's far end is for; the small marker
-/// the fresh view draws is a fifth of the way along it.
+/// a different picture, which is what a bar's far end is for.
 pub const PLUS_SIZE_MAX: f32 = 0.9;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
@@ -232,7 +231,7 @@ pub const PLUS_SIZE_MAX: f32 = 0.9;
 /// the bar as at a reach of one. Cheap fragments, the ink strip having already
 /// answered the colour, so what that comes to depends on how many nodes are
 /// lit at once: measured off `the_node_glow_draws_a_picture` at 1200x1000, a
-/// chord's worth of light costs the same at 8 as at the fresh 0.35 (5.4 ms a
+/// chord's worth of light costs the same at 8 as at a reach of 0.35 (5.4 ms a
 /// frame either way), and a lattice with thirty-odd nodes lit goes from 6.6 ms
 /// to 12.2. A bar to turn up while watching the frame rate, in other words,
 /// rather than a number the renderer defends.

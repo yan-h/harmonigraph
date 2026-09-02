@@ -143,9 +143,12 @@ fn pick_selects_the_node_nearest_the_pointer() {
     );
     let viewport = Vec2::new(800.0, 600.0);
     // Pointer exactly on the projected origin node must pick it, not a
-    // neighbor; a pointer far outside every node picks nothing.
-    let origin_px = scene.project(viewport, Vec3::ZERO).unwrap();
-    assert_eq!(scene.pick(viewport, origin_px, 24.0), Some(LatticePos::ORIGIN));
+    // neighbor; a pointer far outside every node picks nothing. Its world
+    // position comes from the scene because the window center is a view
+    // setting and need not put lattice origin at world origin.
+    let origin = origin_node(&scene);
+    let origin_px = scene.project(viewport, origin.world_pos).unwrap();
+    assert_eq!(scene.pick(viewport, origin_px, 24.0), Some(origin.lattice_pos));
     assert_eq!(scene.pick(viewport, Vec2::new(-500.0, -500.0), 24.0), None);
 }
 

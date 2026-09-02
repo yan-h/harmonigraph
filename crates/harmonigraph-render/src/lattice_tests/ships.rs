@@ -484,6 +484,15 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
     );
 }
 
+fn ringing_view() -> harmonigraph_scene::ViewConfig {
+    harmonigraph_scene::ViewConfig {
+        // These tests exercise the analyzer ring's shipping and paint paths,
+        // so the fixture gives that layer a radial slot explicitly.
+        spectral_ring_width: 0.1,
+        ..Default::default()
+    }
+}
+
 /// The ring's floor colour is a picture on every node, so the ring being on
 /// is itself a reason to ship an instance: the cull that drops idle nodes
 /// keeps all of them the moment the annulus is real. Nothing else reaches
@@ -491,10 +500,10 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
 /// cull on activation instead.
 #[test]
 fn an_open_ring_ships_every_idle_node() {
-    let fresh = harmonigraph_scene::ViewConfig::default();
+    let view = ringing_view();
     let mut scene = idle_scene();
     assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
-    (scene.spectral.inner, scene.spectral.outer) = fresh.rings().audio;
+    (scene.spectral.inner, scene.spectral.outer) = view.rings().audio;
     let cb = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
@@ -526,10 +535,10 @@ fn an_open_ring_ships_every_idle_node() {
 /// exactly as long as it is drawn.
 #[test]
 fn a_faded_out_ring_ships_no_idle_node() {
-    let fresh = harmonigraph_scene::ViewConfig::default();
+    let view = ringing_view();
     let mut scene = idle_scene();
     assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
-    (scene.spectral.inner, scene.spectral.outer) = fresh.rings().audio;
+    (scene.spectral.inner, scene.spectral.outer) = view.rings().audio;
     let ships = |scene: &Scene| {
         LatticeCallback::from_scene(
             scene,
@@ -574,18 +583,18 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
     };
 
     let shot_at = |gpu: &mut Shooter, level: u8| -> Vec<u8> {
-        let fresh = harmonigraph_scene::ViewConfig::default();
+        let view = ringing_view();
         let mut scene = single_marked_node(0, 0);
         let node = &mut scene.nodes[0];
         // Nothing held, so what is on screen is the ring alone: the band's own
         // wedges are the MIDI picture and would sum into the channels below.
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.activation = 1.0;
-        let rings = fresh.rings();
+        let rings = view.rings();
         scene.outer_inner = rings.band.0;
         scene.outer_outer = rings.band.1;
         scene.rings_outer = rings.outer;
-        scene.octave_gap = fresh.octave_gap_width();
+        scene.octave_gap = view.octave_gap_width();
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
         (paint.inner, paint.outer) = rings.audio;
         paint.folded = true;

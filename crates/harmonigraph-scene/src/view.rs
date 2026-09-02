@@ -108,9 +108,9 @@ fn exponential_level(p: f32, shape: f32) -> f32 {
 
 impl Default for GlowCurve {
     fn default() -> Self {
-        // This exponent closely follows the compact accent the fresh Glow bars
-        // are tuned around while leaving both slower and faster shapes in reach.
-        GlowCurve { shape: 2.75 }
+        // A late falloff carries the broad fresh-view field through the gaps
+        // before it drops at the far edge, with earlier falls still in reach.
+        GlowCurve { shape: -1.303_725_2 }
     }
 }
 
@@ -730,9 +730,8 @@ pub struct ViewConfig {
     /// harmonic is PRESENT. A filter long enough to settle the second is longer
     /// than the first should ever be.
     ///
-    /// Its own times rather than the note Fade, too, for a reason the Fade's own
-    /// default states: 0.15 s is where a note's arrival and its release agree,
-    /// and that is a judgement about MIDI transients. Riding the ring's
+    /// Its own times rather than the note Fade, too, because that parameter's
+    /// default is a judgement about MIDI transients. Riding the ring's
     /// steadiness on it means one cannot be tuned without detuning the other.
     /// The Fade still carries the ring's ARRIVAL and DEPARTURE
     /// ([`RingFade`](crate::RingFade)) — a layer of a node comes and goes with
@@ -860,11 +859,11 @@ pub struct ViewConfig {
     /// Which shimmer sweeps the lattice (see [`Pulse`]): the sheet takes
     /// every octave slice a note currently lights, and a melody or bass
     /// mark's own strip past the band as well — a mark being one slice in
-    /// two pieces, so light crossing one crosses the other. [`Pulse::Bands`]
-    /// fresh, so the sweep is on out of the box; a blob with no `pulse_marks`
-    /// key gets that same value, the container-level `#[serde(default)]`
-    /// making `impl Default` the one fallback for this field as for every
-    /// other.
+    /// two pieces, so light crossing one crosses the other. Fresh it is steady,
+    /// because the marks read as note history rather than another moving
+    /// spectral signal. A blob with no `pulse_marks` key gets that same value,
+    /// the container-level `#[serde(default)]` making `impl Default` the one
+    /// fallback for this field as for every other.
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
@@ -1737,9 +1736,9 @@ impl ViewConfig {
     ///
     /// Its own function rather than the one above with a field swapped in,
     /// because the two numbers are independent and a repair that read the wrong
-    /// one would be silent — the markers and the rings open on one grey, so a
-    /// fresh view draws the same picture either way and only a moved bar tells
-    /// them apart. The reason the repair exists at all is
+    /// one would be silent: both answers are drawable neutral greys, so only a
+    /// comparison against the bar exposes the swap. The reason the repair
+    /// exists at all is
     /// [`lattice_ground_lightness`](Self::lattice_ground_lightness)'s: a NaN
     /// walks through a `clamp` untouched into a Newton solve that answers with
     /// whatever its guard parks on, and the drawing code is reached by more
@@ -1748,7 +1747,7 @@ impl ViewConfig {
         if self.marker_ink.is_finite() {
             self.marker_ink.clamp(0.0, 100.0)
         } else {
-            DEFAULT_RING_GROUND
+            DEFAULT_MARKER_INK
         }
     }
 
@@ -2082,7 +2081,7 @@ impl ViewConfig {
     /// something (straight, no wait), so a blob carrying a nonsense number for
     /// one gets the inert setting rather than a look nobody asked for. It
     /// reads as a feature switched off, which is what a broken number should
-    /// look like. Fresh, they are 0.35 and 0.15, not 0.
+    /// look like. Fresh, neither is 0.
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
@@ -2360,6 +2359,11 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
 const DEFAULT_RING_GROUND: f32 = 20.0;
 
+/// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
+/// ground because the accessors repair the two independently without building
+/// a fresh view to read either field.
+const DEFAULT_MARKER_INK: f32 = 28.0;
+
 /// The `L*` a fresh [`ViewConfig::sounding_ink`] opens on: the top of the axis,
 /// so a sounding name is white and the fresh distance between the two ends of
 /// the label pair is the whole of it. Named for [`DEFAULT_RING_GROUND`]'s
@@ -2405,7 +2409,7 @@ impl Default for ViewConfig {
             // sevens_size).
             extent_sevens: 0,
             center_threes: 0,
-            center_fives: 0,
+            center_fives: 1,
             center_sevens: 0,
             // Sevens sheets at full size, which rides along inert while the
             // axis is collapsed above. At full size a sheet rivals the home
@@ -2460,18 +2464,14 @@ impl Default for ViewConfig {
             // tight gap everywhere: the octaves read as a ring of distinct
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
-            // behind them is fixed on.) The stack is middle, audio ring, gap,
-            // band, gap, marks — the node's own light fills the middle and the
-            // two rings stand around it (see ring_inner).
-            band_width: 0.163_084_63,
-            // The stack seated just past halfway out, so a node reads as a lit
-            // middle with its readings around it: the glow fills the whole of
-            // the space this leaves (see glow_reach), the analyzer's ring is a
-            // thin annulus at its edge, and the octaves stand outside that.
-            // Dialled to 0 the stack seats on the center instead and the audio
-            // ring's wedges close into pie slices, which is the same node read
-            // as one solid measurement.
-            ring_inner: 0.551_335_3,
+            // behind them is fixed on.)
+            band_width: 0.192_277_49,
+            // The stack sits three fifths of the way out, leaving a broad
+            // middle for the glow's field while the octave band reads as the
+            // node's perimeter. Dialled to 0 the stack seats on the center and
+            // its wedges close into pie slices, which is the same node read as
+            // one solid measurement.
+            ring_inner: 0.600_738_5,
             // The two gaps are one number here: the radial padding is what puts
             // the band at its outer edge, and the same width cut angularly is
             // the slicing that reads as distinct marks. They are two bars
@@ -2490,12 +2490,10 @@ impl Default for ViewConfig {
             // the skin, so retuning that rung and leaving this behind is a test
             // failure rather than a drift.
             lattice_ground: DEFAULT_RING_GROUND,
-            // The same rung, so the fresh lattice is one grey at rest and the
-            // pair reads as a pair. Where they part is a picture a person dials
-            // for — the glow on, the ground down, the markers held up to keep
-            // the positions legible — and there is no fresh look that guesses
-            // it, because it depends on how much light is behind the notes.
-            marker_ink: DEFAULT_RING_GROUND,
+            // One rung above the ring ground, so the resting positions stay
+            // legible through the broad glow without competing with a sounding
+            // node's white name.
+            marker_ink: DEFAULT_MARKER_INK,
             // The other end of the label pair, as far from that grey as the
             // axis goes: type on a sounding node is white, and what says a node
             // is sounding is its own light behind a name that has stepped out
@@ -2522,17 +2520,14 @@ impl Default for ViewConfig {
             // Narrow, for the just-tuned material this is aimed at — see the
             // field.
             spectral_width: 2.088_490_2,
-            // A thin ring, the middle ahead of it (see ring_inner) holding
-            // most of the room inside the band. It still carries one wedge per
-            // octave, each a level or a window of spectrum, and the gaps either
-            // side still make it a ring rather than a thick edge on the node's
-            // light.
-            spectral_ring_width: 0.061_113_536,
+            // Parked at the floor so the center and octave band spend the
+            // node's radial budget; Fold still feeds the node glow through the
+            // analyzer reading independently of this width.
+            spectral_ring_width: 0.0,
             // A narrow wedge — see the field for why a window this size and
-            // not the octave that makes the ring continuous. Dialled rather
-            // than taken from the live session, which had it parked at the
-            // disabled bar's floor while reading Fold: it only zooms the
-            // Spectrum reading's wedge.
+            // not the octave that makes the ring continuous. It only zooms the
+            // Spectrum reading's wedge, so it rides inert while Fold is
+            // selected.
             spectral_ring_range: 10.0,
             // A share of the Level window rather than a dB deliberately, so
             // what it says is "no ring dimmer than this much of the ramp" and
@@ -2570,36 +2565,31 @@ impl Default for ViewConfig {
             // OUT over the whole Fade, so lifting a chord one key at a time
             // leaves a fading mark on nearly every note of it.
             mark_delay: 0.102_448_754,
-            pulse_marks: Pulse::Bands,
-            // The sheet the marks above wear. A period well under one node's
-            // spacing puts several of them across every mark, so this reads as
-            // a fine texture ON the marks rather than as light crossing the
-            // lattice — which is what keeps it off the reading of the octave
-            // slice each mark extends, the one place the sheet touches the
-            // glyph layer. Half depth and a slow pace hold it there; wider
-            // and deeper it would be a sweep crossing the lattice instead.
+            // The marks hold steady so they read as note history rather than
+            // as another moving spectral signal.
+            pulse_marks: Pulse::Off,
+            // These values ride inert with the steady mode and preserve the
+            // dialled sheet if a moving pattern is selected.
             shimmer_speed: 0.335_761_5,
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            // A small marker: arms a fifth of the way out the quad, which is
-            // well inside the middle a node's rings stand around (see
-            // ring_inner, at 0.55), so a note arriving covers its own marker
-            // rather than growing out of it.
-            plus_arm: 0.2,
-            // Just over half the arm's length across, so the fresh cross reads
-            // as two strokes rather than as a blob with dents — at this
-            // proportion it carries about 60% of the ink a disc of the same
-            // reach would (8t - 4t^2 against pi), which is light enough to be
-            // a ground for the music to arrive on.
-            plus_width: 0.11,
-            // A little under half the arm, so a fresh plus reads as reaching
-            // out of its crossing rather than as a drawn glyph: the ends
-            // arrive at nothing rather than stopping at something.
-            plus_taper: 0.09,
-            meantone: false,
+            // Long arms nearly fill the middle inside the ring stack, making
+            // the resting lattice continuous enough to read through the wide
+            // glow field.
+            plus_arm: 0.477_250_43,
+            // A narrow stroke keeps that reach from turning each crossing into
+            // a solid block.
+            plus_width: 0.064_242_415,
+            // Most of each arm is taper, so the long marker arrives at a fine
+            // point rather than carrying its full width into the ring stack.
+            plus_taper: 0.367_250_4,
+            // The fresh 12-TET tuning satisfies both comma identities, so the
+            // spelling locks open on the tuning's own equivalences rather than
+            // showing duplicate comma spellings.
+            meantone: true,
             meantone_auto: true,
-            marvel: false,
+            marvel: true,
             marvel_auto: true,
             frameless: false,
             show_perf: false,
@@ -2608,29 +2598,21 @@ impl Default for ViewConfig {
             // A halo at about four fifths strength: a node's rings are quiet
             // shapes, and the bloom is what gives them presence.
             bloom_strength: 0.806_154_85,
-            // The node glow ON, it being the only light a node has: the rings
-            // are crisp shapes and the middle they stand around (see
-            // ring_inner) is empty ink, so a fresh view with the reach at 0
-            // would be a lattice of hollow annuli. A reach of about a third of
-            // a node past its rim, which is a halo plainly there and well short
-            // of the neighbour it would otherwise reach.
-            glow_reach: 0.35,
-            glow_strength: 1.0,
+            // A reach spanning several lattice steps turns each node's light
+            // into a shared field. The lower strength keeps those overlapping
+            // fields from flattening the rings and markers drawn over them.
+            glow_reach: 4.546_375,
+            glow_strength: 0.274_842_2,
             glow_curve: GlowCurve::default(),
-            // A sixth of a radius, so σ is a twelfth of one: the shadow and the
-            // light either side of it read as one blur rather than as a cut
-            // through it, which is what a band with a short edge, laid against
-            // a node's own dark rings, does not.
-            glow_shadow: 0.16,
-            // Most of the frame taken under a ring, and not all of it: a ring
-            // in a dim pool of its own halo reads as shade, where the whole of
-            // it taken away reads as a black annulus drawn round the node.
-            glow_shadow_depth: 0.85,
-            // Calibrated by eye on a name at the fresh view (#498, PR B): at 1
-            // a fresh name's shadow is a faint tint beside the ring's, at 4 a
-            // hairline casts as a block. A ring and a cross take the same
-            // number, which is what makes one Shadow bar one darkness across
-            // the picture.
+            // A broad shadow preserves the form of the ring and marker across
+            // the wide light field.
+            glow_shadow: 0.418_517_17,
+            // Just under half depth leaves the shadow legible without cutting
+            // the shared field back to the ground.
+            glow_shadow_depth: 0.477_784_4,
+            // At 1 a name's shadow is a faint tint beside the ring's, while at
+            // 4 a hairline casts as a block. One value for a ring, cross and
+            // name makes the Shadow bar one darkness across the picture.
             glow_shadow_gain: 2.5,
             // The straight line, and 1 is the only value that is one: the
             // shadow's profile is the kernel's own, which is what every reading
@@ -2640,17 +2622,17 @@ impl Default for ViewConfig {
             // alike. The bar exists to ask whether a letterform wants
             // otherwise; the fresh view is the answer being no.
             glow_shadow_name: 1.0,
-            // One Gaussian, which is one cell per caster and the picture the
-            // rest of the Shadow section is calibrated on.
-            glow_shadow_kernel: ShadowKernel::Gaussian,
+            // Distance keeps a caster's form at this broad shadow width, where
+            // a blur would inherit too much of the caster's own thickness.
+            glow_shadow_kernel: ShadowKernel::Distance,
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own
             // halo without the grey around it going with it.
             glow_wash: 1.0,
-            // The colour averaged half way round, which keeps a chord's hues
-            // as arcs while a lone wedge still tints the whole halo.
-            glow_blend: 0.5,
+            // Each octave keeps its own arc of colour around the node instead
+            // of averaging with the opposite side.
+            glow_blend: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of
