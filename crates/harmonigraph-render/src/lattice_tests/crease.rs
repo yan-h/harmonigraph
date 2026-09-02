@@ -16,7 +16,7 @@
 
 use glam::Vec2;
 use harmonigraph_scene::crease::{
-    facing, facing_at, smoothstep, spend, standoff_coverage, union_distance,
+    facing, facing_at, pocket, smoothstep, spend, standoff_coverage, taper_length, union_distance,
 };
 use harmonigraph_scene::{BEYOND_RAMP, SHADOW_TAIL};
 
@@ -71,33 +71,49 @@ enum Feature {
 }
 
 impl Feature {
-    /// The offset from `x` to this feature's nearest point, for `x` outside it.
-    fn offset(self, x: Vec2) -> Vec2 {
+    /// The offset from `x` to this feature's nearest point, for `x` outside it,
+    /// and that foot's CLEARANCE: how far along its own segment it stands from
+    /// the nearest convex end of it, zero where the foot IS that end.
+    ///
+    /// The one fact the facing plane alone cannot carry. Seen from outside a
+    /// gap between two pieces of one caster both feet are corners, and the
+    /// exterior bisector puts each within the ramp of the other at every ramp
+    /// width — the same reading a concave junction gives, whose feet stand on
+    /// segment INTERIORS. What tells the two apart is the clearance.
+    fn offset(self, x: Vec2) -> (Vec2, f32) {
         match self {
             Feature::Bar { centre, axis, half } => {
                 let perp = axis.perp();
                 let d = x - centre;
                 let q = Vec2::new(d.dot(axis), d.dot(perp)).clamp(-half, half);
-                centre + q.x * axis + q.y * perp - x
+                // A rectangle's foot stands on the face whose own axis was
+                // CLAMPED, and that face runs along the other one — so the
+                // clearance is the larger of the two slacks, a clamped axis
+                // having none. Both clamped is a corner and leaves neither.
+                let slack = half - q.abs();
+                (centre + q.x * axis + q.y * perp - x, slack.max_element().max(0.0))
             }
             Feature::Sector { inner, outer, cut, half, .. } => {
-                let mut best = Vec2::splat(f32::INFINITY);
-                let mut keep = |p: Vec2| {
+                let mut best = (Vec2::splat(f32::INFINITY), 0.0f32);
+                let mut keep = |p: Vec2, clear: f32| {
                     let o = p - x;
-                    if o.length_squared() < best.length_squared() {
-                        best = o;
+                    if o.length_squared() < best.0.length_squared() {
+                        best = (o, clear);
                     }
                 };
                 // Each cut is a segment running from where it leaves the inner
                 // circle — or where the two cuts meet, whichever stands farther
-                // out — to where it meets the outer one.
+                // out — to where it meets the outer one. Both ends are convex
+                // corners of the slice, so the clearance is the margin to the
+                // nearer of them and a clamped `t` leaves none.
                 let end = (outer * outer - cut * cut).max(0.0).sqrt();
                 let start = (cut / half.tan()).max((inner * inner - cut * cut).max(0.0).sqrt());
+                let (lo, hi) = (start.min(end), end);
                 let ((e1, m1), (e2, m2)) = self.cut_frames();
                 for (e, m) in [(e1, m1), (e2, m2)] {
                     let base = cut * m;
-                    let t = (x - base).dot(e).clamp(start.min(end), end);
-                    keep(base + t * e);
+                    let t = (x - base).dot(e).clamp(lo, hi);
+                    keep(base + t * e, (t - lo).min(hi - t).max(0.0));
                 }
                 // A radial projection reaches an arc only while it stays inside
                 // the cuts; where it does not, that arc's nearest point is its
@@ -107,13 +123,39 @@ impl Feature {
                     for radius in [inner, outer] {
                         let p = x / r * radius;
                         if self.within_cuts(p) {
-                            keep(p);
+                            keep(p, self.arc_clearance(p, radius));
                         }
                     }
                 }
                 best
             }
         }
+    }
+
+    /// How far along its own arc a foot on the circle of `radius` stands from
+    /// the cut that ends that arc, as a LENGTH.
+    ///
+    /// A cut ends the arc `acos(cut/radius)` of angle off its own inward
+    /// normal, so the margin is that angle less the foot's own — a difference
+    /// of two `acos`, with no branch to wrap. The cuts bound an INTERSECTION
+    /// where the wedge is convex and a UNION where it is reflex, and the margin
+    /// follows: the smaller of the two, or the larger.
+    ///
+    /// The arc LENGTH rather than the chord to the cut line the shader takes
+    /// (`annular_sector_distance`): the two agree to a fraction of a percent
+    /// wherever the cut meets the circle near-squarely, which the octave ring's
+    /// does, and only the neighbourhood of the end decides a taper.
+    fn arc_clearance(self, p: Vec2, radius: f32) -> f32 {
+        let Feature::Sector { half, cut, .. } = self else {
+            unreachable!("only a sector has arcs")
+        };
+        let ((_, m1), (_, m2)) = self.cut_frames();
+        let r = radius.max(1.0e-6);
+        let beta = (cut / r).clamp(-1.0, 1.0).acos();
+        let margin = |m: Vec2| beta - (p.dot(m) / r).clamp(-1.0, 1.0).acos();
+        let (a, b) = (margin(m1), margin(m2));
+        let angle = if half > std::f32::consts::FRAC_PI_2 { a.max(b) } else { a.min(b) };
+        r * angle.max(0.0)
     }
 
     /// Whether `x` is ink.
@@ -161,13 +203,44 @@ impl Feature {
     }
 }
 
+/// The two gates a second foot passes before it is unioned in.
+///
+/// Both are parameters and not constants so that one test evaluates the shipped
+/// rule beside the rule without it: a mouth claim is only measuring something
+/// if the sweep reads a different field under a rule that admits the mouth,
+/// and a sweep stopping short of one reads the same field under every rule
+/// here (#450).
+#[derive(Clone, Copy)]
+struct Rule {
+    /// How far behind the facing plane a foot still counts, as a cosine. Zero
+    /// is the hard predicate #568's first comment measures the step of.
+    ramp: f32,
+    /// The length a foot's clearance tapers over, in points. Zero counts every
+    /// foot whole however close it stands to the end of its own segment.
+    taper: f32,
+}
+
+/// The rule the picture is drawn with.
+const TAPERED: Rule = Rule { ramp: BEYOND_RAMP, taper: taper_length(W) };
+
+/// The facing ramp with every clearance counted whole: the rule #578 shipped,
+/// and what the taper is measured against.
+const RAMP_ONLY: Rule = Rule { ramp: BEYOND_RAMP, taper: 0.0 };
+
+/// The hard half-plane predicate, ungated either way.
+const HARD: Rule = Rule { ramp: 0.0, taper: 0.0 };
+
 /// What the rule reads at one point of one shape.
 struct Reading {
     /// Distance to the nearest ink.
     d1: f32,
-    /// The second feature's distance, and how squarely its foot faces.
+    /// The second feature's distance, and how much of its foot counts once both
+    /// gates are applied.
     d2: f32,
     k: f32,
+    /// The taper's own share of that weight, so a claim can name which gate
+    /// moved a reading.
+    pocket: f32,
     /// The cosine the ramp is applied to — what a sweep has to carry across the
     /// ramp's band for its smoothness claim to be measuring anything.
     cos_phi: f32,
@@ -175,35 +248,41 @@ struct Reading {
     s: f32,
 }
 
-/// Read `ink` at `x` with a facing ramp of `ramp` (0 is the hard predicate).
+/// Read `ink` at `x` under `rule`.
 ///
 /// The second feature is the RUNNER-UP — the nearest of the caster's others,
-/// weighted by how squarely its foot faces. §2 defines it as the nearest among
-/// those beyond the plane, which differs only where a nearer feature is
-/// excluded and a farther one is not; the producers keep a top-2, so the model
-/// keeps the same approximation rather than a better one.
-fn read(ink: &[Feature], x: Vec2, ramp: f32) -> Reading {
-    let offsets: Vec<Vec2> = ink.iter().map(|f| f.offset(x)).collect();
+/// weighted by how squarely its foot faces and by how far both feet stand from
+/// the ends of their own segments. §2 defines it as the nearest among those
+/// beyond the plane, which differs only where a nearer feature is excluded and
+/// a farther one is not; the producers keep a top-2, so the model keeps the
+/// same approximation rather than a better one.
+fn read(ink: &[Feature], x: Vec2, rule: Rule) -> Reading {
+    let feet: Vec<(Vec2, f32)> = ink.iter().map(|f| f.offset(x)).collect();
     let mut win = 0;
-    for (i, o) in offsets.iter().enumerate() {
-        if o.length_squared() < offsets[win].length_squared() {
+    for (i, o) in feet.iter().enumerate() {
+        if o.0.length_squared() < feet[win].0.length_squared() {
             win = i;
         }
     }
-    let near = offsets[win];
-    let mut foot = Vec2::splat(f32::INFINITY);
-    for (i, &o) in offsets.iter().enumerate() {
-        if i != win && o.length_squared() < foot.length_squared() {
+    let near = feet[win];
+    let mut foot = (Vec2::splat(f32::INFINITY), 0.0);
+    for (i, &o) in feet.iter().enumerate() {
+        if i != win && o.0.length_squared() < foot.0.length_squared() {
             foot = o;
         }
     }
-    let (d1, d2) = (near.length(), foot.length());
-    let k = facing_at(near, foot, ramp);
+    let (d1, d2) = (near.0.length(), foot.0.length());
+    // A taper of zero is no taper at all rather than a step at zero clearance:
+    // `smoothstep` over an empty interval answers NaN exactly at its edge, and
+    // a corner's clearance sits exactly there.
+    let pocket = if rule.taper > 0.0 { pocket(near.1, foot.1, rule.taper) } else { 1.0 };
+    let k = facing_at(near.0, foot.0, rule.ramp) * pocket;
     Reading {
         d1,
         d2,
         k,
-        cos_phi: foot.dot(-near / d1) / d2,
+        pocket,
+        cos_phi: foot.0.dot(-near.0 / d1) / d2,
         s: standoff_coverage(union_distance(d1, d2, k, W), W),
     }
 }
@@ -222,7 +301,7 @@ fn nearest(ink: &[Feature], x: Vec2) -> f32 {
     if ink.iter().any(|f| f.covers(x)) {
         return 0.0;
     }
-    ink.iter().map(|f| f.offset(x).length()).fold(f32::INFINITY, f32::min)
+    ink.iter().map(|f| f.offset(x).0.length()).fold(f32::INFINITY, f32::min)
 }
 
 /// The largest jump between adjacent readings of `f` along `line`, and where it
@@ -294,6 +373,12 @@ fn facing_slabs(gap: f32) -> Vec<Feature> {
 
 /// An L of 5 point bars, its inner corner at the origin, its free quadrant the
 /// positive one and its outer corner at `(-5, -5)`.
+///
+/// The two arms OVERLAP at the junction, so the segment ends that meet there
+/// are buried in ink and no reading stands off them: the clearance's
+/// convex-only rule needs no case here. A glyph bake, whose contours meet
+/// rather than overlap, does — its terminals have to be told from its
+/// junctions.
 fn ell() -> Vec<Feature> {
     vec![
         Feature::Bar { centre: Vec2::new(12.5, -2.5), axis: Vec2::X, half: Vec2::new(17.5, 2.5) },
@@ -302,7 +387,8 @@ fn ell() -> Vec<Feature> {
 }
 
 /// A V of 5 point bars meeting at the origin with an interior angle of
-/// `degrees`, opening along +y.
+/// `degrees`, opening along +y — overlapping at the vertex like [`ell`]'s arms,
+/// for the same reason.
 fn vee(degrees: f32) -> Vec<Feature> {
     let a = degrees.to_radians() / 2.0;
     let arm = |sx: f32| {
@@ -386,7 +472,7 @@ fn bar_end_in_a_bowl() -> Vec<Feature> {
 fn a_facing_pair_reads_the_union_of_its_two_distances() {
     let gap = W / 2.0;
     let ink = facing_slabs(gap);
-    let mid = read(&ink, Vec2::ZERO, BEYOND_RAMP);
+    let mid = read(&ink, Vec2::ZERO, TAPERED);
     let exact = 1.0 - (1.0 - spend(gap / 2.0, W)).powi(2);
     assert_eq!(mid.k, 1.0, "the two feet face squarely, so neither is weighted down");
     assert!(
@@ -395,7 +481,7 @@ fn a_facing_pair_reads_the_union_of_its_two_distances() {
         mid.s,
         gap / 2.0,
     );
-    let crease = max_second_difference(&ink, Vec2::ZERO, 3.0, |x| read(&ink, x, BEYOND_RAMP).s);
+    let crease = max_second_difference(&ink, Vec2::ZERO, 3.0, |x| read(&ink, x, TAPERED).s);
     let today = max_second_difference(&ink, Vec2::ZERO, 3.0, |x| nearest_only(&ink, x));
     assert!(
         today > 5.0 * SMOOTH,
@@ -427,7 +513,7 @@ fn a_lone_edge_and_a_convex_corner_read_the_nearest_distance_alone() {
         ("the open side of a facing pair", &slabs, Vec2::new(-gap / 2.0 - 6.0 - 2.5, 0.0)),
         ("outside an L's outer corner", &l, Vec2::new(-8.0, -8.0)),
     ] {
-        let r = read(ink, x, BEYOND_RAMP);
+        let r = read(ink, x, TAPERED);
         assert_eq!(r.k, 0.0, "{what} weights its second foot {} at cos {}", r.k, r.cos_phi);
         assert_eq!(
             r.s,
@@ -449,7 +535,7 @@ fn a_lone_edge_and_a_convex_corner_read_the_nearest_distance_alone() {
 fn a_right_angle_junction_fills_to_the_exact_union() {
     let ink = ell();
     let arm = 5.0;
-    let r = read(&ink, Vec2::splat(arm), BEYOND_RAMP);
+    let r = read(&ink, Vec2::splat(arm), TAPERED);
     let exact = 1.0 - (1.0 - spend(arm, W)).powi(2);
     assert!(
         r.cos_phi.abs() < 1.0e-6,
@@ -463,7 +549,7 @@ fn a_right_angle_junction_fills_to_the_exact_union() {
         r.s,
     );
     let inner = Vec2::splat(4.0);
-    let filled = max_second_difference(&ink, inner, 3.0, |x| read(&ink, x, BEYOND_RAMP).s);
+    let filled = max_second_difference(&ink, inner, 3.0, |x| read(&ink, x, TAPERED).s);
     let today = max_second_difference(&ink, inner, 3.0, |x| nearest_only(&ink, x));
     assert!(
         today > 5.0 * SMOOTH,
@@ -490,7 +576,7 @@ fn the_ramp_shuts_exactly_at_a_120_degree_junction() {
     for degrees in [60.0f32, 90.0, 105.0, 120.0, 150.0] {
         let ink = vee(degrees);
         let x = Vec2::new(0.0, 6.0);
-        let (near, foot) = (ink[0].offset(x), ink[1].offset(x));
+        let (near, foot) = (ink[0].offset(x).0, ink[1].offset(x).0);
         let cos = foot.dot(-near.normalize()) / foot.length();
         assert!(
             (cos - degrees.to_radians().cos()).abs() < 1.0e-5,
@@ -503,7 +589,7 @@ fn the_ramp_shuts_exactly_at_a_120_degree_junction() {
         if degrees >= 120.0 {
             assert_eq!(k, 0.0, "the {degrees}° V is filled at weight {k}");
             assert_eq!(
-                read(&ink, x, BEYOND_RAMP).s,
+                read(&ink, x, TAPERED).s,
                 nearest_only(&ink, x),
                 "the {degrees}° V moved off the nearest-ink reading",
             );
@@ -513,36 +599,64 @@ fn the_ramp_shuts_exactly_at_a_120_degree_junction() {
     }
 }
 
-/// The sliced ring fills its gaps and leaves its outside exactly where it was.
+/// The sliced ring fills its gaps, at the weight its own SHORTNESS allows, and
+/// leaves its outside where it was.
 ///
 /// The trap this is against is a union taken over PRIMITIVES, which counts two
 /// collinear slices twice along their shared edge line and lifts the shadow
-/// outside every gap. The half-space test excludes a co-facing neighbour by
-/// construction, so the outside stays the min-distance row's — and the sweep
-/// one point out, where the gap itself is in view, is what says the same sweep
-/// would have seen a lift if there were one.
+/// outside every gap.
+///
+/// The exact union is out of reach here, and by design: the cut segment is 4.01
+/// points long between its two convex ends against a taper of
+/// `taper_length(W)`, so the two tapers overlap and the middle of the gap
+/// never counts a whole pair. A gap that short is what an octave ring HAS —
+/// capping the taper at half a segment would buy the middle back and hand the
+/// mouth its bulb again, since the cap is largest exactly where the segment is
+/// shortest. So the claim is the arithmetic at the weight the pair carries,
+/// plus the lift over the min-distance row that says the union reached the
+/// fixture at all.
 #[test]
 fn the_ring_fills_its_gaps_and_leaves_its_outside_alone() {
     let ink = sliced_ring();
     let (inner, outer, gap) = RING;
     let centre = gap_direction() * (inner + outer) / 2.0;
-    let r = read(&ink, centre, BEYOND_RAMP);
-    let exact = 1.0 - (1.0 - spend(gap / 2.0, W)).powi(2);
+    let r = read(&ink, centre, TAPERED);
+    let p = spend(gap / 2.0, W);
+    let held = 1.0 - (1.0 - p) * (1.0 - r.pocket * p);
     assert!(
-        r.s >= exact - 1.0e-6,
-        "the gap centre reads {} where two feet {} points off union to {exact}",
+        r.pocket > 0.7 && r.pocket < 1.0,
+        "the gap centre carries {} of its pair, so the fixture is not measuring a taper that \
+         overlaps itself",
+        r.pocket,
+    );
+    assert!(
+        (r.s - held).abs() < 1.0e-6,
+        "the gap centre reads {} where two feet {} points off, at {} of a pair, union to {held}",
         r.s,
         gap / 2.0,
+        r.pocket,
+    );
+    assert!(
+        r.s > nearest_only(&ink, centre) + 0.15,
+        "the gap centre reads {} against the min-distance row's {}, so the union is not reaching \
+         this fixture",
+        r.s,
+        nearest_only(&ink, centre),
     );
     let round = |out: f32| {
         (0..3600)
             .map(|i| Vec2::from_angle(i as f32 * std::f32::consts::TAU / 3600.0) * (outer + out))
-            .map(|x| read(&ink, x, BEYOND_RAMP).s - nearest_only(&ink, x))
+            .map(|x| read(&ink, x, TAPERED).s - nearest_only(&ink, x))
             .fold(0.0f32, f32::max)
     };
+    // What the taper leaves outside the ring, which is
+    // `a_mouths_exterior_reads_the_nearest_field_exactly`'s subject: nothing at
+    // all over a mouth, and a residual thousandths of a level deep over the
+    // slice's own arc, where an ADJACENT slice's cut foot stands a fraction
+    // short of its end and so is not a corner.
     assert!(
-        round(1.0) > 0.2,
-        "one point out the ring gains only {}, so the sweep never passes a gap",
+        round(1.0) < 5.0e-4,
+        "one point out the ring gains {} over the min-distance row",
         round(1.0),
     );
     assert!(
@@ -561,6 +675,11 @@ fn the_ring_fills_its_gaps_and_leaves_its_outside_alone() {
 /// half a gap outside each radius. The hard predicate is evaluated here too and
 /// asserted to reproduce that step — a sweep stopping short of the mouth reads
 /// a smooth field under either rule and proves nothing (#450).
+///
+/// The FACING gate on its own, with every clearance counted whole: what the
+/// ramp is worth is a separate quantity from what the taper over it is worth,
+/// and `a_gaps_taper_carries_no_step_to_its_mouth` makes the same measurement
+/// of the rule the picture is drawn with.
 #[test]
 fn the_ring_mouth_is_a_step_under_a_hard_test_and_smooth_under_the_ramp() {
     let ink = sliced_ring();
@@ -569,8 +688,8 @@ fn the_ring_mouth_is_a_step_under_a_hard_test_and_smooth_under_the_ramp() {
     let centre = g * (inner + outer) / 2.0;
     for (edge, out, radius) in [("outer", outer + 3.0, outer), ("inner", inner - 3.0, inner)] {
         let midline = sweep(centre, g * out);
-        let hard = largest_step(&midline, |x| read(&ink, x, 0.0).s);
-        let ramped = largest_step(&midline, |x| read(&ink, x, BEYOND_RAMP).s);
+        let hard = largest_step(&midline, |x| read(&ink, x, HARD).s);
+        let ramped = largest_step(&midline, |x| read(&ink, x, RAMP_ONLY).s);
         let today = largest_step(&midline, |x| nearest_only(&ink, x));
         assert!(
             hard > 0.2,
@@ -589,21 +708,169 @@ fn the_ring_mouth_is_a_step_under_a_hard_test_and_smooth_under_the_ramp() {
         // The patch is centred on the corner the plane pivots about, and three
         // points of reach carries the crossing at half a gap out.
         let patch =
-            |ramp: f32| max_second_difference(&ink, g * radius, 3.0, |x| read(&ink, x, ramp).s);
+            |rule: Rule| max_second_difference(&ink, g * radius, 3.0, |x| read(&ink, x, rule).s);
         let flat = max_second_difference(&ink, g * radius, 3.0, |x| nearest_only(&ink, x));
         assert!(
-            patch(0.0) > 2.0 * flat,
+            patch(HARD) > 2.0 * flat,
             "the hard test reads {} over the {edge} mouth patch against the min-distance row's \
              {flat}, so the patch does not hold the step",
-            patch(0.0),
+            patch(HARD),
         );
         assert!(
-            patch(BEYOND_RAMP) <= flat,
+            patch(RAMP_ONLY) <= flat,
             "the ramp reads {} over the {edge} mouth patch, above the min-distance row's own \
              {flat}",
-            patch(BEYOND_RAMP),
+            patch(RAMP_ONLY),
         );
     }
+}
+
+/// The taper carries the gap's fill to nothing BEFORE its mouth, so nothing
+/// crosses the mouth to step there — and it does it without leaving a plug.
+///
+/// The claim the clearance was written for. Half a gap outside either radius
+/// the nearest ink is a convex CORNER, and a corner is where a segment ends:
+/// the pair is worth nothing there whatever angle its feet stand at, so the
+/// field outside is the min-distance field and there is no switch-on to smooth.
+///
+/// A PLUG is the failure this build can produce in exchange, and it is the
+/// second reading here: a fill that rises through the gap and then drops within
+/// a taper of the mouth would leave a bright knot ending in mid-gap, which is a
+/// different artifact rather than a smaller one. So the profile is required to
+/// fall the whole way out from its own deepest point, and that point is
+/// required to stand at the gap's middle rather than pressed against a mouth.
+#[test]
+fn a_gaps_taper_carries_no_step_to_its_mouth() {
+    let ink = sliced_ring();
+    let (inner, outer, _) = RING;
+    let g = gap_direction();
+    let centre = g * (inner + outer) / 2.0;
+    for (edge, out, radius) in [("outer", outer + 3.0, outer), ("inner", inner - 3.0, inner)] {
+        let midline = sweep(centre, g * out);
+        let hard = largest_step(&midline, |x| read(&ink, x, HARD).s);
+        let tapered = largest_step(&midline, |x| read(&ink, x, TAPERED).s);
+        let today = largest_step(&midline, |x| nearest_only(&ink, x));
+        assert!(
+            hard > 0.2,
+            "the hard test steps {hard} at the {edge} mouth, so the sweep does not reach it",
+        );
+        assert!(
+            tapered < 0.05 && tapered * 5.0 < hard,
+            "the taper steps {tapered} at the {edge} mouth against the hard test's {hard} and \
+             the min-distance row's {today}",
+        );
+        let patch =
+            |rule: Rule| max_second_difference(&ink, g * radius, 3.0, |x| read(&ink, x, rule).s);
+        let flat = max_second_difference(&ink, g * radius, 3.0, |x| nearest_only(&ink, x));
+        // The min-distance row's own curvature, and not a fraction of it: the
+        // taper hands the mouth patch back to that row rather than smoothing
+        // it, so what is left over is the exterior residual
+        // `a_mouths_exterior_reads_the_nearest_field_exactly` bounds — 2e-5 of
+        // the 0.117 the corner's own field carries.
+        assert!(
+            patch(TAPERED) <= flat * 1.001,
+            "the taper reads {} over the {edge} mouth patch, above the min-distance row's own \
+             {flat}",
+            patch(TAPERED),
+        );
+
+        // No plug: the deepest reading stands at the gap's middle, and from
+        // there the field only falls out through the mouth.
+        let deepest = midline
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by(|a, b| read(&ink, a.1, TAPERED).s.total_cmp(&read(&ink, b.1, TAPERED).s))
+            .expect("the midline has samples");
+        let (from_centre, to_mouth) =
+            ((deepest.1 - centre).length(), (deepest.1 - g * radius).length());
+        assert!(
+            from_centre < 0.5 * to_mouth,
+            "the {edge} midline is deepest {from_centre} points off the gap's centre and \
+             {to_mouth} off its mouth, so the fill has moved out to the mouth",
+        );
+        let rise = midline[deepest.0..]
+            .windows(2)
+            .map(|x| read(&ink, x[1], TAPERED).s - read(&ink, x[0], TAPERED).s)
+            .fold(0.0f32, f32::max);
+        assert!(
+            rise <= 0.0,
+            "the {edge} midline rises {rise} on its way out to the mouth, so the fill ends in a \
+             plug rather than a taper",
+        );
+    }
+}
+
+/// Outside a gap's mouth the taper hands the field back to the min-distance
+/// row EXACTLY, which is what says the bulb is gone rather than smaller.
+///
+/// Exactly and not nearly: both feet at a mouth are corners, `pocket` is zero
+/// with zero slope there, and `union_distance` returns `d1` itself at zero
+/// weight — so the cell outside a mouth is the same number the row before the
+/// union wrote, bit for bit.
+///
+/// What is NOT exact, and the second claim here, is the rest of the ring's
+/// outside. Over a slice's own arc the runner-up is the adjacent slice's cut
+/// foot, which stands a fraction inside its own end rather than at it: a pair
+/// at about a hundredth of full weight, worth three ten-thousandths of a level
+/// and confined to a band a point and a half deep. That is under the frame's
+/// own quantiser and it is the leak a topology-aware successor removes; the
+/// bound is here so a change that widens it is visible.
+#[test]
+fn a_mouths_exterior_reads_the_nearest_field_exactly() {
+    let ink = sliced_ring();
+    let (inner, outer, gap) = RING;
+    let g = gap_direction();
+    // Every radius from just outside the ink out past the standoff's reach,
+    // read on both sides of the ring.
+    let radii = |i: u32| 0.05 + i as f32 * (4.0 - 0.05) / 200.0;
+    // The mouth's own wedge: from the gap's midline round to the slice CORNER,
+    // which is where the nearest ink stops being that corner.
+    let corner = |radius: f32| (gap / 2.0 / radius).asin();
+    let mut worst_mouth = 0.0f32;
+    let mut worst_round = 0.0f32;
+    for i in 0..=200 {
+        let out = radii(i);
+        for (radius, r) in [(outer, outer + out), (inner, inner - out)] {
+            for j in -100..=100 {
+                let x = Vec2::from_angle(g.to_angle() + j as f32 * corner(radius) / 100.0) * r;
+                worst_mouth =
+                    worst_mouth.max((read(&ink, x, TAPERED).s - nearest_only(&ink, x)).abs());
+            }
+            for j in 0..720 {
+                let x = Vec2::from_angle(j as f32 * std::f32::consts::TAU / 720.0) * r;
+                worst_round =
+                    worst_round.max((read(&ink, x, TAPERED).s - nearest_only(&ink, x)).abs());
+            }
+        }
+    }
+    // One ulp of a coverage near a half, which is what a `d1` round trip costs.
+    assert!(
+        worst_mouth < 1.0e-6,
+        "a mouth's exterior moves {worst_mouth} off the min-distance row",
+    );
+    assert!(
+        worst_round < 5.0e-4,
+        "the ring's outside moves {worst_round} off the min-distance row, past the residual an \
+         adjacent slice's near-corner foot accounts for",
+    );
+    // And the same sweep under the ramp alone, which is what says the sweep
+    // passes a mouth at all rather than measuring an exterior nothing reaches
+    // (#450).
+    let lift = (0..=200)
+        .flat_map(|i| {
+            let out = radii(i);
+            (-100..=100).map(move |j| {
+                Vec2::from_angle(g.to_angle() + j as f32 * corner(outer) / 100.0) * (outer + out)
+            })
+        })
+        .map(|x| read(&ink, x, RAMP_ONLY).s - nearest_only(&ink, x))
+        .fold(0.0f32, f32::max);
+    assert!(
+        lift > 0.2,
+        "the ramp lifts the same wedge only {lift} over the min-distance row, so the sweep never \
+         passes a mouth",
+    );
 }
 
 /// A bar ending inside a bowl carries the same pair of claims, over a sweep
@@ -615,6 +882,12 @@ fn the_ring_mouth_is_a_step_under_a_hard_test_and_smooth_under_the_ramp() {
 /// terminal standing against the bowl's own terminal — so the sweep runs the
 /// length of the bar, past the tip's pocket and out through the opening, and
 /// the hard test's step over it is what says it arrived.
+///
+/// At that terminal the taper hands the field back to the min-distance row
+/// whole rather than smoothing it: the bar's foot there is a CORNER, its
+/// clearance is zero, and no pair survives. So the patch matches the row it
+/// gave back rather than beating it, and the fill the taper does keep lives
+/// where the sweep runs along the bar's flank.
 #[test]
 fn a_bar_end_in_a_bowl_crosses_the_ramp_without_a_step() {
     let ink = bar_end_in_a_bowl();
@@ -622,46 +895,65 @@ fn a_bar_end_in_a_bowl_crosses_the_ramp_without_a_step() {
     // its tip and the wall to well past its far end.
     let line = sweep(Vec2::new(11.0, 4.0), Vec2::new(-16.0, 4.0));
     let (lo, hi) = line.iter().fold((1.0f32, -1.0f32), |(lo, hi), &x| {
-        let c = read(&ink, x, BEYOND_RAMP).cos_phi;
+        let c = read(&ink, x, TAPERED).cos_phi;
         (lo.min(c), hi.max(c))
     });
     assert!(
         hi > 0.5 && lo < -0.25,
         "the sweep carries the second foot over cos {lo}..{hi}, which does not cross the ramp",
     );
-    let (hard, at) = largest_step_at(&line, |x| read(&ink, x, 0.0).s);
-    let ramped = largest_step(&line, |x| read(&ink, x, BEYOND_RAMP).s);
+    let fill = line
+        .iter()
+        .map(|&x| read(&ink, x, TAPERED).s - nearest_only(&ink, x))
+        .fold(0.0f32, f32::max);
+    assert!(
+        fill > 0.02,
+        "the taper lifts the sweep only {fill} over the min-distance row, so the claims below are \
+         about a field the rule never touched",
+    );
+    let (hard, at) = largest_step_at(&line, |x| read(&ink, x, HARD).s);
+    let ramped = largest_step(&line, |x| read(&ink, x, TAPERED).s);
     let today = largest_step(&line, |x| nearest_only(&ink, x));
     assert!(hard > 0.1, "the hard test steps {hard}, so the sweep does not reach the terminal");
     assert!(
         ramped <= today,
         "the ramp steps {ramped} where the min-distance row steps {today} (hard test: {hard})",
     );
-    let patch = |ramp: f32| max_second_difference(&ink, at, 3.0, |x| read(&ink, x, ramp).s);
+    let patch = |rule: Rule| max_second_difference(&ink, at, 3.0, |x| read(&ink, x, rule).s);
     let flat = max_second_difference(&ink, at, 3.0, |x| nearest_only(&ink, x));
     assert!(
-        patch(0.0) > 2.0 * flat,
+        patch(HARD) > 2.0 * flat,
         "the hard test reads {} over the terminal's patch against the min-distance row's {flat}, \
          so the patch does not hold the step",
-        patch(0.0),
+        patch(HARD),
     );
     assert!(
-        patch(BEYOND_RAMP) < 0.5 * flat,
-        "the ramp reads {} over the terminal's patch against the min-distance row's {flat}",
-        patch(BEYOND_RAMP),
+        patch(TAPERED) <= flat,
+        "the taper reads {} over the terminal's patch, above the min-distance row's own {flat}",
+        patch(TAPERED),
     );
 }
 
-/// A G's counter deepens over its crossbar, and stays as flat as it was.
+/// A G's counter deepens over its crossbar, and the crease it stood on is
+/// gone — at the price of the taper's own curvature over the crossbar's free
+/// END.
 ///
 /// The reading #490 is about: three points above the crossbar, inside the bowl,
 /// where the min-distance row spends the crossbar's distance alone and the wall
-/// on the far side of the point contributes nothing.
+/// on the far side of the point contributes nothing. Over the crossbar's middle
+/// the taper is saturated and the fill is the full union.
+///
+/// The patch reaches three points either side of that, and the crossbar's free
+/// end stands a point from its edge — so the fill FADES across the patch, which
+/// is curvature a saturated fill does not have. What the reading says is that
+/// the fade costs about half of the crease it replaced and stays a third
+/// under it: the taper is not free here, and buying its share back by widening
+/// `L` would readmit the bulb at every mouth, `L` being one rule for both.
 #[test]
 fn a_counter_deepens_over_its_crossbar_without_a_crease() {
     let ink = c_ring_with_a_crossbar();
     let x = Vec2::new(0.0, 4.5);
-    let r = read(&ink, x, BEYOND_RAMP);
+    let r = read(&ink, x, TAPERED);
     let today = nearest_only(&ink, x);
     assert_eq!(r.k, 1.0, "the wall stands at cos {} of the plane", r.cos_phi);
     assert!(
@@ -672,7 +964,8 @@ fn a_counter_deepens_over_its_crossbar_without_a_crease() {
         r.d1,
         r.d2,
     );
-    let filled = max_second_difference(&ink, x, 3.0, |p| read(&ink, p, BEYOND_RAMP).s);
+    let filled = max_second_difference(&ink, x, 3.0, |p| read(&ink, p, TAPERED).s);
+    let saturated = max_second_difference(&ink, x, 3.0, |p| read(&ink, p, RAMP_ONLY).s);
     let flat = max_second_difference(&ink, x, 3.0, |p| nearest_only(&ink, p));
     assert!(
         flat > 2.0 * SMOOTH,
@@ -680,9 +973,14 @@ fn a_counter_deepens_over_its_crossbar_without_a_crease() {
          for the rule to fill",
     );
     assert!(
-        filled <= SMOOTH,
-        "the filled counter reads {filled} against a smooth field's {SMOOTH} (min-distance: \
-         {flat})",
+        saturated <= SMOOTH,
+        "the fill itself reads {saturated} against a smooth field's {SMOOTH}, so the curvature \
+         below is not the taper's (min-distance: {flat})",
+    );
+    assert!(
+        filled < 0.6 * flat,
+        "the tapered counter reads {filled} against the crease it replaced, {flat}, and the \
+         saturated fill's own {saturated}",
     );
 }
 
@@ -694,10 +992,13 @@ fn the_ramp_trade_table() {
     let ink = sliced_ring();
     let (inner, outer, gap) = RING;
     let g = gap_direction();
-    let ramps = [0.0f32, 0.3, 0.5, 0.6];
+    let ramps =
+        [HARD, Rule { ramp: 0.3, taper: 0.0 }, RAMP_ONLY, Rule { ramp: 0.6, taper: 0.0 }, TAPERED];
     let head = |what: &str| {
-        println!("| {what} | min-distance | hard | ramp 0.3 | ramp 0.5 | ramp 0.6 |");
-        println!("|---|---|---|---|---|---|");
+        println!(
+            "| {what} | min-distance | hard | ramp 0.3 | ramp 0.5 | ramp 0.6 | ramp 0.5 + taper |"
+        );
+        println!("|---|---|---|---|---|---|---|");
     };
 
     head("h (pt) outside the outer radius");

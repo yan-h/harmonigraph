@@ -78,3 +78,31 @@ pub fn facing_cosine(cos_phi: f32, ramp: f32) -> f32 {
 pub fn facing(near: Vec2, foot: Vec2) -> f32 {
     facing_at(near, foot, BEYOND_RAMP)
 }
+
+/// One e-fold of the standoff, in the units `w` is given in: the length a
+/// pocket's correction tapers over as its foot approaches the end of the
+/// segment it stands on.
+///
+/// The decay length of `p` itself and not a length read off the gap, because
+/// what the taper has to be small compared to is the distance over which the
+/// second term is worth anything at all.
+pub const fn taper_length(w: f32) -> f32 {
+    w / SHADOW_TAIL
+}
+
+/// How much of a facing pair counts, 0..=1, from each foot's clearance to the
+/// nearest CONVEX end of its own segment: zero, with zero slope, where either
+/// foot IS that end.
+///
+/// [`facing`] alone admits two convex corners seen from outside a gap — the
+/// exterior bisector of a mouth puts the far corner within the ramp at every
+/// width, so no ramp separates a mouth from a concave junction; both stand
+/// their feet at 90°. What separates them is that a mouth's feet are segment
+/// ENDS, and a concave junction's are segment interiors.
+///
+/// The PRODUCT and not a taper of the smaller clearance: a pair is worth what
+/// both of its feet are worth, so two feet each half a taper from their ends
+/// count for a quarter rather than a half.
+pub fn pocket(h_near: f32, h_foot: f32, l: f32) -> f32 {
+    smoothstep(0.0, l, h_near) * smoothstep(0.0, l, h_foot)
+}
