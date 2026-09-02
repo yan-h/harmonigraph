@@ -143,7 +143,7 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
 
 #[test]
 fn learn_enables_meantone_from_a_12tet_triad() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
@@ -262,12 +262,22 @@ impl ParamBackend for TuningBackend {
     }
 }
 
+/// A fresh state with both comma locks released. Tests of detection and learn
+/// state the starting verdict explicitly so an engaged shipped look cannot
+/// satisfy an "engages" assertion before the path under test runs.
+fn unlocked() -> SharedState {
+    let mut state = fresh();
+    state.view.meantone = false;
+    state.view.marvel = false;
+    state
+}
+
 /// The auto-detect engages the mode from the tuning alone — no learn, no
 /// switch. Quarter-comma meantone: a 696.58¢ fifth whose four-stack lands on
 /// the just major third.
 #[test]
 fn a_meantone_tuning_engages_the_mode_by_itself() {
-    let mut state = fresh();
+    let mut state = unlocked();
     assert!(state.view.meantone_auto, "the auto-detect is on out of the box");
     assert!(!state.view.meantone, "and the mode starts off");
     let three =
@@ -285,7 +295,7 @@ fn a_meantone_tuning_engages_the_mode_by_itself() {
 /// case the tolerance exists to reject.
 #[test]
 fn just_intonation_does_not_engage_meantone() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -298,7 +308,7 @@ fn just_intonation_does_not_engage_meantone() {
 /// exactly as the user set it.
 #[test]
 fn the_auto_detect_off_leaves_the_mode_alone() {
-    let mut state = fresh();
+    let mut state = unlocked();
     state.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
@@ -329,7 +339,7 @@ fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
 /// magnet only reaches `TEMPER_TOLERANCE`.
 #[test]
 fn a_third_dragged_clear_of_the_magnet_stays_released() {
-    let mut state = fresh();
+    let mut state = unlocked();
     // Either side of the window, as a FRACTION of it: the two cases have to
     // stay just outside and just inside whatever the tolerance is set to,
     // and fixed offsets stop straddling it the moment it narrows.
@@ -341,7 +351,7 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "past the tolerance nothing pulls it back");
     // Just inside, though, and the magnet takes it.
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
@@ -356,7 +366,7 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
 /// releases, so it cannot argue.
 #[test]
 fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -382,7 +392,7 @@ fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
 /// the next frame, and the press would do nothing you could see.
 #[test]
 fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
@@ -416,7 +426,7 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
 /// its own.
 #[test]
 fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
-    let mut state = fresh();
+    let mut state = unlocked();
     state.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
@@ -443,7 +453,7 @@ fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
 /// edit was undoing.
 #[test]
 fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
@@ -470,7 +480,7 @@ fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
 /// asked for.
 #[test]
 fn a_marvel_tuning_engages_the_mode_by_itself() {
-    let mut state = fresh();
+    let mut state = unlocked();
     assert!(state.view.marvel_auto, "the septimal detect is on out of the box");
     assert!(!state.view.marvel, "and the mode starts off");
     let params = TuningBackend::new(
@@ -499,7 +509,7 @@ fn a_marvel_tuning_engages_the_mode_by_itself() {
 /// than the tolerance.
 #[test]
 fn just_intonation_does_not_engage_marvel() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -516,7 +526,7 @@ fn just_intonation_does_not_engage_marvel() {
 /// turns the pair into septimal meantone — a seventh of ten fifths.
 #[test]
 fn the_two_locks_compose_into_septimal_meantone() {
-    let mut state = fresh();
+    let mut state = unlocked();
     // Quarter-comma meantone, whose derived third is the just one — and a
     // seventh param nowhere near anything, to prove it is not being read.
     let three =
@@ -543,7 +553,7 @@ fn the_two_locks_compose_into_septimal_meantone() {
 /// judged-once rule exists to prevent, one axis over.
 #[test]
 fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
-    let mut state = fresh();
+    let mut state = unlocked();
     // The septimal mode is not what this is about; leave it out of the way.
     state.view.marvel_auto = false;
     let params = TuningBackend::new(
@@ -576,7 +586,7 @@ fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
 /// released would drop the lock the moment either moved.
 #[test]
 fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
-    let mut state = fresh();
+    let mut state = unlocked();
     state.view.marvel = true;
     // 2·690 + 2·400 − 1200 = 980¢: the stale seventh param is 20¢ away and
     // irrelevant while the lock holds.
@@ -593,7 +603,7 @@ fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
 /// one — from a chord that pins down every axis the identity reads.
 #[test]
 fn learn_enables_marvel_from_a_12tet_seventh() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
@@ -627,7 +637,7 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
 /// wearing the other comma's clothes.
 #[test]
 fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
-    let mut state = fresh();
+    let mut state = unlocked();
     // A third a tenth of a cent off four fifths: inside the tolerance, so
     // meantone engages — and far enough that the raw third and the derived
     // one are different numbers, which is what the verdict must not read.
@@ -653,7 +663,7 @@ fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
 /// `begin_frame`'s detect never releases it.
 #[test]
 fn learn_measures_the_septimal_comma_against_the_derived_third() {
-    let mut state = fresh();
+    let mut state = unlocked();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
@@ -677,7 +687,7 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
     // Either side of the window as a FRACTION of it, so the pair keeps
     // straddling the tolerance whatever it is set to.
     for (offset, engaged) in [(tolerance * 1.5, false), (tolerance * 0.5, true)] {
-        let mut state = fresh();
+        let mut state = unlocked();
         let params = TuningBackend::new(
             harmonigraph_core::tuning::THREE_12TET,
             harmonigraph_core::tuning::FIVE_12TET,

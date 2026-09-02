@@ -97,11 +97,11 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
         );
         scene
     };
-    let default_curve = harmonigraph_scene::GlowCurve::default();
+    let compact_curve = harmonigraph_scene::GlowCurve { shape: 2.75 };
     let long_curve = harmonigraph_scene::GlowCurve { shape: 0.75 };
-    let default = shooter.shot(&at(default_curve));
+    let compact = shooter.shot(&at(compact_curve));
     let long = shooter.shot(&at(long_curve));
-    let mut unlit = at(default_curve);
+    let mut unlit = at(compact_curve);
     unlit.glow_reach = 0.0;
     let off = shooter.shot(&unlit);
 
@@ -111,7 +111,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     let centre = ((SIZE[1] / 2) * SIZE[0] + SIZE[0] / 2) as usize;
     assert_eq!(
         &long[centre * 4..centre * 4 + 4],
-        &default[centre * 4..centre * 4 + 4],
+        &compact[centre * 4..centre * 4 + 4],
         "lifting the tail changed the glow at its peak",
     );
 
@@ -143,12 +143,12 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
         assert!(count > 100, "the outer-reach annulus held only {count} pixels");
         sum as f64 / count as f64
     };
-    let (ordinary, tailed) = (outer(&default), outer(&long));
-    assert!(ordinary > 0.0, "the default curve left no outer halo to compare");
+    let (ordinary, tailed) = (outer(&compact), outer(&long));
+    assert!(ordinary > 0.0, "the compact curve left no outer halo to compare");
     assert!(
         tailed > ordinary * 1.5,
         "the slower shape left the outer reach at {tailed:.2} against \
-         the default's {ordinary:.2}",
+         the compact curve's {ordinary:.2}",
     );
 }
 

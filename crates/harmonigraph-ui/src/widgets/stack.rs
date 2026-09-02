@@ -23,7 +23,7 @@ use crate::theme;
 /// the four layers stop for good, and the only thing out past it is a strip
 /// that can be [`MARK_THICKNESS_MAX`] deep. A bar carrying anything past that
 /// carries travel no handle can use, at the price of the length the layers'
-/// names need: a fresh node ends at 0.94, which is under three quarters of
+/// names need: a fresh node ends near 0.91, which is under three quarters of
 /// this axis and under two thirds of the billboard's.
 ///
 /// What it costs is the corner where the rings are pushed hard against the quad
@@ -560,9 +560,9 @@ impl<'a> StackBar<'a> {
         // Which is a name leaving the stretch it names, and it is worth what it
         // costs. The room on this bar is not shared out the way the names need
         // it: a fresh node spends over a third of the axis on the empty middle,
-        // whose name wants a fifth of that, and gives the audio ring a
-        // twentieth, which is under half what "Audio" wants at ANY width a
-        // settings column reaches (#405). Naming only what fits leaves that
+        // whose name wants a fifth of that, while a dialled analyzer ring can
+        // still be under half what "Audio" wants at ANY width a settings
+        // column reaches (#405). Naming only what fits leaves that
         // ring — the layer most worth naming, being the one with no room to
         // say what it is — anonymous for good, while the bar carries the length
         // its name needs a few pixels away.
@@ -832,7 +832,7 @@ mod tests {
     /// the room running out from the inside is a different thing.
     #[test]
     fn a_layer_widened_past_the_room_left_drops_the_ones_outside_it() {
-        let view = fresh();
+        let view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
         // Far enough out that the band no longer fits, and not so far that the
         // audio ring inside it goes too — the stack drops from the OUTSIDE in,
         // one layer at a time.
@@ -982,11 +982,11 @@ mod tests {
     /// showing through, which is what the empty run past the last layer is too.
     #[test]
     fn the_cells_are_the_stack_the_node_draws() {
-        let mut view = fresh();
+        let mut view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
+        let rings = view.rings();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
         });
-        let rings = fresh().rings();
         let fills = filled_rects(&shapes);
         let (_, x_of) = axis_on(&shapes);
         for (lo, hi) in [rings.audio, rings.band] {
@@ -1034,7 +1034,7 @@ mod tests {
     /// size.
     #[test]
     fn a_thumb_stands_in_the_gap_its_layer_holds_open() {
-        let rings = fresh().rings();
+        let rings = ViewConfig { spectral_ring_width: 0.1, ..fresh() }.rings();
         assert!(rings.gap > 0.0, "a node with no padding has no gap to stand a thumb in");
         let spans = layer_spans(&rings);
         let thumbs = thumb_axis(&rings);
@@ -1270,10 +1270,10 @@ mod tests {
         }
     }
 
-    /// Every layer on the node is named from [`ALL_NAMED`] points of column up,
-    /// which is well under the width a settings column is dragged to. Three
-    /// things buy that: the names run along a layer's whole STRETCH rather than
-    /// its cell, which is what gives the strip — a few points across at a fresh
+    /// Every layer on a fully layered node is named from [`ALL_NAMED`] points
+    /// of column up, which is well under the width a settings column is dragged
+    /// to. Three things buy that: the names run along a layer's whole STRETCH rather than
+    /// its cell, which is what gives the strip — a few points across in this
     /// view — the empty bar past the stack to be named in; the axis stops a
     /// strip's depth past the quad edge rather than at the billboard's reach,
     /// which is worth a fifth of the bar to the three layers inside it; and a
@@ -1281,9 +1281,9 @@ mod tests {
     /// it rather than going undrawn.
     ///
     /// The first two reach only a TRAILING layer's empty stretch past the whole
-    /// stack, and it is the third that names the audio ring: a twentieth of the
-    /// axis at a fresh view is under half what "Audio" wants at any width a
-    /// settings column reaches (#405).
+    /// stack, and it is the third that names the audio ring: its narrow cell is
+    /// under half what "Audio" wants at any width a settings column reaches
+    /// (#405).
     ///
     /// Swept rather than sampled, and the floor is asserted from BOTH sides, so
     /// that a placement change has to move the number here rather than quietly
@@ -1294,28 +1294,28 @@ mod tests {
     #[test]
     fn every_layer_on_the_node_is_named() {
         let named = |w: f32| {
-            let mut view = fresh();
+            let mut view = ViewConfig { spectral_ring_width: 0.1, ..fresh() };
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
             let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
             NAMES.iter().filter(|n| drawn.iter().any(|s| s == *n)).count()
         };
+        let first_all_named = every_column_width().find(|w| named(*w) == 4).unwrap();
+        assert_eq!(
+            first_all_named, ALL_NAMED,
+            "the first fully named width moved from {ALL_NAMED} to {first_all_named}",
+        );
         for w in every_column_width().filter(|w| *w >= ALL_NAMED) {
             assert_eq!(named(w), 4, "a layer went unnamed at {w}, past the {ALL_NAMED} floor");
         }
-        assert!(
-            named(ALL_NAMED - 1.0) < 4,
-            "every layer is named a point below the floor too — {ALL_NAMED} is stale, and \
-             the bar is now doing better than it claims",
-        );
     }
 
     /// The narrowest settings column at which all four layers are named.
     ///
-    /// A measurement of the fresh view's own proportions and the room its four
-    /// names need, not a setting: it moves whenever either does.
-    const ALL_NAMED: f32 = 193.0;
+    /// A measurement of the fully layered fixture's proportions and the room
+    /// its four names need, not a setting: it moves whenever either does.
+    const ALL_NAMED: f32 = 178.0;
 
     /// And one thumb per layer, four of them, on the boundaries.
     #[test]

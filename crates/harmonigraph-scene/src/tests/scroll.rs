@@ -524,11 +524,12 @@ fn following_the_camera_does_not_move_the_picture() {
     plain_camera.target += moved;
 
     let (mut view, mut camera) = (ViewConfig::default(), Camera::default());
+    let before = (view.center_fives, view.center_threes);
     camera.target += moved;
     view.follow_camera(&mut camera);
     assert_eq!(
         (view.center_fives, view.center_threes),
-        (1, -1),
+        (before.0 + 1, before.1 - 1),
         "the window did not take the step the camera did",
     );
 

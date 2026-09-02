@@ -751,6 +751,9 @@ mod tests {
             // on it is drawn.
             state.view.sevens_size = 1.0;
             state.view.glow_reach = 4.0;
+            // A compact falloff keeps the ground below saturation, leaving the
+            // missing light under the node measurable at this wide reach.
+            state.view.glow_curve.shape = 2.75;
             // No names: a played node's name stands on its middle and casts
             // its own shadow there (`fs_shadow_box` in harmonigraph-render),
             // which is a claim of its own and not the light under the body.

@@ -101,7 +101,7 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // of them, and a key that quietly stopped matching (a rename, a space
     // after the colon) would leave its default untested.
     let mut saved = state.save_persist();
-    for key in ["meantone_auto:true,", "marvel_auto:true,", "marvel:false,"] {
+    for key in ["meantone_auto:true,", "marvel_auto:true,", "marvel:true,"] {
         let stripped = saved.replace(key, "");
         assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
         saved = stripped;
@@ -115,7 +115,7 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // − 1200), so the same argument opts them in — off would leave the mode
     // unreachable for every project that already exists.
     assert!(restored.view.marvel_auto, "a missing detect key means on");
-    assert!(!restored.view.marvel, "a missing mode key means off, and the detect decides");
+    assert!(restored.view.marvel, "a missing mode key uses the engaged fresh verdict");
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 }
 

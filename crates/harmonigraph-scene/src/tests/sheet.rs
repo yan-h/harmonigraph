@@ -127,7 +127,12 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
     // paired with a stack that starts as far out as `ring_inner` goes, GAP_MAX
     // is enough padding to put the band's slot past the node's edge, and the
     // layer comes out off.
-    let wild = ViewConfig { ring_gap: 5.0, ring_inner: RING_INNER_MAX, ..ViewConfig::default() };
+    let wild = ViewConfig {
+        spectral_ring_width: 0.05,
+        ring_gap: 5.0,
+        ring_inner: RING_INNER_MAX,
+        ..ViewConfig::default()
+    };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
     // What the refused slot comes out AS, which is the whole of how a layer
     // says it is not drawn: the empty pair. An inside-out pair (the slot's own

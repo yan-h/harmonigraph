@@ -287,14 +287,12 @@ pub fn derive_scene(
             // part way through a note.
             //
             // So a mark comes in GRADED over the band between the Delay and
-            // the Delay plus the Fade. At the fresh view (Delay 0.15, Fade
-            // 0.15) a note held 160ms peaks at 0.30, 200ms at 0.57, 250ms at
-            // 0.89, and 300ms and longer at full — while the disc under it is
-            // at full for every one of them. That band is the threshold
-            // softened rather than a second one: the Delay's own claim is
-            // that an end held briefly should not read as the line being
-            // traced, and a Delay of 0 puts the mark back exactly on the
-            // note's rule.
+            // the Delay plus the Fade. Fresh, both use the same short scale,
+            // so the band softens a brief handoff without holding a sustained
+            // end back. That band is the threshold softened rather than a
+            // second one: the Delay's own claim is that an end held briefly
+            // should not read as the line being traced, and a Delay of 0 puts
+            // the mark back exactly on the note's rule.
             let release = voice.release_level(now, &env);
             let mark = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
             FrameVoice {

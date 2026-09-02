@@ -947,6 +947,15 @@ mod tests {
         scene_of_at(state, 1.0)
     }
 
+    /// A state with a radial slot for the analyzer ring. The shipped look may
+    /// park that width at its floor; the end-to-end ring tests state the layer
+    /// they need so their analyzer and gate paths stay reachable.
+    fn ringing() -> SharedState {
+        let mut state = fresh();
+        state.view.spectral_ring_width = 0.1;
+        state
+    }
+
     /// [`scene_of`] at a stated clock, for the claims about how a ring comes
     /// and goes rather than about what it reads. A state carried across two of
     /// these has a fade running through it, exactly as a shell does.
@@ -980,7 +989,7 @@ mod tests {
     /// disagree about: the keys light one pitch class, the saw sounds at many.
     #[test]
     fn either_reading_draws_beside_the_keys_rather_than_instead_of_them() {
-        let mut state = fresh();
+        let mut state = ringing();
         state.frame_params.fade_time = 0.0;
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
@@ -1059,7 +1068,7 @@ mod tests {
     /// decision rather than a bug.
     #[test]
     fn the_rings_levels_are_the_analyzers_own() {
-        let mut state = fresh();
+        let mut state = ringing();
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
         state.view.spectral_reading = SpectralReading::Spectrum;
@@ -1132,7 +1141,7 @@ mod tests {
     /// not, bucket for bucket, and no node has to be picked for it to be true.
     #[test]
     fn the_two_readings_are_measured_apart() {
-        let mut state = fresh();
+        let mut state = ringing();
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
@@ -1204,7 +1213,7 @@ mod tests {
     fn the_plugin_has_two_colour_schemes_and_audio_wears_the_analyzers() {
         use crate::panes::spectral::roll::note_color;
 
-        let mut state = fresh();
+        let mut state = ringing();
         state.view.spectral_reading = SpectralReading::Spectrum;
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
@@ -1291,7 +1300,7 @@ mod tests {
     #[test]
     fn the_ring_draws_its_floor_before_any_audio_flows() {
         for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
-            let mut state = fresh();
+            let mut state = ringing();
             state.view.spectral_reading = reading;
             let scene = scene_of(&mut state);
             assert!(
@@ -1320,9 +1329,9 @@ mod tests {
     /// where the nodes are.
     #[test]
     fn silence_rings_nothing_and_a_tone_rings_its_own_class() {
-        let quiet = scene_of(&mut fresh());
-        assert!(quiet.spectral.ring_draws(), "the fresh ring is off, so nothing is being gated");
-        assert!(quiet.spectral.gate > 0.0, "the fresh gate is at its floor");
+        let quiet = scene_of(&mut ringing());
+        assert!(quiet.spectral.ring_draws(), "the stated ring is off, so nothing is being gated");
+        assert!(quiet.spectral.gate > 0.0, "the stated gate is at its floor");
         assert!(
             quiet.nodes.iter().all(|n| n.audio_ring == 0.0),
             "{} of {} nodes rang with no audio flowing",
@@ -1330,7 +1339,7 @@ mod tests {
             quiet.nodes.len(),
         );
 
-        let mut state = fresh();
+        let mut state = ringing();
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
@@ -1371,7 +1380,7 @@ mod tests {
     /// `harmonigraph_scene` about the fade would go on passing.
     #[test]
     fn a_ring_arrives_on_the_fade_the_notes_run_on() {
-        let mut state = fresh();
+        let mut state = ringing();
         // A straight line of a stated length, so half way in is half way
         // along; the fresh curve is not, and this is not the test for it.
         state.frame_params.fade_time = 1.0;
@@ -1412,7 +1421,7 @@ mod tests {
     /// `harmonigraph_scene`'s own units.
     #[test]
     fn the_gates_floor_rings_every_node() {
-        let mut state = fresh();
+        let mut state = ringing();
         state.view.spectral_ring_gate = 0.0;
         let scene = scene_of(&mut state);
         assert!(
