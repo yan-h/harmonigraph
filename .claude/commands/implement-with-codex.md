@@ -51,7 +51,8 @@ prescribes, because that is the dialect the runtime is tuned for:
   What is wrong or missing, at <path>:<line>, and what done looks like.
 </task>
 <completeness_contract>
-  ./ci.sh green. If anything plugin-affecting changed:
+  GitHub Actions' Full CI check green; ./ci.sh is its single full gate.
+  If anything plugin-affecting changed:
   cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 </completeness_contract>
 <verification_loop>
@@ -134,7 +135,7 @@ refuses a command whose reach it cannot verify statically, and a
 `$(git rev-parse --git-common-dir)` inside the path is exactly that shape —
 it gets declined, not answered.
 
-Verification stays here because `ci.sh` passing is not the same claim as the
+Verification stays here because Full CI passing is not the same claim as the
 change being right, and Codex has no memory of why the code is weird. What a
 review finds here is fixed here — do not send the finding back as a second
 task unless the fix is genuinely another implementation job.

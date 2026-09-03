@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the formatting check, clippy across
-# all targets with warnings denied, the full test suite, the plugin package
-# check, the two vendored crates' own tests, the doc-link check, the harmonigraph-core
-# dependency guard, then the script gates — worktree-reclaim ownership and lock
-# cases, the registered-worktree bundle swap, and pre-push skips.
-# Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
-# so a green run here means a green run there.
+# Canonical full CI gate: formatting, workspace clippy with warnings denied,
+# workspace tests, the plugin package check, harmonigraph-render's own tests,
+# both vendored crates' tests, doc links, the harmonigraph-core dependency
+# guard, worktree reclaim safety, and the registered-worktree bundle swap.
 #
-# Run it directly:              ./ci.sh
-# Or gate every push on it:     git config core.hooksPath .githooks
-#                               (then `git push --no-verify` to skip one-off)
+# GitHub Actions invokes this script unchanged on the toolchain pinned by
+# rust-toolchain.toml. It remains available locally when a full run is useful.
+#
+# Run it directly: ./ci.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -123,38 +121,5 @@ run .claude/tests/reclaim-locks.sh
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
 
-# The third script gate, and it guards the thing that decides whether the other
-# two run at all: the pre-push hook waves a push past this file when nothing in
-# it can change the answer. Wrong in the cheap direction it costs a build;
-# wrong in the other it reports a clean push having gated nothing, which is the
-# same silence the swap check exists for. Its inputs are git's stdin protocol
-# and a stamp file, so no cargo test reaches it.
-run .claude/tests/pre-push-skip.sh
-
 echo
-echo "✅ local CI passed (fmt + clippy + tests + plugin check + vendored crates + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap + pre-push skips)"
-
-# Record what passed, so the next push of the same content does not pay for it
-# again. The key is the TREE and not the commit: a rebase, an amended message
-# and a second branch all ask about source that has already been through here,
-# and the stamp lives in the common git dir so a tree one worktree cleared is
-# cleared for every worktree — which is the case this repo hits most, parallel
-# sessions pushing the same base.
-#
-# Only from a clean tree. This runs on the working tree, so with anything
-# uncommitted the run says nothing about `HEAD`'s tree and must not claim to.
-# What the key deliberately does NOT carry is the environment the two script
-# gates read (a pid, the spare pool's sockets, an inode) — those are seconds
-# and the alternative is a key that is never stale and never still.
-if [ -z "$(git status --porcelain)" ]; then
-  # Asked for absolutely, and identically to the hook: `--git-common-dir` alone
-  # may answer relative to GIT_DIR, which is set when the hook calls this file
-  # and not when a person does, and a stamp written where the hook does not
-  # look for it is a cache that never hits.
-  stamp="$(git rev-parse --path-format=absolute --git-common-dir)/ci-passed-trees"
-  tree=$(git rev-parse HEAD^{tree})
-  if ! grep -qxF "$tree" "$stamp" 2>/dev/null; then
-    echo "$tree" >>"$stamp"
-    tail -n 200 "$stamp" >"$stamp.tmp" && mv "$stamp.tmp" "$stamp"
-  fi
-fi
+echo "✅ full CI passed (fmt + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap)"

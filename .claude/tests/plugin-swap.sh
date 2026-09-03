@@ -24,10 +24,9 @@
 # Written for bash 3.2 (macOS system bash), like the scripts it tests.
 set -uo pipefail
 
-# git exports GIT_DIR and friends to its hooks, and ci.sh runs from
-# .githooks/pre-push — inherited, they would point every git call below at the
-# repo being PUSHED instead of the throwaway one. Same guard, same reason, as
-# `.claude/tests/reclaim-locks.sh`.
+# This test creates and enters a throwaway repository, so inherited GIT_DIR
+# and related variables would point every git call below at the caller's repo.
+# Same guard, same reason, as `.claude/tests/reclaim-locks.sh`.
 for v in $(env | sed -n 's/^\(GIT_[A-Z_]*\)=.*/\1/p'); do
   unset "$v"
 done
