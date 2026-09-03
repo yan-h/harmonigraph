@@ -2,18 +2,13 @@
 //! is what that caster multiplies the frame by in its own draw
 //! (`fs_shadow_box` in text.wgsl).
 //!
-//! One cell per caster PER TERM of the kernel, each at a scale that keeps the
-//! blur's cost flat: a cell is the caster's box grown by that term's reach,
-//! drawn at `min(1, 3 / σ_t)` of the target's pixels, so σ is at most
-//! `SIGMA_CELL_MAX` texels in every cell and the kernel at most nineteen taps
-//! whatever the Shadow bar says and whatever row of the kernel table is
-//! chosen. The atlas is about the names' own area at the fresh Shadow and one
-//! Gaussian, shrinks as the bar widens, and grows with the term count.
-//!
-//! Each term at its OWN resolution is the whole point of the shape: a mixture's
-//! narrow term carries the kernel's core, and a shared resolution picked for
-//! the widest term would resample that core away and leave every row of the
-//! table reading as the same soft blob.
+//! ONE cell per caster, at a scale that keeps the blur's cost flat: the cell is
+//! the caster's box grown by the kernel's reach, drawn at `min(1, 3 / σ)` of
+//! the target's pixels, so σ is at most `SIGMA_CELL_MAX` texels in every cell
+//! and the kernel at most nineteen taps whatever the Shadow bar says. The atlas
+//! is about the names' own area at the fresh Shadow under a Gaussian, and
+//! shrinks as the bar widens. A DISTANCE cell parts from that at the quality
+//! floor, which is where its cost stops falling.
 //!
 //! What lives here is the arithmetic that runs without a GPU — the packer and
 //! σ — beside the textures and the blur passes over them (shadow.wgsl). The
@@ -102,13 +97,13 @@ pub(crate) struct Caster {
     /// kernel three times as wide: the blur's tap count is flat in this exactly
     /// as it is in the bar.
     pub sigma_scale: f32,
-    /// Whether a distance term is evaluated by the caster's scene draw instead
-    /// of read out of a cell.
+    /// Whether this caster's distance is evaluated by its own scene draw
+    /// instead of read out of a cell.
     ///
     /// The marker already has its exact field in `plus_paint`, so rasterizing
     /// the same field into a cell would spend an atlas allocation and a second
-    /// scene draw for no new information. Blur terms still need the shared
-    /// cell that holds their convolution.
+    /// scene draw for no new information. A Gaussian still needs the shared
+    /// cell that holds its convolution.
     pub direct_distance: bool,
 }
 
@@ -169,8 +164,8 @@ pub(crate) struct ShadowBox {
     /// where the standoff's curve is windowed to nothing and so the value a
     /// texel past its encoded reach holds; w: unused.
     ///
-    /// x is read by the node's SCENE draw, which needs every term at once and
-    /// so reaches the array rather than the box; y and z by the passes that
+    /// x is read by the node's SCENE draw, which needs the caster's whole entry
+    /// and so reaches the array rather than the box; y and z by the passes that
     /// sweep the CELLS, which take one at a time and have to know which chain
     /// this one belongs to. Carried on the box rather than in a buffer of its
     /// own because the node's two draws — the one that fills a cell and the one
@@ -179,8 +174,8 @@ pub(crate) struct ShadowBox {
     pub who: [f32; 4],
 }
 
-/// What `ShadowBox::who`'s y and `ShadowCaster::kind` hold for a term whose
-/// cell is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
+/// What `ShadowBox::who`'s y and `ShadowCaster::shade`'s y hold for a cell that
+/// is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
 /// and common.wgsl, pinned by
 /// `the_shaders_distance_kind_and_window_are_the_packers`.
 ///
@@ -231,15 +226,13 @@ impl ShadowBox {
 pub(crate) const NO_CELL: ShadowBox =
     ShadowBox { rect: [0.0; 4], cell: [0.0; 4], terms: [0.0; 4], who: [0.0; 4] };
 
-/// A frame's cells, packed: one box per caster per TERM, in the caster's own
-/// order with the terms consecutive inside it, the same casters gathered as the
-/// scene pass reads them, and the atlas size that holds it all.
+/// A frame's cells, packed: one box per caster in the order they arrived, the
+/// same casters gathered as the scene pass reads them, and the atlas size that
+/// holds it all.
 ///
 /// The two views of one packing. `boxes` is what FILLS and BLURS a cell — one
-/// instance per cell, each carrying its own σ and scale — and `casters` is what
-/// SAMPLES them, one entry per caster carrying every term at once, because a
-/// mixture has to be mixed before it is spent (`shadow_transmittance`) and a
-/// draw cannot take one term at a time.
+/// instance per cell, carrying its own σ and scale — and `casters` is what
+/// SAMPLES them, one entry per caster carrying the quad it is drawn over.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Packed {
     pub boxes: Vec<ShadowBox>,
@@ -247,71 +240,57 @@ pub(crate) struct Packed {
     pub size: [u32; 2],
 }
 
-/// One caster's whole kernel, as the scene pass reads it: the quad to draw over
-/// and every term's cell and mapping.
+/// One caster's shadow, as the scene pass reads it: the quad to draw over, the
+/// cell to sample, and what to spend what it holds as.
 ///
-/// In a STORAGE BUFFER rather than beside the instance, which is the one place
-/// this design departs from #527's sketch. A node's own rows reach location 15
-/// and leave five free; two terms consume four of those rows for their cells
-/// and maps before the caster's rect and term metadata have been carried.
-/// Indexed by the caster's own index — the order `pack` was handed — so a node,
-/// a name and the marker field all reach it the same way and nothing carries a
-/// second copy.
+/// In a STORAGE BUFFER rather than beside the instance. A node's own rows reach
+/// location 15 and leave five free, and a caster is four of them; the cell is
+/// read by a node, a marker and a name alike, so one array they all index is
+/// also one place the shape is written down. Indexed by the caster's own index
+/// — the order `pack` was handed — so nothing carries a second copy.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct ShadowCaster {
-    /// The union of every term's padded box, in the pane's points: min, then
-    /// size. What a caster's shadow is drawn OVER, so the widest term finishes
-    /// inside the quad rather than being cut off in a straight line at it.
+    /// The caster's padded box, in the pane's points: min, then size. What its
+    /// shadow is drawn OVER, so the reach finishes inside the quad rather than
+    /// being cut off in a straight line at it.
     pub rect: [f32; 4],
-    /// x: how much of this caster's shadow lands, 0..=1 — zero where the atlas
-    /// could not hold every one of its cells, which is a caster that darkens
-    /// nothing rather than one that darkens by part of its kernel. y/z/w unused.
-    pub level: [f32; 4],
-    /// What each term's cell HOLDS: 0 blurred ink, [`DISTANCE_KIND`] a
-    /// distance. Zeroed past the kernel's own term count.
-    ///
-    /// Per caster rather than in a uniform, though every caster in a frame is
-    /// packed off one row and so carries the same kinds: the two shader modules
-    /// that read a kernel declare this struct once between them (common.wgsl)
-    /// and their uniforms separately, so a term's own properties riding here
-    /// are written down once and a copy in each `Locals` would be two.
-    pub kind: [f32; harmonigraph_scene::SHADOW_TERMS_MAX],
-    /// Each term's σ in the pane's POINTS — what a distance read out of a cell
-    /// is measured against, one Shadow width being 2σ.
-    ///
-    /// In points because that is what an exact distance cell holds: the sampler
-    /// divides one by the other and the target's own pixel scale never enters,
-    /// so a Render scale moves neither.
-    /// Per caster because [`Caster::sigma_scale`] is.
-    pub sigma: [f32; harmonigraph_scene::SHADOW_TERMS_MAX],
-    /// Each term's cell in atlas texels: origin, then size. Zeroed past the
-    /// kernel's own term count, and zeroed whole where the caster casts
-    /// nothing.
-    pub cell: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
-    /// Each term's map from a point of the pane to a texel of its cell: x/y the
-    /// origin, z the scale, so a texel is `xy + points * z`; w this term's
-    /// share of the mixture, which is 0 on a distance term — normalized over
-    /// the BLUR terms alone, so a lone Gaussian standing beside a distance term
-    /// arrives whole.
+    /// The cell in atlas texels: origin, then size. Zeroed whole where the
+    /// caster casts nothing, and where its distance is evaluated directly by
+    /// its own scene draw.
+    pub cell: [f32; 4],
+    /// The map from a point of the pane to a texel of that cell: x/y the
+    /// origin, z the scale, so a texel is `xy + points * z`. w unused.
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
-    /// scale) for the shader to combine: the three differ per TERM, and a
-    /// fragment would otherwise repeat the subtraction for every term for a
-    /// number that never changes within a frame.
-    pub map: [[f32; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
+    /// scale) for the shader to combine: a fragment would otherwise repeat the
+    /// subtraction for a number that never changes within a frame.
+    pub map: [f32; 4],
+    /// What this caster SPENDS, none of it a coordinate.
+    ///
+    /// x: how much of its shadow lands, 0..=1 — zero where the atlas could not
+    /// hold its cell, which is a caster that darkens nothing.
+    ///
+    /// y: what its cell HOLDS, 0 blurred ink and [`DISTANCE_KIND`] a distance.
+    /// Per caster rather than in a uniform, because the two shader modules that
+    /// read a caster declare this struct once between them (common.wgsl) and
+    /// their uniforms separately — so a caster's own properties riding here are
+    /// written down once where a copy in each `Locals` would be two.
+    ///
+    /// z: its σ in the pane's POINTS, which is what a distance read out of a
+    /// cell is measured against, one Shadow width being 2σ. In points because
+    /// that is what an exact distance cell holds: the sampler divides one by
+    /// the other and the target's own pixel scale never enters, so a Render
+    /// scale moves neither. Per caster because [`Caster::sigma_scale`] is.
+    ///
+    /// w: unused.
+    pub shade: [f32; 4],
 }
 
 /// A caster the frame packed nothing for: what every draw carries when the
 /// Shadow is shut, and what a reader answers 1 to with nothing sampled.
-pub(crate) const NO_CASTER: ShadowCaster = ShadowCaster {
-    rect: [0.0; 4],
-    level: [0.0; 4],
-    kind: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
-    sigma: [0.0; harmonigraph_scene::SHADOW_TERMS_MAX],
-    cell: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
-    map: [[0.0; 4]; harmonigraph_scene::SHADOW_TERMS_MAX],
-};
+pub(crate) const NO_CASTER: ShadowCaster =
+    ShadowCaster { rect: [0.0; 4], cell: [0.0; 4], map: [0.0; 4], shade: [0.0; 4] };
 
 /// Every caster's cell, shelf-packed in the order the casters arrive.
 ///
@@ -334,111 +313,87 @@ pub(crate) fn pack(
     sigma_px: f32,
     px_per_point: f32,
     max_side: u32,
-    kernel: &[harmonigraph_scene::KernelTerm],
+    kernel: harmonigraph_scene::ShadowKernel,
 ) -> Packed {
     // A finite positive number, which a NaN or an infinity out of a corrupt
     // blob is not: either is no shadow rather than a kernel of nothing.
     let positive = |x: f32| x.is_finite() && x > 0.0;
-    if casters.is_empty() || kernel.is_empty() || !positive(sigma_px) || !positive(px_per_point) {
+    if casters.is_empty() || !positive(sigma_px) || !positive(px_per_point) {
         return Packed::default();
     }
-    // Held to what the atlas and the sampler are built for, so a longer row
-    // added to the table stops at the representation's bound rather than
-    // reading past the array a caster carries.
-    let kernel = &kernel[..kernel.len().min(harmonigraph_scene::SHADOW_TERMS_MAX)];
-    let is_distance =
-        |t: &harmonigraph_scene::KernelTerm| t.kind == harmonigraph_scene::TermKind::Distance;
-    // NORMALIZED where the row is read, so a table that sums to 1.001 is a
-    // rounding in the fit rather than a tenth of a percent of extra darkness,
-    // and a row of zeros is no shadow rather than a division.
-    //
-    // Over the BLUR terms alone. A distance term is not a share of a mixture —
-    // it is the shape the row draws — so counting it would hand a share of the
-    // darkness to a term that never asked for one, and halve any Gaussian
-    // standing beside it.
-    let total: f32 = kernel.iter().filter(|t| !is_distance(t)).map(|t| t.weight.max(0.0)).sum();
-    let weight = |t: &harmonigraph_scene::KernelTerm| {
-        if positive(total) && !is_distance(t) {
-            t.weight.max(0.0) / total
-        } else {
-            0.0
-        }
-    };
-    // One term's σ for one caster, in the target's pixels: the frame's, scaled
-    // by what the caster asked for and by what the term is. `max` and not a
-    // branch, so a NaN out of a corrupt blob comes out as 0 — a hard-edged
-    // shadow of the caster's own ink rather than a kernel of nothing.
-    let sigma_of = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
-        (sigma_px * c.sigma_scale * t.sigma).max(0.0)
-    };
+    let is_distance = kernel.is_distance();
+    // One caster's σ in the target's pixels: the frame's, scaled by what the
+    // caster asked for. `max` and not a branch, so a NaN out of a corrupt blob
+    // comes out as 0 — a hard-edged shadow of the caster's own ink rather than
+    // a kernel of nothing.
+    let sigma_of = |c: &Caster| (sigma_px * c.sigma_scale).max(0.0);
     // A cell, sized off ITS OWN σ: drawn at `min(1, SIGMA_CELL_MAX / σ)` of the
-    // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the term
-    // or the caster asked for, and padded by the kernel's reach in those same
-    // texels, plus one so the scene pass's bilinear tap at the box's own edge
-    // still lands inside the cell.
+    // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the
+    // caster asked for, and padded by the kernel's reach in those same texels,
+    // plus one so the scene pass's bilinear tap at the box's own edge still
+    // lands inside the cell. That cap is what holds the blur's cost flat across
+    // the whole bar: the chain reads σ off the cell and clamps its taps to that
+    // cell's rect, so a wider Shadow is a smaller cell rather than a wider
+    // kernel.
     //
-    // Per term and not per frame, which is what holds the blur's cost flat
-    // across the whole table: the chain reads σ off each cell and clamps its
-    // taps to that cell's rect, so N terms are N cells the existing pass sweeps
-    // rather than N kernels any one of them is blurred by.
-    // A DISTANCE cell parts from that in pad, stored σ and a quality floor.
-    // Its pad is the standoff's own stop rather than the kernel's reach, that
-    // being where the curve is windowed to zero
-    // (`KernelTerm::reach_sigmas`, which is the one place the two are written
-    // down). The floor keeps both fixed glyph fields and analytic node fields
-    // from being reduced to visible rectangles. σ in the CELL is zero because
-    // the distance cell bypasses the blur chain entirely.
-    let shape = |c: &Caster, t: &harmonigraph_scene::KernelTerm| {
-        let sigma = sigma_of(c, t);
+    // A DISTANCE cell parts from that in pad, stored σ and a quality floor. Its
+    // pad is the standoff's own stop rather than the blur's reach, that being
+    // where the curve is windowed to zero (`ShadowKernel::reach_sigmas`, which
+    // is the one place the two are written down). The floor keeps both fixed
+    // glyph fields and analytic node fields from being reduced to visible
+    // rectangles. σ in the CELL is zero because the distance cell bypasses the
+    // blur chain entirely.
+    let shape = |c: &Caster| {
+        let sigma = sigma_of(c);
         // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
         // infinity the `min` answers: the cell is at the target's own
         // resolution and its kernel collapses to the centre tap.
         let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
-        let floor = if is_distance(t) { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
+        let floor = if is_distance { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
         // More samples than the target has pixels buy no smoother contour and
         // turn the floor into supersampling at the small end.
         let scale = fit.max(floor).min(1.0);
         let k = scale * px_per_point;
-        // This term's σ in the cell's own texels, which is what the PADDING is
-        // in whatever the kind — the two families reach different multiples of
-        // it and `KernelTerm::reach_sigmas` is the one place that is written
-        // down.
+        // σ in the cell's own texels, which is what the PADDING is in whatever
+        // the kind — the two renderers reach different multiples of it and
+        // `ShadowKernel::reach_sigmas` is the one place that is written down.
         let texels = sigma * scale;
-        let pad = ((t.kind.reach_sigmas() * texels).ceil() + 1.0) / k;
+        let pad = ((kernel.reach_sigmas() * texels).ceil() + 1.0) / k;
         // The BLUR chain's σ, which a distance cell has none of because it
         // bypasses that chain.
-        (scale, k, if is_distance(t) { 0.0 } else { texels }, pad)
+        (scale, k, if is_distance { 0.0 } else { texels }, pad)
     };
     // What a caster's level comes to where it is spent: a level at zero, or a
     // NaN out of the same corrupt blob, darkens nothing.
     let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0;
+    // Whether this caster's own scene draw evaluates the field, which is a
+    // caster with no cell to pack.
+    let direct = |c: &Caster| c.direct_distance && is_distance;
 
-    // One entry per (caster, term), the terms consecutive inside each caster —
-    // the order every index below is in. A direct distance term keeps an empty
-    // entry to preserve those indices, but asks for no shelf space.
-    let mut rects: Vec<[f32; 4]> = Vec::with_capacity(casters.len() * kernel.len());
-    let mut sizes: Vec<[u32; 2]> = Vec::with_capacity(casters.len() * kernel.len());
+    // One entry per caster, in the order they arrived — the order every index
+    // below is in. A direct caster keeps an empty entry to preserve those
+    // indices, but asks for no shelf space.
+    let mut rects: Vec<[f32; 4]> = Vec::with_capacity(casters.len());
+    let mut sizes: Vec<[u32; 2]> = Vec::with_capacity(casters.len());
     for caster in casters {
-        for term in kernel {
-            // A caster that darkens nothing takes NO cell: a reader hands the
-            // frame back whole at level 0, so the cells it would fill are ones
-            // nothing ever samples. Nodes clipped off the pane and nodes
-            // projected behind the eye arrive here at level 0 in numbers
-            // (`node_caster`), and N cells each would widen the atlas every
-            // blur pass sweeps and be rasterized by the whole node shader for
-            // no picture at all.
-            if !casts(caster) || (caster.direct_distance && is_distance(term)) {
-                rects.push([0.0; 4]);
-                sizes.push([0, 0]);
-                continue;
-            }
-            let (_, k, _, pad) = shape(caster, term);
-            let r = caster.rect;
-            let rect = [r[0] - pad, r[1] - pad, r[2] + 2.0 * pad, r[3] + 2.0 * pad];
-            let texels = |points: f32| ((points * k).ceil() as u32).max(1);
-            rects.push(rect);
-            sizes.push([texels(rect[2]), texels(rect[3])]);
+        // A caster that darkens nothing takes NO cell: a reader hands the
+        // frame back whole at level 0, so the cell it would fill is one
+        // nothing ever samples. Nodes clipped off the pane and nodes
+        // projected behind the eye arrive here at level 0 in numbers
+        // (`node_caster`), and a cell each would widen the atlas every blur
+        // pass sweeps and be rasterized by the whole node shader for no
+        // picture at all.
+        if !casts(caster) || direct(caster) {
+            rects.push([0.0; 4]);
+            sizes.push([0, 0]);
+            continue;
         }
+        let (_, k, _, pad) = shape(caster);
+        let r = caster.rect;
+        let rect = [r[0] - pad, r[1] - pad, r[2] + 2.0 * pad, r[3] + 2.0 * pad];
+        let texels = |points: f32| ((points * k).ceil() as u32).max(1);
+        rects.push(rect);
+        sizes.push([texels(rect[2]), texels(rect[3])]);
     }
     // Wide enough for the widest cell and about square over the total area,
     // so a pane's worth of names packs into a few shelves rather than one.
@@ -466,67 +421,47 @@ pub(crate) fn pack(
     }
     let height = (y + shelf).next_power_of_two().min(max_side);
 
-    // ALL of a caster's cells or none of them. A kernel is mixed before it is
-    // spent, so a caster drawn with one term missing is not a fainter shadow —
-    // it is a different kernel, and a narrow one at that, drawn on whichever
-    // casters happened to fall off the end of the atlas. A direct distance
-    // term is not missing: its scene draw owns that term and needs no cell.
+    // A cell the atlas could not hold is a caster that darkens NOTHING rather
+    // than one drawn at part of its shadow: the quad is still billboarded on
+    // the reach the bar names, so half a shadow inside it would be a hard edge
+    // at the box. A direct caster is not missing a cell: its scene draw owns
+    // the field and needs none.
     let fits = |i: usize| {
         let [w, h] = sizes[i];
         let [x, y] = placed[i];
         w > 0 && h > 0 && x + w <= width && y + h <= height
     };
-    let n = kernel.len();
     let mut boxes = Vec::with_capacity(rects.len());
     let mut packed_casters = Vec::with_capacity(casters.len());
     for (c, caster) in casters.iter().enumerate() {
-        let whole = casts(caster)
-            && kernel
-                .iter()
-                .enumerate()
-                .all(|(t, term)| caster.direct_distance && is_distance(term) || fits(c * n + t));
+        let whole = casts(caster) && (direct(caster) || fits(c));
         let level = if whole { caster.level.clamp(0.0, 1.0) } else { 0.0 };
         let mut entry = NO_CASTER;
-        entry.level[0] = level;
-        let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
-        for (t, term) in kernel.iter().enumerate() {
-            let i = c * n + t;
-            let direct = caster.direct_distance && is_distance(term);
-            // A direct term has no cell, so it also has no cell-resolution or
-            // padding metadata. Keeping either here would make the packed frame
-            // churn when an atlas-only setting changes even though the scene
-            // draw cannot read it.
-            let (scale, k, sigma_cell, pad) =
-                if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster, term) };
-            let kind = if is_distance(term) { DISTANCE_KIND } else { 0.0 };
-            let rect = rects[i];
-            let [w, h] = sizes[i];
-            let [x, y] = placed[i];
-            let cell =
-                if whole && !direct { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
-            boxes.push(ShadowBox {
-                rect,
-                cell,
-                terms: [k, sigma_cell, level, scale],
-                who: [c as f32, kind, pad, 0.0],
-            });
-            if !whole {
-                continue;
+        let direct = direct(caster);
+        // A direct caster has no cell, so it also has no cell-resolution or
+        // padding metadata. Keeping either here would make the packed frame
+        // churn when an atlas-only setting changes even though the scene draw
+        // cannot read it.
+        let (scale, k, sigma_cell, pad) = if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster) };
+        let kind = if is_distance { DISTANCE_KIND } else { 0.0 };
+        let rect = rects[c];
+        let [w, h] = sizes[c];
+        let [x, y] = placed[c];
+        let cell =
+            if whole && !direct { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
+        boxes.push(ShadowBox {
+            rect,
+            cell,
+            terms: [k, sigma_cell, level, scale],
+            who: [c as f32, kind, pad, 0.0],
+        });
+        if whole {
+            entry.shade = [level, kind, sigma_of(caster) / px_per_point, 0.0];
+            entry.cell = cell;
+            if !direct {
+                entry.map = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, 0.0];
+                entry.rect = rect;
             }
-            entry.kind[t] = kind;
-            entry.sigma[t] = sigma_of(caster, term) / px_per_point;
-            entry.cell[t] = cell;
-            if direct {
-                continue;
-            }
-            entry.map[t] = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, weight(term)];
-            for axis in 0..2 {
-                lo[axis] = lo[axis].min(rect[axis]);
-                hi[axis] = hi[axis].max(rect[axis] + rect[axis + 2]);
-            }
-        }
-        if whole && hi[0] > lo[0] && hi[1] > lo[1] {
-            entry.rect = [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]];
         }
         packed_casters.push(entry);
     }
@@ -626,7 +561,7 @@ impl ShadowTarget {
     /// atlas in `views[0]`.
     ///
     /// Both targets are cleared first: every shipped kernel is either entirely
-    /// blur or entirely distance, and this chain only runs for a blur row.
+    /// blur or entirely distance, and this chain only runs under the Gaussian.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -702,7 +637,7 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// What binds the casters' terms to the scene pipelines: one read-only storage
+/// What binds the casters to the scene pipelines: one read-only storage
 /// buffer, at group 3.
 ///
 /// A group of its own rather than a third binding beside the atlas, because
@@ -852,187 +787,34 @@ pub(crate) mod tests {
         Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0, direct_distance: false }
     }
 
-    /// One Gaussian: one cell per caster, which is what every claim about the
-    /// packing that is not about the MIXTURE is asked at. The rows with more
-    /// terms in them name themselves.
-    fn one() -> &'static [harmonigraph_scene::KernelTerm] {
-        harmonigraph_scene::ShadowKernel::Gaussian.terms()
+    /// One Gaussian, which is what every claim about the packing that is not
+    /// about the DISTANCE renderer is asked at.
+    fn one() -> harmonigraph_scene::ShadowKernel {
+        harmonigraph_scene::ShadowKernel::Gaussian
     }
 
-    /// Every row of the kernel table is a mixture the atlas and the sampler are
-    /// built to hold, and every one is scaled to the same reach.
-    ///
-    /// The table is arithmetic nothing else checks: a row is four numbers typed
-    /// out of a least-squares fit, and a transposed digit in one draws a
-    /// perfectly plausible shadow of the wrong width. Three things say a row is
-    /// the shape it claims. Its weights sum to 1, so switching rows does not
-    /// change how DARK the shadow is — the mix is normalized where it is read,
-    /// which turns a bad sum into a silent brightness change rather than an
-    /// error. Its σ ratios straddle 1, that being what "scaled to the same
-    /// reach" means for a mixture: a row entirely under 1 is a shadow narrower
-    /// than the bar says. And it fits in what a caster carries.
-    ///
-    /// The rows are listed by hand, so a row added to the table has to be
-    /// added here too. The claims are about the rows carrying a blur term; a
-    /// distance row has no mixture to sum and is measured by the two readings
-    /// in `lattice_tests::shadows` instead.
-    #[test]
-    fn every_kernel_row_is_a_mixture_of_the_width_the_bar_names() {
-        use harmonigraph_scene::ShadowKernel::*;
-        for kernel in [Gaussian, TwoScale, Distance] {
-            if kernel.has_distance() {
-                continue;
-            }
-            let terms = kernel.terms();
-            assert!(
-                !terms.is_empty() && terms.len() <= harmonigraph_scene::SHADOW_TERMS_MAX,
-                "{kernel:?} has {} terms, which is not something a caster can carry",
-                terms.len(),
-            );
-            let total: f32 = terms.iter().map(|t| t.weight).sum();
-            assert!(
-                (total - 1.0).abs() < 0.005,
-                "{kernel:?}'s weights sum to {total}, so the row is a brightness change as well \
-                 as a shape",
-            );
-            assert!(
-                terms.iter().all(|t| t.weight > 0.0 && t.sigma > 0.0),
-                "{kernel:?} carries a term that draws nothing: {terms:?}",
-            );
-            let widest = terms.iter().fold(0.0f32, |w, t| w.max(t.sigma));
-            let narrowest = terms.iter().fold(f32::INFINITY, |w, t| w.min(t.sigma));
-            assert!(
-                narrowest <= 1.0 && widest >= 1.0,
-                "{kernel:?} spans {narrowest}..{widest}, which does not straddle the width the \
-                 Shadow bar names",
-            );
-        }
-        assert_eq!(
-            Gaussian.terms(),
-            &[harmonigraph_scene::KernelTerm {
-                weight: 1.0,
-                sigma: 1.0,
-                kind: harmonigraph_scene::TermKind::Blur,
-            }],
-            "the Gaussian row is not one Gaussian at the bar's own width, so every other reading \
-             in this suite is against a different picture",
-        );
-    }
-
-    /// A mixture packs one cell per caster per term, each at the resolution its
-    /// OWN σ asks for — which is the whole reason the shape is N cells rather
-    /// than one blurred N ways.
-    ///
-    /// The claim to make is about the narrow term. A row's core is the term the
-    /// eye reads as the shadow's edge, and a shared resolution picked for the
-    /// widest term would draw that core through the wide term's texel grid and
-    /// leave every row looking like the same blob. So: the narrow cell is drawn
-    /// FINER than the wide one, and every cell's σ is still under the cap that
-    /// holds the blur's tap count flat.
-    #[test]
-    fn a_mixtures_cells_are_each_at_their_own_terms_resolution() {
-        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
-        // Past the cap at every term, so each cell is really drawn smaller than
-        // the pane and the resolutions below are the packer's own choice rather
-        // than the pane's.
-        let sigma = SIGMA_CELL_MAX * 40.0;
-        let packed = pack(&[caster(0.0, 0.0, 40.0, 12.0)], sigma, 1.0, 16384, terms);
-        assert_eq!(packed.boxes.len(), terms.len(), "one cell per term");
-        assert_eq!(packed.casters.len(), 1, "one entry per caster, whatever the term count");
-        for (t, term) in terms.iter().enumerate() {
-            let b = packed.boxes[t];
-            assert!(
-                b.terms[1] <= SIGMA_CELL_MAX + 1e-4,
-                "term {t} is {} texels of σ, past the cap the tap count rests on",
-                b.terms[1],
-            );
-            assert!(b.cell[2] > 0.0 && b.cell[3] > 0.0, "term {t} got no cell");
-            let expected = (SIGMA_CELL_MAX / (sigma * term.sigma)).min(1.0);
-            assert!(
-                (b.terms[3] - expected).abs() < 1e-5,
-                "term {t} is drawn at {} of the target where its own σ asks for {expected}",
-                b.terms[3],
-            );
-        }
-        let (narrow, wide) = (packed.boxes[0], packed.boxes[terms.len() - 1]);
-        assert!(
-            narrow.terms[0] > wide.terms[0] * 2.0,
-            "the narrow term is drawn at {} texels a point against the wide one's {}, which is \
-             not a finer picture of the core",
-            narrow.terms[0],
-            wide.terms[0],
-        );
-        // And the caster's own entry spans the WIDEST term's box, which is the
-        // quad the mix is drawn over: a quad on the narrow term's reach cuts
-        // the wide one off in a straight line.
-        let entry = packed.casters[0];
-        for b in &packed.boxes {
-            assert!(
-                entry.rect[0] <= b.rect[0] + 1e-3
-                    && entry.rect[1] <= b.rect[1] + 1e-3
-                    && entry.rect[0] + entry.rect[2] >= b.rect[0] + b.rect[2] - 1e-3
-                    && entry.rect[1] + entry.rect[3] >= b.rect[1] + b.rect[3] - 1e-3,
-                "the caster's quad {:?} does not hold a term's box {:?}",
-                entry.rect,
-                b.rect,
-            );
-        }
-        let weights: f32 = entry.map.iter().take(terms.len()).map(|m| m[3]).sum();
-        assert!(
-            (weights - 1.0).abs() < 1e-4,
-            "the terms a caster carries sum to {weights} of a mixture, so its shadow is a \
-             different darkness from a Gaussian's",
-        );
-    }
-
-    /// A caster the atlas cannot hold ALL of casts nothing at all.
-    ///
-    /// All or none, and the trap is that the middle is plausible: a mixture with
-    /// its wide term dropped is not a fainter shadow, it is the narrow rows of
-    /// the table drawn on whichever casters happened to fall off the end of the
-    /// shelves — a different kernel, chosen by the packing order.
-    #[test]
-    fn a_caster_the_atlas_cannot_hold_every_term_of_casts_none_of_it() {
-        let terms = harmonigraph_scene::ShadowKernel::TwoScale.terms();
-        // Each term's cell fits alone, while the pair cannot both be shelved in
-        // this atlas. That reaches the partial-kernel branch rather than the
-        // simpler case where the whole row fits.
-        let packed = pack(&[caster(0.0, 0.0, 300.0, 300.0)], 40.0, 1.0, 96, terms);
-        assert_eq!(packed.casters.len(), 1);
-        assert_eq!(
-            packed.casters[0].level[0], 0.0,
-            "a caster missing a cell still casts, so some frame draws a kernel nobody chose",
-        );
-        assert!(
-            packed.boxes.iter().all(|b| b.cell == [0.0; 4] && b.terms[2] == 0.0),
-            "a caster that casts nothing kept a cell, which is ink drawn into the atlas origin \
-             over whatever is packed there",
-        );
-    }
-
-    /// What a row of the table costs in ATLAS, against one Gaussian, at both
+    /// What the DISTANCE renderer costs in ATLAS against the Gaussian, at both
     /// ends of the Shadow bar.
     ///
     /// The number `timing.rs` cannot give: a frame's GPU time on a contended
     /// machine swings by a factor of ten between its p10 and its p90, where the
     /// packing is arithmetic and answers the same way every run. It is also the
-    /// cost that decides whether a row is affordable, the blur chain over the
-    /// cells being unchanged — every cell's σ is capped in TEXELS, so N terms
-    /// buy area rather than a wider kernel.
+    /// cost that decides whether the pair is affordable, the blur chain over
+    /// the cells being unchanged — every cell's σ is capped in TEXELS, so what
+    /// a renderer buys is area rather than a wider kernel.
     ///
     /// Read at both ends because the two are not the same question. Cells are
-    /// drawn at `min(1, SIGMA_CELL_MAX / σ)`, so at a NARROW Shadow the terms
-    /// are all at the pane's own resolution and a row costs about N times one
-    /// Gaussian. At a wide one a blur cell scales down with its own σ while a
-    /// Distance cell stops at the quality floor.
+    /// drawn at `min(1, SIGMA_CELL_MAX / σ)`, so at a NARROW Shadow both are at
+    /// the pane's own resolution and cost about the same. At a wide one a blur
+    /// cell scales down with its own σ while a Distance cell stops at the
+    /// quality floor.
     ///
-    /// TwoScale's bound is four, just above the core-and-skirt row at both ends
-    /// of the bar. Distance has a bound of its own below; past either, the row
-    /// is a reason the atlas hits `max_side` rather than a shape to compare
-    /// (see `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
+    /// Past the bound below, the renderer is a reason the atlas hits `max_side`
+    /// rather than a shape to compare (see
+    /// `a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold`).
     #[test]
     fn a_kernel_row_costs_this_much_atlas_against_one_gaussian() {
-        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
+        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
         // A pane's worth of names: a run of type is the caster the atlas is
         // mostly made of, and a node's box is the same shape at a bigger size.
         let casters: Vec<Caster> =
@@ -1042,7 +824,7 @@ pub(crate) mod tests {
             // a power of two in each direction, which quantizes every reading
             // to a factor of two and hides what a row actually asked for.
             let area = |kernel: harmonigraph_scene::ShadowKernel| -> f64 {
-                pack(&casters, sigma, 2.0, 16384, kernel.terms())
+                pack(&casters, sigma, 2.0, 16384, kernel)
                     .boxes
                     .iter()
                     .map(|b| f64::from(b.cell[2]) * f64::from(b.cell[3]))
@@ -1050,21 +832,14 @@ pub(crate) mod tests {
             };
             let plain = area(Gaussian);
             assert!(plain > 0.0, "one Gaussian packed nothing at {what}");
-            let ratio = area(TwoScale) / plain;
-            eprintln!("TwoScale at {what}: {ratio:.2}x one Gaussian's cells");
-            assert!(
-                ratio <= 4.0,
-                "TwoScale packs {ratio:.2}x one Gaussian's cells at {what}, which is a row that \
-                 reaches the device's texture limit rather than a row to compare",
-            );
-            // The DISTANCE row on a bound of its own, and two orders of
-            // magnitude above the blur rows' rather than beside them. A blur
-            // cell shrinks with σ and a distance cell stops at its quality
-            // floor, so the top of the bar is where the two families' costs
-            // part company by construction. This fixture measures about 87x at
-            // the top of the bar; the ceiling catches a change that walks the
-            // atlas into `max_side`, where a caster stops casting with nothing
-            // on screen to say so.
+            // The DISTANCE renderer on a bound of its own, two orders of
+            // magnitude above the Gaussian's rather than beside it. A blur cell
+            // shrinks with σ and a distance cell stops at its quality floor, so
+            // the top of the bar is where the two costs part company by
+            // construction. This fixture measures about 87x at the top of the
+            // bar; the ceiling catches a change that walks the atlas into
+            // `max_side`, where a caster stops casting with nothing on screen
+            // to say so.
             let ratio = area(Distance) / plain;
             eprintln!(
                 "Distance at {what}, {DISTANCE_TEXELS_PER_POINT:.2} tex/pt: {ratio:.2}x one \
@@ -1078,23 +853,32 @@ pub(crate) mod tests {
         }
     }
 
-    /// The shader's term count is the scene crate's.
+    /// The shader's caster is as many rows as the one the CPU writes.
     ///
-    /// Two files with no linkage: `SHADOW_TERMS` sizes the arrays a caster's
-    /// entry is read out of, and `SHADOW_TERMS_MAX` sizes the ones the CPU
-    /// writes. A shader smaller than the struct reads a term's cell out of the
-    /// next term's slot, which is a shadow of the right shape in the wrong
-    /// place.
+    /// Two files with no linkage: common.wgsl declares the struct the scene
+    /// draws read a caster's entry out of, and [`ShadowCaster`] is what `pack`
+    /// writes into that buffer. A shader one row short reads every field after
+    /// the missing one out of the next caster's entry — a shadow of the right
+    /// shape in the wrong place, on no diagnostic at all.
+    ///
+    /// The rows and not the field names, which is what a wgsl parser would buy
+    /// and is not what goes wrong: every row here is a `vec4<f32>`, so the
+    /// count is the size and a row added on one side alone is what the count
+    /// catches.
     #[test]
-    fn the_shaders_term_count_is_the_scenes() {
-        let src = crate::with_common(crate::SHADER_SRC);
-        assert!(
-            src.contains(&format!(
-                "const SHADOW_TERMS: u32 = {}u;",
-                harmonigraph_scene::SHADOW_TERMS_MAX
-            )),
-            "common.wgsl declares a different SHADOW_TERMS than the struct a caster is written \
-             into",
+    fn the_shaders_caster_is_the_packers() {
+        let src = crate::with_common("");
+        let body = src
+            .split_once("struct ShadowCaster {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .expect("common.wgsl declares ShadowCaster")
+            .0;
+        let rows = body.matches("vec4<f32>,").count();
+        assert_eq!(
+            rows,
+            std::mem::size_of::<ShadowCaster>() / 16,
+            "common.wgsl's ShadowCaster is {rows} rows where the packer writes {}",
+            std::mem::size_of::<ShadowCaster>() / 16,
         );
     }
 
@@ -1381,7 +1165,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// The two shader modules that spell a distance term's kind agree on it,
+    /// The two shader modules that spell a distance cell's kind agree on it,
     /// and the scene and consumer agree on the standoff's window.
     ///
     /// Each has to be written more than once — there is no linkage between
@@ -1406,7 +1190,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// A distance term's cell is padded to exactly where its curve is windowed
+    /// A distance cell is padded to exactly where its curve is windowed
     /// to nothing and stops shrinking at the renderer's quality floor.
     ///
     /// The pad has to REACH the stop or the shadow ends in a straight line at
@@ -1425,7 +1209,7 @@ pub(crate) mod tests {
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
         // target's full resolution or the blur's fit decides the cell.
         let sigma = 40.0;
-        let terms = ShadowKernel::Distance.terms();
+        let terms = ShadowKernel::Distance;
         let out = pack(&[caster], sigma, 1.0, 4096, terms);
         let cell = out.boxes[0];
         for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
@@ -1448,14 +1232,14 @@ pub(crate) mod tests {
             "a distance cell is padded {pad} points where its curve reaches {want}",
         );
         // A blur cell belongs to the other fill and sampling branch.
-        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian.terms());
+        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian);
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
         assert!((blur.boxes[0].terms[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
     }
 
-    /// A caster that owns its exact distance keeps the term's profile metadata
-    /// without occupying an atlas cell. Its blur row remains a real cell
-    /// because the scene draw does not hold that convolution.
+    /// A caster that owns its exact distance keeps the profile metadata without
+    /// occupying an atlas cell. Under the GAUSSIAN the same caster still takes
+    /// a real cell, because its scene draw does not hold that convolution.
     #[test]
     fn a_direct_distance_keeps_only_the_blur_cell() {
         use harmonigraph_scene::ShadowKernel;
@@ -1465,31 +1249,15 @@ pub(crate) mod tests {
             sigma_scale: 1.0,
             direct_distance: true,
         };
-        let distance = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance.terms());
-        assert_eq!(distance.boxes[0].cell, [0.0; 4], "the direct term packed an atlas cell");
-        assert_eq!(distance.casters[0].kind[0], DISTANCE_KIND);
-        assert_eq!(distance.casters[0].sigma[0], 20.0);
-        assert_eq!(distance.casters[0].level[0], 1.0);
+        let distance = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
+        assert_eq!(distance.boxes[0].cell, [0.0; 4], "the direct caster packed an atlas cell");
+        assert_eq!(distance.casters[0].shade[1], DISTANCE_KIND);
+        assert_eq!(distance.casters[0].shade[2], 20.0);
+        assert_eq!(distance.casters[0].shade[0], 1.0);
 
-        let blur = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Gaussian.terms());
+        let blur = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Gaussian);
         assert!(blur.boxes[0].cell[2] > 0.0 && blur.boxes[0].cell[3] > 0.0);
-
-        let mixed = [
-            harmonigraph_scene::KernelTerm {
-                weight: 1.0,
-                sigma: 1.0,
-                kind: harmonigraph_scene::TermKind::Blur,
-            },
-            harmonigraph_scene::KernelTerm {
-                weight: 0.0,
-                sigma: 1.0,
-                kind: harmonigraph_scene::TermKind::Distance,
-            },
-        ];
-        let mixed = pack(&[caster], 40.0, 2.0, 4096, &mixed);
-        assert!(mixed.boxes[0].cell[2] > 0.0 && mixed.boxes[0].cell[3] > 0.0);
-        assert_eq!(mixed.boxes[1].cell, [0.0; 4]);
-        assert_eq!(mixed.casters[0].kind[1], DISTANCE_KIND);
+        assert_eq!(blur.casters[0].shade[1], 0.0, "a Gaussian caster says it holds a distance");
     }
 
     /// A caster whose distance is held in the atlas keeps the cell its scene
@@ -1504,12 +1272,12 @@ pub(crate) mod tests {
             sigma_scale: 1.0,
             direct_distance: false,
         };
-        let exact = pack(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance.terms());
+        let exact = pack(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
         assert_eq!(exact.boxes[0].who[1], DISTANCE_KIND);
 
         let name = caster_of(&[crate::text::tests::glyph()], 1.0);
-        let name = pack(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance.terms());
+        let name = pack(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(name.boxes[0].cell[2] > 0.0 && name.boxes[0].cell[3] > 0.0);
         assert_eq!(name.boxes[0].who[1], DISTANCE_KIND);
     }
@@ -1531,11 +1299,9 @@ pub(crate) mod tests {
                 let blur_resolution = (SIGMA_CELL_MAX / sigma_points).min(px_per_point);
                 let distance_resolution = blur_resolution.max(DISTANCE_TEXELS_PER_POINT);
                 let distance =
-                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance.terms())
-                        .boxes[0];
+                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance).boxes[0];
                 let gaussian =
-                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian.terms())
-                        .boxes[0];
+                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian).boxes[0];
                 assert!(
                     (distance.terms[0] - distance_resolution).abs() < 1e-5,
                     "Distance at σ {sigma_points} points and {px_per_point} px/pt packed {} \

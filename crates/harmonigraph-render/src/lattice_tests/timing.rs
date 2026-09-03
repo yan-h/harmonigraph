@@ -43,24 +43,21 @@ fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
     time_a_frame_of_names(scene, "the top of the Shadow bar");
 }
 
-/// Every row of the kernel table, at both ends of the Shadow bar.
+/// Both renderers, at both ends of the Shadow bar.
 ///
-/// What a MIXTURE costs, which is the number #527 wants before a row is chosen.
-/// A row of N terms packs N cells per caster and takes N taps in every caster's
-/// draw; the blur chain over them is unchanged, every cell's σ still being
-/// capped in texels. The two ends of the bar are here for the same reason the
-/// two probes above are: the atlas SHRINKS as the bar opens and the quads grow,
-/// so a row's cost is not one number.
+/// The two ends are here for the same reason the two probes above are: the
+/// atlas SHRINKS as the bar opens and the quads grow, so a renderer's cost is
+/// not one number.
 ///
-/// A DISTANCE row is the expensive one to measure before a merge (#536). Its
-/// cell does not shrink past the renderer's quality floor, so its atlas stays
-/// finer as the bar opens; its fill is the whole node shader at that
-/// resolution, once per node (#507).
+/// DISTANCE is the expensive one to measure before a merge (#536). Its cell
+/// does not shrink past the renderer's quality floor, so its atlas stays finer
+/// as the bar opens; its fill is the whole node shader at that resolution, once
+/// per node (#507).
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_each_kernel_costs_this_much() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian, TwoScale};
-    for kernel in [Gaussian, TwoScale, Distance] {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    for kernel in [Gaussian, Distance] {
         for (shadow, where_) in [
             (the_live_view().glow_shadow, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),

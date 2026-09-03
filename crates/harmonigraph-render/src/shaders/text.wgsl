@@ -44,25 +44,12 @@ struct Locals {
     /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
     /// surface casts no shadow and leaves it at 0.
     shadow_depth: f32,
-    /// How many terms the lattice's kernel has, and so how many cells a caster
-    /// carries and how many taps its box takes (`ShadowKernel::terms`). Read by
-    /// [`fs_shadow_box`] alone, and 0 everywhere else — which is a surface that
-    /// samples the atlas not at all.
-    shadow_terms: f32,
-    /// Preserves WGSL's 8-byte `vec2` alignment for the atlas size.
-    shadow_atlas_pad: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.
+    ///
+    /// Beside the depth above so the pair fills a `vec2`'s 8-byte alignment
+    /// with no pad of its own.
     shadow_atlas_size: vec2<f32>,
-    /// The lattice's shadow CURVE, in the two slots that were the gap before
-    /// the rings: how much a caster thin against σ is worth against a solid
-    /// one, and the exponent that bends where along the shadow's width the
-    /// depth sits. The pair `shadow_transmittance` takes beside the depth, so a
-    /// name's shadow and a ring's are shaped by one number each. Read by
-    /// [`fs_shadow_box`] alone; every other surface casts no shadow and leaves
-    /// both at 0.
-    shadow_gain: f32,
-    shadow_curve: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
@@ -702,8 +689,8 @@ fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
 
 struct BoxOut {
     @builtin(position) position: vec4<f32>,
-    /// Where this fragment stands on the pane, in points — the space every
-    /// term's cell is mapped from (`shadow_kernel`).
+    /// Where this fragment stands on the pane, in points — the space the
+    /// caster's cell is mapped from (`shadow_kernel`).
     @location(0) at: vec2<f32>,
     /// The caster's level, 0..1.
     @location(1) @interpolate(flat) level: f32,
@@ -712,7 +699,7 @@ struct BoxOut {
 };
 
 /// A caster's box: the quad its shadow is laid over, which is its ink's own box
-/// grown by the WIDEST of its kernel's terms (`pack` in shadow.rs).
+/// grown by the kernel's reach (`pack` in shadow.rs).
 ///
 /// No vertex buffer at all. The draw is one instance at the caster's own index
 /// (`Draw::Label` in lib.rs), so the index IS the instance index, and every
@@ -733,7 +720,7 @@ fn vs_shadow_box(
     var out: BoxOut;
     out.position = on_screen(at);
     out.at = at;
-    out.level = caster.level.x;
+    out.level = caster.shade.x;
     out.who = who;
     return out;
 }
@@ -786,17 +773,12 @@ fn vs_shadow_box(
 /// alone.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
-    let full = shadow_kernel(
-        in.who,
-        in.at,
-        u32(max(locals.shadow_terms, 0.0)),
-        locals.shadow_gain,
-    );
-    let t = shadow_transmittance(full, locals.shadow_depth, in.level, locals.shadow_curve);
+    let full = shadow_kernel(in.who, in.at);
+    let t = shadow_transmittance(full, locals.shadow_depth, in.level);
     // The bright pass's copy, always at a WHOLE shadow (1) rather than at
     // `shadow_depth`: the copy the bright pass reads takes every caster's
     // shadow to the shader's own floor, whatever the visible one is left at.
-    let lit = shadow_transmittance(full, 1.0, in.level, locals.shadow_curve);
+    let lit = shadow_transmittance(full, 1.0, in.level);
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),

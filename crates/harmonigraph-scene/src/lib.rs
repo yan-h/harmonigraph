@@ -52,8 +52,7 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    Gradient, KernelTerm, NoteNames, Pulse, SevensLabel, ShadowKernel, TermKind, REACH_SIGMAS,
-    SHADOW_STOP, SHADOW_TAIL, SHADOW_TERMS_MAX,
+    Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel, REACH_SIGMAS, SHADOW_STOP, SHADOW_TAIL,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
@@ -272,44 +271,6 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
 /// so the fill the scene pass pays. `timing.rs` is what reads that back.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
-
-/// The most a caster's blurred ink may be multiplied up by before it is spent
-/// as a shadow (see [`ViewConfig::glow_shadow_gain`]).
-///
-/// Six, which is a hairline ring reaching the depth bar's own floor at about a
-/// sixth of the blur's peak: past that the `min(…, 1)` under it has every
-/// caster in the picture saturated and the bar's last stretch moves nothing.
-pub const GLOW_SHADOW_GAIN_MAX: f32 = 6.0;
-
-/// The shallowest a shadow's falloff may be bent (see
-/// [`ViewConfig::glow_shadow_curve`]). One is neutral: it leaves the selected
-/// kernel's profile intact and is what a fresh view opens on. The bar only
-/// tightens the profile from there.
-pub const GLOW_SHADOW_CURVE_MIN: f32 = 1.0;
-
-/// The steepest a shadow's falloff may be bent (see
-/// [`ViewConfig::glow_shadow_curve`]).
-///
-/// Four presses the middle of the profile down to a sixteenth of its neutral
-/// level while keeping the saturated middle and empty edge fixed, which is the
-/// useful end of the control before most of its travel reads as the same rim.
-pub const GLOW_SHADOW_CURVE_MAX: f32 = 4.0;
-
-/// The kernel level a shadow spends after its Curve bar bends it.
-///
-/// Both kernel families arrive in 0..=1: a blur as its gained coverage and a
-/// Distance row as its fixed exponential decay. Raising that level to the
-/// curve exponent keeps 0 and 1 fixed while moving everything between them,
-/// which is the same stage `shadow_transmittance` runs in common.wgsl.
-pub fn shadow_curve_level(curve: f32, level: f32) -> f32 {
-    let curve = if curve.is_finite() {
-        curve.clamp(GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_CURVE_MAX)
-    } else {
-        1.0
-    };
-    let level = if level.is_finite() { level.clamp(0.0, 1.0) } else { 0.0 };
-    level.powf(curve)
-}
 
 /// The widest a note name's own shadow may be dialled against the rest of the
 /// picture's (see [`ViewConfig::glow_shadow_name`]).
@@ -959,21 +920,12 @@ pub struct Scene {
     /// How dark a shadow lands where it is whole (see
     /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
     pub glow_shadow_depth: f32,
-    /// What a caster's blurred ink is multiplied up by before it is spent as a
-    /// shadow (see [`ViewConfig::glow_shadow_gain`]); already clamped to
-    /// 0..=[`GLOW_SHADOW_GAIN_MAX`].
-    pub glow_shadow_gain: f32,
-    /// The exponent the gained blur is bent by on its way to the depth (see
-    /// [`ViewConfig::glow_shadow_curve`]); already clamped to
-    /// [`GLOW_SHADOW_CURVE_MIN`]..=[`GLOW_SHADOW_CURVE_MAX`].
-    pub glow_shadow_curve: f32,
     /// What a note NAME's σ takes against the rest of the picture's (see
     /// [`ViewConfig::glow_shadow_name`]); already clamped to
     /// 0..=[`GLOW_SHADOW_NAME_MAX`].
     pub glow_shadow_name: f32,
-    /// Which row every caster's ink is turned into a cell by (see
-    /// [`ViewConfig::glow_shadow_kernel`]). Carried whole: the renderer takes
-    /// the row off it rather than a copy of the numbers.
+    /// Which of the two renderers every caster's ink is turned into a cell by
+    /// (see [`ViewConfig::glow_shadow_kernel`]).
     pub glow_shadow_kernel: ShadowKernel,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.

@@ -235,22 +235,13 @@ pub(crate) struct TextUniforms {
     /// whatever stands under it (`fs_shadow_box`). Every other surface casts
     /// none and leaves it at 0.
     pub(crate) shadow_depth: f32,
-    /// How many terms the lattice's kernel has, and so how many cells a caster
-    /// carries and how many taps its box takes (`fs_shadow_box`). 0 on every
-    /// other surface, which samples the atlas not at all.
-    pub(crate) shadow_terms: f32,
-    /// Aligns `shadow_atlas_size` to WGSL's 8-byte `vec2` boundary.
-    pub(crate) shadow_atlas_pad: f32,
     /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
     /// a name's cell into. 0 everywhere else, where nothing draws into one.
+    ///
+    /// Here rather than beside the two sheets above because a `vec2` is aligned
+    /// to eight bytes and the scalar before it is the pair that reaches it: the
+    /// depth and this size sit together so the struct needs no pad of its own.
     pub(crate) shadow_atlas_size: [f32; 2],
-    /// The lattice's shadow CURVE, in the two slots that were the gap before
-    /// `ring0`: how much a name thin against σ is worth against a solid caster,
-    /// and the exponent that bends where along the shadow's width the depth
-    /// sits (`fs_shadow_box`). Both 0 on every other surface, which casts no
-    /// shadow.
-    pub(crate) shadow_gain: f32,
-    pub(crate) shadow_curve: f32,
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
 }
@@ -598,10 +589,11 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
 
 /// The three draws that prepare a name's shadow cell.
 ///
-/// Blur terms keep the coverage union they already use. A distance term first
-/// fills every analytic cell with its own pad, then MIN-blends each glyph's
-/// true signed field over that value. The latter is the exact union of the
-/// letterforms and cannot double-darken where two glyph quads overlap.
+/// Under the Gaussian a cell keeps the coverage union it already uses. Under
+/// Distance the pass first fills every analytic cell with its own pad, then
+/// MIN-blends each glyph's true signed field over that value. The latter is the
+/// exact union of the letterforms and cannot double-darken where two glyph
+/// quads overlap.
 pub(crate) fn create_glyph_cell_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -1181,11 +1173,7 @@ impl CallbackTrait for TextCallback {
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
             shadow_depth: 0.0,
-            shadow_terms: 0.0,
-            shadow_atlas_pad: 0.0,
             shadow_atlas_size: [0.0; 2],
-            shadow_gain: 0.0,
-            shadow_curve: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };

@@ -109,114 +109,90 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>, share: f32) -> vec3<f
 @group(2) @binding(0) var shadow_atlas: texture_2d<f32>;
 @group(2) @binding(1) var shadow_sampler: sampler;
 
-// The most terms a caster's kernel is built out of — `SHADOW_TERMS_MAX` in
-// harmonigraph_scene, pinned to it by `the_shaders_term_count_is_the_scenes`.
-const SHADOW_TERMS: u32 = 2u;
-
-// One caster's whole kernel, as the scene pass reads it (`ShadowCaster` in
+// One caster's shadow, as the scene pass reads it (`ShadowCaster` in
 // shadow.rs).
 struct ShadowCaster {
-    // The union of every term's padded box, in the pane's points: min, then
-    // size. The quad a caster's shadow is drawn over.
+    // The caster's padded box, in the pane's points: min, then size. The quad a
+    // caster's shadow is drawn over.
     rect: vec4<f32>,
-    // x: how much of this caster's shadow lands, 0..=1. y/z/w unused.
-    level: vec4<f32>,
-    // What each term's cell HOLDS: 0 blurred ink, `DISTANCE_KIND` a distance.
-    kind: array<f32, SHADOW_TERMS>,
-    // Each term's σ in the pane's POINTS, which is what a distance read out of
-    // a cell is measured against — one Shadow width is 2σ.
-    sigma: array<f32, SHADOW_TERMS>,
-    // Each term's cell in atlas texels: origin, then size. Zeroed past the
-    // kernel's own term count, and zeroed whole where nothing was packed.
-    cell: array<vec4<f32>, SHADOW_TERMS>,
-    // Each term's map from a point of the pane to a texel of that cell —
-    // `xy + points * z` — and w its share of the mixture, already normalized
-    // over the BLUR terms and 0 on a distance term.
-    map: array<vec4<f32>, SHADOW_TERMS>,
+    // The cell in atlas texels: origin, then size. Zeroed whole where nothing
+    // was packed.
+    cell: vec4<f32>,
+    // The map from a point of the pane to a texel of that cell —
+    // `xy + points * z`. w unused.
+    map: vec4<f32>,
+    // What this caster SPENDS, none of it a coordinate. x: how much of its
+    // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and
+    // `DISTANCE_KIND` a distance; z: its σ in the pane's POINTS, which is what
+    // a distance read out of the cell is measured against, one Shadow width
+    // being 2σ; w unused.
+    shade: vec4<f32>,
 };
 
-// What `ShadowCaster::kind` holds for a term whose cell is a DISTANCE —
+// What `ShadowCaster::shade`'s y holds for a cell that is a DISTANCE —
 // `shadow::DISTANCE_KIND`, and spelled again in shadow.wgsl because there is no
 // linkage between shader modules here.
 const DISTANCE_KIND: f32 = 1.0;
 
-// Every caster's kernel, indexed by the caster's own index in the frame
+// Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack`'s order).
 //
-// A storage buffer and a group of its own, which is what a MIXTURE costs. The
-// whole caster cannot fit the five attribute locations a node leaves after
-// location 15 (see `ShadowCaster` in shadow.rs), and a term's cell is read by a
-// node, a marker and a name alike, so one array they all index is also one place
-// the shape is written down.
+// A storage buffer and a group of its own. A node's instance rows and the box
+// beside them already take fifteen of the sixteen attribute locations a vertex
+// layout has, where a caster is four vec4 rows (see `ShadowCaster` in
+// shadow.rs); and a cell is read by a node, a marker and a name alike, so one
+// array they all index is also one place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
 
-// What a caster's kernel comes to at `points` of the pane, 0..=1 — the EXPONENT
+// How much a caster's Gaussian is multiplied up by before it is spent, which is
+// what a caster THIN against σ is worth against a solid one.
+//
+// A renderer constant and not a bar. A Gaussian of coverage is at most 1 and
+// only deep inside ink far wider than σ; a hairline ring or a stroke of type is
+// a few pixels against a σ of several, so its blur peaks at a fraction of that
+// and its shadow, spent as an exponent on the depth, would land at a fraction of
+// the depth the bar names. The `min(…, 1)` under it keeps the depth a true
+// FLOOR: ink wide against σ saturates rather than overshooting, so this only
+// ever deepens the thin.
+//
+// It calibrates ONE renderer against the other rather than shaping a picture —
+// what a person dials is the width and the depth, and those mean the same thing
+// under either kernel because of this number. The distance renderer needs none
+// of it: a distance already gives a hairline the whole depth at its own edge by
+// construction, and a gain on top of that is a plateau over the whole padded box.
+const GAUSSIAN_GAIN: f32 = 2.5;
+
+// What a caster's shadow comes to at `points` of the pane, 0..=1 — the EXPONENT
 // `shadow_transmittance` then spends the depth over.
 //
-// The whole row is mixed HERE and not after the transmittance, because the depth
-// is spent as an exponent on the result: a sum of transmittances is a different
-// picture from the transmittance of a sum, and the second is the one a kernel
-// means.
+// One bilinear tap, branching on what the cell holds. A cell is drawn at a
+// fraction of the target's pixels once its σ is past `shadow::SIGMA_CELL_MAX`,
+// and the tap is what makes a blur wider than its own texels read smooth. A tap
+// of a DISTANCE field is a valid interpolation for the same reason a tap of
+// coverage is — the field is smooth almost everywhere and its creases are where
+// two answers are equally right.
 //
-// Each term's cell is at its OWN resolution — a narrow term is drawn finer than
-// a wide one (`pack`) — so this is N bilinear taps into N pictures rather than
-// N taps into one, and the kernel's core keeps the sharpness that is the whole
-// reason a mixture is worth drawing.
-//
-// One loop across both FAMILIES, branching per term on what its cell holds. The
-// gain enters here rather than at the transmittance because whether it applies
-// is a property of the ROW: a blur row is gained and a distance row is not, and
-// a function taking the finished exponent cannot tell them apart.
-//
-// `terms` is the kernel's own count, off a uniform: a term past it carries
-// weight 0 and would cost a tap for nothing.
-fn shadow_kernel(who: u32, points: vec2<f32>, terms: u32, gain: f32) -> f32 {
+// The gain enters here rather than at the transmittance because whether it
+// applies is a property of the RENDERER, and a function taking the finished
+// exponent cannot tell the two apart.
+fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
     if who >= arrayLength(&shadow_casters) {
         return 0.0;
     }
+    let cell = shadow_casters[who].cell;
+    if !cell_packed(cell) {
+        return 0.0;
+    }
     let atlas = vec2<f32>(textureDimensions(shadow_atlas));
-    // The blur terms, summed by weight; and the distance term's own coverage.
-    var blur = 0.0;
-    var cov = 0.0;
-    var distance = false;
-    for (var t = 0u; t < min(terms, SHADOW_TERMS); t = t + 1u) {
-        let cell = shadow_casters[who].cell[t];
-        if !cell_packed(cell) {
-            continue;
-        }
-        let map = shadow_casters[who].map[t];
-        // Held inside the cell, so a quad reaching a hair past its own box
-        // takes that cell's own empty border rather than the neighbour packed
-        // beside it.
-        let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
-        // One bilinear tap per term. A cell is drawn at a fraction of the
-        // target's pixels once its σ is past `shadow::SIGMA_CELL_MAX`, and the
-        // tap is what makes a blur wider than its own texels read smooth. A tap
-        // of a DISTANCE field is a valid interpolation for the same reason a
-        // tap of coverage is — the field is smooth almost everywhere and its
-        // creases are where two answers are equally right.
-        let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
-        if shadow_casters[who].kind[t] >= 0.5 * DISTANCE_KIND {
-            distance = true;
-            cov = standoff_coverage(held, 2.0 * shadow_casters[who].sigma[t]);
-        } else {
-            blur = blur + map.w * held;
-        }
+    let map = shadow_casters[who].map;
+    // Held inside the cell, so a quad reaching a hair past its own box takes
+    // that cell's own empty border rather than the neighbour packed beside it.
+    let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
+    let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
+    if shadow_casters[who].shade.y >= 0.5 * DISTANCE_KIND {
+        return clamp(standoff_coverage(held, 2.0 * shadow_casters[who].shade.z), 0.0, 1.0);
     }
-    if distance {
-        // A distance row does NOT see the gain. The gain exists to push a
-        // hairline's blur up to full depth, and a distance field already gives
-        // a hairline full depth at its own edge by construction — a gain on top
-        // of that is the plateau over the whole padded box that the family is
-        // here to not draw.
-        return clamp(cov, 0.0, 1.0);
-    }
-    // The GAIN, which is how much of the depth a caster thin against σ is
-    // worth: a hairline's blur peaks at a fraction of 1, and without this its
-    // shadow would land at a fraction of the depth the bar names. The
-    // `min(…, 1)` is what keeps the depth a FLOOR — a caster wide against σ
-    // saturates there rather than overshooting.
-    return min(max(gain, 0.0) * clamp(blur, 0.0, 1.0), 1.0);
+    return min(GAUSSIAN_GAIN * clamp(held, 0.0, 1.0), 1.0);
 }
 
 // How much of a shadow stands `d` points out from the ink, 0..=1, for a caster
@@ -242,15 +218,6 @@ fn standoff_coverage(d: f32, w: f32) -> f32 {
 const SHADOW_TAIL: f32 = 4.0;
 const SHADOW_STOP: f32 = 2.0;
 
-// The flattest a shadow's falloff may be bent to, whatever a caller asks for.
-//
-// The exponent acts on a number in 0..=1, so as it approaches zero every
-// blurred fragment with any ink at all in it goes to `pow(x, 0)` = 1 and the
-// shadow is a solid rectangle over the caster's whole padded box — the one
-// value of the curve that draws a shape no caster has. A floor here rather than
-// only in the bar, so a hand-edited blob cannot reach it either.
-const SHADOW_CURVE_FLOOR: f32 = 0.05;
-
 // What the Shadow depth's own bar bottoms out at: the share of the frame left
 // under a caster's solid middle at the top of that bar.
 //
@@ -264,7 +231,7 @@ const SHADOW_CURVE_FLOOR: f32 = 0.05;
 // can hold rounds the frame away, which is what the top of that bar says it does.
 const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 
-// What a caster's kernel leaves of the frame under one fragment, 0..=1: `keep`
+// What a caster's shadow leaves of the frame under one fragment, 0..=1: `keep`
 // raised to the exponent `shadow_kernel` came to, with the caster's LEVEL spent
 // as a share of the result rather than inside the exponent.
 //
@@ -274,9 +241,9 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // which uniform the depth arrives in, and both stay with the caller.
 //
 // `full` arrives already in 0..=1 and already spent through whatever its own
-// family owes — the gain on a blur row, the standoff's decay on a distance one
-// (`shadow_kernel`). What is left here is the pair every row shares: how dark
-// the shadow lands, and where along its width that darkness sits.
+// renderer owes — the gain on a Gaussian, the standoff's decay on a distance
+// (`shadow_kernel`). What is left here is the one thing both share: how dark the
+// shadow lands.
 //
 // The level is spent as a SHARE because `1 - level * (1 - T)` is a caster of
 // opacity `level` letting the rest of the light straight through: a marker a
@@ -284,14 +251,9 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // where the same level inside the exponent would have it cast half
 // (`SHADOW_KEEP_FLOOR` to the 0.1 is 0.5) — a shadow snapping on while its ink
 // is barely there.
-fn shadow_transmittance(full: f32, depth: f32, level: f32, curve: f32) -> f32 {
+fn shadow_transmittance(full: f32, depth: f32, level: f32) -> f32 {
     let keep = max(1.0 - clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
-    // The CURVE, which is where along the shadow's width that depth sits. An
-    // exponent on a number in 0..=1 holds both ends still — a saturated middle
-    // stays at the depth, and a fragment the blur left at nothing stays at
-    // nothing — and moves everything between them, so the bar bends the profile
-    // without moving where the shadow starts or stops.
-    let through = pow(keep, pow(full, max(curve, SHADOW_CURVE_FLOOR)));
+    let through = pow(keep, clamp(full, 0.0, 1.0));
     return 1.0 - clamp(level, 0.0, 1.0) * (1.0 - through);
 }
 

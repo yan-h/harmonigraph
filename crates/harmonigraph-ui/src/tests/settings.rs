@@ -146,7 +146,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .map(|cs| cs.shape)
     .collect();
     let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 3, "the Lattice page drew {} curve previews", paths.len());
+    assert_eq!(paths.len(), 2, "the Lattice page drew {} curve previews", paths.len());
     let points = &paths[0];
     assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
@@ -211,38 +211,6 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
         assert!(
             (point.y - want).abs() < 0.02,
             "at {p} across the reach the bar is at {} and the scene curve at {want}",
-            point.y,
-        );
-    }
-}
-
-/// The Shadow curve bar draws the same exponent the scene hands to every
-/// kernel family.
-#[test]
-fn the_shadow_curve_bar_draws_the_curve_the_scene_receives() {
-    let mut state = fresh();
-    state.view.glow_shadow_curve = 2.0;
-    let tab = SettingsPane::Page(DisplayPage::Lattice).install(&mut state);
-    let shapes: Vec<egui::Shape> = tab_body(&mut state, tab, 320.0, PANE_HEIGHT)
-        .shapes
-        .into_iter()
-        .map(|cs| cs.shape)
-        .collect();
-    let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 3, "the Lattice page drew {} curve previews", paths.len());
-    let points = &paths[2];
-    assert!(points.len() > 8, "the Shadow curve used only {} points", points.len());
-
-    let (left, right) = (points[0].x, points[points.len() - 1].x);
-    let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
-    assert!(left < right && floor > ceiling, "the Shadow curve is not rising");
-    for point in points {
-        let p = (point.x - left) / (right - left);
-        let level = harmonigraph_scene::shadow_curve_level(state.view.glow_shadow_curve, p);
-        let want = floor - (floor - ceiling) * level;
-        assert!(
-            (point.y - want).abs() < 0.02,
-            "at {p} through the kernel the bar is at {} and the scene curve at {want}",
             point.y,
         );
     }
