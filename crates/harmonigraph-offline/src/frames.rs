@@ -360,9 +360,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -453,9 +453,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -580,9 +580,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -674,9 +674,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -772,9 +772,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -989,9 +989,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );
@@ -1094,9 +1094,9 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        for (pane, rect) in &placements {
+                        for (surface, (pane, rect)) in placements.iter().enumerate() {
                             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                            draw_pane(&mut child, *pane, &mut state, now);
+                            draw_pane(&mut child, *pane, &mut state, now, surface);
                         }
                     },
                 );
@@ -1199,9 +1199,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    for (pane, rect) in &placements {
+                    for (surface, (pane, rect)) in placements.iter().enumerate() {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                        draw_pane(&mut child, *pane, &mut state, NOW);
+                        draw_pane(&mut child, *pane, &mut state, NOW, surface);
                     }
                 },
             );

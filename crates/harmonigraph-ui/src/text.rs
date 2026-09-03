@@ -266,11 +266,16 @@ pub(crate) const SIZE_STEP: f32 = 1.04;
 const MAX_GLYPH_PX: f32 = 512.0;
 
 /// Which batch a flush belongs to. Unique per FLUSH drawn in one frame, since
-/// each keeps its own instance buffer — the analyzer and its Render-preview
-/// copy, plus every pane that flushes more than once to put something between
-/// two groups of text. A pane is not the unit here, which is what makes adding
-/// one a renumbering rather than an append; the ids are checked for collisions
-/// in this module's tests.
+/// each keeps its own instance buffer — every live copy of a pane, plus every
+/// pane that flushes more than once to put something between two groups of
+/// text. The ids are checked for collisions in this module's tests.
+///
+/// Every id here is a surface's block plus a SLOT inside it, because a surface
+/// is what a copy of a pane is: the dock's own tabs are surface 0, the Video
+/// panel's preview surface 1, and offline a layout hands each placement its
+/// index (see [`draw_pane`](crate::draw_pane)), so the space has to grow with
+/// the copies a layout draws rather than be renumbered for them. Adding a flush
+/// takes a slot and raises [`FLUSHES_PER_SURFACE`].
 ///
 /// The lattice's node names are not among them: they are drawn inside the
 /// lattice's own pass, so that a node in front covers the name of the node
@@ -278,23 +283,26 @@ const MAX_GLYPH_PX: f32 = 512.0;
 /// [`lattice_labels`](TextBatch::lattice_labels) rather than through a flush.
 /// The learn badge still flushes, being chrome ABOUT the pane rather than
 /// something in the picture.
-pub(crate) const LATTICE_LEARN: u64 = 0;
-/// The spiral's rim names. ONE, where the analyzer has one per surface,
-/// because the spiral is drawn at most once in a frame: the dock holds one tab
-/// per pane, and the Video panel's preview composes `Layout::split`, which
-/// places no spiral at all. A hand-written offline layout with two spirals in
-/// it would want a second — the same assumption `draw_pane` already makes
-/// about the analyzer's texture slot.
-pub(crate) const SPIRAL_NAMES: u64 = 1;
-/// The analyzer's, one per surface (docked, then the preview).
-///
-/// LAST, and every constant above it: this is the one id here that is a
-/// function, so it is the only one whose range grows on its own. A constant
-/// placed inside that range collides with nothing until a surface is added and
-/// then collides in silence, which is why a new id goes above this line rather
-/// than after the number it happens to hand out today.
+const FLUSHES_PER_SURFACE: u64 = 3;
+
+/// One surface's block of ids: `slot` picks the flush within it.
+fn batch(surface: usize, slot: u64) -> u64 {
+    surface as u64 * FLUSHES_PER_SURFACE + slot
+}
+
+/// The lattice's learn badge.
+pub(crate) fn lattice_learn(surface: usize) -> u64 {
+    batch(surface, 0)
+}
+
+/// The spiral's rim names.
+pub(crate) fn spiral_names(surface: usize) -> u64 {
+    batch(surface, 1)
+}
+
+/// The analyzer's pitch and level labels.
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    2 + surface as u64
+    batch(surface, 2)
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -1648,22 +1656,18 @@ mod tests {
     /// Every batch drawn in one frame keeps its own instance buffer, keyed on
     /// its id, so two batches sharing one id draw each other's glyphs — the
     /// second flush overwrites the first's buffer and the first pane's text
-    /// lands wherever the second's was. The ids are hand-numbered and the
-    /// analyzer's run from a base, which is what makes adding one a renumber
-    /// rather than an append.
+    /// lands wherever the second's was.
     ///
-    /// Swept well past the two surfaces that exist, because the analyzer's is
-    /// the one id here that is a FUNCTION and a hand-written list of the
-    /// surfaces alive today cannot fail on the thing that makes it one: a
-    /// constant standing inside the run it hands out collides with nothing
-    /// until a surface is added, and then collides silently. Sweeping is what
-    /// holds the constants clear of that run rather than clear of `{0, 1}`.
+    /// Swept across surfaces rather than checked at the two the editor draws,
+    /// because every id here is a FUNCTION of the surface: a slot standing
+    /// outside its own block collides with nothing until a surface is added,
+    /// and then collides in silence. An offline layout naming one pane eight
+    /// times is what reaches surface 7.
     const SURFACES: usize = 8;
     #[test]
     fn every_batch_drawn_in_a_frame_has_an_id_of_its_own() {
-        let ids: Vec<u64> = [LATTICE_LEARN, SPIRAL_NAMES]
-            .into_iter()
-            .chain((0..SURFACES).map(spectral_labels))
+        let ids: Vec<u64> = (0..SURFACES)
+            .flat_map(|s| [lattice_learn(s), spiral_names(s), spectral_labels(s)])
             .collect();
         let distinct: std::collections::HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");

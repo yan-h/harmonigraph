@@ -234,8 +234,9 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
 /// Draw every remembered note that falls inside the pane's time window and
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
-/// `surface` names the roll (0 the docked pane / offline render, 1 the
-/// Render preview), so two live copies get their own instance buffer.
+/// `surface` names the roll — which live copy of the pane this is (see
+/// [`draw_pane`](crate::draw_pane)) — so two live copies get their own
+/// instance buffer.
 ///
 /// One paint callback for the whole roll, drawing one instanced quad per
 /// note segment — NOT a stack of stroked rounded rects through egui's
@@ -255,11 +256,11 @@ pub(super) fn draw_roll(
 ) {
     let ppp = painter.ctx().pixels_per_point().max(1.0);
     let notes = note_instances(axes, scale, state, split, now, ppp);
-    if surface == 0 {
+    if surface == crate::panes::DOCKED_SURFACE {
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
-        // cannot see it. The Render preview is a second roll and does
-        // not publish (see `Instruments::roll_notes`).
+        // cannot see it. The overlay reads one number, so only the copy a
+        // person is looking at writes it (see `Instruments::roll_notes`).
         state
             .instruments
             .roll_notes

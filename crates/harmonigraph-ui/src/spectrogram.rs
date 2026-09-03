@@ -767,7 +767,7 @@ pub(crate) fn build(
         // aggregator are disjoint fields of `spectrum`.
         None => {
             let hist = &spectrum.history;
-            let agg = spectrum.spectrogram[surface].agg.get_or_insert_with(SpectrogramAgg::new);
+            let agg = spectrum.spectrogram.at(surface).agg.get_or_insert_with(SpectrogramAgg::new);
             agg.window(hist, plan.first, bucket, plan.capacity)
         }
     };
@@ -788,7 +788,13 @@ pub(crate) fn build(
     // and never scrolls, so there is no lap for a key to come round on.
     let capacity = if view.whole { w } else { ring_capacity(plan.capacity, w) };
     let layout = TexLayout { bucket, t_origin, tex_span };
-    spectrum.spectrogram[surface].gpu.accept(plan.key.clone(), first_key, capacity, power, layout);
+    spectrum.spectrogram.at(surface).gpu.accept(
+        plan.key.clone(),
+        first_key,
+        capacity,
+        power,
+        layout,
+    );
     Some(layout)
 }
 
@@ -807,8 +813,8 @@ pub(crate) fn run_for(
     // is not a rung, and a live frame holding one would sit at a width the
     // ladder never offers for as long as the window stayed near it. See
     // [`Plan::new`].
-    spectrum.spectrogram[surface].held_bucket = (!view.whole).then_some(plan.bucket);
-    match spectrum.spectrogram[surface].gpu.hit(&plan.key) {
+    spectrum.spectrogram.at(surface).held_bucket = (!view.whole).then_some(plan.bucket);
+    match spectrum.spectrogram.at(surface).gpu.hit(&plan.key) {
         Some(layout) => Some(layout),
         None => build(spectrum, whole, surface, plan, view),
     }
@@ -823,7 +829,7 @@ pub(crate) fn frame_data(
     surface: usize,
     cfg: &SpectrumConfig,
 ) -> Option<(SpectrogramGrid, SpectrogramShades)> {
-    let gpu = &mut spectrum.spectrogram[surface].gpu;
+    let gpu = &mut spectrum.spectrogram.at(surface).gpu;
     let grid = gpu.grid()?;
     Some((grid, gpu.shades(cfg)))
 }
@@ -2736,7 +2742,7 @@ mod tests {
             len: hist.len(),
             newest: hist.back().map_or(clock, |c| c.time),
         };
-        let held = spectrum.spectrogram[0].held_bucket;
+        let held = spectrum.spectrogram.at(0).held_bucket;
         let live_plan = Plan::new(&live_view, &live_columns, held);
         assert!(
             is_rung(live_plan.bucket),
@@ -2794,7 +2800,7 @@ mod tests {
                 len: hist.len(),
                 newest: hist.back().map_or(clock, |c| c.time),
             };
-            let held = spectrum.spectrogram[0].held_bucket;
+            let held = spectrum.spectrogram.at(0).held_bucket;
             let plan = Plan::new(&view, &columns, held);
             buckets.insert((plan.bucket * 1e6).round() as i64);
             run_for(&mut spectrum, None, 0, &plan, &view).expect("a run to draw");
@@ -2802,7 +2808,7 @@ mod tests {
 
         // The opening frame's rung and the one it steps up to, and nothing after.
         assert_eq!(buckets.len(), 2, "the pane saw more than one step: {buckets:?} us");
-        let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
+        let refolds = spectrum.spectrogram.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
         assert_eq!(refolds, 2, "a still hand on a rung boundary refolded {refolds} times in 200");
     }
 
@@ -2836,17 +2842,17 @@ mod tests {
         let fold = |spectrum: &mut crate::AudioSpectrum, view: &PaneView, cols: &Columns| {
             let plan = Plan::new(view, cols, None);
             let layout = run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
-            let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("a run was accepted");
+            let sent = spectrum.spectrogram.at(0).gpu.sent.as_ref().expect("a run was accepted");
             let held = (layout, sent.run.clone(), sent.dirty.clone());
             // The frame drew, which is what entitles the next one to a delta.
-            acknowledge(&spectrum.spectrogram[0].gpu);
+            acknowledge(&spectrum.spectrogram.at(0).gpu);
             held
         };
 
         let cols = columns(200, 91.99);
         let (cold, run, dirty) = fold(&mut spectrum, &view, &cols);
         assert!(dirty.is_empty(), "the first fold patched a buffer that was never written");
-        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1);
+        assert_eq!(spectrum.spectrogram.at(0).gpu.full_uploads(), 1);
 
         // Same columns: the key hits, so nothing is folded and the same
         // allocation goes back to the GPU.
@@ -2859,7 +2865,11 @@ mod tests {
         spectrum.push_history(92.0, &bins);
         let (_, _, dirty) = fold(&mut spectrum, &view, &columns(201, 92.0));
         assert_eq!(dirty.len(), 1, "a column's arrival wrote {} slabs", dirty.len());
-        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 1, "a column forced a full upload");
+        assert_eq!(
+            spectrum.spectrogram.at(0).gpu.full_uploads(),
+            1,
+            "a column forced a full upload"
+        );
 
         // A pane a RUNG narrower sizes the GPU's copy differently, and the slot
         // a key lands in is `key mod capacity` — so the whole mapping moves and
@@ -2873,14 +2883,14 @@ mod tests {
         spectrum.push_history(92.01, &bins);
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
         assert!(dirty.is_empty(), "a new slot mapping was patched rather than uploaded");
-        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 2);
+        assert_eq!(spectrum.spectrogram.at(0).gpu.full_uploads(), 2);
 
         // And a released context is a full upload rather than a patch of a
         // buffer nothing wrote.
-        spectrum.spectrogram[0].gpu.release();
+        spectrum.spectrogram.at(0).gpu.release();
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
         assert!(dirty.is_empty(), "a fresh context was sent a delta");
-        assert_eq!(spectrum.spectrogram[0].gpu.full_uploads(), 3);
+        assert_eq!(spectrum.spectrogram.at(0).gpu.full_uploads(), 3);
     }
 
     /// The acknowledgement the render crate's `prepare` makes at the end of a
@@ -2930,12 +2940,12 @@ mod tests {
             let fold = |spectrum: &mut crate::AudioSpectrum, newest: f64, len: usize| {
                 let plan = Plan::new(&view, &Columns { first: 0, len, newest }, None);
                 run_for(spectrum, None, 0, &plan, &view).expect("a run to draw");
-                let sent = spectrum.spectrogram[0].gpu.sent.as_ref().expect("accepted");
+                let sent = spectrum.spectrogram.at(0).gpu.sent.as_ref().expect("accepted");
                 (sent.first_key, sent.run.len() / SPECTRUM_BINS, sent.dirty.len())
             };
             let before = fold(&mut spectrum, time - 0.01, 200);
             if acknowledged {
-                acknowledge(&spectrum.spectrogram[0].gpu);
+                acknowledge(&spectrum.spectrogram.at(0).gpu);
             }
             // Four columns at 10 ms carry the window past a 16 ms slab
             // boundary, so the second run holds a key the first did not.
@@ -2944,7 +2954,7 @@ mod tests {
                 time += 0.01;
             }
             let after = fold(&mut spectrum, time - 0.01, 204);
-            (before, after, spectrum.spectrogram[0].gpu.full_uploads())
+            (before, after, spectrum.spectrogram.at(0).gpu.full_uploads())
         };
 
         let (before, after, uploads) = sequence(false);
@@ -3747,15 +3757,15 @@ mod tests {
                     newest: hist.back().map_or(t.clock, |c| c.time),
                 };
                 let plan = Plan::new(view, &columns, None);
-                let uploads = spectrum.spectrogram[0].gpu.full_uploads();
-                let refolds = spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds());
-                let hit = spectrum.spectrogram[0].gpu.hit(&plan.key).is_some();
+                let uploads = spectrum.spectrogram.at(0).gpu.full_uploads();
+                let refolds = spectrum.spectrogram.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
+                let hit = spectrum.spectrogram.at(0).gpu.hit(&plan.key).is_some();
                 run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
                 t.folds += u32::from(!hit);
-                t.rebuilds += u32::from(spectrum.spectrogram[0].gpu.full_uploads() > uploads);
+                t.rebuilds += u32::from(spectrum.spectrogram.at(0).gpu.full_uploads() > uploads);
                 t.backwards += u32::from(
                     refolds > 0
-                        && spectrum.spectrogram[0].agg.as_ref().map_or(0, |a| a.rebuilds())
+                        && spectrum.spectrogram.at(0).agg.as_ref().map_or(0, |a| a.rebuilds())
                             > refolds,
                 );
                 let (grid, shades) = frame_data(spectrum, 0, &cfg).expect("a grid to draw");
@@ -3836,7 +3846,7 @@ mod tests {
             frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
             // A context that went away: the copy is gone and nothing about it can
             // be assumed.
-            spectrum.spectrogram[0].gpu.release();
+            spectrum.spectrogram.at(0).gpu.release();
             frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
             push(&mut tally, &mut spectrum, 8, 0.0);
             frame(&mut tally, &mut spectrum, &mut headless, &view(mid));
@@ -4534,7 +4544,7 @@ mod tests {
             for _ in 0..4 {
                 frame(&mut spectrum, &mut headless, &mut clock, &mut n, 100.0);
             }
-            let was = spectrum.spectrogram[0].gpu.full_uploads();
+            let was = spectrum.spectrogram.at(0).gpu.full_uploads();
             // A point a frame, which is the rate a hand delivers a drag at, over
             // travel that takes the depth axis from a sliver to past the cap.
             const TRAVEL: u32 = 400;
@@ -4542,7 +4552,7 @@ mod tests {
                 let depth_len = 100.0 + step as f32;
                 frame(&mut spectrum, &mut headless, &mut clock, &mut n, depth_len);
             }
-            let sent = spectrum.spectrogram[0].gpu.full_uploads() - was;
+            let sent = spectrum.spectrogram.at(0).gpu.full_uploads() - was;
             // Ten rungs reach from a two-slab ring to the cap and this travel
             // crosses three of them, `live_slab`'s own rungs a few more.
             assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");

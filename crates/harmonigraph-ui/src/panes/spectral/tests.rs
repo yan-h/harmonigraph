@@ -1796,7 +1796,7 @@ fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_slab_cap() {
     });
     let _ = painted_pane(WIDE, &mut state, 61.0);
 
-    let slabs = state.spectrum.spectrogram[0].gpu.run_slabs();
+    let slabs = state.spectrum.spectrogram.at(0).gpu.run_slabs();
     assert!(slabs > 0, "no heatmap in the frame, so it never reached the fold this is about");
     // The cap, plus the slab each end of the window can spend by falling
     // mid-slab.

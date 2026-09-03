@@ -234,7 +234,7 @@ pub(crate) fn draw_spectrogram(
             }
         }
     };
-    let plan = Plan::new(&view, &columns, spectrum.spectrogram[surface].held_bucket);
+    let plan = Plan::new(&view, &columns, spectrum.spectrogram.at(surface).held_bucket);
 
     // The run on the GPU when the plan's key still names it, and a fresh fold
     // otherwise. The pitch axis, the rows and the colours are uniforms, so a
