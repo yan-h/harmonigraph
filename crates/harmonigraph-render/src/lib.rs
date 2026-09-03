@@ -1918,15 +1918,15 @@ struct PaneBuffers {
     /// capacity, being one row per instance.
     node_cell_buffer: wgpu::Buffer,
     node_cell_capacity: usize,
-    /// Every caster's whole kernel, as the SCENE draws read it — one entry per
-    /// caster carrying each term's cell and mapping
-    /// ([`shadow::ShadowCaster`]), and the bind group naming it at group 3.
+    /// Every caster's shadow, as the SCENE draws read it — one entry per caster
+    /// carrying its cell and mapping ([`shadow::ShadowCaster`]), and the bind
+    /// group naming it at group 3.
     ///
     /// A storage buffer rather than more rows beside the instances, for the
-    /// reason [`shadow::ShadowCaster`] gives: two terms use four vec4s for their
-    /// cells and maps before the caster's rect and metadata, while a node's
-    /// stream has room for five. Rebuilt with the buffer, which is the one thing
-    /// the atlas's own bind groups must not be — hence a group of its own
+    /// reason [`shadow::ShadowCaster`] gives: a node's instance rows and the box
+    /// beside them leave one of the sixteen attribute locations, where a caster
+    /// is four vec4s. Rebuilt with the buffer, which is the one thing the
+    /// atlas's own bind groups must not be — hence a group of its own
     /// (`shadow::caster_layout`).
     caster_buffer: wgpu::Buffer,
     caster_capacity: usize,

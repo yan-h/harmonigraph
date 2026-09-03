@@ -637,7 +637,7 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// What binds the casters' terms to the scene pipelines: one read-only storage
+/// What binds the casters to the scene pipelines: one read-only storage
 /// buffer, at group 3.
 ///
 /// A group of its own rather than a third binding beside the atlas, because

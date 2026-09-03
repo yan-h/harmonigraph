@@ -589,10 +589,11 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
 
 /// The three draws that prepare a name's shadow cell.
 ///
-/// Blur terms keep the coverage union they already use. A distance term first
-/// fills every analytic cell with its own pad, then MIN-blends each glyph's
-/// true signed field over that value. The latter is the exact union of the
-/// letterforms and cannot double-darken where two glyph quads overlap.
+/// Under the Gaussian a cell keeps the coverage union it already uses. Under
+/// Distance the pass first fills every analytic cell with its own pad, then
+/// MIN-blends each glyph's true signed field over that value. The latter is the
+/// exact union of the letterforms and cannot double-darken where two glyph
+/// quads overlap.
 pub(crate) fn create_glyph_cell_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
