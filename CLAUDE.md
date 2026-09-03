@@ -12,10 +12,8 @@ Claude-facing paths rather than copying it per agent; copies drift while
 symlinks make every session read the same contract. Tool-specific hooks,
 permissions and commands stay in each tool's native configuration — except
 where a Claude path holds procedure rather than settings, which any agent
-can read directly: `.claude/commands/audit-merges.md` is the combined-merge
-audit, `.claude/agents/merge-auditor.md` the read-only survey role it
-dispatches, and `.claude/commands/implement-with-codex.md` the handoff that
-sends an edit to Codex while the brief and the verification stay here.
+can read directly: the commands under `.claude/commands/` and the roles they
+dispatch under `.claude/agents/`.
 
 ## Every change runs in an owner-managed worktree and ends in a draft PR
 
@@ -55,12 +53,9 @@ owes the build below, and satisfying one of the two is not satisfying both.
 
 ## Lazy-loaded detail lives in `.claude/skills/`
 
-- **`build-handover`** — `load-plugin.sh` usage, the `build <branch> @<sha>`
-  overlay tag, recovering an evicted build.
-- **`capture-daw-state`** — recovering live settings out of a Bitwig project
-  (`./read-plugin-state.py`), and the editor-window trap.
-- **`pr-hygiene`** — review habit, squash vs merge commit, and the rule for
-  when an agent earns a file in `.claude/agents/`.
+Procedure that only one kind of task needs goes in a skill rather than here.
+Every session already carries each skill's description, so reach for the
+skill itself; a summary of one in this file is a second copy to maintain.
 
 ## Builds go through sccache
 
@@ -304,42 +299,14 @@ deleted palettes/orientations/sweep modes, and the `default_*` block whose
 job was to keep an old blob from being restyled were all removed at once.
 Don't write the next one: a rename is a rename, a dropped variant is dropped.
 
-Two mechanisms carry the weight instead, and they are worth keeping straight:
-
-- **Every persisted struct carries a container-level `#[serde(default)]`** —
-  `ViewConfig`, `SpectrumConfig`, `RenderConfig`, `RenderFrame`, `Camera`,
-  `Gradient`, and each `UiPersist` section but `dock`. A struct NESTED in one
-  of those needs it in its own right and carries it: `GlowCurve` inside
-  `ViewConfig`, `SpiralView` inside its section. `impl Default` is
-  therefore the one and only source of a field's fallback: no second set of
-  values, and retuning the fresh look is free. A key missing from a blob
-  costs that key alone —
-  `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
-  `a_persist_blob_missing_any_one_section_keeps_the_rest` sweep for it rather
-  than pinning one field, because a struct added without the attribute is
-  invisible at its declaration. `UiPersist::ui_scale` is the BLOB's one
-  field-level `default = "..."`, and only because an `f32`'s own default of
-  0.0 is a scale of nothing. Don't add others to it. The offline renderer's
-  `Layout` is outside this rule on purpose — a `.ron` a person writes by hand
-  (`--dump-layout` prints a preset to start from) rather than state the
-  plugin saves, so `panes` is REQUIRED, the struct carries no container-level
-  default at all, and `background` holds the tree's only other field-level
-  `default = "..."`.
-- **`UI_PERSIST_VERSION` is the floor**: a blob below it is refused whole
-  rather than half-read. Note what it does NOT cover — see below.
-
-What survives from an old blob is now only what serde gives free: an unknown
-KEY is skipped, so retiring a field is safe. An unknown VARIANT is not — it
-fails the parse and drops the entire persist, layout and camera with it.
-
-**The floor is no guard against that**, and it is worth being exact, because
-it is easy to assume otherwise: the version is read out of a struct that
-never parsed, so the check never runs. Raising the floor does nothing for a
-dropped variant at any value. What makes it acceptable is that it is LOUD —
-`load_persist` returns whether it applied and writes the reason to the
-console, the offline renderer prints to stderr, and `a_refused_blob_says_why`
-holds both. Dropping an enum variant is still fine; say so in the PR body,
-and keep the refusal audible.
+Two mechanisms carry the weight instead: a container-level
+`#[serde(default)]` on every persisted struct, and `UI_PERSIST_VERSION` as a
+floor that refuses a blob below it whole rather than half-reading it.
+Neither covers a DROPPED ENUM VARIANT, which fails the parse and takes the
+entire persist, layout and camera with it — still fine to do, but say so in
+the PR body and keep the refusal audible. The `persistence-contract` skill
+holds why the floor cannot cover it and where the rule has exceptions; read
+it before changing a persisted shape.
 
 ## What you could not finish goes to an ISSUE, not the backlog
 
