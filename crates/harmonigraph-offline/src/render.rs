@@ -236,9 +236,9 @@ pub fn render(
         // background is the render pass's clear color rather than a
         // painted rect.
         let output = context.run_ui(frame_input(screen, now, max_texture_side), |ui| {
-            for (pane, rect) in &placements {
+            for (surface, (pane, rect)) in placements.iter().enumerate() {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
-                draw_pane(&mut child, *pane, &mut state, now);
+                draw_pane(&mut child, *pane, &mut state, now, surface);
             }
             // Last, over the gaps the panes left: the seam that keeps the
             // lattice and the spectral pane from reading as one field.

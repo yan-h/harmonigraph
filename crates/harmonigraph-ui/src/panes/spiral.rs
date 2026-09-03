@@ -530,7 +530,14 @@ impl Spiral {
 /// Analyzer's own `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel
 /// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
 /// scrolled with.
-pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+///
+/// `surface` is which live copy this is, and the two things the pane holds
+/// between frames are keyed on it: the halo's bloom chain and the rim names'
+/// instance buffer. The docked tab is 0; offline a layout hands each placement
+/// its index (see [`draw_pane`](crate::draw_pane)), so a `.ron` naming the
+/// spiral twice grows a chain per rect instead of tearing one down and
+/// rebuilding it between the two.
+pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, surface: usize) {
     let cfg = state.spectrum_config;
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -564,6 +571,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             marks,
             bloom,
             state.target_format,
+            crate::panes::lattice::pane_id(surface),
         ));
     }
     // The names last, and outside the disc, so nothing in the picture is over
@@ -575,7 +583,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
         &painter,
         rect,
         state,
-        crate::text::SPIRAL_NAMES,
+        crate::text::spiral_names(surface),
         // Nothing here scrolls: a name sits on its note's ray for as long as
         // the note sounds, so the filter has no travel to follow and takes the
         // axis every still surface takes. A pan is travel, but it is a
@@ -1004,7 +1012,7 @@ mod tests {
     /// One frame of the whole pane on a context of `frames`' own, with events
     /// delivered — what every gesture fixture below is built from.
     fn frame(ctx: &egui::Context, state: &mut SharedState, events: Vec<egui::Event>) {
-        let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, 100.0));
+        let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, 100.0, 0));
     }
 
     /// The framing a drag from `from` by `delta` leaves behind, driven through
@@ -1078,7 +1086,7 @@ mod tests {
     }
 
     fn painted(state: &mut SharedState, now: f64) -> Vec<egui::Shape> {
-        painted_into(SCREEN, PANE, |ui| spiral_pane(ui, state, now))
+        painted_into(SCREEN, PANE, |ui| spiral_pane(ui, state, now, 0))
             .shapes
             .into_iter()
             .map(|s| s.shape)
@@ -2114,7 +2122,7 @@ mod tests {
         let cfg = state.spectrum_config;
         let span = cfg.high_midi - cfg.low_midi;
         let shapes: Vec<egui::Shape> =
-            painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, 0.1))
+            painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, 0.1, 0))
                 .shapes
                 .into_iter()
                 .map(|s| s.shape)
