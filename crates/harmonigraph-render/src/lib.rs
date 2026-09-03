@@ -2402,6 +2402,7 @@ impl Offscreen {
         device: &wgpu::Device,
         shared: &OffscreenShared<'_>,
         want: Option<[u32; 2]>,
+        blurs: bool,
     ) {
         match want {
             Some(size) => {
@@ -2413,6 +2414,12 @@ impl Offscreen {
                         shared.sampler,
                         [size[0].max(held[0]), size[1].max(held[1])],
                     ));
+                }
+                // After the size check, so a target rebuilt just above and one
+                // kept from last frame arrive at the same answer: the
+                // intermediate is the atlas's own size and a rebuild drops it.
+                if let Some(atlas) = self.shadow.as_mut() {
+                    atlas.ensure_half(device, shared.shadow_layout, shared.sampler, blurs);
                 }
             }
             None => self.shadow = None,
@@ -3574,7 +3581,7 @@ impl LatticeResources {
             // wrong answer. This settles both.
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow, wants.rows);
-                offscreen.ensure_shadow(device, &shared, wants.shadow);
+                offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
             }
         }
         // The casters' kernels, whose buffer and bind group are one object:
@@ -3614,6 +3621,11 @@ struct PaneTargets {
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
+    /// Whether any cell this frame packed holds COVERAGE, and so whether the
+    /// blur's intermediate is held beside the atlas
+    /// (`shadow::ShadowTarget::ensure_half`). A frame whose every group answers
+    /// a distance leaves it `false` and allocates one plane instead of two.
+    blurs: bool,
     /// The ink strip's height: the row map's own capacity.
     rows: u32,
     /// How many casters this frame's kernels are packed for — the storage
@@ -3868,6 +3880,14 @@ impl CallbackTrait for LatticeCallback {
         // atlas; a markers-only Distance frame therefore allocates no atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
+        // The blur chain runs, and its intermediate is held, when some cell in
+        // the atlas holds COVERAGE — which is what the chain convolves, a
+        // distance cell collapsing its own quad inside both passes (`vs_cell`
+        // in shadow.wgsl). Read off the boxes rather than off the settings, so
+        // a Gaussian group with nothing in the frame to cast costs neither the
+        // pass nor the plane.
+        let blurs =
+            packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
         let pane = resources.pane_buffers(
             device,
             self.pane_id,
@@ -3876,6 +3896,7 @@ impl CallbackTrait for LatticeCallback {
             PaneTargets {
                 glow,
                 shadow: shadow_wanted,
+                blurs,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
@@ -4155,15 +4176,8 @@ impl CallbackTrait for LatticeCallback {
                     pass.draw(0..4, 0..pane.glyph_count);
                 }
                 drop(pass);
-                // The chain runs when some cell in the atlas holds COVERAGE,
-                // which is what it convolves; a distance cell collapses its own
-                // quad inside the pass (`vs_cell` in shadow.wgsl). Read off the
-                // boxes rather than off the settings, so a Gaussian group with
-                // nothing in the frame to cast costs no pass.
-                let blurs = packed
-                    .boxes
-                    .iter()
-                    .any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
+                // The same answer the atlas was allocated on, so the chain and
+                // the plane it ping-pongs through can never disagree.
                 if blurs {
                     let cells = &resources.shadow_cell_pipelines;
                     atlas.blur(
@@ -4348,7 +4362,7 @@ impl CallbackTrait for LatticeCallback {
             // each to read its own cell. The 1x1 stand-in where this frame
             // packed none: every box is then zeros, and a caster with no cell
             // multiplies by exactly 1 with nothing sampled (`shadow_through`).
-            let cells = atlas.map_or(&resources.shadow_dummy_bind_group, |a| &a.reads[0]);
+            let cells = atlas.map_or(&resources.shadow_dummy_bind_group, |a| a.read());
 
             // The order, as `from_scene` laid it down (see [`Draw`]). One walk
             // forward, back to front, with nothing here deciding what goes
@@ -4405,7 +4419,7 @@ impl CallbackTrait for LatticeCallback {
                         // quad and the level out of the array at group 3 and
                         // binds no vertex buffer at all.
                         if let Some(atlas) = atlas.filter(|_| (l as usize) < pane.caster_count) {
-                            pass.set_bind_group(2, &atlas.reads[0], &[]);
+                            pass.set_bind_group(2, atlas.read(), &[]);
                             pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                             pass.set_pipeline(&resources.shadow_box_pipeline);
                             pass.draw(0..4, l..l + 1);
