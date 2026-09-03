@@ -12,10 +12,8 @@ Claude-facing paths rather than copying it per agent; copies drift while
 symlinks make every session read the same contract. Tool-specific hooks,
 permissions and commands stay in each tool's native configuration — except
 where a Claude path holds procedure rather than settings, which any agent
-can read directly: `.claude/commands/audit-merges.md` is the combined-merge
-audit, `.claude/agents/merge-auditor.md` the read-only survey role it
-dispatches, and `.claude/commands/implement-with-codex.md` the handoff that
-sends an edit to Codex while the brief and the verification stay here.
+can read directly: the commands under `.claude/commands/` and the roles they
+dispatch under `.claude/agents/`.
 
 ## Every change runs in an owner-managed worktree and ends in a draft PR
 
@@ -55,12 +53,9 @@ owes the build below, and satisfying one of the two is not satisfying both.
 
 ## Lazy-loaded detail lives in `.claude/skills/`
 
-- **`build-handover`** — `load-plugin.sh` usage, the `build <branch> @<sha>`
-  overlay tag, recovering an evicted build.
-- **`capture-daw-state`** — recovering live settings out of a Bitwig project
-  (`./read-plugin-state.py`), and the editor-window trap.
-- **`pr-hygiene`** — review habit, squash vs merge commit, and the rule for
-  when an agent earns a file in `.claude/agents/`.
+Procedure that only one kind of task needs goes in a skill rather than here.
+Every session already carries each skill's description, so reach for the
+skill itself; a summary of one in this file is a second copy to maintain.
 
 ## Builds go through sccache
 
@@ -128,21 +123,23 @@ the main repo root, so it silently builds main. The bundle looks fresh and
 contains none of the branch's changes. `load-plugin.sh` and
 `update-plugin.sh` exist to sidestep this.
 
-## House style: comments present-tense and at their own site
+## House style: formatting is mechanical, and a diff edits what moves
 
 **Formatting is not something to think about.** Run `cargo fmt --all`;
 `rustfmt.toml` holds the settings and `ci.sh` checks them, so the style is
-decided mechanically and a session spends no attention on it. If the output
+decided mechanically and a session spends no attention on it. The local
+pre-push gate is only `cargo fmt --all --check` — `ci.sh` itself runs in
+GitHub Actions, so a push is cheap and the full suite reports back on the PR.
+If the output
 is ever wrong, change the config rather than hand-formatting around it — a
 `#[rustfmt::skip]` where a hand-built table has to keep its columns, and the
 tree currently needs none.
 
-Two things the formatter does NOT do. It does not wrap **comment prose**, so
-that stays a habit: keep it near 100 columns, where the config puts code. And
-it does not touch the `.wgsl` shaders at all.
+The formatter does not touch the `.wgsl` shaders at all.
 
-Don't go looking for a setting for the first one. `wrap_comments` and
-`comment_width` exist and would do it, but they are nightly-only, and a
+Nor does it wrap comment prose, and don't go looking for a setting that would.
+`wrap_comments` and `comment_width` exist and would do it, but they are
+nightly-only, and a
 nightly-only key in `rustfmt.toml` is DROPPED with a warning rather than
 applied — so on the toolchain `rust-toolchain.toml` pins they do nothing.
 What makes this worth writing down is that they look like they work:
@@ -152,91 +149,6 @@ and reformats 468 hunks, which is not the path `cargo fmt` or `ci.sh` takes.
 std/external/crate, which would be worth having — are behind the same gate.
 Buying them means a second pinned toolchain that only rustfmt uses, and
 `cargo fmt` then being the wrong command to type.
-
-The two conventions below are the ones still invisible to the build — nothing
-fails when you break either, and both are easy to break by reflex.
-
-**Comments state the current constraint, in the present tense.** A comment
-describing the delta from a previous version rots: once that version is a
-couple of refactors gone it names something no reader can reconstruct, and
-it still reads as authoritative, which makes it worse than no comment at
-all. Git already holds the history. PR #83 converted 59 such comments
-across 23 files, keeping each argument and dropping only its time
-reference. Rewrite by keeping the reasoning and dropping the time
-reference — state what the ALTERNATIVE would do, not what the code did:
-"a window mean rather than the EMA this used to be, which was the wrong
-filter" becomes "a window mean rather than an EMA, which IS the wrong
-filter".
-
-The exception is where the past tense is load-bearing, and it is a real
-category rather than an escape hatch. It is now a SMALL category: the
-`legacy_*` fields, the `bare_as_some` shim, the serde aliases and the
-historical `default_*` block are all gone (see the compat section below), and
-with them most of what used to live here. What is left:
-
-- The **fade param's pre-merge id** (`pitch-class-fade`, in
-  `harmonigraph-plugin`'s `lib.rs` and `harmonigraph-take`'s `params.rs`),
-  where the id is a live contract with the host's automation lane and the
-  rename it outlived is the whole reason it looks wrong.
-- The note standing where the retired `node_style` key was, in
-  `harmonigraph-scene`'s `view.rs` — the only surviving record of a set of
-  seventeen, kept deliberately.
-- `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
-  `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
-  reasoning that no longer holds — and is now the only one of its kind.
-
-There the history *is* the current constraint, and flattening it destroys
-real information. Runtime "old" and "no longer" — a previously-held voice,
-a slab's previously-sent bytes — describe state rather than builds, and are
-not in scope at all.
-
-A comment justifying a value by what an OLD BLOB was drawn with is no longer
-in the exception; it is now the ordinary rot case, because no code reads an
-old blob differently. State what the value is and why, not which build wrote
-it.
-
-**A comment states the constraint at its own site; it does not narrate the
-code around it.** This is the rule about ALTITUDE, and it is where the
-upkeep actually goes: measured over the thirty PRs ending at #437, about
-half of every changed line was a comment line and a quarter to a third of
-hunks changed nothing BUT comments — and almost none of that churn was
-rationale. It was prose mirroring the rest of the system from where it sat:
-a doc comment listing the glow's passes ("the light, the moat that takes
-light back off, and the cover that..."), rewritten every time a pass came or
-went; vocabulary name-checks (moat→standoff, grid→markers,
-`grid_at`→`pluses_at`) that cost one edit in code and one per prose
-mention; a test's doc comment re-describing the fixture that sits directly
-under it. A mirror has to be repainted every time the thing it reflects
-moves, and a rename of one word in the picture is paid for at every
-sentence that uses it. Concretely:
-
-- Say what THIS value, branch or pass is constrained to and why. If the
-  relationship to another site is the constraint, state it in a line and
-  link the site (`see X`) — a link does not restate X, so it survives X
-  changing; an inventory of X does not.
-- Never describe what is ABSENT ("with no moat", "the moat is off here on
-  purpose"). Such a comment has a half-life of one PR: the moment the thing
-  is deleted, the sentence about its absence is the rot.
-- A test's doc comment is the CLAIM — what the measurement shows and why
-  that is the thing to measure. The fixture is the code below it; don't
-  narrate it.
-- A config field's doc carries units, range and what the endpoints mean.
-  How the shader or the pane consumes the value belongs at the consumer.
-
-What this does NOT license is cutting rationale. The codebase is heavily
-rationale-driven — a comment is often the only carrier of why the code is
-weird, and it is the tripwire against a plausible-but-wrong "simplification"
-by a reader with no memory of the decision, which here is almost every
-reader. Those comments rarely rot, because a constraint does not move when a
-neighbour is renamed. The density of the tree (over 40% of the non-blank
-lines under `crates/` are comments, doc comments alone nearly 30%) is a COST
-this rule exists to stop growing, not a norm to match; a new comment earns
-its place by stating a constraint, not by reaching the surrounding average.
-Both comment rules are habits to maintain rather than a one-time cleanup —
-new PRs regenerate both patterns — and neither is a mandate for a
-whole-tree rewrite. Comments carry the rationale, so rewriting them in bulk
-is a change of content dressed as a sweep, and no reviewer can read past it
-to find the sentences that actually moved.
 
 The same reader is the reason a diff edits the lines that move rather than
 reprinting the file around them. Rewriting a file whole to change a few of
@@ -304,42 +216,14 @@ deleted palettes/orientations/sweep modes, and the `default_*` block whose
 job was to keep an old blob from being restyled were all removed at once.
 Don't write the next one: a rename is a rename, a dropped variant is dropped.
 
-Two mechanisms carry the weight instead, and they are worth keeping straight:
-
-- **Every persisted struct carries a container-level `#[serde(default)]`** —
-  `ViewConfig`, `SpectrumConfig`, `RenderConfig`, `RenderFrame`, `Camera`,
-  `Gradient`, and each `UiPersist` section but `dock`. A struct NESTED in one
-  of those needs it in its own right and carries it: `GlowCurve` inside
-  `ViewConfig`, `SpiralView` inside its section. `impl Default` is
-  therefore the one and only source of a field's fallback: no second set of
-  values, and retuning the fresh look is free. A key missing from a blob
-  costs that key alone —
-  `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
-  `a_persist_blob_missing_any_one_section_keeps_the_rest` sweep for it rather
-  than pinning one field, because a struct added without the attribute is
-  invisible at its declaration. `UiPersist::ui_scale` is the BLOB's one
-  field-level `default = "..."`, and only because an `f32`'s own default of
-  0.0 is a scale of nothing. Don't add others to it. The offline renderer's
-  `Layout` is outside this rule on purpose — a `.ron` a person writes by hand
-  (`--dump-layout` prints a preset to start from) rather than state the
-  plugin saves, so `panes` is REQUIRED, the struct carries no container-level
-  default at all, and `background` holds the tree's only other field-level
-  `default = "..."`.
-- **`UI_PERSIST_VERSION` is the floor**: a blob below it is refused whole
-  rather than half-read. Note what it does NOT cover — see below.
-
-What survives from an old blob is now only what serde gives free: an unknown
-KEY is skipped, so retiring a field is safe. An unknown VARIANT is not — it
-fails the parse and drops the entire persist, layout and camera with it.
-
-**The floor is no guard against that**, and it is worth being exact, because
-it is easy to assume otherwise: the version is read out of a struct that
-never parsed, so the check never runs. Raising the floor does nothing for a
-dropped variant at any value. What makes it acceptable is that it is LOUD —
-`load_persist` returns whether it applied and writes the reason to the
-console, the offline renderer prints to stderr, and `a_refused_blob_says_why`
-holds both. Dropping an enum variant is still fine; say so in the PR body,
-and keep the refusal audible.
+Two mechanisms carry the weight instead: a container-level
+`#[serde(default)]` on every persisted struct, and `UI_PERSIST_VERSION` as a
+floor that refuses a blob below it whole rather than half-reading it.
+Neither covers a DROPPED ENUM VARIANT, which fails the parse and takes the
+entire persist, layout and camera with it — still fine to do, but say so in
+the PR body and keep the refusal audible. The `persistence-contract` skill
+holds why the floor cannot cover it and where the rule has exceptions; read
+it before changing a persisted shape.
 
 ## What you could not finish goes to an ISSUE, not the backlog
 
@@ -356,15 +240,9 @@ PR, and it widens the range `/audit-merges` has to reason about. The
 exception is the one that pays for itself — the requested behaviour cannot
 work until the bug is fixed — and the PR body says so.
 
-`BACKLOG.md` is not that. An item there is a line of prose, restated at
-dispatch and deleted by whoever fixes it, so an investigation parked in it
-dies with the fix. It is for things that take five seconds to notice and
-need no context to act on.
-
-It is also no longer tracked in git — it is gitignored and per-clone, so a
-worktree session has no copy of it and cannot read or add to one. That makes
-the issue the only durable channel a session actually has, which sharpens
-rather than weakens the rule above.
+`BACKLOG.md` is not the alternative: it is gitignored and per-clone, so a
+worktree session has no copy of it and cannot read or add to one. The issue
+is the only durable channel a session actually has.
 
 Issue #121 is the worked example and the reason this is written down: four
 hypotheses eliminated by instrumentation across a whole session, and the
