@@ -587,7 +587,7 @@ impl ShadowKernel {
 
     /// Whether a caster drawn by this kernel puts a DISTANCE in its cell rather
     /// than blurred ink — what the fill, the blur chain and the sampler each
-    /// branch on, and what `ShadowCaster::kind` carries to the shader.
+    /// branch on, and what `ShadowCaster::shade` carries to the shader.
     pub fn is_distance(self) -> bool {
         matches!(self, ShadowKernel::Distance)
     }

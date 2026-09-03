@@ -2681,10 +2681,10 @@ fn node_paint(in: VsOut) -> Painted {
     return Painted(washed, final_alpha, bloom_alpha);
 }
 
-/// A node's shadow source, into its own cell of the atlas (`shadow.rs`). A blur
-/// term stores the byte-identical coverage it convolves. A Distance term stores
-/// the exact union in pane points, with only layers at the half-level contour
-/// included.
+/// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under
+/// the Gaussian the cell stores the byte-identical coverage the blur convolves;
+/// under Distance it stores the exact union in pane points, with only layers at
+/// the half-level contour included.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2914,7 +2914,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     out.uv = corner * margin;
     out.color = inst.color;
     // The whole marker field is ONE caster, and it is the first the frame packs
-    // (`from_scene`), so its terms sit at index 0 of the array.
+    // (`from_scene`), so its entry sits at index 0 of the array.
     out.shadow_box = vec4<f32>(0.0, arm_points, 0.0, 0.0);
     // The Gaussian's shared cell is a picture of one cross CENTRED in its box,
     // so the "pane point" a marker reads it at is its own place on that cross
@@ -3551,8 +3551,9 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let alpha = in.color.a * plus_coverage(in.uv, aa);
     // The SHADOW, multiplied into everything already in the frame under it. A
     // Gaussian reads the field's shared cell; a distance spends this fragment's
-    // exact folded-box distance, measured by this marker's own arm on screen. A cross in front of a node darkens that node's rings wherever
-    // it reaches them, and a node drawn after it darkens the cross the same way
+    // exact folded-box distance, measured by this marker's own arm on screen. A
+    // cross in front of a node darkens that node's rings wherever it reaches
+    // them, and a node drawn after it darkens the cross the same way
     // — the painter's order the pass already has is the whole of what decides
     // which.
     let d_points = plus_sd(in.uv) * in.shadow_box.y;

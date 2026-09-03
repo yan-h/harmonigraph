@@ -102,8 +102,8 @@ pub(crate) struct Caster {
     ///
     /// The marker already has its exact field in `plus_paint`, so rasterizing
     /// the same field into a cell would spend an atlas allocation and a second
-    /// scene draw for no new information. Blur terms still need the shared
-    /// cell that holds their convolution.
+    /// scene draw for no new information. A Gaussian still needs the shared
+    /// cell that holds its convolution.
     pub direct_distance: bool,
 }
 
@@ -164,8 +164,8 @@ pub(crate) struct ShadowBox {
     /// where the standoff's curve is windowed to nothing and so the value a
     /// texel past its encoded reach holds; w: unused.
     ///
-    /// x is read by the node's SCENE draw, which needs every term at once and
-    /// so reaches the array rather than the box; y and z by the passes that
+    /// x is read by the node's SCENE draw, which needs the caster's whole entry
+    /// and so reaches the array rather than the box; y and z by the passes that
     /// sweep the CELLS, which take one at a time and have to know which chain
     /// this one belongs to. Carried on the box rather than in a buffer of its
     /// own because the node's two draws — the one that fills a cell and the one
@@ -174,8 +174,8 @@ pub(crate) struct ShadowBox {
     pub who: [f32; 4],
 }
 
-/// What `ShadowBox::who`'s y and `ShadowCaster::kind` hold for a term whose
-/// cell is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
+/// What `ShadowBox::who`'s y and `ShadowCaster::shade`'s y hold for a cell that
+/// is a DISTANCE rather than blurred ink — `DISTANCE_KIND` in shadow.wgsl
 /// and common.wgsl, pinned by
 /// `the_shaders_distance_kind_and_window_are_the_packers`.
 ///

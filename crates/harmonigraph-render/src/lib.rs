@@ -1500,7 +1500,7 @@ impl LatticeCallback {
                 },
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
-                // lattice has. y/z unused.
+                // lattice has. z unused.
                 misc11: [
                     scene.glow_shadow,
                     scene.glow_shadow_kernel.reach_sigmas(),
@@ -4358,9 +4358,9 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_bind_group(2, cells, &[]);
                         pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                         pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                        // Term 0's block, which is the only one this draw reads:
-                        // what it takes off a box is the caster's INDEX, and
-                        // every term of one caster carries the same one.
+                        // One box per node instance: what this draw takes off
+                        // a box is the caster's INDEX, which is the only row of
+                        // it the scene pass reads.
                         pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
                         pass.draw(0..4, a..b);
                     }
@@ -4395,8 +4395,8 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_bind_group(0, bind_group, &[]);
                         pass.set_bind_group(1, light, &[]);
                         // One instance at the caster's own index, which is how
-                        // the draw finds its kernel: `vs_shadow_box` reads the
-                        // quad and every term out of the array at group 3 and
+                        // the draw finds its shadow: `vs_shadow_box` reads the
+                        // quad and the level out of the array at group 3 and
                         // binds no vertex buffer at all.
                         if let Some(atlas) = atlas.filter(|_| (l as usize) < pane.caster_count) {
                             pass.set_bind_group(2, &atlas.reads[0], &[]);

@@ -689,8 +689,8 @@ fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
 
 struct BoxOut {
     @builtin(position) position: vec4<f32>,
-    /// Where this fragment stands on the pane, in points — the space every
-    /// term's cell is mapped from (`shadow_kernel`).
+    /// Where this fragment stands on the pane, in points — the space the
+    /// caster's cell is mapped from (`shadow_kernel`).
     @location(0) at: vec2<f32>,
     /// The caster's level, 0..1.
     @location(1) @interpolate(flat) level: f32,
@@ -699,7 +699,7 @@ struct BoxOut {
 };
 
 /// A caster's box: the quad its shadow is laid over, which is its ink's own box
-/// grown by the WIDEST of its kernel's terms (`pack` in shadow.rs).
+/// grown by the kernel's reach (`pack` in shadow.rs).
 ///
 /// No vertex buffer at all. The draw is one instance at the caster's own index
 /// (`Draw::Label` in lib.rs), so the index IS the instance index, and every

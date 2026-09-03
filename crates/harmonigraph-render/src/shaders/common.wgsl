@@ -137,8 +137,8 @@ const DISTANCE_KIND: f32 = 1.0;
 // Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack`'s order).
 //
-// A storage buffer and a group of its own. The whole caster cannot fit the five
-// attribute locations a node leaves after location 15 (see `ShadowCaster` in
+// A storage buffer and a group of its own. A node's own rows reach location 15
+// and the box beside them takes four of the five left (see `ShadowCaster` in
 // shadow.rs), and a cell is read by a node, a marker and a name alike, so one
 // array they all index is also one place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
