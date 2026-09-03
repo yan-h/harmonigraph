@@ -123,21 +123,23 @@ the main repo root, so it silently builds main. The bundle looks fresh and
 contains none of the branch's changes. `load-plugin.sh` and
 `update-plugin.sh` exist to sidestep this.
 
-## House style: comments present-tense and at their own site
+## House style: formatting is mechanical, and a diff edits what moves
 
 **Formatting is not something to think about.** Run `cargo fmt --all`;
 `rustfmt.toml` holds the settings and `ci.sh` checks them, so the style is
-decided mechanically and a session spends no attention on it. If the output
+decided mechanically and a session spends no attention on it. The local
+pre-push gate is only `cargo fmt --all --check` — `ci.sh` itself runs in
+GitHub Actions, so a push is cheap and the full suite reports back on the PR.
+If the output
 is ever wrong, change the config rather than hand-formatting around it — a
 `#[rustfmt::skip]` where a hand-built table has to keep its columns, and the
 tree currently needs none.
 
-Two things the formatter does NOT do. It does not wrap **comment prose**, so
-that stays a habit: keep it near 100 columns, where the config puts code. And
-it does not touch the `.wgsl` shaders at all.
+The formatter does not touch the `.wgsl` shaders at all.
 
-Don't go looking for a setting for the first one. `wrap_comments` and
-`comment_width` exist and would do it, but they are nightly-only, and a
+Nor does it wrap comment prose, and don't go looking for a setting that would.
+`wrap_comments` and `comment_width` exist and would do it, but they are
+nightly-only, and a
 nightly-only key in `rustfmt.toml` is DROPPED with a warning rather than
 applied — so on the toolchain `rust-toolchain.toml` pins they do nothing.
 What makes this worth writing down is that they look like they work:
@@ -147,91 +149,6 @@ and reformats 468 hunks, which is not the path `cargo fmt` or `ci.sh` takes.
 std/external/crate, which would be worth having — are behind the same gate.
 Buying them means a second pinned toolchain that only rustfmt uses, and
 `cargo fmt` then being the wrong command to type.
-
-The two conventions below are the ones still invisible to the build — nothing
-fails when you break either, and both are easy to break by reflex.
-
-**Comments state the current constraint, in the present tense.** A comment
-describing the delta from a previous version rots: once that version is a
-couple of refactors gone it names something no reader can reconstruct, and
-it still reads as authoritative, which makes it worse than no comment at
-all. Git already holds the history. PR #83 converted 59 such comments
-across 23 files, keeping each argument and dropping only its time
-reference. Rewrite by keeping the reasoning and dropping the time
-reference — state what the ALTERNATIVE would do, not what the code did:
-"a window mean rather than the EMA this used to be, which was the wrong
-filter" becomes "a window mean rather than an EMA, which IS the wrong
-filter".
-
-The exception is where the past tense is load-bearing, and it is a real
-category rather than an escape hatch. It is now a SMALL category: the
-`legacy_*` fields, the `bare_as_some` shim, the serde aliases and the
-historical `default_*` block are all gone (see the compat section below), and
-with them most of what used to live here. What is left:
-
-- The **fade param's pre-merge id** (`pitch-class-fade`, in
-  `harmonigraph-plugin`'s `lib.rs` and `harmonigraph-take`'s `params.rs`),
-  where the id is a live contract with the host's automation lane and the
-  rename it outlived is the whole reason it looks wrong.
-- The note standing where the retired `node_style` key was, in
-  `harmonigraph-scene`'s `view.rs` — the only surviving record of a set of
-  seventeen, kept deliberately.
-- `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
-  `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
-  reasoning that no longer holds — and is now the only one of its kind.
-
-There the history *is* the current constraint, and flattening it destroys
-real information. Runtime "old" and "no longer" — a previously-held voice,
-a slab's previously-sent bytes — describe state rather than builds, and are
-not in scope at all.
-
-A comment justifying a value by what an OLD BLOB was drawn with is no longer
-in the exception; it is now the ordinary rot case, because no code reads an
-old blob differently. State what the value is and why, not which build wrote
-it.
-
-**A comment states the constraint at its own site; it does not narrate the
-code around it.** This is the rule about ALTITUDE, and it is where the
-upkeep actually goes: measured over the thirty PRs ending at #437, about
-half of every changed line was a comment line and a quarter to a third of
-hunks changed nothing BUT comments — and almost none of that churn was
-rationale. It was prose mirroring the rest of the system from where it sat:
-a doc comment listing the glow's passes ("the light, the moat that takes
-light back off, and the cover that..."), rewritten every time a pass came or
-went; vocabulary name-checks (moat→standoff, grid→markers,
-`grid_at`→`pluses_at`) that cost one edit in code and one per prose
-mention; a test's doc comment re-describing the fixture that sits directly
-under it. A mirror has to be repainted every time the thing it reflects
-moves, and a rename of one word in the picture is paid for at every
-sentence that uses it. Concretely:
-
-- Say what THIS value, branch or pass is constrained to and why. If the
-  relationship to another site is the constraint, state it in a line and
-  link the site (`see X`) — a link does not restate X, so it survives X
-  changing; an inventory of X does not.
-- Never describe what is ABSENT ("with no moat", "the moat is off here on
-  purpose"). Such a comment has a half-life of one PR: the moment the thing
-  is deleted, the sentence about its absence is the rot.
-- A test's doc comment is the CLAIM — what the measurement shows and why
-  that is the thing to measure. The fixture is the code below it; don't
-  narrate it.
-- A config field's doc carries units, range and what the endpoints mean.
-  How the shader or the pane consumes the value belongs at the consumer.
-
-What this does NOT license is cutting rationale. The codebase is heavily
-rationale-driven — a comment is often the only carrier of why the code is
-weird, and it is the tripwire against a plausible-but-wrong "simplification"
-by a reader with no memory of the decision, which here is almost every
-reader. Those comments rarely rot, because a constraint does not move when a
-neighbour is renamed. The density of the tree (over 40% of the non-blank
-lines under `crates/` are comments, doc comments alone nearly 30%) is a COST
-this rule exists to stop growing, not a norm to match; a new comment earns
-its place by stating a constraint, not by reaching the surrounding average.
-Both comment rules are habits to maintain rather than a one-time cleanup —
-new PRs regenerate both patterns — and neither is a mandate for a
-whole-tree rewrite. Comments carry the rationale, so rewriting them in bulk
-is a change of content dressed as a sweep, and no reviewer can read past it
-to find the sentences that actually moved.
 
 The same reader is the reason a diff edits the lines that move rather than
 reprinting the file around them. Rewriting a file whole to change a few of
@@ -323,15 +240,9 @@ PR, and it widens the range `/audit-merges` has to reason about. The
 exception is the one that pays for itself — the requested behaviour cannot
 work until the bug is fixed — and the PR body says so.
 
-`BACKLOG.md` is not that. An item there is a line of prose, restated at
-dispatch and deleted by whoever fixes it, so an investigation parked in it
-dies with the fix. It is for things that take five seconds to notice and
-need no context to act on.
-
-It is also no longer tracked in git — it is gitignored and per-clone, so a
-worktree session has no copy of it and cannot read or add to one. That makes
-the issue the only durable channel a session actually has, which sharpens
-rather than weakens the rule above.
+`BACKLOG.md` is not the alternative: it is gitignored and per-clone, so a
+worktree session has no copy of it and cannot read or add to one. The issue
+is the only durable channel a session actually has.
 
 Issue #121 is the worked example and the reason this is written down: four
 hypotheses eliminated by instrumentation across a whole session, and the
