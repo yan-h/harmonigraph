@@ -129,8 +129,8 @@ fn vs_glyph(
 ///
 /// The three attributes after the glyph's own are the name's `ShadowBox`
 /// (shadow.rs), one copy per glyph: the box's corner in points and the cell's
-/// in texels are the same point, and `terms.x` is the scale between the two, so
-/// the quad lands in the cell exactly where the pane's quad lands on the pane.
+/// in texels are the same point, and `box_meta.x` is the scale between the two,
+/// so the quad lands in the cell exactly where the pane's quad lands on the pane.
 /// Everything a fragment reads — `texel`, the sheet, the patch bounds — is
 /// interpolated across the quad and does not know which of the two it is on.
 @vertex
