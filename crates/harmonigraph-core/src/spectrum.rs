@@ -817,9 +817,10 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
         // reach for if this ever matters more. It is bit-identical too,
         // measured across n = 2..16384: `TAU / len` is exact for a power-of-two
         // `len` and dividing by `n` is exact, so both spellings of the angle
-        // round the same real value once. What it costs is state — the table
-        // has to be rebuilt in `configure`, which is the one place `fft_size`
-        // changes, alongside `ring`, `window`, `re` and `im`.
+        // round the same real value once. What it costs is state — a table
+        // rebuilt in `configure`, which is the one place `fft_size` changes,
+        // alongside `ring`, `tapers`, `re` and `im`. That price is already
+        // paid there once, for `untangle_twiddles`.
         for k in 0..half {
             let angle = -step * k as f32;
             let (ws, wc) = angle.sin_cos();

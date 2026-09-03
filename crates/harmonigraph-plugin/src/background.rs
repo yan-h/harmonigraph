@@ -230,9 +230,9 @@ impl Restore {
 /// **A drain is bounded by the RING, not by the poll**, and the difference is
 /// worth stating because the reassuring number is the wrong one. Descheduled
 /// past 1.37 s with the window shut, this wakes to a full ring and spends ~170
-/// columns of FFT — about 70 ms — under one lock; the steady state is a poll's
-/// worth, about a millisecond. Neither is a hang, but 70 ms on the host's main
-/// thread inside `gui_create` is the figure to argue with if #296 is ever
+/// columns of FFT — about 40 ms — under one lock; the steady state is a poll's
+/// worth, well under a millisecond. Neither is a hang, but 40 ms on the host's
+/// main thread inside `gui_create` is the figure to argue with if #296 is ever
 /// re-opened against this lock.
 ///
 /// A skipped round costs nothing: the ring carries seventeen of them even at

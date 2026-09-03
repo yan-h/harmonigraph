@@ -134,17 +134,9 @@ fn untangle(re: &[f32], im: &[f32], tw: &[(f32, f32)], power: &mut [f32]) {
     }
 }
 
-/// The twiddles the untangle reads, indexed by bin of the half transform:
-/// `e^(-i * tau * k / n)` for the REAL length `n`.
-fn untangle_twiddles(n: usize) -> Vec<(f32, f32)> {
-    (0..n / 2)
-        .map(|k| {
-            let angle = -std::f32::consts::TAU * k as f32 / n as f32;
-            angle.sin_cos()
-        })
-        .collect()
-}
-
+/// `e^(-i * tau * k / n)` for `k` in `0..n / 2`. At the transform's own length
+/// that is the stage table `fft_table` subsamples by stride; at the REAL window
+/// length it is the table the untangle indexes by bin.
 fn twiddles(n: usize) -> Vec<(f32, f32)> {
     (0..n / 2)
         .map(|k| {
@@ -154,28 +146,47 @@ fn twiddles(n: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The ring walk `pitch_spectrum` pays for: a modulo per sample.
+/// The ring walk `pitch_spectrum` pays for: a modulo per sample, tapering and
+/// PACKING into two buffers half the window long.
 fn unroll_modulo(ring: &[f32], window: &[f32], write: usize, re: &mut [f32], im: &mut [f32]) {
     let n = ring.len();
-    for i in 0..n {
-        let src = (write + i) % n;
-        re[i] = ring[src] * window[i];
-        im[i] = 0.0;
+    for j in 0..n / 2 {
+        let even = (write + 2 * j) % n;
+        let odd = (write + 2 * j + 1) % n;
+        re[j] = ring[even] * window[2 * j];
+        im[j] = ring[odd] * window[2 * j + 1];
     }
 }
 
 /// The same walk as two contiguous runs, which is what the ring actually is.
+///
+/// The packing is what makes this more than a `split_at`: an output point is
+/// two ADJACENT samples, so a head run of odd length leaves one point
+/// straddling the seam and starts the tail's own points one sample in. Either
+/// parity of `write` has to come out equal to [`unroll_modulo`], which `main`
+/// asserts before timing either.
 fn unroll_split(ring: &[f32], window: &[f32], write: usize, re: &mut [f32], im: &mut [f32]) {
     let n = ring.len();
+    let head_len = n - write;
     let (tail, head) = ring.split_at(write);
-    let (w_head, w_tail) = window.split_at(n - write);
-    for ((dst, r), w) in re[..n - write].iter_mut().zip(head).zip(w_head) {
-        *dst = r * w;
+    let (w_head, w_tail) = window.split_at(head_len);
+    let head_points = head_len / 2;
+    for j in 0..head_points {
+        re[j] = head[2 * j] * w_head[2 * j];
+        im[j] = head[2 * j + 1] * w_head[2 * j + 1];
     }
-    for ((dst, r), w) in re[n - write..].iter_mut().zip(tail).zip(w_tail) {
-        *dst = r * w;
+    let (mut j, mut t) = (head_points, 0);
+    if head_len % 2 == 1 {
+        re[j] = head[head_len - 1] * w_head[head_len - 1];
+        im[j] = tail[0] * w_tail[0];
+        j += 1;
+        t = 1;
     }
-    im.fill(0.0);
+    for d in j..n / 2 {
+        let s = t + 2 * (d - j);
+        re[d] = tail[s] * w_tail[s];
+        im[d] = tail[s + 1] * w_tail[s + 1];
+    }
 }
 
 /// How many timed rounds each row runs, of which the FASTEST is reported.
@@ -219,7 +230,7 @@ fn main() {
         })
         .collect();
     let tw = twiddles(m);
-    let untw = untangle_twiddles(n);
+    let untw = twiddles(n);
 
     println!("\nFFT core, n = {m} (half of the {n}-sample window), {iters} iterations each");
     // Packed as a column packs: even samples real, odd samples imaginary.
@@ -250,8 +261,14 @@ fn main() {
     });
 
     println!("\nRing walk (the loop feeding the FFT)");
-    let mut re2 = vec![0.0f32; n];
-    let mut im2 = vec![0.0f32; n];
+    // An ODD `write`, so the split walk's seam falls mid-point rather than
+    // between two of them — the case its head/tail arithmetic exists for.
+    let mut re2 = vec![0.0f32; m];
+    let mut im2 = vec![0.0f32; m];
+    let (mut ref_re, mut ref_im) = (vec![0.0f32; m], vec![0.0f32; m]);
+    unroll_modulo(&signal, &window, 3457, &mut ref_re, &mut ref_im);
+    unroll_split(&signal, &window, 3457, &mut re2, &mut im2);
+    assert!(re2 == ref_re && im2 == ref_im, "the split walk is not the modulo walk");
     let modulo = bench("unroll with % per sample (current)", iters * 4, || {
         unroll_modulo(black_box(&signal), black_box(&window), 3457, &mut re2, &mut im2);
     });
