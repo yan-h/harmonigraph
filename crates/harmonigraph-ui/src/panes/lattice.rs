@@ -12,7 +12,13 @@ use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabel};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
-pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+///
+/// `surface` is which live copy of the pane this is, and every id it claims is
+/// derived from it — the GPU pane id ([`pane_id`]) and the badge's text batch.
+/// The docked tab is 0; offline a layout hands each placement its index (see
+/// [`draw_pane`](crate::draw_pane)), so a `.ron` naming the lattice twice draws
+/// two pictures instead of one picture twice.
+pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, surface: usize) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
@@ -72,7 +78,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     let background = state.background;
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
-    draw_lattice(ui, rect, state, now, 0, background, Some(&response), stats);
+    draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats);
 }
 
 /// The lattice's shared draw sequence: derive the scene, pick when this is
@@ -204,21 +210,22 @@ pub(crate) fn draw_lattice(
         ),
     );
     if let Some(mut badge) = badge {
-        draw_learn_overlay(ui, rect, state, now, &mut badge);
+        draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
     }
 }
 
 /// The GPU pane id a live copy of a lattice paint callback claims, so two
 /// live copies never overwrite each other's buffers within a frame — the
-/// docked pane's own id and the Render preview's second copy.
+/// docked pane, the Render preview, and each placement of an offline layout.
 ///
-/// One id space per callback type
-/// (`lattice_paint_callback`, `harmonigraph_render::roll_paint_callback`),
-/// not one shared across all of them: the lattice's 0/1 and the roll's do
-/// not have to, and do not, mean the same live copy. `crate::text`'s
-/// `spectral_labels` is a THIRD, unrelated space — a text batch's flush id,
-/// not a GPU pane id — offset to leave room for the constants that space
-/// hands out before it, `LATTICE_LEARN` and `SPIRAL_NAMES`.
+/// One id space per callback type (`lattice_paint_callback`,
+/// `harmonigraph_render::roll_paint_callback`,
+/// `harmonigraph_render::glow_paint_callback`), not one shared across all of
+/// them: each keeps a map of its own, so the same surface names a different
+/// live copy in each and none of them has to agree with the others.
+/// `crate::text`'s flush ids are a further space again — a text batch's
+/// instance buffer, not a GPU pane — and cut the surface into blocks of their
+/// own.
 pub(crate) fn pane_id(surface: usize) -> u64 {
     surface as u64
 }
@@ -244,6 +251,7 @@ fn draw_learn_overlay(
     rect: egui::Rect,
     state: &SharedState,
     now: f64,
+    surface: usize,
     badge: &mut crate::text::TextBatch,
 ) {
     let painter = ui.painter_at(rect);
@@ -259,7 +267,7 @@ fn draw_learn_overlay(
         &painter,
         rect,
         state,
-        crate::text::LATTICE_LEARN,
+        crate::text::lattice_learn(surface),
         harmonigraph_render::SlideAxis::default(),
     );
 }

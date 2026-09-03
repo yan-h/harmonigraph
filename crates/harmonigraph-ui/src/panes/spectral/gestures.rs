@@ -15,7 +15,7 @@
 //! one answer every layer of the pane takes its boundary from.
 
 use super::axes::{spectrum_share, widest_span, Axes};
-use crate::panes::zoom_gesture;
+use crate::panes::{zoom_gesture, DOCKED_SURFACE};
 use crate::SharedState;
 use egui::Sense;
 
@@ -301,11 +301,6 @@ pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
     let keep = kept.min((depth - FAR_REGION_FLOOR_PT).max(share * depth)) / depth;
     state.spectrum_hold.0 = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
 }
-
-/// The `surface` that is the real, docked Analyzer pane. Slot 1 is the Video
-/// tab's preview and the offline renderer never has a pointer, so this is the
-/// one copy of the pane a person can actually navigate.
-const DOCKED_SURFACE: usize = 0;
 
 /// How much one point of scroll zooms, as an exponent — a full notch of a
 /// mouse wheel (~50 points) closes the range by about a third, and a trackpad's

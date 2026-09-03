@@ -750,7 +750,7 @@ fn the_lattice_pane_paints_the_ground_it_hands_the_scene() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0);
+        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0, 0);
     })
     .shapes;
 
@@ -791,7 +791,7 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
     state.set_background((7, 9, 11));
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {
-        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0);
+        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0, 0);
     })
     .shapes;
 

@@ -52,6 +52,15 @@ use spectral::spectral_pane;
 use spiral::spiral_pane;
 use tuning::tuning_pane;
 
+/// The surface every docked tab draws on. One id serves all of them because the
+/// dock holds one tab per pane; the Video tab's preview takes 1, and the
+/// offline renderer numbers its placements from 0 in a process of its own.
+///
+/// It is also the one copy of a pane a person can navigate — the preview
+/// answers no pointer of its own and a render has none — which is what the
+/// Analyzer's gestures gate on.
+pub(crate) const DOCKED_SURFACE: usize = 0;
+
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
 pub(super) fn normalize_deg(deg: f32) -> f32 {
@@ -248,7 +257,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
         let right = ui.max_rect().right();
         ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
         match tab {
-            Tab::Lattice => lattice_pane(ui, self.state, self.now),
+            Tab::Lattice => lattice_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
             Tab::Display => display_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
@@ -262,9 +271,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
                 spectral::hold_spectrum(self.state, ui.available_size());
-                spectral_pane(ui, self.state, self.now, 0)
+                spectral_pane(ui, self.state, self.now, DOCKED_SURFACE)
             }
-            Tab::Spiral => spiral_pane(ui, self.state, self.now),
+            Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
         }

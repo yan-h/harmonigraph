@@ -371,7 +371,7 @@ fn profile_picture_panes() {
                 egui::Rect::from_min_size(egui::Pos2::ZERO, body),
                 |ui| {
                     crate::begin_frame(&mut state, &backend, t);
-                    draw_pane(ui, pane, &mut state, t);
+                    draw_pane(ui, pane, &mut state, t, 0);
                 },
             );
             let ms = start.elapsed().as_secs_f64() * 1000.0;
