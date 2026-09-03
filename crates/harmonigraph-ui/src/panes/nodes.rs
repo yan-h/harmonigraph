@@ -15,9 +15,8 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    shadow_curve_level, GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX,
-    GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
-    GLOW_SHADOW_CURVE_MAX, GLOW_SHADOW_CURVE_MIN, GLOW_SHADOW_GAIN_MAX, GLOW_SHADOW_MAX,
+    GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
+    GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX,
     GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
@@ -723,85 +722,34 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  short, which is how a shadow says how thick the ink casting it \
                  is. 0% is the picture with no shadow at all.",
             );
-        // The kernel, above the three bars that shape what it draws: it is the
-        // only setting here that changes what the blur IS rather than how the
-        // blur is spent, and the only one that costs atlas.
+        // The renderer, under the two bars that say how wide and how dark: it
+        // is the only setting here that changes what a shadow IS rather than
+        // how much of it there is, and the only one that costs atlas.
         choice_row(
             ui,
             "Kernel",
             &mut view.glow_shadow_kernel,
             &[
                 (
-                    ShadowKernel::Gaussian,
-                    "Gaussian",
-                    "One plain blur. The shape a shadow has had all along, and \
-                     what every other setting here is calibrated against. One \
-                     cell of the shadow atlas per item.",
-                ),
-                (
-                    ShadowKernel::TwoScale,
-                    "Two-scale",
-                    "A tight core with a wide skirt under it, 70/30 at 1:3. The \
-                     cheapest departure from a plain blur: the shadow keeps a \
-                     definite edge near the ink and carries a faint pool well \
-                     past where a Gaussian has stopped. Two cells per item.",
-                ),
-                (
                     ShadowKernel::Distance,
                     "Distance",
-                    "Not a blur at all: how far each point stands from the \
-                     nearest ink, spent through the Shadow curve bar. A blur \
-                     of a hairline is a smudge whose width is the hairline's, \
-                     so at a wide Shadow the whole lattice reads as one soft \
+                    "How far each point stands from the nearest ink. A blur of \
+                     a hairline is a smudge whose width is the hairline's, so \
+                     at a wide Shadow the whole lattice reads as one soft \
                      blob; a distance is the same at a hairline as at a slab, \
                      so a letter's counters, a cross's arms and a corner all \
-                     keep their shape while the source grid resolves them. At \
-                     the widest settings the adaptive grid softens fine detail \
-                     to keep the cost bounded. What it gives up is the pocket \
-                     between two strokes standing close.",
+                     keep their shape. What it gives up is the pocket between \
+                     two strokes standing close.",
+                ),
+                (
+                    ShadowKernel::Gaussian,
+                    "Gaussian",
+                    "One plain blur — the conventional shadow, and what the \
+                     Shadow bars are calibrated against. A hairline's blur \
+                     carries the stroke's WIDTH rather than its shape, so the \
+                     picture softens as the Shadow opens.",
                 ),
             ],
-        );
-        // The two that shape the depth rather than set it: how much of it the
-        // picture's THINNEST ink gets, and where along the shadow's width it
-        // sits.
-        // The gain is the BLUR family's: a distance field gives a hairline the
-        // whole depth at its own edge by construction, so `shadow_kernel`
-        // returns before the gain is ever read on a distance row.
-        ui.add_enabled_ui(!view.glow_shadow_kernel.has_distance(), |ui| {
-            ValueBar::new(&mut view.glow_shadow_gain, 0.0..=GLOW_SHADOW_GAIN_MAX, "Shadow gain")
-                .display(|v| format!("{v:.2}x"))
-                .show(ui)
-                .on_hover_text(
-                    "How much of the Shadow depth the picture's THINNEST ink \
-                     gets, on the blur rows of the Kernel picker. A shadow is \
-                     a blur of the thing casting it, so a wide band blurs to a \
-                     solid pool and a hairline ring or a stroke of type blurs \
-                     to a faint smudge — and without this they would land at \
-                     wildly different darknesses from one depth. Turning it up \
-                     brings the thin ink up toward the depth the bar names and \
-                     leaves the wide ink exactly where it is, until at the top \
-                     everything in the lattice is one flat silhouette. 0x is \
-                     the picture with no shadow at all. A Distance row needs \
-                     none of it: a hairline already stands at the whole depth \
-                     against its own ink.",
-                );
-        });
-        ValueBar::new(
-            &mut view.glow_shadow_curve,
-            GLOW_SHADOW_CURVE_MIN..=GLOW_SHADOW_CURVE_MAX,
-            "Shadow curve",
-        )
-        .display(|v| format!("{v:.2}"))
-        .curve(shadow_curve_level)
-        .show(ui)
-        .on_hover_text(
-            "Where along a shadow's width its darkness sits. Both ends stay \
-             put — the pool under solid ink stays at the depth, and the far \
-             edge stays at nothing — and this bends everything between them. \
-             Values above 1 pull the darkness in tight against the ink and let \
-             the rest go gently, which reads as a rim. 1 leaves either the \
-             selected blur or Distance decay in its own shape.",
         );
         // The one bar in the section a single caster keeps to itself, and the
         // one that breaks "one Shadow width across the picture" — see

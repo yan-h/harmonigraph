@@ -555,10 +555,6 @@ pub fn derive_scene(
         // outside the bar is a quad nothing can fill.
         glow_shadow: view.glow_shadow.clamp(0.0, crate::GLOW_SHADOW_MAX),
         glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
-        glow_shadow_gain: view.glow_shadow_gain.clamp(0.0, crate::GLOW_SHADOW_GAIN_MAX),
-        glow_shadow_curve: view
-            .glow_shadow_curve
-            .clamp(crate::GLOW_SHADOW_CURVE_MIN, crate::GLOW_SHADOW_CURVE_MAX),
         glow_shadow_name: view.glow_shadow_name.clamp(0.0, crate::GLOW_SHADOW_NAME_MAX),
         // No clamp: an enum is in range or the blob did not parse.
         glow_shadow_kernel: view.glow_shadow_kernel,

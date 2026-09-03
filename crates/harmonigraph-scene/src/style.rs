@@ -491,101 +491,17 @@ pub enum NoteNames {
     Played,
 }
 
-/// The most terms a shadow's kernel may be built out of.
-///
-/// Two is the core-and-skirt pair [`ShadowKernel::TwoScale`] is built from, the
-/// longest row in the table. This sizes the fixed arrays shared with the
-/// shaders, so it is the representation's bound rather than a per-row setting.
-pub const SHADOW_TERMS_MAX: usize = 2;
-
-/// What a term of a kernel PUTS IN a cell, which is what parts the two families
-/// a Shadow can be drawn from.
-///
-/// The atlas, the packer and the sampler's loop are one path across both: a row
-/// is a slice of terms whatever the kinds in it, and this is a branch inside
-/// that path rather than a second path beside it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TermKind {
-    /// The caster's ink, convolved with a Gaussian of this term's σ. The cell
-    /// holds coverage, and what a fragment reads back is how much of the ink
-    /// stands within a blur of it.
-    Blur,
-    /// The DISTANCE, in the pane's points, from this texel to the caster's
-    /// nearest ink, supplied by the caster's exact field and read back through
-    /// the standoff's own curve.
-    ///
-    /// What it buys is FORM. A blur of a stroke thin against σ peaks at a
-    /// fraction of 1 and its profile carries the stroke's WIDTH rather than its
-    /// shape, which is the whole reason a blur family needs a gain at all; a
-    /// distance is the same at a hairline as at a slab, so a letterform's
-    /// counters and a corner's diagonal survive the widest Shadow the bar
-    /// reaches.
-    Distance,
-}
-
-/// One term of a shadow's kernel: how much of the mixture it is, how wide it is
-/// against the picture's own σ, and what it puts in its cell.
-///
-/// `sigma` is a RATIO and not a length, so a term follows the Shadow bar
-/// wherever it is dialled and a preset is one row of numbers rather than a
-/// second width to keep in step. It scales a [`Distance`](TermKind::Distance)
-/// term's reach exactly as it scales a blur's σ, so
-/// [`glow_shadow_name`](crate::ViewConfig::glow_shadow_name) dials a name's
-/// distance row by the ratio it already dials its Gaussian by.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct KernelTerm {
-    /// This term's share of the mixture, which only a [`Blur`](TermKind::Blur)
-    /// term has. The shares are normalized over the BLUR terms alone where they
-    /// are read (`pack` in `harmonigraph-render`'s `shadow.rs`), so a row that
-    /// does not sum to 1 is a rounding rather than a brightness change — and a
-    /// lone Gaussian standing beside a distance term is the whole Gaussian
-    /// rather than half of one.
-    pub weight: f32,
-    /// This term's σ over the picture's σ. 1 is the width the Shadow bar names.
-    pub sigma: f32,
-    /// Whether this term's cell holds blurred ink or a distance to it.
-    pub kind: TermKind,
-}
-
-impl TermKind {
-    /// How far a term of this kind reaches past a caster's ink, in its own σ.
-    ///
-    /// The two families end at different multiples of their own width, and both
-    /// end EXACTLY: a Gaussian is lowered onto zero at [`REACH_SIGMAS`] σ
-    /// (`PEDESTAL` in shadow.wgsl) and the standoff's curve is windowed to zero
-    /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because a
-    /// width is 2σ.
-    ///
-    /// One expression for both, so a quad and its cell's padding are sized off
-    /// one number — a cell padded short of what its quad reaches is a shadow
-    /// cut off in a straight line at the box.
-    pub fn reach_sigmas(self) -> f32 {
-        match self {
-            TermKind::Blur => REACH_SIGMAS,
-            TermKind::Distance => 2.0 * SHADOW_STOP,
-        }
-    }
-}
-
-impl KernelTerm {
-    /// How far this term reaches past a caster's ink, in the PICTURE's σ —
-    /// [`TermKind::reach_sigmas`] taken at this term's own width.
-    pub fn reach_sigmas(self) -> f32 {
-        self.sigma * self.kind.reach_sigmas()
-    }
-}
-
 /// How many σ out a blurred cell is padded, and how far its kernel reaches —
 /// `REACH` in shadow.wgsl and `REACH_SIGMAS` in `harmonigraph-render`'s
 /// `shadow.rs`, pinned to both by
 /// `the_blurs_reach_and_loop_bound_are_the_packers_own`.
 ///
-/// Here as well as there because a row's reach is what every QUAD is grown by,
-/// and which row is drawn is the scene's to say.
+/// Here as well as there because a kernel's reach is what every QUAD is grown
+/// by, and which kernel a caster is drawn by is the scene's to say.
 pub const REACH_SIGMAS: f32 = 3.0;
 
 /// How many Shadow widths out the standoff's curve is windowed to nothing, and
-/// so how far a [`Distance`](TermKind::Distance) cell is padded.
+/// so how far a [`ShadowKernel::Distance`] cell is padded.
 ///
 /// A decay has no radius at which it stops and a quad does, so this is where
 /// that difference is settled rather than left to the billboard: the coverage
@@ -601,7 +517,7 @@ pub const REACH_SIGMAS: f32 = 3.0;
 pub const SHADOW_STOP: f32 = 2.0;
 
 /// How far down the standoff's decay is carried by one Shadow width, as the
-/// exponent of the decay there: four e-folds, so a distance row stands at a
+/// exponent of the decay there: four e-folds, so a distance shadow stands at a
 /// fiftieth of its own depth at the width the bar names and spends the rest
 /// inside it.
 ///
@@ -613,99 +529,66 @@ pub const SHADOW_STOP: f32 = 2.0;
 /// shader's copy.
 pub const SHADOW_TAIL: f32 = 4.0;
 
-/// What a shadow is made of: which row of terms every caster's ink is turned
-/// into a cell by.
+/// What a shadow is MADE of: which of the two renderers turns a caster's ink
+/// into the number its draw multiplies the frame by.
 ///
-/// TWO FAMILIES in one table, and the picker is the toggle between them. The
-/// blur rows are mixtures of Gaussians; the distance rows hold the distance to
-/// the ink instead ([`TermKind`]), which is a different answer to the same
-/// question rather than a different width of the same one. What parts them in
-/// the picture is FORM at a wide Shadow: a blur's profile at a hairline carries
-/// the stroke's width, a distance's carries its shape.
+/// Two renderers and nothing between them. A caster is drawn by one or the
+/// other — there is no mixture, no weight and no second term — and a frame
+/// whose casters disagree schedules both paths rather than a third.
 ///
-/// The non-Gaussian blur row is a MIXTURE and not a kernel of its own, because
-/// the atlas blurs separably — once along x, once along y (`blur` in
-/// shadow.wgsl). Two-scale gets its tight core and wide skirt from two cells,
-/// each blurred by the chain that already exists and mixed by weight where a
-/// caster reads them. It is a row of this table rather than a branch in the
-/// shader.
-///
-/// The rows are scaled so a straight edge reads 2.3% of the depth at one
-/// Shadow width — the same rule that puts a plain Gaussian's σ at half the bar
-/// (`sigma_px` in `harmonigraph-render`'s `shadow.rs`), so switching rows
-/// changes the shadow's SHAPE and not how far it reaches.
-///
-/// The table is here and nowhere else. The packer sizes each term's cell off
-/// the same σ ratio the sampler mixes by, and two copies of one row is the
-/// mirror that rots.
+/// What parts them in the picture is FORM at a wide Shadow. A Gaussian of a
+/// hairline peaks at a fraction of 1 and its profile carries the stroke's
+/// WIDTH, which is why a blur needs a gain to reach the depth at all; a
+/// distance is the same at a hairline as at a slab, so a letterform's
+/// counters, a cross's arms and a corner's diagonal all survive the widest
+/// Shadow the bar reaches. What a distance gives up is the pocket a blur
+/// builds where two strokes stand close: the distance to the nearer of two
+/// strokes is the distance to one of them, so a crease reads no deeper than a
+/// lone edge — #490's crease, which is the model rather than a defect in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShadowKernel {
-    /// One Gaussian at half the Shadow's width. The shape a separable blur
-    /// makes on its own, and what every reading of the Shadow bar is
-    /// calibrated against.
+    /// The DISTANCE, in the pane's points, from a fragment to the caster's
+    /// nearest ink, supplied by that caster's exact field and read back through
+    /// the standoff's own decay ([`SHADOW_TAIL`], [`SHADOW_STOP`]).
     #[default]
-    Gaussian,
-    /// Two Gaussians at 1:3, 70/30 — a tight core with a wide skirt under it,
-    /// which is #521's option 6 and the cheapest departure from one Gaussian.
-    /// Exact by construction: the row IS the kernel rather than a fit to one.
-    TwoScale,
-    /// The other FAMILY: one cell holding the distance to the caster's nearest
-    /// ink, spent through the fixed standoff decay before the shared Shadow
-    /// curve bends it.
-    ///
-    /// A blur cannot hold form at a Shadow wide against the ink — a stroke of
-    /// type under a σ of six points blurs to a smudge whose profile is the
-    /// stroke's WIDTH — and a distance is the same at a hairline as at a slab,
-    /// so a letterform's counters, a cross's arms and a corner's diagonal are
-    /// all still there at the top of the bar. What it gives up is the pocket a
-    /// blur builds where two strokes stand close: the distance to the nearer of
-    /// two strokes is the distance to one of them, so a crease reads no deeper
-    /// than a lone edge, and #490's crease is exactly that.
     Distance,
+    /// The caster's coverage, convolved with one Gaussian at half the Shadow's
+    /// width — the conventional accumulation, kept beside the distance as the
+    /// alternative a group may be switched to rather than as a correction term
+    /// mixed into it.
+    ///
+    /// One fixed kernel. A straight edge keeps `erfc(d / (σ√2)) / 2` of the
+    /// light `d` out from its edge, which at one Shadow width is 2.3%, so both
+    /// renderers answer one Shadow bar with one reach.
+    Gaussian,
 }
 
 impl ShadowKernel {
-    /// This kernel's terms, longest-lived end of the table first.
+    /// How far this kernel reaches past a caster's ink, in the picture's own σ.
     ///
-    /// σ is given here against the picture's own σ, which is HALF a Shadow
-    /// width: the fits are published in Shadow widths, and every number below
-    /// is twice its published one. One conversion at one site, so the packer
-    /// and the sampler cannot come to read the table differently.
-    pub fn terms(self) -> &'static [KernelTerm] {
-        use TermKind::{Blur, Distance};
-        const GAUSSIAN: [KernelTerm; 1] = [KernelTerm { weight: 1.0, sigma: 1.0, kind: Blur }];
-        const TWO_SCALE: [KernelTerm; 2] = [
-            KernelTerm { weight: 0.70, sigma: 0.465, kind: Blur },
-            KernelTerm { weight: 0.30, sigma: 1.3948, kind: Blur },
-        ];
-        // σ 1: a distance term's own width IS the Shadow bar's, so a second
-        // ratio here would be a second width to keep in step for nothing.
-        const DISTANCE: [KernelTerm; 1] = [KernelTerm { weight: 0.0, sigma: 1.0, kind: Distance }];
-        match self {
-            ShadowKernel::Gaussian => &GAUSSIAN,
-            ShadowKernel::TwoScale => &TWO_SCALE,
-            ShadowKernel::Distance => &DISTANCE,
-        }
-    }
-
-    /// How far the widest term of this kernel reaches past a caster's ink, in
-    /// the picture's own σ.
+    /// The two renderers end at different multiples of their own width, and
+    /// both end EXACTLY: a Gaussian is lowered onto zero at [`REACH_SIGMAS`] σ
+    /// (`PEDESTAL` in shadow.wgsl) and the standoff's curve is windowed to zero
+    /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because a
+    /// width is 2σ.
     ///
-    /// What every QUAD is grown by, and what the reach the eye reads is: a
-    /// caster billboarded on its narrow term's reach cuts the wide one off in a
-    /// straight line, which is the trap `shadow_reach_uv` exists for at one
-    /// term and is ×N here. The WIDEST and not the sum, a quad having to hold
-    /// the whole kernel rather than the sum of its profiles.
+    /// One expression for both, so a quad and its cell's padding are sized off
+    /// one number — a cell padded short of what its quad reaches is a shadow
+    /// cut off in a straight line at the box.
     ///
     /// In σ and not in Shadow widths because that is the unit `sigma_px` hands
     /// out — one conversion, at one site.
     pub fn reach_sigmas(self) -> f32 {
-        self.terms().iter().fold(0.0f32, |r, term| r.max(term.reach_sigmas()))
+        match self {
+            ShadowKernel::Gaussian => REACH_SIGMAS,
+            ShadowKernel::Distance => 2.0 * SHADOW_STOP,
+        }
     }
 
-    /// Whether any term of this kernel holds a DISTANCE, which is what
-    /// disables the blur-only gain.
-    pub fn has_distance(self) -> bool {
-        self.terms().iter().any(|t| t.kind == TermKind::Distance)
+    /// Whether a caster drawn by this kernel puts a DISTANCE in its cell rather
+    /// than blurred ink — what the fill, the blur chain and the sampler each
+    /// branch on, and what `ShadowCaster::kind` carries to the shader.
+    pub fn is_distance(self) -> bool {
+        matches!(self, ShadowKernel::Distance)
     }
 }

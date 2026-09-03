@@ -132,11 +132,18 @@ struct Uniforms {
     // normalized exponential in x. The fixed full/zero endpoints are supplied
     // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
     glow_curve: vec4<f32>,
-    // The SHADOW's two dials. x: how wide it is, as a share of a node's
-    // radius — the σ every caster's ink is blurred at (`shadow::sigma_px`) and
-    // the reach every quad is grown by (`shadow_reach_uv`); w: how dark it
-    // lands, 1 taking the frame under a solid caster down to
-    // `SHADOW_KEEP_FLOOR`. y/z unused and zeroed by the CPU.
+    // The SHADOW's dials. x: how wide it is, as a share of a node's radius —
+    // the σ every caster's ink is blurred at (`shadow::sigma_px`) and the reach
+    // every quad is grown by (`shadow_reach_uv`); y: how far the chosen
+    // renderer reaches past a caster's ink in the picture's own σ
+    // (`ShadowKernel::reach_sigmas`), which is what a quad is grown BY; w: how
+    // dark it lands, 1 taking the frame under a solid caster down to
+    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
+    //
+    // A reach and not a σ RATIO in y, because the two renderers do not end at
+    // the same multiple of their own width: the ratio times a constant answers
+    // for a Gaussian and would cut a distance's window off a third of the way
+    // in. The multiple is spent on the CPU, so a quad here is one number.
     //
     // Every number on it is the FRAME's, one Shadow across the picture: what a
     // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
@@ -173,29 +180,14 @@ struct Uniforms {
     // texels, for the draws that fill a cell — they cannot bind the texture
     // they are writing, so its size cannot be read off it.
     misc14: vec4<f32>,
-    // The shadow's CURVE — what its blur is spent through, where misc11 says
-    // how wide and how dark it is. x: the gain, how much a caster thin against
-    // σ is worth against a solid one (`Scene::glow_shadow_gain`); y: the
-    // exponent that bends where along the shadow's width the depth sits
-    // (`Scene::glow_shadow_curve`); z: how many terms this frame's kernel has
-    // (`ShadowKernel::terms`), which is how many cells a caster carries and how
-    // many taps its draw makes; w: the WIDEST of those terms' σ over the
-    // picture's own, which every quad is grown by.
-    //
-    // A row of its own rather than misc11's spare slot, because the two rows
-    // answer different questions: up there is the shadow's SIZE, which every
-    // caster's quad and cell are built from on the CPU, and here is the
-    // arithmetic one fragment spends — nothing on this row moves a quad, a cell
-    // or the atlas. Packed on misc11's rule, whatever the light says.
-    shadow_curve: vec4<f32>,
-    // The cells every resting marker's shadow is read out of, one per TERM of
-    // the kernel, as rows rather than a per-instance buffer: every cross is the
-    // same shape at the same σ, and a blur is linear, so `blur(level * ink)` is
-    // `level * blur(ink)` and the level can be spent per marker where the cells
-    // are read. The boxes in the pane's points, centred on the crossing.
-    plus_shadow_rect: array<vec4<f32>, SHADOW_TERMS>,
-    // Each of those boxes' cells in atlas texels: origin, then size.
-    plus_shadow_cell: array<vec4<f32>, SHADOW_TERMS>,
+    // The cell every resting marker's Gaussian is read out of, as a row rather
+    // than a per-instance buffer: every cross is the same shape at the same σ,
+    // and a blur is linear, so `blur(level * ink)` is `level * blur(ink)` and
+    // the level can be spent per marker where the cell is read. The box is in
+    // the pane's points, centred on the crossing.
+    plus_shadow_rect: vec4<f32>,
+    // That box's cell in atlas texels: origin, then size.
+    plus_shadow_cell: vec4<f32>,
     // x: points to cell texels; y: σ in those texels; z: the cell's share of
     // the target's pixels, which is the softness the cross is cut with where it
     // is RASTERIZED (`aa_width`, `vs_plus_cell`); w: one arm in points, which
@@ -203,7 +195,7 @@ struct Uniforms {
     //
     // No level among them: it is 1 for every marker, a marker's own opacity
     // being the share it spends when it READS the cell (`plus_paint`).
-    plus_shadow_terms: array<vec4<f32>, SHADOW_TERMS>,
+    plus_shadow_terms: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
     // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
@@ -312,51 +304,22 @@ fn glow_shadow() -> f32 {
 // How dark a shadow lands (`u.misc11.w`): the share of the frame a caster's
 // solid middle takes away, 1 leaving `SHADOW_KEEP_FLOOR` of it.
 //
-// A FLOOR rather than a scale, which is what the `min(…, 1)` under the gain in
-// `shadow_transmittance` buys: a caster wide against σ saturates here, and the
-// gain only deepens the thin ones. At 0 nothing casts and every draw multiplies by
-// 1, which is the picture with no shadow in it at all.
+// A FLOOR rather than a scale, which is what the `min(…, 1)` under the
+// Gaussian's gain in `shadow_kernel` buys: a caster wide against σ saturates
+// here, and the gain only deepens the thin ones. At 0 nothing casts and every
+// draw multiplies by 1, which is the picture with no shadow in it at all.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
-// How much a caster THIN against σ is worth against a solid one
-// (`u.shadow_curve.x`), and where along the shadow's width the depth sits
-// (`u.shadow_curve.y`). The pair `shadow_transmittance` takes, read here so
-// that every caster in this module spends one number.
+// How far this frame's renderer reaches past a caster's ink in the picture's own
+// σ (`u.misc11.y`, `ShadowKernel::reach_sigmas`), which is what every quad is
+// grown by.
 //
-// Spent on BOTH of the pictures a caster writes, the depth being the only term
-// the bloom's copy takes differently: what parts the two is how dark the shadow
-// lands and never what shape it is.
-fn glow_shadow_gain() -> f32 {
-    return max(u.shadow_curve.x, 0.0);
-}
-
-fn glow_shadow_curve() -> f32 {
-    return max(u.shadow_curve.y, 0.0);
-}
-
-// How many terms this frame's kernel has (`u.shadow_curve.z`), and how far the
-// widest of them reaches past a caster's ink in the picture's own σ
-// (`u.shadow_curve.w`, `ShadowKernel::reach_sigmas`).
-//
-// The widest and not the sum, because a quad has to hold the whole kernel: a
-// caster billboarded on its narrow term's reach cuts the wide one off in a
-// straight line at the box, which is the trap `shadow_reach_uv` exists for and
-// is ×N here.
-//
-// A reach and not a σ RATIO, because the two families do not end at the same
-// multiple of their own width: the ratio times a constant answers for a blur
-// row and would cut a distance row's window off a third of the way in. The
-// multiple is `KernelTerm::reach_sigmas`, spent on the CPU, so a quad here is
-// one number. Floored at `SHADOW_REACH_SIGMAS` so a frame with no kernel packed
-// sizes its quads as one Gaussian does.
-fn glow_shadow_terms() -> u32 {
-    return u32(max(u.shadow_curve.z, 0.0));
-}
-
+// Floored at `SHADOW_REACH_SIGMAS` so a frame with nothing packed sizes its
+// quads as one Gaussian does.
 fn glow_shadow_reach() -> f32 {
-    return max(u.shadow_curve.w, SHADOW_REACH_SIGMAS);
+    return max(u.misc11.y, SHADOW_REACH_SIGMAS);
 }
 
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
@@ -390,54 +353,40 @@ struct ShadowThrough {
     bloom: f32,
 }
 
-// A node's or a marker's own kernel, read at this point of the pane and spent
-// through `shadow_transmittance`: what its blurred ink leaves of the frame under
-// it, 0..=1.
+// A node's or a marker's own shadow, read at this point of the pane and spent
+// through `shadow_transmittance`: what its ink leaves of the frame under it,
+// 0..=1.
 //
-// A caster with no cells leaves the frame exactly whole — a frame with no atlas
+// A caster with no cell leaves the frame exactly whole — a frame with no atlas
 // (either Shadow bar at its bottom) packs none at all, and every draw multiplies
 // by 1 with nothing sampled.
 fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     if level <= 0.0 {
         return ShadowThrough(1.0, 1.0);
     }
-    // The whole kernel at this point: one tap per term, mixed by whatever this
-    // row's own family mixes by (`shadow_kernel`). Taken ONCE and spent twice —
-    // the mix is what the two pictures share, and the depth is the only term
-    // they part on, so a wider row costs its taps once however many attachments
-    // read them.
-    let full = shadow_kernel(
-        u32(max(who, 0.0)),
-        points,
-        glow_shadow_terms(),
-        glow_shadow_gain(),
-    );
-    let depth = glow_shadow_depth();
-    let curve = glow_shadow_curve();
+    // Taken ONCE and spent twice — the kernel is what the two pictures share,
+    // and the depth is the only term they part on, so the tap is paid for once
+    // however many attachments read it.
+    let full = shadow_kernel(u32(max(who, 0.0)), points);
     return ShadowThrough(
-        shadow_transmittance(full, depth, level, curve),
-        shadow_transmittance(full, 1.0, level, curve),
+        shadow_transmittance(full, glow_shadow_depth(), level),
+        shadow_transmittance(full, 1.0, level),
     );
 }
 
-// Which term a marker evaluates from the exact field in its scene draw, or the
-// array's length when every active term is read from a cell.
-fn plus_distance_term(who: f32) -> u32 {
+// Whether this caster's shadow is a DISTANCE, which a marker evaluates from the
+// exact field its own scene draw holds rather than reading out of a cell.
+fn plus_is_distance(who: f32) -> bool {
     let caster = u32(max(who, 0.0));
     if caster >= arrayLength(&shadow_casters) {
-        return SHADOW_TERMS;
+        return false;
     }
-    for (var t = 0u; t < min(glow_shadow_terms(), SHADOW_TERMS); t = t + 1u) {
-        if shadow_casters[caster].kind[t] >= 0.5 * DISTANCE_KIND {
-            return t;
-        }
-    }
-    return SHADOW_TERMS;
+    return shadow_casters[caster].shade.y >= 0.5 * DISTANCE_KIND;
 }
 
-// A marker's shadow, with a distance term evaluated from the exact field its
-// scene draw already holds. Blur rows keep the shared cell and take the path
-// above unchanged.
+// A marker's shadow, with a distance evaluated from the exact field its scene
+// draw already holds. A Gaussian keeps the shared cell and takes the path above
+// unchanged.
 fn plus_shadow_through(
     who: f32,
     d_points: f32,
@@ -449,17 +398,13 @@ fn plus_shadow_through(
         return ShadowThrough(1.0, 1.0);
     }
     let caster = u32(max(who, 0.0));
-    let term = plus_distance_term(who);
-    if term >= SHADOW_TERMS {
+    if !plus_is_distance(who) {
         return shadow_through(who, points, level);
     }
-    let full = standoff_coverage(
-        d_points,
-        2.0 * shadow_casters[caster].sigma[term],
-    );
+    let full = standoff_coverage(d_points, 2.0 * shadow_casters[caster].shade.z);
     return ShadowThrough(
-        shadow_transmittance(full, glow_shadow_depth(), distance_level, glow_shadow_curve()),
-        shadow_transmittance(full, 1.0, distance_level, glow_shadow_curve()),
+        shadow_transmittance(full, glow_shadow_depth(), distance_level),
+        shadow_transmittance(full, 1.0, distance_level),
     );
 }
 
@@ -660,8 +605,7 @@ struct ShadowCell {
     @location(14) terms: vec4<f32>,
     // x: this box's caster index in `shadow_casters`; y: whether this is a
     // distance cell; z: its padding in pane points; w: unused. The scene draw
-    // reads x, while the cell and atlas passes consume the rest one term at a
-    // time.
+    // reads x, while the cell and atlas passes read the rest.
     @location(13) who: vec4<f32>,
 };
 
@@ -711,8 +655,8 @@ struct VsOut {
     // ([`vs_main`]), x is this node's caster index in `shadow_casters` and the
     // rest is 0. Zero throughout on the draws that do neither.
     @location(10) @interpolate(flat) shadow_box: vec4<f32>,
-    // Where this fragment stands on the PANE, in points (xy) — the space every
-    // term's cell is mapped from (`shadow_kernel`) — and how coarse the surface
+    // Where this fragment stands on the PANE, in points (xy) — the space a
+    // caster's cell is mapped from (`shadow_kernel`) — and how coarse the surface
     // being rasterized ON is, as a share of the target's pixels (w). z is the
     // caster's level on the pane draw; on a cell draw its magnitude is one node
     // uv in pane points and its sign selects coverage (+) or analytic distance
@@ -2940,8 +2884,9 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     let arm_clip = u.view_proj
         * vec4<f32>(inst.pos_radius.xyz + u.cam_right.xyz * inst.pos_radius.w, 1.0);
     let arm_points = distance(pane_points(centre_clip), pane_points(arm_clip));
-    // Grown to hold the SHADOW as well as the ink, in arms. A blur row's shared
-    // cell is measured at the focus plane and keeps the matching world ratio.
+    // Grown to hold the SHADOW as well as the ink, in arms. The Gaussian's
+    // shared cell is measured at the focus plane and keeps the matching world
+    // ratio.
     // A direct distance is measured in this marker's own screen points, so its
     // quad takes the packed reach in those same points; under perspective the
     // field and its window then scale together instead of the quad shrinking
@@ -2953,10 +2898,8 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
     var stand = select(0.0, shadow_reach_uv(1.0) / arm, arm > 0.0);
-    let distance_term = plus_distance_term(0.0);
-    if distance_term < SHADOW_TERMS {
-        stand = glow_shadow_reach() * shadow_casters[0].sigma[distance_term]
-            / max(arm_points, 1e-6);
+    if plus_is_distance(0.0) {
+        stand = glow_shadow_reach() * shadow_casters[0].shade.z / max(arm_points, 1e-6);
     }
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON
@@ -2973,11 +2916,11 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // The whole marker field is ONE caster, and it is the first the frame packs
     // (`from_scene`), so its terms sit at index 0 of the array.
     out.shadow_box = vec4<f32>(0.0, arm_points, 0.0, 0.0);
-    // A blur row's shared cells are a picture of one cross CENTRED in its box,
-    // so the "pane point" a marker reads them at is its own place on that cross
-    // rather than its place on the pane. A distance row has no cell and uses
-    // the projected arm carried beside the caster index instead.
-    let shared_arm_points = u.plus_shadow_terms[0].w;
+    // The Gaussian's shared cell is a picture of one cross CENTRED in its box,
+    // so the "pane point" a marker reads it at is its own place on that cross
+    // rather than its place on the pane. A distance has no cell and uses the
+    // projected arm carried beside the caster index instead.
+    let shared_arm_points = u.plus_shadow_terms.w;
     // The marker's own opacity is the SHARE of the shadow it casts, which is
     // what makes a position handing itself back as a name fades off it grow its
     // cross and the cross's shadow on one clock (`derive_pluses`).
@@ -2985,40 +2928,34 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     return out;
 }
 
-/// The one cross every resting marker's BLUR term is taken from, drawn into the
-/// shared cells (`u.plus_shadow_*`) rather than onto the pane. A distance term
+/// The one cross every resting marker's GAUSSIAN is taken from, drawn into the
+/// shared cell (`u.plus_shadow_*`) rather than onto the pane. A distance
 /// collapses this draw because its exact field is evaluated in [`plus_paint`].
 ///
-/// ONE INSTANCE PER TERM, and the instance index is the term: a mixture's cells
-/// are at different resolutions, so the same cross is rasterized into each at
-/// that cell's own scale rather than drawn once and resampled. What varies
-/// between markers — where each stands, how opaque it is — is spent where the
-/// cells are READ ([`plus_paint`]), which is why there is no instance data here
-/// beyond the term.
+/// ONE INSTANCE for the whole field. What varies between markers — where each
+/// stands, how opaque it is — is spent where the cell is READ ([`plus_paint`]),
+/// which is why this draw carries no instance data at all.
 @vertex
-fn vs_plus_cell(
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(instance_index) term: u32,
-) -> PlusVsOut {
+fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex_index & 1u) == 1u),
         select(0.0, 1.0, (vertex_index & 2u) == 2u),
     );
-    let rect = u.plus_shadow_rect[term];
-    let cell = u.plus_shadow_cell[term];
-    let texel = cell.xy + corner * rect.zw * u.plus_shadow_terms[term].x;
+    let rect = u.plus_shadow_rect;
+    let cell = u.plus_shadow_cell;
+    let texel = cell.xy + corner * rect.zw * u.plus_shadow_terms.x;
     var out: PlusVsOut;
     out.clip_pos = select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(cell));
-    // The box is one arm grown by this term's own reach on each side, and the
+    // The box is one arm grown by the blur's own reach on each side, and the
     // crossing is at its middle, so half the box in arms is this quad's margin.
-    let arm_points = max(u.plus_shadow_terms[0].w, 1e-6);
+    let arm_points = max(u.plus_shadow_terms.w, 1e-6);
     out.uv = (corner * 2.0 - 1.0) * (rect.z * 0.5 / arm_points);
     out.color = vec4<f32>(1.0);
-    // No caster to READ — this draw is the one that fills the cells — and the
+    // No caster to READ — this draw is the one that fills the cell — and the
     // cell's own scale, which is what the cross is cut with here rather than
     // the pane's.
     out.shadow_box = vec4<f32>(0.0);
-    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.plus_shadow_terms[term].z);
+    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.plus_shadow_terms.z);
     return out;
 }
 
@@ -3613,9 +3550,8 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let body = plus_body_coverage(in.uv, aa);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
     // The SHADOW, multiplied into everything already in the frame under it. A
-    // blur row reads the field's shared cell; a distance row spends this
-    // fragment's exact folded-box distance, measured by this marker's own arm
-    // on screen. A cross in front of a node darkens that node's rings wherever
+    // Gaussian reads the field's shared cell; a distance spends this fragment's
+    // exact folded-box distance, measured by this marker's own arm on screen. A cross in front of a node darkens that node's rings wherever
     // it reaches them, and a node drawn after it darkens the cross the same way
     // — the painter's order the pass already has is the whole of what decides
     // which.
