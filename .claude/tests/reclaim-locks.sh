@@ -22,9 +22,9 @@
 # Written for bash 3.2 (macOS system bash), like the script it tests.
 set -uo pipefail
 
-# git exports GIT_DIR, GIT_INDEX_FILE and the rest to its hooks, and ci.sh runs
-# from .githooks/pre-push — so inherited, they point every git call below at the
-# repo being PUSHED instead of the throwaway one. That is not a near miss:
+# This test creates and enters throwaway repositories, so inherited GIT_DIR,
+# GIT_INDEX_FILE and related variables would point every git call below at the
+# caller's repo instead. That is not a near miss:
 # `git init` with GIT_DIR set and no work tree sets `core.bare=true` on the real
 # repo, `git commit` lands on the real branch, and `git worktree add` registers
 # a worktree in a temp directory this script then deletes.

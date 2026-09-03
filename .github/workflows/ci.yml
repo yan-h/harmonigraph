@@ -1,62 +1,45 @@
-name: CI
+name: Full CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
 
 jobs:
-  test:
-    # macOS: the primary (currently only verified) target, and the vendored
-    # baseview/egui-baseview patches are macOS-specific.
+  full-ci:
+    name: Full CI
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      # rustup picks the toolchain from rust-toolchain.toml automatically.
-      - uses: Swatinem/rust-cache@v2
-      - name: Formatting
-        run: cargo fmt --all --check
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Tests
-        run: cargo test --workspace
-      # The standalone harness enables harmonigraph-render's hot-reload
-      # feature, and cargo unifies features across --workspace, so the
-      # gates above never compile the configuration the release bundle
-      # ships. See ci.sh.
-      - name: Plugin package check
-        run: cargo check -p harmonigraph-plugin
-      # The vendored crates are excluded from the workspace, so --workspace
-      # compiles them and runs none of their tests. baseview's decide when a
-      # gesture is over. See ci.sh.
-      - name: Vendored tests
-        run: cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/vendor-baseview
-      # Doc links are the only mechanical check on comments, which are ~40% of
-      # the non-blank lines under crates/. --document-private-items is what
-      # makes it cover more than the exported surface; private_intra_doc_links
-      # is allowed because it only matters for published HTML. See ci.sh.
-      - name: Doc links
-        run: cargo doc --no-deps --workspace --document-private-items
-        env:
-          RUSTDOCFLAGS: "-D rustdoc::all -A rustdoc::private_intra_doc_links"
-      # harmonigraph-core is MIT OR Apache-2.0 inside a GPL workspace; that split
-      # holds only while it stays self-contained. See ci.sh for the rationale.
-      - name: harmonigraph-core dependency guard
-        run: |
-          deps=$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="harmonigraph-core"][0]; print(" ".join(sorted(d["name"] for d in p["dependencies"])))')
-          if [ -n "$deps" ]; then
-            echo "::error::harmonigraph-core must stay dependency-free (MIT OR Apache-2.0 inside a GPL workspace). Found: $deps"
-            exit 1
-          fi
-          echo "ok — no dependencies"
-      # Which worktree locks count as live — the one decision in the tree that
-      # deletes a directory, and the only one no cargo test can reach, since
-      # its inputs are a pid, its argv and the spare pool's sockets. See ci.sh.
-      - name: Worktree reclaim lock cases
-        run: .claude/tests/reclaim-locks.sh
-      # The other gate no cargo test can reach: its subject is an inode and an
-      # ad-hoc signature, and its failure is silent — the DAW goes on drawing
-      # the previous build. See ci.sh.
-      - name: Bundle swap
-        run: .claude/tests/plugin-swap.sh
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+
+      # Keep every full gate in ci.sh so local on-demand and remote runs cannot
+      # silently diverge.
+      - name: Run full CI
+        run: ./ci.sh

@@ -1,11 +1,10 @@
 //! What the spectrum's FFT costs, and what the variants of it cost:
 //! `cargo run --release --example fft_bench -p harmonigraph-core`.
 //!
-//! CI compiles this and gates it on warnings (`ci.sh` runs clippy with
-//! `--all-targets`, and `.githooks/pre-push` runs `ci.sh`), so it can break a
-//! push — it is only the RUNNING of it that is manual. It is also the one
-//! place outside `spectrum.rs` naming `DEFAULT_FFT_SIZE`, so a rename has to
-//! come through here.
+//! Full CI compiles this and gates it on warnings (`ci.sh` runs clippy with
+//! `--all-targets`), so it can fail the check — it is only the RUNNING of it
+//! that is manual. It is also the one place outside `spectrum.rs` naming
+//! `DEFAULT_FFT_SIZE`, so a rename has to come through here.
 //!
 //! `fft_in_place` is private, so the rows below are copies of it. Keeping them
 //! honest is a matter of reading: what pins the shipped transform is

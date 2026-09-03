@@ -1922,10 +1922,11 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("harmonigraph-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        // Stands in for the renderer: ignores its arguments and outlives the
-        // test, so the only way it ends is being killed.
+        // Stands in for the renderer: `exec` makes the tracked child the
+        // sleeper itself, so killing it also closes the stderr pipe the render
+        // thread waits on.
         let fake = dir.join("slow-renderer");
-        std::fs::write(&fake, "#!/bin/sh\nsleep 300\n").expect("write fake renderer");
+        std::fs::write(&fake, "#!/bin/sh\nexec sleep 300\n").expect("write fake renderer");
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
         let take = dir.join("take-1.take");

@@ -16,7 +16,7 @@ Demonstration: [slipstream (5-limit just intonation)](https://www.youtube.com/wa
 
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
-Almost every line here was written by Claude Code sessions, directed and reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work under; `./ci.sh` is the gate every push clears.
+Almost every line here was written by Claude Code sessions, directed and reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work under; GitHub Actions runs `./ci.sh` as the canonical full gate.
 
 Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's wgpu backend in the plugin, eframe's in the standalone harness).
 
@@ -46,12 +46,10 @@ cargo run -p harmonigraph-standalone
 # The whole test suite; every crate carries tests.
 cargo test
 
-# The exact checks .github/workflows/ci.yml runs: cargo fmt --check, clippy
-# -D warnings, the tests, the harmonigraph-plugin package check, baseview's
-# own tests, the rustdoc doc-link check, the harmonigraph-core dependency
-# guard, the worktree-reclaim lock cases and the bundle swap. Actions is
-# currently off, so this is the gate — don't wait on a check to appear on
-# your PR.
+# The canonical full gate used by GitHub Actions: formatting, workspace
+# clippy and tests, the plugin package check, harmonigraph-render's own tests,
+# both vendored crates, doc links, the harmonigraph-core dependency guard,
+# the worktree-reclaim lock cases and the bundle swap.
 ./ci.sh
 
 # Build the CLAP/VST3 bundles into target/bundled/.
@@ -64,7 +62,7 @@ cargo xtask bundle harmonigraph-plugin --release
 ./read-plugin-state.py
 ```
 
-To gate every `git push` on `./ci.sh` automatically, enable the tracked hook once per clone: `git config core.hooksPath .githooks` (skip a one-off push with `git push --no-verify`). With Actions off, this hook is what actually gates anything.
+Enable the tracked pre-push formatting check once per clone with `git config core.hooksPath .githooks`. The hook stays cheap locally; GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`.
 
 ## Getting a build into the DAW
 
