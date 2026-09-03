@@ -1,8 +1,9 @@
 # Upstream contribution drafts
 
-Fixes this project carries locally (see ../../PATCHES.md) that belong
-upstream. Prepared branches live on yan-h's forks where porting was
-mechanical; nothing has been submitted — submitting is a human call.
+Fixes this project carries locally (see ../../PATCHES.md) that belong upstream.
+Prepared branches live on yan-h's forks where porting was mechanical;
+nothing has been submitted —
+submitting is a human call.
 
 | Fix | Upstream | Status |
 | --- | --- | --- |

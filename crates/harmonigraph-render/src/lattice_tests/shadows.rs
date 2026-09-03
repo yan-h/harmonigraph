@@ -239,7 +239,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     };
 
     let [x, y, w, h] = cell.cell.map(|v| v as u32);
-    let k = cell.terms[0];
+    let k = cell.cell_map[0];
     let tolerance = 0.45 / k;
     let mut checked = 0usize;
     let mut worst = 0.0f32;

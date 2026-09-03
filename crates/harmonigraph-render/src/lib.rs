@@ -4073,7 +4073,7 @@ impl CallbackTrait for LatticeCallback {
             uniforms.plus_shadow_rect = cell.rect;
             uniforms.plus_shadow_cell = cell.cell;
             uniforms.plus_shadow_terms =
-                [cell.terms[0], cell.terms[1], cell.terms[3], self.marker_arm_points];
+                [cell.cell_map[0], cell.cell_map[1], cell.cell_map[3], self.marker_arm_points];
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;

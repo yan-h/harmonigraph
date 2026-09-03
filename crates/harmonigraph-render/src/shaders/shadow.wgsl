@@ -48,7 +48,7 @@ fn no_quad() -> vec4<f32> {
 fn cell_quad(
     vertex: u32,
     cell: vec4<f32>,
-    terms: vec4<f32>,
+    cell_map: vec4<f32>,
     draws: bool,
 ) -> CellOut {
     let corner = vec2<f32>(
@@ -70,7 +70,7 @@ fn cell_quad(
         out.position = no_quad();
     }
     out.bounds = vec4<f32>(cell.xy, cell.xy + cell.zw);
-    out.sigma = terms.y;
+    out.sigma = cell_map.y;
     return out;
 }
 
@@ -82,10 +82,10 @@ fn vs_cell(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
+    @location(2) cell_map: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
+    return cell_quad(vertex, cell, cell_map, who.y < 0.5 * DISTANCE_KIND);
 }
 
 /// The BLUR cells alone: the y pass.
@@ -94,10 +94,10 @@ fn vs_cell_blur(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) cell: vec4<f32>,
-    @location(2) terms: vec4<f32>,
+    @location(2) cell_map: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, terms, who.y < 0.5 * DISTANCE_KIND);
+    return cell_quad(vertex, cell, cell_map, who.y < 0.5 * DISTANCE_KIND);
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical full CI gate: formatting, workspace clippy with warnings denied,
+# Canonical full CI gate: formatting, markdown clause breaks, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, harmonigraph-render's own tests,
 # both vendored crates' tests, doc links, the harmonigraph-core dependency
 # guard, worktree reclaim safety, and the registered-worktree bundle swap.
@@ -22,6 +22,19 @@ run() { echo; echo "▶ $*"; "$@"; }
 # head. Before it, style was a convention kept by attention alone, which is the
 # scarcest thing in a repo whose commits mostly come from parallel sessions.
 run cargo fmt --all --check
+
+# The same idea for markdown, which rustfmt never opens. Prose here is laid out
+# one clause per line, so a line break only ever falls where the text already
+# had punctuation. That buys three mechanical properties, none of them about
+# how it looks: an edit rewrites the clause it edits instead of reflowing the
+# rest of the paragraph, two sessions editing neighbouring sentences of one
+# paragraph touch different lines instead of colliding, and a line is a whole
+# unit of text, so splicing paragraphs cannot strand a fragment on its own line
+# — which is the defect that prompted this.
+#
+# A break inside a paragraph renders as a space, so none of this changes a
+# rendered byte. `--write` fixes every failure this reports.
+run .claude/semantic-breaks.py --check
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
@@ -122,4 +135,4 @@ run .claude/tests/reclaim-locks.sh
 run .claude/tests/plugin-swap.sh
 
 echo
-echo "✅ full CI passed (fmt + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap)"
+echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap)"
