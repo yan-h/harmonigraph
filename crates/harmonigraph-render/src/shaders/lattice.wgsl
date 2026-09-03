@@ -602,7 +602,7 @@ struct ShadowCell {
     // x: points to cell texels; y: σ in those texels; z: the caster's level;
     // w: the cell's share of the target's pixels, which is what a draw INTO
     // the cell is antialiased against (`aa_width`, `vs_node_cell`).
-    @location(14) terms: vec4<f32>,
+    @location(14) cell_map: vec4<f32>,
     // x: this box's caster index in `shadow_casters`; y: whether this is a
     // distance cell; z: its padding in pane points; w: unused. The scene draw
     // reads x, while the cell and atlas passes read the rest.
@@ -676,7 +676,7 @@ struct VsOut {
 fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: ShadowCell) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     out.shadow_box = vec4<f32>(box.who.x, 0.0, 0.0, 0.0);
-    out.shadow_at = vec4<f32>(pane_points(out.clip_pos), box.terms.z, 1.0);
+    out.shadow_at = vec4<f32>(pane_points(out.clip_pos), box.cell_map.z, 1.0);
     return out;
 }
 
@@ -702,11 +702,11 @@ fn vs_node_cell(
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
     if box.who.y < 0.5 {
-        let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.terms.x);
+        let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.cell_map.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
         out.shadow_box = box.cell;
-        out.shadow_at = vec4<f32>(texel, uv_points, box.terms.w);
+        out.shadow_at = vec4<f32>(texel, uv_points, box.cell_map.w);
         return out;
     }
 
@@ -715,7 +715,7 @@ fn vs_node_cell(
         select(0.0, 1.0, (vertex_index & 2u) == 2u),
     );
     let texel = box.cell.xy + corner * box.cell.zw;
-    let points = box.rect.xy + (texel - box.cell.xy) / max(box.terms.x, 1e-6);
+    let points = box.rect.xy + (texel - box.cell.xy) / max(box.cell_map.x, 1e-6);
 
     // One uv in pane points. The billboard lies in the camera's right/up plane,
     // so both endpoints have one projection depth and the two projected basis
@@ -738,7 +738,7 @@ fn vs_node_cell(
     out.shadow_box = box.cell;
     // The negative sign carries the distance kind without consuming another
     // interpolator; coverage cells return above with the positive scale.
-    out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.terms.w);
+    out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.cell_map.w);
     return out;
 }
 

@@ -155,7 +155,7 @@ pub(crate) struct ShadowBox {
     /// (`aa_width` in lattice.wgsl): a fragment of the cell is one pane pixel
     /// divided by it, and a soft band taken off that fragment alone is the
     /// Shadow bar times a constant rather than a screen width.
-    pub terms: [f32; 4],
+    pub cell_map: [f32; 4],
     /// x: which caster this box belongs to, as an index into
     /// [`Packed::casters`]; y: what this cell HOLDS, 0 blurred ink and 1 a
     /// distance ([`DISTANCE_KIND`]); z: how far past the caster's ink this cell
@@ -223,7 +223,7 @@ impl ShadowBox {
 /// lattice.wgsl, `fs_shadow_box` in text.wgsl) — the frame left exactly whole,
 /// with nothing sampled.
 pub(crate) const NO_CELL: ShadowBox =
-    ShadowBox { rect: [0.0; 4], cell: [0.0; 4], terms: [0.0; 4], who: [0.0; 4] };
+    ShadowBox { rect: [0.0; 4], cell: [0.0; 4], cell_map: [0.0; 4], who: [0.0; 4] };
 
 /// A frame's cells, packed: one box per caster in the order they arrived, the
 /// same casters gathered as the scene pass reads them, and the atlas size that
@@ -449,7 +449,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         boxes.push(ShadowBox {
             rect,
             cell,
-            terms: [k, sigma_cell, level, scale],
+            cell_map: [k, sigma_cell, level, scale],
             who: [c as f32, kind, pad, 0.0],
         });
         if whole {
@@ -968,20 +968,22 @@ pub(crate) mod tests {
             let packed = pack_at(&[caster(10.0, 10.0, 40.0, 12.0)], sigma_px, 2.0, 16384, one());
             let b = packed.boxes[0];
             assert!(
-                b.terms[1] <= SIGMA_CELL_MAX + 1e-4,
+                b.cell_map[1] <= SIGMA_CELL_MAX + 1e-4,
                 "σ {sigma_px} px packed a cell at σ {} texels",
-                b.terms[1]
+                b.cell_map[1]
             );
             // Under the cap the cell is drawn at the target's own pixels;
             // over it, exactly at the cap.
             if sigma_px <= SIGMA_CELL_MAX {
-                assert!((b.terms[0] - 2.0).abs() < 1e-5 && (b.terms[1] - sigma_px).abs() < 1e-4);
+                assert!(
+                    (b.cell_map[0] - 2.0).abs() < 1e-5 && (b.cell_map[1] - sigma_px).abs() < 1e-4
+                );
             } else {
-                assert!((b.terms[1] - SIGMA_CELL_MAX).abs() < 1e-4);
+                assert!((b.cell_map[1] - SIGMA_CELL_MAX).abs() < 1e-4);
             }
             // And the padding holds the whole kernel plus the sampling texel.
-            let pad_texels = (REACH_SIGMAS * b.terms[1]).ceil() + 1.0;
-            let grown = (b.rect[2] - 40.0) * 0.5 * b.terms[0];
+            let pad_texels = (REACH_SIGMAS * b.cell_map[1]).ceil() + 1.0;
+            let grown = (b.rect[2] - 40.0) * 0.5 * b.cell_map[0];
             assert!((grown - pad_texels).abs() < 1e-3, "padded {grown} texels for {pad_texels}");
         }
     }
@@ -1006,12 +1008,12 @@ pub(crate) mod tests {
             let packed = pack_at(&[caster(0.0, 0.0, 10.0, 10.0)], sigma, 2.0, 16384, one());
             assert_eq!(packed.casters, vec![NO_CASTER], "a shut caster lost or kept an entry");
             assert!(
-                packed.boxes.iter().all(|b| b.cell == [0.0; 4] && b.terms[2] == 0.0),
+                packed.boxes.iter().all(|b| b.cell == [0.0; 4] && b.cell_map[2] == 0.0),
                 "a caster at σ {sigma} packed a cell",
             );
             assert!(
                 packed.boxes.iter().all(|b| b
-                    .terms
+                    .cell_map
                     .iter()
                     .chain(b.who.iter())
                     .all(|t| t.is_finite())),
@@ -1068,10 +1070,10 @@ pub(crate) mod tests {
         let casters: Vec<Caster> = (0..8).map(|_| caster(0.0, 0.0, 100.0, 100.0)).collect();
         let packed = pack_at(&casters, 2.0, 1.0, 256, one());
         assert_eq!(packed.size, [256, 256]);
-        let cast: Vec<bool> = packed.boxes.iter().map(|b| b.terms[2] > 0.0).collect();
+        let cast: Vec<bool> = packed.boxes.iter().map(|b| b.cell_map[2] > 0.0).collect();
         assert!(cast.iter().any(|&c| c), "nothing fit an atlas that holds four cells");
         assert!(!cast.iter().all(|&c| c), "eight 100-pt cells fit a 256-texel atlas");
-        for b in packed.boxes.iter().filter(|b| b.terms[2] == 0.0) {
+        for b in packed.boxes.iter().filter(|b| b.cell_map[2] == 0.0) {
             assert_eq!(b.cell, [0.0; 4]);
         }
     }
@@ -1091,7 +1093,7 @@ pub(crate) mod tests {
         let without = pack_at(&[live, live], 2.0, 1.0, 4096, one());
         let with_dead = pack_at(&[live, dead, live], 2.0, 1.0, 4096, one());
         assert_eq!(with_dead.boxes[1].cell, [0.0; 4], "the dead caster took a cell");
-        assert_eq!(with_dead.boxes[1].terms[2], 0.0, "the dead caster kept a level");
+        assert_eq!(with_dead.boxes[1].cell_map[2], 0.0, "the dead caster kept a level");
         assert_eq!(with_dead.size, without.size, "the dead caster sized the atlas");
         assert_eq!(
             [with_dead.boxes[0].cell, with_dead.boxes[2].cell],
@@ -1148,7 +1150,7 @@ pub(crate) mod tests {
 
         // The block: cell A's ink region — everything inside its padding —
         // filled solid, as a caster wider than the blur is.
-        let pad = ((REACH_SIGMAS * a.terms[1]).ceil() + 1.0) as u32;
+        let pad = ((REACH_SIGMAS * a.cell_map[1]).ceil() + 1.0) as u32;
         let (ax, ay, aw, ah) =
             (a.cell[0] as u32, a.cell[1] as u32, a.cell[2] as u32, a.cell[3] as u32);
         let inked = |x: u32, y: u32| {
@@ -1270,19 +1272,20 @@ pub(crate) mod tests {
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
         // target's full resolution or the blur's fit decides the cell.
         let sigma = 40.0;
-        let terms = ShadowKernel::Distance;
-        let out = pack_at(&[caster], sigma, 1.0, 4096, terms);
+        let kernel = ShadowKernel::Distance;
+        let out = pack_at(&[caster], sigma, 1.0, 4096, kernel);
         let cell = out.boxes[0];
         for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
-            let held = pack_at(&[caster], sigma * px_per_point, px_per_point, 8192, terms).boxes[0];
+            let held =
+                pack_at(&[caster], sigma * px_per_point, px_per_point, 8192, kernel).boxes[0];
             assert!(
-                (held.terms[0] - DISTANCE_TEXELS_PER_POINT).abs() < 1e-5,
+                (held.cell_map[0] - DISTANCE_TEXELS_PER_POINT).abs() < 1e-5,
                 "at {px_per_point} pixels a point the cell packed {} texels per point rather \
                  than {DISTANCE_TEXELS_PER_POINT}",
-                held.terms[0],
+                held.cell_map[0],
             );
         }
-        assert_eq!(cell.terms[1], 0.0, "a distance cell carries a blur σ");
+        assert_eq!(cell.cell_map[1], 0.0, "a distance cell carries a blur σ");
         assert_eq!(cell.who[1], DISTANCE_KIND, "the box does not say it holds a distance");
         // The pad is the stop in points, plus the one texel the sampler's
         // bilinear tap at the box's own edge needs.
@@ -1295,7 +1298,7 @@ pub(crate) mod tests {
         // A blur cell belongs to the other fill and sampling branch.
         let blur = pack_at(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian);
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
-        assert!((blur.boxes[0].terms[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
+        assert!((blur.boxes[0].cell_map[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
     }
 
     /// A frame whose GROUPS disagree packs each caster at its own kernel and
@@ -1326,14 +1329,14 @@ pub(crate) mod tests {
         let [d, g] = [packed.boxes[0], packed.boxes[1]];
         assert_eq!(d.who[1], DISTANCE_KIND, "the distance caster packed a coverage cell");
         assert_eq!(g.who[1], 0.0, "the Gaussian caster packed a distance cell");
-        assert_eq!(d.terms[0], DISTANCE_TEXELS_PER_POINT, "the distance cell missed its floor");
+        assert_eq!(d.cell_map[0], DISTANCE_TEXELS_PER_POINT, "the distance cell missed its floor");
         assert!(
-            (g.terms[0] - SIGMA_CELL_MAX / far).abs() < 1e-5,
+            (g.cell_map[0] - SIGMA_CELL_MAX / far).abs() < 1e-5,
             "the Gaussian cell packed {} texels a point rather than following its own σ",
-            g.terms[0],
+            g.cell_map[0],
         );
-        assert_eq!(d.terms[1], 0.0, "the distance cell carries a blur σ");
-        assert!((g.terms[1] - SIGMA_CELL_MAX).abs() < 1e-4, "the Gaussian cell is past the cap");
+        assert_eq!(d.cell_map[1], 0.0, "the distance cell carries a blur σ");
+        assert!((g.cell_map[1] - SIGMA_CELL_MAX).abs() < 1e-4, "the Gaussian cell is past the cap");
         // And what each hands the SHADER: its own kind and its own σ in points,
         // which is what a sampler reading one frame's worth of casters spends.
         let [ed, eg] = [packed.casters[0], packed.casters[1]];
@@ -1419,16 +1422,16 @@ pub(crate) mod tests {
                     pack_at(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian).boxes
                         [0];
                 assert!(
-                    (distance.terms[0] - distance_resolution).abs() < 1e-5,
+                    (distance.cell_map[0] - distance_resolution).abs() < 1e-5,
                     "Distance at σ {sigma_points} points and {px_per_point} px/pt packed {} \
                      texels per point instead of {distance_resolution}",
-                    distance.terms[0],
+                    distance.cell_map[0],
                 );
                 assert!(
-                    (gaussian.terms[0] - blur_resolution).abs() < 1e-5,
+                    (gaussian.cell_map[0] - blur_resolution).abs() < 1e-5,
                     "Gaussian at σ {sigma_points} points and {px_per_point} px/pt packed {} \
                      texels per point instead of {blur_resolution}",
-                    gaussian.terms[0],
+                    gaussian.cell_map[0],
                 );
             }
         }
