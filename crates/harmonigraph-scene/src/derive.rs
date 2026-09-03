@@ -550,14 +550,10 @@ pub fn derive_scene(
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_curve: view.glow_curve.sanitized(),
-        // The Shadow on the same footing, a bar's range rather than a
-        // billboard's: every caster's quad is grown by it, so a number from
-        // outside the bar is a quad nothing can fill.
-        glow_shadow: view.glow_shadow.clamp(0.0, crate::GLOW_SHADOW_MAX),
-        glow_shadow_depth: view.glow_shadow_depth.clamp(0.0, 1.0),
-        glow_shadow_name: view.glow_shadow_name.clamp(0.0, crate::GLOW_SHADOW_NAME_MAX),
-        // No clamp: an enum is in range or the blob did not parse.
-        glow_shadow_kernel: view.glow_shadow_kernel,
+        // Every Shadow group on the same footing, a bar's range rather than a
+        // billboard's: every caster's quad is grown by its group's width, so a
+        // number from outside the bar is a quad nothing can fill.
+        shadow: view.shadow.clamped(),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),

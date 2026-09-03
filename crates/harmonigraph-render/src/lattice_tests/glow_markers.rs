@@ -5,7 +5,9 @@ use super::fixtures::*;
 use crate::*;
 
 fn with_shadow_kernel(mut scene: Scene, kernel: harmonigraph_scene::ShadowKernel) -> Scene {
-    scene.glow_shadow_kernel = kernel;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = kernel;
+    }
     scene
 }
 
@@ -443,7 +445,7 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
 ///
 /// This is the whole of what sharing the node's Shadow bar buys, and it is a
 /// claim no relative measurement can hold. σ is a length on the PANE
-/// (`shadow::sigma_px`), taken off the home node's radius; a σ scaled by each
+/// (`shadow::sigma_points`), taken off the home node's radius; a σ scaled by each
 /// caster's own size instead would leave every other shadow test here passing,
 /// each being monotone in the Shadow, a superset, or a comparison between two
 /// arms of one length. What it changes is that the lattice's Shadow becomes as

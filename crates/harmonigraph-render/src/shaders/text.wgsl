@@ -40,9 +40,10 @@ struct Locals {
     /// so this converts a rim radius in points into a texel offset.
     pixels_per_point: f32,
     /// How much of what stands under a name its shadow takes where that shadow
-    /// is whole, 0..1 — the lattice's `glow_shadow_depth`, the same number a
-    /// ring's own shadow spends. Read by [`fs_shadow_box`] alone; every other
-    /// surface casts no shadow and leaves it at 0.
+    /// is whole, 0..1 — the TEXT group's own depth
+    /// (`ShadowSettings::lattice_text`), which a ring's need not equal. Read by
+    /// [`fs_shadow_box`] alone; every other surface casts no shadow and leaves
+    /// it at 0.
     shadow_depth: f32,
     /// The shadow atlas's size in texels — what [`vs_glyph_cell`] maps a cell
     /// into. The scene pass reads the same size off the texture itself.

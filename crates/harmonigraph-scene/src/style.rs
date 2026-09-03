@@ -576,8 +576,8 @@ impl ShadowKernel {
     /// one number — a cell padded short of what its quad reaches is a shadow
     /// cut off in a straight line at the box.
     ///
-    /// In σ and not in Shadow widths because that is the unit `sigma_px` hands
-    /// out — one conversion, at one site.
+    /// In σ and not in Shadow widths because that is the unit `sigma_points`
+    /// hands out — one conversion, at one site.
     pub fn reach_sigmas(self) -> f32 {
         match self {
             ShadowKernel::Gaussian => REACH_SIGMAS,
@@ -590,5 +590,131 @@ impl ShadowKernel {
     /// branch on, and what `ShadowCaster::shade` carries to the shader.
     pub fn is_distance(self) -> bool {
         matches!(self, ShadowKernel::Distance)
+    }
+}
+
+/// One GROUP of casters' shadow: which renderer draws it, how far it reaches
+/// and how dark it lands.
+///
+/// Three values and no more. Which kernel a group is drawn by is a look; how
+/// wide and how dark it is are what a person dials against that look. Anything
+/// that only calibrates one renderer against the other — the Gaussian's gain,
+/// the standoff's decay and window — is a renderer constant and lives at the
+/// consumer, so switching a group's kernel does not move its two bars.
+///
+/// The groups are explicit ([`ShadowSettings`]) rather than one style with
+/// per-group overrides: an override needs a sentinel for "not set", and a
+/// sentinel is a fourth value with no place on a bar. Four numbers written out
+/// twice cost less than one inheritance rule.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ShadowStyle {
+    /// Which of the two renderers turns this group's ink into its shadow.
+    pub kernel: ShadowKernel,
+    /// How wide the shadow is, as a share of a node's radius,
+    /// 0..=[`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) — half of it is the σ a
+    /// Gaussian blurs at and the width a distance's decay is measured in, and
+    /// the whole of it times [`ShadowKernel::reach_sigmas`] is what every quad
+    /// in the group is grown by.
+    ///
+    /// 0 is the picture with no shadow in it for this group, pixel for pixel:
+    /// no cell is packed and every draw multiplies by 1.
+    pub width: f32,
+    /// How dark the shadow lands where it is whole, 0..=1 — the factor the
+    /// frame is left with under this group's solid ink, spent in STOPS across
+    /// the width above (`shadow_transmittance` in common.wgsl).
+    ///
+    /// A FLOOR rather than a scale: ink wide against σ lands exactly here and a
+    /// hairline lands short of it. 1 takes the frame under wide ink to black; 0
+    /// is this group's second off switch.
+    pub depth: f32,
+}
+
+impl Default for ShadowStyle {
+    fn default() -> ShadowStyle {
+        ShadowStyle {
+            // Distance keeps a caster's form at this broad shadow width, where
+            // a blur would inherit too much of the caster's own thickness.
+            kernel: ShadowKernel::Distance,
+            // A broad shadow preserves the form of the ring and marker across
+            // the wide light field.
+            width: 0.418_517_17,
+            // Just under half depth leaves the shadow legible without cutting
+            // the shared field back to the ground.
+            depth: 0.477_784_4,
+        }
+    }
+}
+
+impl ShadowStyle {
+    /// Whether this group casts at all.
+    ///
+    /// Either bar at its bottom is the whole of this group's shadow gone — no
+    /// cell packed, no atlas area, no taps, and every draw multiplying by
+    /// exactly 1. The two are separate switches because they answer separate
+    /// questions, and a picture is entitled to reach the off state from either.
+    pub fn casts(self) -> bool {
+        self.width > 0.0 && self.depth > 0.0
+    }
+
+    /// This style held to the ranges its bars name — the PICTURE's door, where
+    /// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) is the blob's.
+    ///
+    /// Every caster's quad is grown by the width, so a number from outside the
+    /// bar is a quad nothing can fill. The kernel takes no clamp: an enum is in
+    /// range or the blob did not parse.
+    pub fn clamped(self) -> ShadowStyle {
+        ShadowStyle {
+            kernel: self.kernel,
+            width: self.width.clamp(0.0, crate::GLOW_SHADOW_MAX),
+            depth: self.depth.clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// Every group of casters the picture dials its shadow separately.
+///
+/// One implementation with a value per group, not a shadow per group: both
+/// renderers read one geometric field per caster and one profile, and a frame
+/// whose groups disagree schedules two paths rather than four. What a group
+/// buys is the pair of numbers, because the ink in it is a different KIND of
+/// ink — a ring and a cross want a shadow that says how thick they are, and a
+/// letterform wants one that does not fill its counters, and the width that
+/// does the first may not be the width that does the second.
+///
+/// The spectral pane's two groups (#556's step 7) are not here yet: its roll
+/// outline and its text rim still carry shadows of their own that these
+/// renderers do not draw, and a persisted value nothing reads is a setting the
+/// picture cannot answer for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ShadowSettings {
+    /// The lattice's nodes and the resting markers between them.
+    pub lattice_geometry: ShadowStyle,
+    /// The lattice's note names, letters and drawn marks alike.
+    pub lattice_text: ShadowStyle,
+}
+
+impl ShadowSettings {
+    /// Every group, in the order the settings pane lists them.
+    ///
+    /// The one place the groups are enumerated, so a group added at step 7 is
+    /// added to the struct and to this and to nothing else: the clamp, the
+    /// sanitize and the tests that sweep the groups all read it.
+    pub fn groups(&self) -> [ShadowStyle; 2] {
+        [self.lattice_geometry, self.lattice_text]
+    }
+
+    /// The same, to write through — [`groups`](Self::groups)'s pair.
+    pub fn groups_mut(&mut self) -> [&mut ShadowStyle; 2] {
+        [&mut self.lattice_geometry, &mut self.lattice_text]
+    }
+
+    /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
+    pub fn clamped(self) -> ShadowSettings {
+        ShadowSettings {
+            lattice_geometry: self.lattice_geometry.clamped(),
+            lattice_text: self.lattice_text.clamped(),
+        }
     }
 }

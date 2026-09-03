@@ -47,15 +47,12 @@ fn ink_radius(scene: &Scene) -> f32 {
     scene.rings_outer * scene.marker_unit * points_per_world(scene)
 }
 
-/// σ of every caster's blur in this frame, in points — the pane is drawn at
-/// one point per pixel here, so [`shadow::sigma_px`]'s target pixels are the
-/// frame's own.
+/// σ of every caster's shadow in this frame, in points. Every fixture here
+/// dials both groups alike, so one number answers for the whole frame.
 fn sigma(scene: &Scene) -> f32 {
-    crate::shadow::sigma_px(
-        scene.glow_shadow,
+    crate::shadow::sigma_points(
+        scene.shadow.lattice_geometry.width,
         scene.node_radius * points_per_world(scene),
-        1.0,
-        scene.render_scale,
     )
 }
 
@@ -71,8 +68,10 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
         ..Default::default()
     };
     scene.glow_reach = 0.0;
-    scene.glow_shadow = shadow;
-    scene.glow_shadow_depth = depth;
+    for style in scene.shadow.groups_mut() {
+        style.width = shadow;
+        style.depth = depth;
+    }
     // The crosses away: a marker casts a shadow of its own into every frame
     // these fixtures read.
     scene.pluses.clear();
@@ -103,7 +102,9 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     scene.octave_gap = 0.10;
     scene.mark_inner = 0.84;
     scene.mark_thickness = 0.16;
-    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+    }
 
     let cb = LatticeCallback::from_scene(
         &scene,
@@ -115,14 +116,8 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
     );
     assert_eq!(cb.instances.len(), 1, "the fixture must ship exactly one node");
     assert_eq!(cb.casters.len(), 1, "the fixture must pack exactly one caster");
-    let sigma_px = shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, cb.render_scale);
-    let packed = shadow::pack(
-        &cb.casters,
-        sigma_px,
-        cb.render_scale,
-        device.limits().max_texture_dimension_2d,
-        cb.kernel,
-    );
+    let packed =
+        shadow::pack(&cb.casters, cb.render_scale, device.limits().max_texture_dimension_2d);
     let cell = packed.boxes[cb.node_cells[0] as usize];
     assert_eq!(cell.who[1], shadow::DISTANCE_KIND, "the node did not pack a distance cell");
 
@@ -329,7 +324,7 @@ fn atlas_of(shooter: &Shooter) -> Option<[u32; 2]> {
 /// it. The light is composited under everything, so a node's own shadow lands
 /// on its own halo; what says the holding-off is LOCAL — a moat rather than a
 /// dimmer on the whole light — is that it has all but run out at the width the
-/// bar names, σ being half of it (`shadow::sigma_px`) and the blur of a
+/// bar names, σ being half of it (`shadow::sigma_points`) and the blur of a
 /// half-plane keeping 2.3% of the light at 2σ.
 ///
 /// Each reading is a SHARE of the light at its own pixel, taken against the
@@ -786,7 +781,9 @@ fn a_distance_frame_of_markers_casts_without_an_atlas() {
     let scene = |depth| {
         let mut scene =
             crosses_on_ground(&[(-1.5, 1.0), (0.0, 0.6), (1.5, 0.3)], ARM, SHADOW, depth);
-        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
         scene
     };
     let flat = shooter.shot(&scene(0.0));
@@ -819,7 +816,9 @@ fn a_distance_markers_shadow_width_is_screen_constant_under_perspective() {
             pitch: 0.0,
             ..Default::default()
         };
-        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
         scene.pluses = vec![
             one_marker(glam::Vec3::new(0.0, 1.5, 4.0), ARM, CROSS_INK, 1.0),
             one_marker(glam::Vec3::new(0.0, -1.5, -8.0), ARM, CROSS_INK, 1.0),
@@ -1029,7 +1028,9 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     // sized off the wrong one of the two cuts a whole family's tail off in a
     // straight line at the box.
     let distant = |mut scene: Scene| -> Scene {
-        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
         far(scene)
     };
     let distance = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
@@ -1167,7 +1168,7 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
         1,
         None,
     );
-    let sigma = crate::shadow::sigma_px(cb.uniforms.misc11[0], cb.node_points, 1.0, 1.0);
+    let sigma = cb.casters.iter().map(|c| c.sigma_points).fold(0.0f32, f32::max);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
     // At the fixture's own Shadow every cell is drawn at the target's own
     // resolution, which is the regime a blur row and a distance row SHARE. A
@@ -1189,7 +1190,12 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
         for kernel in
             [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
         {
-            let packed = crate::shadow::pack(&cb.casters, sigma, 1.0, 16384, kernel);
+            let casters: Vec<crate::shadow::Caster> = cb
+                .casters
+                .iter()
+                .map(|c| crate::shadow::Caster { sigma_points: sigma, kernel, ..*c })
+                .collect();
+            let packed = crate::shadow::pack(&casters, 1.0, 16384);
             // Read over the casters that darken something: one at level 0 is packed
             // as no cell on purpose (`pack`), and most of this fixture's nodes
             // project clean off the pane.
@@ -1351,7 +1357,9 @@ fn a_resting_crosss_shadow_reaches_the_bloom_too() {
         let mut scene = lit_node_and_a_name(REACH, shadow, DEPTH);
         scene.glow_strength = STRENGTH;
         scene.bloom_strength = 1.0;
-        scene.glow_shadow_kernel = kernel;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
         if cross {
             scene.pluses = vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, CROSS_INK, 1.0)];
         }
@@ -1385,7 +1393,9 @@ fn a_zero_width_mark_casts_no_distance_shadow() {
 
     let staged = |slots| {
         let mut scene = on_ground(SHADOW, 1.0);
-        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
         scene.mark_thickness = 0.0;
         scene.nodes[0].melody_slots = slots;
         scene.nodes[0].melody_level = f32::from(slots != 0);
@@ -1481,78 +1491,216 @@ fn a_marked_nodes_shadow_stands_off_an_unmarked_ones_by_the_strip_alone() {
     );
 }
 
-/// The Name shadow bar moves a NAME's shadow and leaves every other caster's
-/// exactly as it was, byte for byte.
+/// The TEXT group's width moves a name's shadow and leaves every other
+/// caster's exactly as it was, byte for byte.
 ///
-/// The one place the lattice's one reach is dialled per caster, so the thing to
-/// prove is that it is per caster and not per frame: σ moved inside `pack`'s
-/// loop, and a term left outside it would take the ring stack and the cross
-/// with it. A frame with no name in it is the control, and it has to be
-/// IDENTICAL rather than close — the bar reaches it through no code path at
-/// all.
+/// The whole point of the groups, and the thing to prove is that σ is per
+/// CASTER and not per frame: it is dialled where a caster is built
+/// (`from_scene`) and read where its cell is sized, so a term left outside that
+/// would take the ring stack and the cross along with the names. A frame with
+/// no name in it is the control, and it has to be IDENTICAL rather than close —
+/// the group reaches it through no code path at all.
 ///
-/// Read at the two ends and at the bottom, the bottom being the one value with
-/// a shape of its own: at 0 a name's cell is packed with no padding and the
-/// kernel collapses to its centre tap, which is the letterforms dropped as a
-/// hard-edged copy of themselves. That it still casts is what says the zero is
-/// a look rather than an off switch.
+/// Read at the geometry group's own width, at the top of the bar and at the
+/// bottom. The bottom is the group's OFF switch: a group at no width packs no
+/// cell and multiplies by 1, which is the same picture as a group at no depth,
+/// and the pair of them agreeing is what says the two switches are one state.
 #[test]
-fn the_name_shadow_bar_moves_a_names_shadow_and_no_other_casters() {
+fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     shooter.clear = over_ground();
-    let scene_of = |name: f32| -> Scene {
-        let mut scene = on_ground(0.4, 0.85);
-        scene.glow_shadow_name = name;
+    const GEOMETRY: f32 = 0.4;
+    let scene_of = |text: f32| -> Scene {
+        let mut scene = on_ground(GEOMETRY, 0.85);
+        scene.shadow.lattice_text.width = text;
         scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         scene
     };
-    // The name clear of the node under it, so what the bar widens lands on bare
-    // ground and is read against the ground alone.
+    // The name clear of the node under it, so what the group widens lands on
+    // bare ground and is read against the ground alone.
     let named = |scene: &Scene| name_at(scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
-    let with_name = |shooter: &mut Shooter, name: f32| {
-        let scene = scene_of(name);
+    let with_name = |shooter: &mut Shooter, text: f32| {
+        let scene = scene_of(text);
         let labels = named(&scene);
         shooter.shot_with(&scene, labels)
     };
     let without_name =
-        |shooter: &mut Shooter, name: f32| shooter.shot_with(&scene_of(name), a_name(Vec::new()));
+        |shooter: &mut Shooter, text: f32| shooter.shot_with(&scene_of(text), a_name(Vec::new()));
 
-    let one = with_name(&mut shooter, 1.0);
-    let wide = with_name(&mut shooter, harmonigraph_scene::GLOW_SHADOW_NAME_MAX);
-    let hard = with_name(&mut shooter, 0.0);
+    let one = with_name(&mut shooter, GEOMETRY);
+    let wide = with_name(&mut shooter, harmonigraph_scene::GLOW_SHADOW_MAX);
+    let off = with_name(&mut shooter, 0.0);
     let moved = differing_pixels(&one, &wide);
-    assert!(moved > 200, "the whole Name shadow bar moved {moved} pixels, which is no bar at all");
-    let sharpened = differing_pixels(&one, &hard);
-    assert!(
-        sharpened > 200,
-        "the bottom of the Name shadow bar moved {sharpened} pixels off the fresh width",
-    );
+    assert!(moved > 200, "the whole text group's width moved {moved} pixels, which is no bar");
+    let gone = differing_pixels(&one, &off);
+    assert!(gone > 200, "shutting the text group moved {gone} pixels off its own width");
 
     // The control: the same three widths with the name's glyphs taken out.
-    let bare = without_name(&mut shooter, 1.0);
-    for name in [0.0, harmonigraph_scene::GLOW_SHADOW_NAME_MAX] {
-        let other = without_name(&mut shooter, name);
+    let bare = without_name(&mut shooter, GEOMETRY);
+    for text in [0.0, harmonigraph_scene::GLOW_SHADOW_MAX] {
+        let other = without_name(&mut shooter, text);
         assert_eq!(
             differing_pixels(&bare, &other),
             0,
-            "the Name shadow bar at {name} moved a frame with no name in it, so σ is still one \
-             number for every caster",
+            "the text group at {text} moved a frame with no name in it, so σ is still one number \
+             for every caster",
         );
     }
 
-    // And that the bar's bottom is a SHADOW rather than none: a name at no
-    // width still darkens what it stands on, the cell being its own ink at the
-    // target's resolution.
-    let no_shadow = {
-        let mut scene = scene_of(1.0);
-        scene.glow_shadow_depth = 0.0;
+    // The group's two off switches are ONE state: a name at no width and a name
+    // at no depth are the same picture, with the geometry group untouched in
+    // both.
+    let no_depth = {
+        let mut scene = scene_of(GEOMETRY);
+        scene.shadow.lattice_text.depth = 0.0;
         let labels = named(&scene);
         shooter.shot_with(&scene, labels)
     };
-    let cast = differing_pixels(&hard, &no_shadow);
-    assert!(cast > 200, "a name at no width of its own cast {cast} pixels, which is no shadow");
+    assert_eq!(
+        differing_pixels(&off, &no_depth),
+        0,
+        "a name at no width and a name at no depth drew different pictures, so one of the two \
+         bars is not the group's off switch",
+    );
+}
+
+/// A frame whose two groups are drawn by DIFFERENT renderers draws each group
+/// by its OWN renderer, over the ground that group darkens.
+///
+/// The end-to-end half of `a_mixed_frame_packs_each_caster_at_its_own_style`:
+/// that one is about cells, and this is about the picture the two fills and the
+/// one blur chain come to. A kernel wired per FRAME anywhere past `pack` — the
+/// glyph fill's pipeline, the chain's own gate — draws one of the two uniform
+/// frames instead.
+///
+/// The load-bearing claim is the POSITIVE one. That the mixed frame merely
+/// differs from each uniform frame is satisfied by any breakage big enough:
+/// a chain that wipes the other renderer's cells clears that bar while drawing
+/// a solid box over every node. So each group is read against the frame its own
+/// renderer drew, over the ground that group and no other darkens — and where
+/// that ground IS comes off a shot with the group shut rather than a rect
+/// written down here, so the reading follows the fixture rather than pinning
+/// it.
+///
+/// The control is the same pair with the NAMES taken out: the text group's
+/// kernel reaches such a frame through no code path at all, so switching it has
+/// to leave the frame byte-identical.
+#[test]
+fn a_frame_whose_groups_disagree_draws_both_renderers() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    const WIDTH: f32 = 0.4;
+    let scene_of = |geometry, text, widths: [f32; 2]| -> Scene {
+        let mut scene = on_ground(WIDTH, 0.85);
+        scene.shadow.lattice_geometry.kernel = geometry;
+        scene.shadow.lattice_text.kernel = text;
+        scene.shadow.lattice_geometry.width = widths[0];
+        scene.shadow.lattice_text.width = widths[1];
+        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
+        scene
+    };
+    // The name clear of the node under it, so the two groups' shadows land on
+    // bare ground and neither reading is a sum of both.
+    let named = |scene: &Scene| name_at(scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+    let mut shot = |geometry, text, widths| {
+        let scene = scene_of(geometry, text, widths);
+        let labels = named(&scene);
+        shooter.shot_with(&scene, labels)
+    };
+    let both = [WIDTH, WIDTH];
+    let all_distance = shot(Distance, Distance, both);
+    let all_gaussian = shot(Gaussian, Gaussian, both);
+    // BOTH orderings: the atlas holds the two kinds of cell together either
+    // way round, so a pass that serves one kind at the other's expense shows up
+    // in whichever group is holding the kind it drops.
+    let mixed = shot(Distance, Gaussian, both);
+    let flipped = shot(Gaussian, Distance, both);
+    // Each uniform frame with one group shut, which is what says where that
+    // group's shadow lands.
+    let no_geometry = shot(Distance, Distance, [0.0, WIDTH]);
+    let no_text = shot(Gaussian, Gaussian, [WIDTH, 0.0]);
+    for (what, uniform) in [("all-Distance", &all_distance), ("all-Gaussian", &all_gaussian)] {
+        let moved = differing_pixels(&mixed, uniform);
+        assert!(
+            moved > 200,
+            "the mixed frame is {moved} pixels off the {what} one, so a kernel is being chosen \
+             once for the frame rather than once per group",
+        );
+    }
+
+    let darkened = |a: &[u8], b: &[u8]| -> Vec<bool> {
+        a.chunks(4).zip(b.chunks(4)).map(|(x, y)| x != y).collect()
+    };
+    let alone = |m: &[bool], other: &[bool]| -> Vec<bool> {
+        m.iter().zip(other).map(|(&a, &b)| a && !b).collect()
+    };
+    let geometry_ground = darkened(&all_distance, &no_geometry);
+    let text_ground = darkened(&all_gaussian, &no_text);
+    let geometry_only = alone(&geometry_ground, &text_ground);
+    let text_only = alone(&text_ground, &geometry_ground);
+    // The two readings are not fully independent: the bloom is ONE attachment
+    // over the whole pane and every group's shadow reaches it, so switching the
+    // other group's renderer moves this ground by a level or two even where
+    // nothing on it is drawn by that group. That is the whole of the coupling.
+    // The renderers themselves part by tens of levels over the same ground,
+    // which the second bound holds them to — so the first is a reading rather
+    // than a tolerance wide enough to swallow the difference it measures.
+    const COUPLED: i32 = 4;
+    for (how, frame, by_geometry, by_text) in [
+        ("a Distance geometry over a Gaussian text", &mixed, &all_distance, &all_gaussian),
+        ("a Gaussian geometry over a Distance text", &flipped, &all_gaussian, &all_distance),
+    ] {
+        for (whose, ground, own, other) in [
+            ("geometry", &geometry_only, by_geometry, by_text),
+            ("text", &text_only, by_text, by_geometry),
+        ] {
+            let held = ground.iter().filter(|&&on| on).count();
+            assert!(
+                held > 200,
+                "the {whose} group darkens {held} pixels no other group reaches, which is too \
+                 little ground for the reading below to cross",
+            );
+            let worst = |against: &[u8]| -> i32 {
+                (0..ground.len())
+                    .filter(|&i| ground[i])
+                    .map(|i| {
+                        (0..4)
+                            .map(|c| (frame[4 * i + c] as i32 - against[4 * i + c] as i32).abs())
+                            .max()
+                            .unwrap()
+                    })
+                    .max()
+                    .unwrap_or(0)
+            };
+            assert!(
+                worst(own) <= COUPLED,
+                "over the {whose} group's own ground {how} stands {} levels off the frame that \
+                 group's own renderer drew, so it is not being drawn by its own kernel there",
+                worst(own),
+            );
+            assert!(
+                worst(other) > 4 * COUPLED,
+                "the two renderers draw the {whose} group's own ground {} levels apart, which is \
+                 too close for the reading above to be measuring anything",
+                worst(other),
+            );
+        }
+    }
+
+    // The control, and the half that says the text group's kernel is really the
+    // TEXT's: with no name in the frame it reaches nothing.
+    let mut bare =
+        |geometry, text| shooter.shot_with(&scene_of(geometry, text, both), a_name(Vec::new()));
+    assert_eq!(
+        differing_pixels(&bare(Distance, Distance), &bare(Distance, Gaussian)),
+        0,
+        "the text group's kernel moved a frame with no name in it",
+    );
 }
 
 /// Switching renderers moves the picture and nothing else does: a Distance
@@ -1573,7 +1721,9 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
     shooter.clear = over_ground();
     let mut shot = |kernel, shadow| {
         let mut scene = on_ground(shadow, 0.85);
-        scene.glow_shadow_kernel = kernel;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
         scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
         shooter.shot_with(&scene, named)
@@ -1620,7 +1770,9 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     };
     let mut scene = ringing_only(1.0, 0.16, 1.0);
     scene.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
-    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+    }
     // Close the intentional gaps between the ring's wedges. Angular variation
     // in the samples below is then the distance field's rather than the ink's.
     scene.octave_gap = 0.0;
@@ -1629,7 +1781,9 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
         "the fixture's Shadow is not narrow enough for a cell texel to dominate it",
     );
     let deep = shooter.shot(&scene);
-    scene.glow_shadow_depth = 0.0;
+    for style in scene.shadow.groups_mut() {
+        style.depth = 0.0;
+    }
     let flat = shooter.shot(&scene);
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     // Half a point past the ring's outer edge, where the deep profile still
@@ -1673,7 +1827,9 @@ fn block_on_grey(
 ) -> (Vec<u8>, Vec<u8>, glam::Vec2) {
     const GREY: f32 = 0.55;
     let mut scene = lit_node_and_a_name(0.0, shadow, depth);
-    scene.glow_shadow_kernel = kernel;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = kernel;
+    }
     scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
     shooter.clear =
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
@@ -1715,7 +1871,9 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
         // One σ out, which is half a Shadow width: far enough off the ink for
         // the two geometries to have parted and well inside either row's reach.
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-        scene.glow_shadow_kernel = kernel;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
         let d = sigma(&scene);
         let diag = d / std::f32::consts::SQRT_2;
         let dark = |p: glam::Vec2| {
@@ -1781,7 +1939,9 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
     let mut form = |kernel| {
         let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-        scene.glow_shadow_kernel = kernel;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
         // Grey under the whole counter, and the name still standing on the
         // node's band: a shadow with nothing beneath it to darken measures an
         // empty frame (#450), and a counter this wide runs past the band's own
@@ -1858,7 +2018,9 @@ fn a_distance_rows_crease_is_no_deeper_than_a_lone_edge() {
         wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
     // Two slabs facing each other across a gap of σ, each 2σ wide.
     let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-    scene.glow_shadow_kernel = Distance;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = Distance;
+    }
     scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
     let s = sigma(&scene);
     let (gap, wide, tall) = (s, 2.0 * s, 2.0 * s);

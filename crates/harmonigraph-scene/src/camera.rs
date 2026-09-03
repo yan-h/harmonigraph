@@ -157,8 +157,8 @@ impl Camera {
     /// the framing itself. What it is for is a length the picture holds in
     /// WORLD units — a node's radius, a marker's arm — that something measured
     /// on the pane has to match: the Shadow bar is dialled in node radii, and
-    /// the σ every caster is blurred at is in pixels
-    /// (`shadow::sigma_px` in harmonigraph-render).
+    /// the σ every caster is spent at is in the pane's POINTS
+    /// (`shadow::sigma_points` in harmonigraph-render).
     ///
     /// True at the focus plane under every projection, for the reason
     /// [`screen_scale`](Self::screen_scale) gives: the window's half-height is

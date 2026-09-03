@@ -84,7 +84,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // fragments is thin; a Shadow this wide makes it most of the quad.
     let wide_shadow = || {
         let mut scene = parity_scene();
-        scene.glow_shadow = 0.6;
+        for style in scene.shadow.groups_mut() {
+            style.width = 0.6;
+        }
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside
@@ -127,7 +129,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // an early-out of its own, which every fixture above compiles on one row.
     let distance = || {
         let mut scene = wide_shadow();
-        scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
         scene
     };
     for (name, scene) in [

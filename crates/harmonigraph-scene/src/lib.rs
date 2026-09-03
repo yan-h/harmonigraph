@@ -52,7 +52,8 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel, REACH_SIGMAS, SHADOW_STOP, SHADOW_TAIL,
+    Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel, ShadowSettings, ShadowStyle,
+    REACH_SIGMAS, SHADOW_STOP, SHADOW_TAIL,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
@@ -255,9 +256,9 @@ pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
-/// How wide an item's shadow may be asked to be (see
-/// [`ViewConfig::glow_shadow`]), in the quad UV units the layer sizes above are
-/// in — the far end of the Glow section's Shadow bar.
+/// How wide a group's shadow may be asked to be (see [`ShadowStyle::width`]),
+/// in the quad UV units the layer sizes above are in — the far end of every
+/// Shadow bar.
 ///
 /// One node radius, so the percentage printed on the bar is its literal share
 /// of the node and its far end is 100%. That still takes the blur well past the
@@ -271,15 +272,6 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
 /// so the fill the scene pass pays. `timing.rs` is what reads that back.
 pub const GLOW_SHADOW_MAX: f32 = 1.0;
-
-/// The widest a note name's own shadow may be dialled against the rest of the
-/// picture's (see [`ViewConfig::glow_shadow_name`]).
-///
-/// Three, this being a RATIO on the one Shadow width rather than a width: a
-/// name's strokes are the thinnest ink in the lattice and the only ink whose
-/// shape is meant to be read, so the question the bar asks is whether the
-/// letterforms want a blur their neighbours do not.
-pub const GLOW_SHADOW_NAME_MAX: f32 = 3.0;
 
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
@@ -912,21 +904,11 @@ pub struct Scene {
     /// The shape of the light's global falloff inside its reach (see
     /// [`ViewConfig::glow_curve`]); already sanitized.
     pub glow_curve: GlowCurve,
-    /// The Shadow: how wide every caster's blur is, in the same quad UV units
-    /// (see [`ViewConfig::glow_shadow`]); already clamped to
-    /// [`GLOW_SHADOW_MAX`]. Independent of the glow — an item casts with no
-    /// light in the picture.
-    pub glow_shadow: f32,
-    /// How dark a shadow lands where it is whole (see
-    /// [`ViewConfig::glow_shadow_depth`]); already clamped to 0..=1.
-    pub glow_shadow_depth: f32,
-    /// What a note NAME's σ takes against the rest of the picture's (see
-    /// [`ViewConfig::glow_shadow_name`]); already clamped to
-    /// 0..=[`GLOW_SHADOW_NAME_MAX`].
-    pub glow_shadow_name: f32,
-    /// Which of the two renderers every caster's ink is turned into a cell by
-    /// (see [`ViewConfig::glow_shadow_kernel`]).
-    pub glow_shadow_kernel: ShadowKernel,
+    /// The Shadow, a style per group of casters (see
+    /// [`ViewConfig::shadow`]); already clamped
+    /// ([`ShadowSettings::clamped`]). Independent of the glow — an item casts
+    /// with no light in the picture.
+    pub shadow: ShadowSettings,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///

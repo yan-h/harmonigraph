@@ -596,13 +596,18 @@ struct Uniforms {
     /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
     /// strength is off.
     glow_curve: [f32; 4],
-    /// The SHADOW's dials. x: how wide it is, as a share of a node's radius
-    /// (`Scene::glow_shadow`) — the σ every caster's ink is blurred at
-    /// ([`shadow::sigma_px`]); y: how far the chosen renderer reaches past a
-    /// caster's ink in the picture's own σ (`ShadowKernel::reach_sigmas`),
-    /// which every quad is grown by; w: how dark it lands
-    /// (`Scene::glow_shadow_depth`), 1 taking the frame under a solid caster to
-    /// the shader's own floor. z unused.
+    /// The LATTICE GEOMETRY group's shadow — the nodes' and the markers', which
+    /// are the casters this module's draws own. x: how wide it is, as a share
+    /// of a node's radius (`ShadowStyle::width`); y: how far its renderer
+    /// reaches past a caster's ink in the picture's own σ
+    /// (`ShadowKernel::reach_sigmas`), which every quad here is grown by; w:
+    /// how dark it lands (`ShadowStyle::depth`), 1 taking the frame under a
+    /// solid caster to the shader's own floor. z unused.
+    ///
+    /// The TEXT group's pair is not here: a name's box is drawn by the text
+    /// pipeline and reads its depth out of that pipeline's own uniform
+    /// (`TextUniforms::shadow_depth`). What the two groups share is σ, and σ
+    /// rides on the caster (`shadow::Caster::sigma_points`).
     ///
     /// A REACH in y and not a σ ratio, because the two renderers do not end at
     /// the same multiple of their own width: the ratio times a constant answers
@@ -610,15 +615,15 @@ struct Uniforms {
     /// in.
     ///
     /// A row of its own rather than slots scattered over the ones beside it,
-    /// because they are one control: the Shadow bar and the Shadow depth bar
-    /// under it.
+    /// because they are one control: a group's Shadow bar and the Shadow depth
+    /// bar under it.
     ///
     /// NOT zeroed with `misc10`, which is where this row parts company with
     /// every other one under the glow: an item casts whether or not there is a
     /// light in the picture, so zeroing this with the light would take every
-    /// shadow off with it the moment the Reach reached 0. `glow_shadow` is its
-    /// own off switch (`glow_shadow()` in lattice.wgsl), and the depth is a
-    /// second one — `prepare` packs no atlas at either bar's bottom.
+    /// shadow off with it the moment the Reach reached 0. The width is its own
+    /// off switch (`glow_shadow()` in lattice.wgsl), and the depth is a second
+    /// one — a group at either bar's bottom packs no cell.
     misc11: [f32; 4],
     /// The node glow's plumbing row, which is not a dial. x: how many rows this
     /// frame's ink strip has (`Scene::glow_rows`) — the one thing
@@ -963,9 +968,14 @@ struct LatticeCallback {
     /// `prepare` packs the shadow atlas from — a pure function of the frame,
     /// which the offline renderer's determinism rests on.
     casters: Vec<shadow::Caster>,
-    /// Which renderer turns every caster's ink into its shadow — what `prepare`
-    /// packs a cell for and which fill pipeline draws into it.
-    kernel: harmonigraph_scene::ShadowKernel,
+    /// Every group's style, as the scene handed it over.
+    ///
+    /// The casters above already carry their own σ and kernel, so what is left
+    /// for this is what a group decides OUTSIDE the packing: which fill
+    /// pipeline the names' cells are drawn by, and the depth a name's box
+    /// spends (`fs_shadow_box` reads it out of the text pipeline's own
+    /// uniform). The geometry group's pair rides in `uniforms.misc11`.
+    shadow: harmonigraph_scene::ShadowSettings,
     /// Which caster each node instance's shadow is, by index into `casters` —
     /// parallel to `instances`, since the walk interleaves the two lists.
     node_cells: Vec<u32>,
@@ -975,15 +985,6 @@ struct LatticeCallback {
     marker_arm_points: f32,
     /// The scene pass's whole order, back to front — see [`Draw`].
     draws: Vec<Draw>,
-    /// A node's own radius on this pane, in POINTS: the unit every shadow in
-    /// the picture is dialled in (`shadow::sigma_px`).
-    ///
-    /// ONE number for the pane, as the size the names are typeset at is: an
-    /// off-sheet node draws smaller and its name with it, and its shadow is
-    /// still the home sheet's width. Derived here rather than handed in,
-    /// because a node and a marker cast whether or not the frame carries a
-    /// single name.
-    node_points: f32,
     /// The fallback font sheet and drawn-mark sheet, on their publication frames.
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
@@ -1288,15 +1289,25 @@ impl LatticeCallback {
                 [(ndc.x * 0.5 + 0.5) * size_points.x, (0.5 - ndc.y * 0.5) * size_points.y]
             })
         };
-        // How far a caster's blur reaches past its own ink, in POINTS. σ is
-        // half the Shadow's width over a node's radius (`shadow::sigma_px`),
-        // and the pane's pixel scale cancels between σ and the divisor that
-        // turns it back into points — so this is the reach at any device scale.
         let node_points = scene.node_radius * camera.points_per_world(size_points.y);
-        let shadow_reach = 0.5
-            * scene.glow_shadow.max(0.0)
-            * scene.glow_shadow_kernel.reach_sigmas()
-            * node_points.max(0.0);
+        // Each group's own σ in POINTS, read once: a caster carries it and the
+        // packer needs no second conversion (`shadow::sigma_points`). A group
+        // with either bar at the bottom hands over a σ of nothing, which is the
+        // group's off switch all the way down — no cell, no atlas, no taps.
+        let geometry = scene.shadow.lattice_geometry;
+        let text = scene.shadow.lattice_text;
+        let sigma_of = |style: harmonigraph_scene::ShadowStyle| {
+            if style.casts() {
+                shadow::sigma_points(style.width, node_points)
+            } else {
+                0.0
+            }
+        };
+        let (geometry_sigma, text_sigma) = (sigma_of(geometry), sigma_of(text));
+        // How far the GEOMETRY group's shadow reaches past its own ink, in
+        // points — what a node's box is clipped to the pane by, the marker and
+        // the node being the two casters in it.
+        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas();
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
@@ -1314,7 +1325,8 @@ impl LatticeCallback {
             let empty = shadow::Caster {
                 rect: [0.0; 4],
                 level: 0.0,
-                sigma_scale: 1.0,
+                sigma_points: geometry_sigma,
+                kernel: geometry.kernel,
                 direct_distance: false,
             };
             let (Some(c), Some(x), Some(y)) = (
@@ -1348,13 +1360,10 @@ impl LatticeCallback {
             // LEVEL 1: the coverage the cell is filled with already carries
             // every layer's own envelope (`node_ink`), so a released node's
             // shadow fades with its ink and needs no second term here.
-            // The picture's own width: a node is what the Shadow bar is
-            // calibrated on, and only a name is dialled off it.
             shadow::Caster {
                 rect: [min.x, min.y, max.x - min.x, max.y - min.y],
                 level: 1.0,
-                sigma_scale: 1.0,
-                direct_distance: false,
+                ..empty
             }
         };
         // One arm of a resting marker on this pane, in points. Every cross is
@@ -1369,11 +1378,6 @@ impl LatticeCallback {
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
-        // What a NAME's σ takes against the rest of the picture's, which is the
-        // one caster in the lattice allowed to be other than 1
-        // (`ViewConfig::glow_shadow_name`). Read once, the bar being one number
-        // for every name in the frame.
-        let name_sigma_scale = scene.glow_shadow_name.max(0.0);
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
         // The marker field's caster, ahead of everything the walk pushes. A
         // Gaussian gives it one shared cell centred on a crossing; a distance
@@ -1384,7 +1388,8 @@ impl LatticeCallback {
             casters.push(shadow::Caster {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
-                sigma_scale: 1.0,
+                sigma_points: geometry_sigma,
+                kernel: geometry.kernel,
                 direct_distance: true,
             });
         }
@@ -1420,7 +1425,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run, name_sigma_scale));
+                casters.push(shadow::caster_of(run, text_sigma, text.kernel));
             }
         }
         // The home run can be empty and can run to the end of the order, in
@@ -1434,10 +1439,9 @@ impl LatticeCallback {
             glyphs,
             casters,
             node_cells,
-            kernel: scene.glow_shadow_kernel,
+            shadow: scene.shadow,
             marker_arm_points,
             draws,
-            node_points,
             atlas: labels.atlas,
             marks: labels.marks,
             sdf: labels.sdf,
@@ -1501,12 +1505,7 @@ impl LatticeCallback {
                 // Packed whatever `lights` says — see `Uniforms::misc11`: a
                 // frame with no light in it still casts every shadow the
                 // lattice has. z unused.
-                misc11: [
-                    scene.glow_shadow,
-                    scene.glow_shadow_kernel.reach_sigmas(),
-                    0.0,
-                    scene.glow_shadow_depth,
-                ],
+                misc11: [geometry.width, geometry.kernel.reach_sigmas(), 0.0, geometry.depth],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
@@ -3853,23 +3852,17 @@ impl CallbackTrait for LatticeCallback {
 
         let glow = self.glow_draws();
         // Every caster's cell, packed for this frame (`shadow::pack`): the
-        // Gaussian's one marker cross, one per node and one per name. None
-        // where the Shadow's width or depth is at the bottom of its bar, or
-        // where nothing in the frame casts — a frame with no cell allocates no
-        // atlas and every cell reader multiplies by exactly 1. σ is in the
-        // TARGET's pixels, which is where the cells are drawn and what #496
-        // found the field's reach missing.
+        // Gaussian's one marker cross, one per node and one per name, each at
+        // the resolution its own σ asks for. A caster whose group has either
+        // bar at the bottom arrived with a σ of nothing and takes none, so a
+        // frame with every group shut allocates no atlas and every cell reader
+        // multiplies by exactly 1.
+        //
+        // The scale handed over is the TARGET's pixels per pane point — the
+        // device's times the render scale, which is the term #496 found missing
+        // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let sigma =
-            shadow::sigma_px(self.uniforms.misc11[0], self.node_points, ppp, self.render_scale);
-        // One cell per caster, at the resolution its own σ asks for (`pack`).
-        // Every cell's σ is capped in TEXELS, so what a wider Shadow costs is a
-        // smaller cell rather than a wider kernel.
-        let packed = if self.uniforms.misc11[3] > 0.0 {
-            shadow::pack(&self.casters, sigma, ppp * self.render_scale, max_dim, self.kernel)
-        } else {
-            shadow::Packed::default()
-        };
+        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
         // A placeholder box preserves the caster index for a distance field
         // evaluated directly by its scene draw. Only a real cell asks for the
         // atlas; a markers-only Distance frame therefore allocates no atlas.
@@ -4024,14 +4017,15 @@ impl CallbackTrait for LatticeCallback {
                         mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
                         filter_axis: self.slide.unit(),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        // What the names share with the rest of the picture,
-                        // read out of the row it was packed into rather than
-                        // off the scene a second time: the Shadow depth a
-                        // name's shadow is spent at, the same number the nodes
-                        // and markers took, so the bar means one thing. The
-                        // Shadow's WIDTH is not here: it is σ, spent on the
-                        // CPU where the cells are packed.
-                        shadow_depth: self.uniforms.misc11[3],
+                        // The TEXT group's own depth, where `misc11` carries
+                        // the geometry group's: a name's box is drawn by this
+                        // pipeline and a ring's by the lattice's, so the two
+                        // depths reach the two shaders through their own
+                        // uniforms and never through each other.
+                        //
+                        // The group's WIDTH is not here: it is σ, and σ is
+                        // spent on the CPU where the cells are packed.
+                        shadow_depth: self.shadow.lattice_text.depth,
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
@@ -4150,7 +4144,10 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_bind_group(0, glyphs, &[]);
                     pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                     pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
-                    pass.set_pipeline(if self.kernel.is_distance() {
+                    // Every name in a frame is one group, so the fill is one
+                    // pipeline for the whole run — where a NODE's fill branches
+                    // per box, its own cell draw serving both kinds.
+                    pass.set_pipeline(if self.shadow.lattice_text.kernel.is_distance() {
                         &resources.glyph_distance_cell_pipeline
                     } else {
                         &resources.glyph_coverage_cell_pipeline
@@ -4158,7 +4155,16 @@ impl CallbackTrait for LatticeCallback {
                     pass.draw(0..4, 0..pane.glyph_count);
                 }
                 drop(pass);
-                if !self.kernel.is_distance() {
+                // The chain runs when some cell in the atlas holds COVERAGE,
+                // which is what it convolves; a distance cell collapses its own
+                // quad inside the pass (`vs_cell` in shadow.wgsl). Read off the
+                // boxes rather than off the settings, so a Gaussian group with
+                // nothing in the frame to cast costs no pass.
+                let blurs = packed
+                    .boxes
+                    .iter()
+                    .any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
+                if blurs {
                     let cells = &resources.shadow_cell_pipelines;
                     atlas.blur(
                         egui_encoder,

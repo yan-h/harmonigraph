@@ -133,7 +133,7 @@ struct Uniforms {
     // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
     glow_curve: vec4<f32>,
     // The SHADOW's dials. x: how wide it is, as a share of a node's radius —
-    // the σ every caster's ink is blurred at (`shadow::sigma_px`) and the reach
+    // the σ every caster's ink is spent at (`shadow::sigma_points`) and the reach
     // every quad is grown by (`shadow_reach_uv`); y: how far the chosen
     // renderer reaches past a caster's ink in the picture's own σ
     // (`ShadowKernel::reach_sigmas`), which is what a quad is grown BY; w: how
@@ -285,7 +285,7 @@ const INK_STRIP_N: u32 = 64u;
 //
 // ONE length for the whole picture — a node's rings, a resting cross, a name's
 // box — so that what an item casts is read off the item's own ink rather than
-// off which draw it belongs to. σ is half of it (`shadow::sigma_px`), where the
+// off which draw it belongs to. σ is half of it (`shadow::sigma_points`), where the
 // derivation of that half is stated.
 //
 // A share of the node's radius, like the two gaps it sits with in the view, and
@@ -325,7 +325,7 @@ fn glow_shadow_reach() -> f32 {
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
 // is drawn at `scale`.
 //
-// σ is HALF the Shadow over a node's radius in points (`shadow::sigma_px`), and
+// σ is HALF the Shadow over a node's radius in points (`shadow::sigma_points`), and
 // one uv is 1.8 of those radii (`node_vertex`) — so σ is `shadow / 3.6` of a
 // home node's uv. A sheet drawn smaller reads the same width in POINTS, which
 // is more of its own uv, which is what the division by `scale` says: the Shadow

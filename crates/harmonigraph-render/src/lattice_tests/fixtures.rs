@@ -3,6 +3,21 @@
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
 use crate::*;
 
+/// Every lattice group at one style, which is what a fixture that says nothing
+/// about the GROUPS means when it names "the Shadow".
+///
+/// Most readings in this suite are about a caster's shape or a profile's
+/// falloff, and neither is a question about which group the ink belongs to. The
+/// tests that ARE about the groups build their two styles by hand.
+pub(super) fn one_shadow(
+    width: f32,
+    depth: f32,
+    kernel: harmonigraph_scene::ShadowKernel,
+) -> harmonigraph_scene::ShadowSettings {
+    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth };
+    harmonigraph_scene::ShadowSettings { lattice_geometry: style, lattice_text: style }
+}
+
 /// One marker for the fixtures below.
 ///
 /// `strength` is the whole marker — its ink, its pool and the shadow its cross
@@ -201,15 +216,13 @@ pub(super) fn parity_scene() -> Scene {
         glow_reach: 0.0,
         glow_strength: 1.0,
         glow_curve: harmonigraph_scene::GlowCurve::default(),
-        // The fresh Shadow and the share a lit slice's own ink takes of the
-        // light, so a test that says nothing about either measures the fresh
-        // picture.
-        glow_shadow: 0.16,
-        glow_shadow_depth: 0.85,
-        // One width for a name as for everything else, so a test that says
-        // nothing about the ratio reads the profile the Shadow bar alone makes.
-        glow_shadow_name: 1.0,
-        glow_shadow_kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+        // BOTH groups alike, so a test that says nothing about the groups reads
+        // one shadow across the picture — the shape it had before the groups
+        // existed — under the renderer every reading here is calibrated
+        // against.
+        shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
+        // The share a lit slice's own ink takes of the light, so a test that
+        // says nothing about it measures the fresh picture.
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
@@ -808,7 +821,9 @@ pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> S
     // leaves it where it is.
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
-    scene.glow_shadow = shadow;
+    for style in scene.shadow.groups_mut() {
+        style.width = shadow;
+    }
     scene.nodes[0].audio_ring = ring;
     scene
 }
@@ -885,8 +900,12 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
     // marker to hold off.
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
-    scene.glow_shadow = shadow;
-    scene.glow_shadow_depth = depth;
+    for style in scene.shadow.groups_mut() {
+        style.width = shadow;
+    }
+    for style in scene.shadow.groups_mut() {
+        style.depth = depth;
+    }
     scene.plus_taper_start = taper_start;
     // Four markers out where the node's halo still reaches and the node's own
     // shadow does not. The distance is the fixture's one delicate number: a
@@ -959,8 +978,12 @@ pub(super) fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene 
     };
     scene.glow_reach = reach;
     scene.glow_strength = 1.5;
-    scene.glow_shadow = shadow;
-    scene.glow_shadow_depth = depth;
+    for style in scene.shadow.groups_mut() {
+        style.width = shadow;
+    }
+    for style in scene.shadow.groups_mut() {
+        style.depth = depth;
+    }
     // The markers away: a cross casts a shadow of its own into the frame the
     // name tests read.
     scene.pluses.clear();
