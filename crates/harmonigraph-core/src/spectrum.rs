@@ -7,13 +7,16 @@
 //! from wherever their audio comes from (the plugin's input bus, the
 //! standalone's mock synth) and the whole pipeline stays unit-testable.
 //! The FFT is a hand-rolled iterative radix-2 (the crate deliberately has
-//! no dependencies), and it is not incidental work: the Spectral pane asks
-//! for a column every 8 ms (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a
-//! stereo input at 8192 points runs 250 transforms a second — and a DAW keeps
-//! that fed with silence as much as with audio, so the cost is continuous
-//! rather than only while something plays. At ~0.11 ms each that is ~3% of a
-//! core, which is why `fft_in_place` is written for the call rate it actually
-//! sees rather than the one a spectrum analyzer sounds like it should have.
+//! no dependencies) over a real-input packing, so a window of `n` real samples
+//! costs a complex transform of `n / 2` (see [`untangle_real_power`]). It is
+//! not incidental work: the Spectral pane asks for a column every 8 ms
+//! (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a stereo input at 8192
+//! points runs 250 transforms a second — and a DAW keeps that fed with silence
+//! as much as with audio, so the cost is continuous rather than only while
+//! something plays. At ~0.06 ms each that is ~1.6% of a core, which is why
+//! both the packing and `fft_in_place`'s twiddle order are written for the
+//! call rate this actually sees rather than the one a spectrum analyzer sounds
+//! like it should have.
 
 /// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is 20 Hz to
 /// 20 kHz — the audible band, as every analyzer states it. The axis is linear
@@ -108,9 +111,15 @@ pub struct SpectrumAnalyzer {
     /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
     /// tapers it is a property of — see [`taper_norm_power`].
     norm_power: f32,
-    /// FFT scratch (allocated per configuration).
+    /// FFT scratch, HALF the window long: the real window is PACKED into a
+    /// complex signal of half the length, transformed at that length, and
+    /// untangled back into bins — see [`untangle_real_power`].
     re: Vec<f32>,
     im: Vec<f32>,
+    /// The untangle's twiddles, one per bin of the half transform. Precomputed
+    /// with the buffers it is sized against, because computing them live hands
+    /// the packing's whole saving back — see [`build_untangle_twiddles`].
+    untangle_twiddles: Vec<(f32, f32)>,
     /// Power per bin, SUMMED across the tapers by
     /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) — the one place the
     /// taper count stops being visible, since everything downstream of it reads
@@ -139,6 +148,7 @@ impl SpectrumAnalyzer {
             norm_power: 0.0,
             re: Vec::new(),
             im: Vec::new(),
+            untangle_twiddles: Vec::new(),
             bin_power: Vec::new(),
             bin_mag: Vec::new(),
         };
@@ -149,7 +159,10 @@ impl SpectrumAnalyzer {
     /// (Re)allocate every buffer for `fft_size` and `taper_count`, and clear
     /// the window.
     fn configure(&mut self, fft_size: usize, taper_count: usize) {
-        assert!(fft_size.is_power_of_two(), "radix-2 FFT needs a power of two");
+        assert!(
+            fft_size >= 4 && fft_size.is_power_of_two(),
+            "a power of two, four up: the packing halves it before the radix-2 FFT sees it"
+        );
         let taper_count = taper_count.clamp(1, MAX_TAPERS);
         self.fft_size = fft_size;
         self.taper_count = taper_count;
@@ -158,8 +171,9 @@ impl SpectrumAnalyzer {
         self.filled = 0;
         self.tapers = build_tapers(fft_size, taper_count);
         self.norm_power = taper_norm_power(&self.tapers, fft_size);
-        self.re = vec![0.0; fft_size];
-        self.im = vec![0.0; fft_size];
+        self.re = vec![0.0; fft_size / 2];
+        self.im = vec![0.0; fft_size / 2];
+        self.untangle_twiddles = build_untangle_twiddles(fft_size);
         self.bin_power = vec![0.0; fft_size / 2];
         self.bin_mag = vec![0.0; fft_size / 2];
     }
@@ -283,18 +297,34 @@ impl SpectrumAnalyzer {
         // `taper_norm_power` instead, so no pass over the bins exists only to
         // divide by a constant.
         self.bin_power.fill(0.0);
+        // Usable bins: skip DC and bin 1 (where the window's own leakage
+        // dominates) and stay clear of Nyquist. Anything the axis asks for
+        // outside this reads as nothing, which is the truth — a 4096-point
+        // window at 48 kHz cannot see 20 Hz at all. It is also the only range
+        // the untangle below fills, so a widening here is work as well as axis.
+        let half = self.fft_size / 2;
+        let (first, last) = (2usize, half - 2);
         for k in 0..self.taper_count {
             let taper = k * self.fft_size;
-            // Unroll the ring into time order, tapered.
-            for i in 0..self.fft_size {
-                let src = (self.write + i) % self.fft_size;
-                self.re[i] = self.ring[src] * self.tapers[taper + i];
-                self.im[i] = 0.0;
+            // Unroll the ring into time order, tapered, and PACKED: the even
+            // samples become the real part of a half-length complex signal and
+            // the odd ones its imaginary part, so a real window of `fft_size`
+            // costs a complex transform of `half` plus an O(n) untangle.
+            for j in 0..half {
+                let even = (self.write + 2 * j) % self.fft_size;
+                let odd = (self.write + 2 * j + 1) % self.fft_size;
+                self.re[j] = self.ring[even] * self.tapers[taper + 2 * j];
+                self.im[j] = self.ring[odd] * self.tapers[taper + 2 * j + 1];
             }
             fft_in_place(&mut self.re, &mut self.im);
-            for (power, (re, im)) in self.bin_power.iter_mut().zip(self.re.iter().zip(&self.im)) {
-                *power += re * re + im * im;
-            }
+            untangle_real_power(
+                &self.re,
+                &self.im,
+                &self.untangle_twiddles,
+                first,
+                last,
+                &mut self.bin_power,
+            );
         }
 
         // Amplitude normalization so a unit sine reads as ~1.0, precomputed
@@ -304,11 +334,6 @@ impl SpectrumAnalyzer {
         let norm_power = self.norm_power;
 
         let bin_hz = self.sample_rate / self.fft_size as f32;
-        // Usable bins: skip DC and bin 1 (where the window's own leakage
-        // dominates) and stay clear of Nyquist. Anything the axis asks for
-        // outside this reads as nothing, which is the truth — a 4096-point
-        // window at 48 kHz cannot see 20 Hz at all.
-        let (first, last) = (2usize, self.fft_size / 2 - 2);
         let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
 
         // Magnitudes for the reconstructing branch alone (hence
@@ -682,6 +707,71 @@ fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
         })
         .sum();
     4.0 / response
+}
+
+/// The twiddles [`untangle_real_power`] reads: `e^(-i * tau * k / n)` for every
+/// bin `k` of the half transform, where `n` is the REAL window length.
+///
+/// A TABLE rather than a `sin_cos` per bin, which is the difference between the
+/// packing paying for itself and not paying at all: the untangle visits nearly
+/// as many bins as the half transform makes `sin_cos` calls (`n/2 - 1` of
+/// them), so computing an angle at each one puts the whole of the trig the
+/// packing just saved straight back. What it costs is state — one table per
+/// window length, built where every other buffer sized on `fft_size` is.
+///
+/// `(sin, cos)` in that order, which is `f32::sin_cos`'s own, so the entry
+/// destructures the way the transform's inline twiddles do.
+fn build_untangle_twiddles(n: usize) -> Vec<(f32, f32)> {
+    (0..n / 2)
+        .map(|k| {
+            let angle = -std::f32::consts::TAU * k as f32 / n as f32;
+            angle.sin_cos()
+        })
+        .collect()
+}
+
+/// The power of bins `first..=last` of the transform of `2 * re.len()` REAL
+/// samples, ADDED to `power`: the untangle half of the real-input packing.
+///
+/// `re`/`im` hold the half-length complex transform `Z` of the packed signal
+/// (even samples real, odd samples imaginary). `Z[k]` and `Z[half - k]` between
+/// them carry the transforms of the even- and odd-indexed subsequences, whose
+/// conjugate-symmetric and antisymmetric parts are those two subsequences'
+/// spectra `E[k]` and `O[k]`; one twiddle recombines them into the real
+/// spectrum's bin, `X[k] = E[k] + W^k O[k]`. The half each of those carries is
+/// factored out to the `0.25` on the squared magnitude below — one exact
+/// multiply on a value being scaled anyway, rather than four on the parts.
+///
+/// **`1 <= first` and `last < half` is the range the form is VALID on**, not a
+/// convenience. DC and Nyquist are the two bins whose conjugate partner is
+/// themselves: they fold together into one entry of `Z`, come out as
+/// `Re Z[0] + Im Z[0]` and `Re Z[0] - Im Z[0]`, and reach neither the twiddle
+/// nor an index of their own. `pitch_spectrum` reads neither — see the
+/// `(first, last)` it passes — so nothing here computes them, and the loop
+/// stays a loop.
+fn untangle_real_power(
+    re: &[f32],
+    im: &[f32],
+    twiddles: &[(f32, f32)],
+    first: usize,
+    last: usize,
+    power: &mut [f32],
+) {
+    let half = re.len();
+    debug_assert!(im.len() == half && twiddles.len() == half);
+    debug_assert!(first >= 1 && last < half, "DC and Nyquist are not this form's to compute");
+    for k in first..=last {
+        let (ws, wc) = twiddles[k];
+        let (ar, ai) = (re[k], im[k]);
+        let (cr, ci) = (re[half - k], im[half - k]);
+        // `2E[k]` and `2i * O[k]`, which is the pair with its partner's
+        // conjugate added and subtracted.
+        let (sr, si) = (ar + cr, ai - ci);
+        let (dr, di) = (ar - cr, ai + ci);
+        let xr = sr + wc * di + ws * dr;
+        let xi = si + ws * di - wc * dr;
+        power[k] += 0.25 * (xr * xr + xi * xi);
+    }
 }
 
 /// Iterative radix-2 Cooley-Tukey, in place. Lengths are compile-time
@@ -1177,26 +1267,44 @@ mod tests {
         assert!((midi_to_hz(60.0) - 261.6256).abs() < 0.1, "middle C ≈ 261.63 Hz");
     }
 
+    /// The packing computes the same spectrum a DFT of the whole real signal
+    /// does, over every bin it is defined for.
+    ///
+    /// Through the path `pitch_spectrum` runs and not the transform alone —
+    /// pack, half-length FFT, untangle — because the packing is where an error
+    /// this test can see would be: a wrong twiddle denominator, a partner read
+    /// from the wrong end, a conjugate the wrong way round. In POWER, which is
+    /// all [`untangle_real_power`] produces and all the analyzer ever reads.
+    ///
+    /// The bins are `1..=half - 1`, which is the whole of the untangle's
+    /// domain: its two ends read their conjugate partner from the far end of
+    /// the half transform, and the middle one (`n/4`) is its own partner, so a
+    /// fixture this size reaches both edge cases and the self-conjugate one.
+    /// DC and Nyquist are outside the form and outside what the analyzer
+    /// reads — see [`untangle_real_power`].
     #[test]
-    fn fft_matches_a_naive_dft_on_a_small_case() {
+    fn the_packed_real_transform_matches_a_naive_dft_on_a_small_case() {
         let n = 16;
+        let half = n / 2;
         let signal: Vec<f32> =
             (0..n).map(|i| (i as f32 * 0.7).sin() + 0.3 * (i as f32 * 2.1).cos()).collect();
-        let mut re = signal.clone();
-        let mut im = vec![0.0f32; n];
+        let mut re: Vec<f32> = signal.iter().step_by(2).copied().collect();
+        let mut im: Vec<f32> = signal.iter().skip(1).step_by(2).copied().collect();
         fft_in_place(&mut re, &mut im);
-        for k in 0..n {
+        let mut power = vec![0.0f32; half];
+        let twiddles = build_untangle_twiddles(n);
+        untangle_real_power(&re, &im, &twiddles, 1, half - 1, &mut power);
+        for (k, &p) in power.iter().enumerate().skip(1) {
             let (mut dr, mut di) = (0.0f64, 0.0f64);
             for (i, &s) in signal.iter().enumerate() {
                 let angle = -std::f64::consts::TAU * (k * i) as f64 / n as f64;
                 dr += f64::from(s) * angle.cos();
                 di += f64::from(s) * angle.sin();
             }
+            let dft = dr * dr + di * di;
             assert!(
-                (re[k] as f64 - dr).abs() < 1e-3 && (im[k] as f64 - di).abs() < 1e-3,
-                "bin {k}: fft ({}, {}) vs dft ({dr}, {di})",
-                re[k],
-                im[k]
+                (f64::from(p) - dft).abs() < 1e-3,
+                "bin {k}: packed power {p} vs dft power {dft}"
             );
         }
     }

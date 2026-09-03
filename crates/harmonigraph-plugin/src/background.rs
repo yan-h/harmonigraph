@@ -19,14 +19,14 @@
 //! draw ribbons and ridges that disagree — and a heatmap that disagrees with
 //! the roll above it is worse than one that admits the gap.
 //!
-//! **What it costs is a continuous FFT.** 0.42 ms per stereo column at the
-//! default 8192-point window, 125 columns a second: about 5% of a core for as
+//! **What it costs is a continuous FFT.** 0.23 ms per stereo column at the
+//! default 8192-point window, 125 columns a second: about 3% of a core for as
 //! long as the plugin is instantiated, paid now even by a project nobody opens
 //! the editor of, and paid continuously because a DAW streams silence as
 //! diligently as it streams music. Memory does not move — [`SpectrumHistory`]
 //! bounds itself at ~30 MB and already outlived the window, so this only
 //! reaches that bound sooner rather than raising it. The hop is the only lever
-//! if that ever needs to come down (32 ms instead of 8 puts it at 1.2%), but it
+//! if that ever needs to come down (32 ms instead of 8 puts it at 0.7%), but it
 //! is not one to reach for casually: the store's tiers, `live_slab`'s ladder
 //! and `COLUMNS_PER_SLAB` are all rungs of one shared `FFT_INTERVAL`, and a
 //! second hop rate is the exact shape of the duplicated-column bug those
