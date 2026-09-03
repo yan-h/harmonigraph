@@ -583,13 +583,28 @@ pub enum Pane {
 /// still read hover and pointer state from `ui`, so an offline caller
 /// feeding synthetic input simply gets no hover — which is what a
 /// recording wants.
-pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
+///
+/// `surface` is which live copy of the pane this is — offline, the placement's
+/// index in the resolved [`Layout`] — and it is what makes two placements of
+/// one pane two pictures instead of one picture drawn twice.
+/// Every pane here holds something between frames — a GPU instance buffer, a
+/// bloom chain, a folded slab grid, a text batch — keyed on its surface, and
+/// egui-wgpu runs every `prepare` before any `paint`, so two copies sharing a
+/// key do not merely share work: the second tears down what the first built and
+/// the first then paints the second's picture across its own rect.
+///
+/// The index rather than a count of the placements of this pane, because it is
+/// what a caller already has in hand and it holds still for as long as the copy
+/// does; a key that changed as a layout was read would churn the state it
+/// names. [`Layout::resolve`] drops a placement too small to draw, so the index
+/// is into what it returned rather than into the file — which is the same list
+/// every frame of a render, the size being fixed for the whole of one.
+pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64, surface: usize) {
     match pane {
-        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        // One spectrogram per frame offline, so texture slot 0. Text sizes
-        // itself off the pane, here as everywhere.
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 0),
-        Pane::Spiral => panes::spiral::spiral_pane(ui, state, now),
+        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now, surface),
+        // Text sizes itself off the pane, here as everywhere.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, surface),
+        Pane::Spiral => panes::spiral::spiral_pane(ui, state, now, surface),
     }
 }
 

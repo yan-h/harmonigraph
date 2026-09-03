@@ -7,9 +7,8 @@
 //! frame settings live in [`RenderFrame`](crate::RenderFrame), persisted with
 //! the take, so `harmonigraph-offline` reproduces exactly this composition.
 //!
-//! The preview's lattice is a *second* live lattice view. It must not go
-//! through [`draw_pane`](crate::draw_pane) (which hardcodes GPU pane id 0 and
-//! would fight the docked Lattice tab); it renders directly with its own id.
+//! The preview's lattice is a *second* live lattice view, drawn on a surface of
+//! its own so that nothing it holds between frames is the docked Lattice tab's.
 //! You frame the camera in the Lattice tab and watch it land here at the
 //! render's aspect — which is exactly what decides "how much of the lattice is
 //! exposed" (a wider frame shows more horizontally).
@@ -19,6 +18,12 @@ use egui::Sense;
 use super::section;
 use crate::widgets::{button_row, choice_row, option_label, record_button, ValueBar};
 use crate::{theme, LatticeSide, Layout, Pane, SharedState};
+
+/// The surface this preview's panes draw on. Every copy of a pane holds
+/// something between frames keyed on its surface — a GPU buffer, a bloom chain,
+/// a folded slab grid — so the preview takes one the dock does not
+/// ([`DOCKED_SURFACE`](crate::panes::DOCKED_SURFACE)) and both stay whole.
+const PREVIEW_SURFACE: usize = 1;
 
 /// Points of breathing room between the render frame and the pane edge, so
 /// the frame's boundary chrome always has somewhere to sit outside the
@@ -87,12 +92,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             Pane::Spectral if placeholder => playhead_placeholder(ui, rect),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                // Directly rather than through `draw_pane`, for the texture
-                // slot: 1 here, so this second live copy doesn't clobber the
-                // docked pane's spectrogram (slot 0). Its text sizes itself
-                // off the rect it is given, so drawing the pane small draws
-                // its type small, as the render will.
-                super::spectral::spectral_pane(&mut child, state, now, 1);
+                // Its text sizes itself off the rect it is given, so drawing
+                // the pane small draws its type small, as the render will.
+                super::spectral::spectral_pane(&mut child, state, now, PREVIEW_SURFACE);
             }
             // Unreachable, and here for the match rather than for the picture:
             // this preview composes `Layout::split`, which places the lattice
@@ -103,12 +105,10 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             //
             // Drawn rather than left as a `todo!()` so that whatever reaches
             // here if `Layout::split` ever grows a spiral gets the pane instead
-            // of a panic inside the host. It needs no texture slot of its own
-            // the way the Spectral pane above does: it reads the analyzer's
-            // current buckets straight and holds nothing between frames.
+            // of a panic inside the host.
             Pane::Spiral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                super::spiral::spiral_pane(&mut child, state, now);
+                super::spiral::spiral_pane(&mut child, state, now, PREVIEW_SURFACE);
             }
             Pane::Lattice => preview_lattice(ui, rect, state, now),
         }
@@ -409,7 +409,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState,
         Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
             .background,
     );
-    super::lattice::draw_lattice(ui, rect, state, now, 1, background, None, None);
+    super::lattice::draw_lattice(ui, rect, state, now, PREVIEW_SURFACE, background, None, None);
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it
