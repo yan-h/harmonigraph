@@ -2,6 +2,10 @@
 //! label placement and node picking.
 
 use crate::Scene;
+// `directx` is glam's name for the NDC convention wgpu targets: Z in 0..1,
+// Y-up. Its `opengl` and `vulkan` siblings are the wrong depth range and the
+// wrong Y direction respectively, so the module path is load-bearing.
+use glam::camera::rh::{proj::directx, view::look_at_mat4};
 use glam::{Mat4, Vec2, Vec3};
 use harmonigraph_core::LatticePos;
 
@@ -246,7 +250,7 @@ impl Camera {
     }
 
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(self.eye(), self.target, Vec3::Y)
+        look_at_mat4(self.eye(), self.target, Vec3::Y)
     }
 
     /// The orthographic projection whose window is the perspective frustum's
@@ -255,16 +259,14 @@ impl Camera {
     fn ortho(&self, aspect: f32) -> Mat4 {
         let half_h = self.distance * (self.fov_y * 0.5).tan();
         let half_w = half_h * aspect;
-        Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
+        directx::orthographic(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        // Both glam _rh constructors produce 0..1 clip-space depth, which
-        // is what wgpu expects.
         let aspect = aspect.max(0.01);
         let proj = match self.projection {
             Projection::Perspective => {
-                Mat4::perspective_rh(self.fov_y, aspect, CLIP_NEAR, CLIP_FAR)
+                directx::perspective(self.fov_y, aspect, CLIP_NEAR, CLIP_FAR)
             }
             // The ortho window is the perspective frustum's cross-section
             // at the target, so toggling projections keeps the framing at
