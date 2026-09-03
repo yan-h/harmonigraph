@@ -324,7 +324,7 @@ fn atlas_of(shooter: &Shooter) -> Option<[u32; 2]> {
 /// it. The light is composited under everything, so a node's own shadow lands
 /// on its own halo; what says the holding-off is LOCAL — a moat rather than a
 /// dimmer on the whole light — is that it has all but run out at the width the
-/// bar names, σ being half of it (`shadow::sigma_px`) and the blur of a
+/// bar names, σ being half of it (`shadow::sigma_points`) and the blur of a
 /// half-plane keeping 2.3% of the light at 2σ.
 ///
 /// Each reading is a SHARE of the light at its own pixel, taken against the
@@ -1566,14 +1566,23 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
     );
 }
 
-/// A frame whose two groups are drawn by DIFFERENT renderers draws both, and
-/// each group's kernel reaches only its own ink.
+/// A frame whose two groups are drawn by DIFFERENT renderers draws each group
+/// by its OWN renderer, over the ground that group darkens.
 ///
 /// The end-to-end half of `a_mixed_frame_packs_each_caster_at_its_own_style`:
 /// that one is about cells, and this is about the picture the two fills and the
 /// one blur chain come to. A kernel wired per FRAME anywhere past `pack` — the
 /// glyph fill's pipeline, the chain's own gate — draws one of the two uniform
-/// frames instead, and both inequalities below catch it.
+/// frames instead.
+///
+/// The load-bearing claim is the POSITIVE one. That the mixed frame merely
+/// differs from each uniform frame is satisfied by any breakage big enough:
+/// a chain that wipes the other renderer's cells clears that bar while drawing
+/// a solid box over every node. So each group is read against the frame its own
+/// renderer drew, over the ground that group and no other darkens — and where
+/// that ground IS comes off a shot with the group shut rather than a rect
+/// written down here, so the reading follows the fixture rather than pinning
+/// it.
 ///
 /// The control is the same pair with the NAMES taken out: the text group's
 /// kernel reaches such a frame through no code path at all, so switching it has
@@ -1585,24 +1594,36 @@ fn a_frame_whose_groups_disagree_draws_both_renderers() {
         return;
     };
     shooter.clear = over_ground();
-    let scene_of = |geometry, text| -> Scene {
-        let mut scene = on_ground(0.4, 0.85);
+    const WIDTH: f32 = 0.4;
+    let scene_of = |geometry, text, widths: [f32; 2]| -> Scene {
+        let mut scene = on_ground(WIDTH, 0.85);
         scene.shadow.lattice_geometry.kernel = geometry;
         scene.shadow.lattice_text.kernel = text;
+        scene.shadow.lattice_geometry.width = widths[0];
+        scene.shadow.lattice_text.width = widths[1];
         scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         scene
     };
     // The name clear of the node under it, so the two groups' shadows land on
     // bare ground and neither reading is a sum of both.
     let named = |scene: &Scene| name_at(scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
-    let mut shot = |geometry, text| {
-        let scene = scene_of(geometry, text);
+    let mut shot = |geometry, text, widths| {
+        let scene = scene_of(geometry, text, widths);
         let labels = named(&scene);
         shooter.shot_with(&scene, labels)
     };
-    let all_distance = shot(Distance, Distance);
-    let all_gaussian = shot(Gaussian, Gaussian);
-    let mixed = shot(Distance, Gaussian);
+    let both = [WIDTH, WIDTH];
+    let all_distance = shot(Distance, Distance, both);
+    let all_gaussian = shot(Gaussian, Gaussian, both);
+    // BOTH orderings: the atlas holds the two kinds of cell together either
+    // way round, so a pass that serves one kind at the other's expense shows up
+    // in whichever group is holding the kind it drops.
+    let mixed = shot(Distance, Gaussian, both);
+    let flipped = shot(Gaussian, Distance, both);
+    // Each uniform frame with one group shut, which is what says where that
+    // group's shadow lands.
+    let no_geometry = shot(Distance, Distance, [0.0, WIDTH]);
+    let no_text = shot(Gaussian, Gaussian, [WIDTH, 0.0]);
     for (what, uniform) in [("all-Distance", &all_distance), ("all-Gaussian", &all_gaussian)] {
         let moved = differing_pixels(&mixed, uniform);
         assert!(
@@ -1612,10 +1633,69 @@ fn a_frame_whose_groups_disagree_draws_both_renderers() {
         );
     }
 
+    let darkened = |a: &[u8], b: &[u8]| -> Vec<bool> {
+        a.chunks(4).zip(b.chunks(4)).map(|(x, y)| x != y).collect()
+    };
+    let alone = |m: &[bool], other: &[bool]| -> Vec<bool> {
+        m.iter().zip(other).map(|(&a, &b)| a && !b).collect()
+    };
+    let geometry_ground = darkened(&all_distance, &no_geometry);
+    let text_ground = darkened(&all_gaussian, &no_text);
+    let geometry_only = alone(&geometry_ground, &text_ground);
+    let text_only = alone(&text_ground, &geometry_ground);
+    // The two readings are not fully independent: the bloom is ONE attachment
+    // over the whole pane and every group's shadow reaches it, so switching the
+    // other group's renderer moves this ground by a level or two even where
+    // nothing on it is drawn by that group. That is the whole of the coupling.
+    // The renderers themselves part by tens of levels over the same ground,
+    // which the second bound holds them to — so the first is a reading rather
+    // than a tolerance wide enough to swallow the difference it measures.
+    const COUPLED: i32 = 4;
+    for (how, frame, by_geometry, by_text) in [
+        ("a Distance geometry over a Gaussian text", &mixed, &all_distance, &all_gaussian),
+        ("a Gaussian geometry over a Distance text", &flipped, &all_gaussian, &all_distance),
+    ] {
+        for (whose, ground, own, other) in [
+            ("geometry", &geometry_only, by_geometry, by_text),
+            ("text", &text_only, by_text, by_geometry),
+        ] {
+            let held = ground.iter().filter(|&&on| on).count();
+            assert!(
+                held > 200,
+                "the {whose} group darkens {held} pixels no other group reaches, which is too \
+                 little ground for the reading below to cross",
+            );
+            let worst = |against: &[u8]| -> i32 {
+                (0..ground.len())
+                    .filter(|&i| ground[i])
+                    .map(|i| {
+                        (0..4)
+                            .map(|c| (frame[4 * i + c] as i32 - against[4 * i + c] as i32).abs())
+                            .max()
+                            .unwrap()
+                    })
+                    .max()
+                    .unwrap_or(0)
+            };
+            assert!(
+                worst(own) <= COUPLED,
+                "over the {whose} group's own ground {how} stands {} levels off the frame that \
+                 group's own renderer drew, so it is not being drawn by its own kernel there",
+                worst(own),
+            );
+            assert!(
+                worst(other) > 4 * COUPLED,
+                "the two renderers draw the {whose} group's own ground {} levels apart, which is \
+                 too close for the reading above to be measuring anything",
+                worst(other),
+            );
+        }
+    }
+
     // The control, and the half that says the text group's kernel is really the
     // TEXT's: with no name in the frame it reaches nothing.
     let mut bare =
-        |geometry, text| shooter.shot_with(&scene_of(geometry, text), a_name(Vec::new()));
+        |geometry, text| shooter.shot_with(&scene_of(geometry, text, both), a_name(Vec::new()));
     assert_eq!(
         differing_pixels(&bare(Distance, Distance), &bare(Distance, Gaussian)),
         0,

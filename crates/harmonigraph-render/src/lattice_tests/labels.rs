@@ -1155,9 +1155,9 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
 
 /// A name's shadow is the same width in POINTS at Render scale 2 as at 1.
 ///
-/// #496: the cells are drawn in the target's pixels and σ is derived in them
-/// (`shadow::sigma_px`), so a scale that doubles the pixels doubles σ with
-/// them and the shadow lands where it did. The footprint is read at both
+/// #496: σ is derived in the pane's POINTS (`shadow::sigma_points`) and the
+/// target's scale enters only where a cell is SIZED, so a scale that doubles
+/// the pixels leaves the shadow the width it was. The footprint is read at both
 /// scales off the composite, which is at the pane's own size either way.
 #[test]
 fn a_names_shadow_is_the_same_width_in_points_at_render_scale_2() {

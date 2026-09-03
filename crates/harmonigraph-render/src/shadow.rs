@@ -320,7 +320,12 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
     }
     let is_distance = |c: &Caster| c.kernel.is_distance();
     // One caster's σ in the target's pixels, which is where its cell is drawn.
-    let sigma_of = |c: &Caster| c.sigma_points * px_per_point;
+    //
+    // Floored at zero because `shape` runs for every non-direct caster,
+    // including the ones `casts` goes on to reject: a NaN σ out of a corrupt
+    // blob would otherwise reach `min`, which returns its OTHER operand for a
+    // NaN, and come out as a NaN pad on a box the vertex stage reads.
+    let sigma_of = |c: &Caster| (c.sigma_points * px_per_point).max(0.0);
     // A cell, sized off ITS OWN σ: drawn at `min(1, SIGMA_CELL_MAX / σ)` of the
     // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the
     // caster asked for, and padded by the kernel's reach in those same texels,
@@ -546,14 +551,24 @@ impl ShadowTarget {
         &'a self,
         encoder: &'a mut wgpu::CommandEncoder,
     ) -> wgpu::RenderPass<'a> {
-        Self::pass(encoder, "lattice_shadow_ink_pass", &self.views[0])
+        Self::pass(
+            encoder,
+            "lattice_shadow_ink_pass",
+            &self.views[0],
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        )
     }
 
     /// The two blur passes over `count` cells of `boxes`, leaving the finished
     /// atlas in `views[0]`.
     ///
-    /// Both targets are cleared first: every shipped kernel is either entirely
-    /// blur or entirely distance, and this chain only runs under the Gaussian.
+    /// The intermediate is cleared and the atlas is NOT. A frame whose groups
+    /// disagree holds both kinds of cell in `views[0]`, where a distance cell
+    /// arrives from the ink pass already final and no draw here rewrites it —
+    /// so clearing on the way back would leave those cells at zero, which the
+    /// scene pass reads as a standoff of nothing and spends as a WHOLE shadow
+    /// over the caster's whole padded box. Every blur cell has its own rect
+    /// redrawn in full, so loading costs the Gaussian nothing.
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -563,13 +578,19 @@ impl ShadowTarget {
     ) {
         let (blur_x, blur_y) = pipelines;
         {
-            let mut pass = Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[1]);
+            let mut pass = Self::pass(
+                encoder,
+                "lattice_shadow_blur_pass",
+                &self.views[1],
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
             pass.set_pipeline(blur_x);
             pass.set_bind_group(0, &self.reads[0], &[]);
             pass.set_vertex_buffer(0, boxes.slice(..));
             pass.draw(0..4, 0..count);
         }
-        let mut pass = Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[0]);
+        let mut pass =
+            Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[0], wgpu::LoadOp::Load);
         pass.set_pipeline(blur_y);
         pass.set_bind_group(0, &self.reads[1], &[]);
         pass.set_vertex_buffer(0, boxes.slice(..));
@@ -580,6 +601,7 @@ impl ShadowTarget {
         encoder: &'a mut wgpu::CommandEncoder,
         label: &'static str,
         target: &'a wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
     ) -> wgpu::RenderPass<'a> {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
@@ -587,10 +609,7 @@ impl ShadowTarget {
                 view: target,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -975,6 +994,11 @@ pub(crate) mod tests {
     /// would slide every caster after them onto a neighbour's cell. What says
     /// the group is shut is the zeroed entry — level 0, no cell — which every
     /// reader answers 1 to with nothing sampled.
+    ///
+    /// The NaN is a second claim and a separate one: `shape` runs for every
+    /// non-direct caster, shut or not, so a corrupt σ has to come out of it as
+    /// a number the vertex stage can read rather than as a NaN geometry term
+    /// on a box that is drawn either way.
     #[test]
     fn a_frame_with_no_caster_packs_no_cell() {
         assert_eq!(pack_at(&[], 4.0, 2.0, 16384, one()), Packed::default());
@@ -984,6 +1008,15 @@ pub(crate) mod tests {
             assert!(
                 packed.boxes.iter().all(|b| b.cell == [0.0; 4] && b.terms[2] == 0.0),
                 "a caster at σ {sigma} packed a cell",
+            );
+            assert!(
+                packed.boxes.iter().all(|b| b
+                    .terms
+                    .iter()
+                    .chain(b.who.iter())
+                    .all(|t| t.is_finite())),
+                "a caster at σ {sigma} packed a box carrying a NaN: {:?}",
+                packed.boxes,
             );
         }
     }

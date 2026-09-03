@@ -74,8 +74,9 @@ fn cell_quad(
     return out;
 }
 
-/// The BLUR cells alone: the x pass. A distance cell already holds its final
-/// field in the target this reads, so neither blur pass touches it.
+/// The BLUR cells alone: the x pass. A distance cell holds its final field in
+/// the target this reads and no draw here writes one, which is why the y pass
+/// LOADS the atlas rather than clearing it (`ShadowTarget::blur`).
 @vertex
 fn vs_cell(
     @builtin(vertex_index) vertex: u32,

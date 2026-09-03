@@ -576,8 +576,8 @@ impl ShadowKernel {
     /// one number — a cell padded short of what its quad reaches is a shadow
     /// cut off in a straight line at the box.
     ///
-    /// In σ and not in Shadow widths because that is the unit `sigma_px` hands
-    /// out — one conversion, at one site.
+    /// In σ and not in Shadow widths because that is the unit `sigma_points`
+    /// hands out — one conversion, at one site.
     pub fn reach_sigmas(self) -> f32 {
         match self {
             ShadowKernel::Gaussian => REACH_SIGMAS,
