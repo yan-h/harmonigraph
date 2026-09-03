@@ -132,7 +132,9 @@ fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
         // would be 0 under either answer. The octave is held to make the node
         // active at all; the band it lights is a layer out from the wedge and
         // no pixel of it is in the set read below.
-        scene.glow_shadow = 0.0;
+        for style in scene.shadow.groups_mut() {
+            style.width = 0.0;
+        }
         scene.nodes[0].glow.level = 1.0;
         if split {
             // The analyzer's window slid off material the volume window still

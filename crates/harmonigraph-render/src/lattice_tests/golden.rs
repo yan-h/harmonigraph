@@ -259,12 +259,13 @@ fn a_chord_at_a_wide_reach() -> Scene {
 /// outside what a capture is read for at all, and his sits at the near end of
 /// the zoom's travel where a frame this size holds one node's top half.
 pub(super) fn the_live_view() -> Scene {
-    let view = harmonigraph_scene::ViewConfig {
-        center_threes: 1,
-        glow_shadow: 0.196_915_06,
-        glow_shadow_depth: 1.0,
-        ..Default::default()
-    };
+    let mut view = harmonigraph_scene::ViewConfig { center_threes: 1, ..Default::default() };
+    // The capture's two Shadow numbers, on both groups: it was taken before the
+    // groups existed, so one width and one depth is what it says.
+    for style in view.shadow.groups_mut() {
+        style.width = 0.196_915_06;
+        style.depth = 1.0;
+    }
     lattice(&view, near_camera())
 }
 
@@ -278,7 +279,9 @@ pub(super) fn the_live_view() -> Scene {
 /// still, that being the contract this family arrived under.
 fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();
-    scene.glow_shadow_kernel = harmonigraph_scene::ShadowKernel::Distance;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+    }
     scene
 }
 
@@ -290,7 +293,9 @@ fn the_live_view_on_the_distance_row() -> Scene {
 /// measured.
 fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
     let mut scene = the_live_view_on_the_distance_row();
-    scene.glow_shadow = harmonigraph_scene::GLOW_SHADOW_MAX;
+    for style in scene.shadow.groups_mut() {
+        style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
+    }
     scene
 }
 
@@ -302,8 +307,11 @@ fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
 fn the_zoomed_out_view_on_the_distance_row() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         center_threes: 1,
-        glow_shadow_depth: 1.0,
-        glow_shadow_kernel: harmonigraph_scene::ShadowKernel::Distance,
+        shadow: one_shadow(
+            harmonigraph_scene::ShadowStyle::default().width,
+            1.0,
+            harmonigraph_scene::ShadowKernel::Distance,
+        ),
         ..Default::default()
     };
     lattice(&view, Camera::default())
@@ -324,7 +332,7 @@ fn a_sheet_behind_a_node() -> Scene {
 /// How far the Shadow bar opens on a fresh blob — for the frames that are
 /// about something else and want the bar where the picture has it.
 fn fresh_shadow() -> f32 {
-    harmonigraph_scene::ViewConfig::default().glow_shadow
+    harmonigraph_scene::ShadowStyle::default().width
 }
 
 /// Where the name goldens stand, and closer than the claim tests' own

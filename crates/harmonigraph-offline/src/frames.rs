@@ -652,8 +652,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
-        let fresh = harmonigraph_scene::ViewConfig::default();
-        for shadow in [0.0f32, fresh.glow_shadow, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
+        let fresh = harmonigraph_scene::ShadowStyle::default();
+        for shadow in [0.0f32, fresh.width, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
             let mut state = SharedState::new(FORMAT);
             state.view.show_labels = true;
             state.view.note_names = harmonigraph_scene::NoteNames::Played;
@@ -663,7 +663,9 @@ mod tests {
                 state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
             }
             state.camera.zoom_by(2.0);
-            state.view.glow_shadow = shadow;
+            for style in state.view.shadow.groups_mut() {
+                style.width = shadow;
+            }
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -1070,8 +1072,10 @@ mod tests {
             state.set_background((24, 25, 29));
             state.view.glow_reach = 1.5;
             state.view.glow_strength = 1.0;
-            state.view.glow_shadow = 0.16;
-            state.view.glow_shadow_depth = depth;
+            for style in state.view.shadow.groups_mut() {
+                style.width = 0.16;
+                style.depth = depth;
+            }
             state.camera.zoom_by(2.0);
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
             let mut released = false;

@@ -5,8 +5,8 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, ShadowKernel, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
-    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
+    Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
+    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
     MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
@@ -278,9 +278,9 @@ pub struct ViewConfig {
     // ---- The sevens layer ------------------------------------------------
     // How the sheets other than the home one draw. Both settings go inert
     // while `extent_sevens` is 0, which is where a fresh view starts. What
-    // makes a small node legible over a large one is the Glow section's Shadow
-    // ([`glow_shadow`](Self::glow_shadow)) — each item multiplying the frame
-    // under it by its own blurred ink, at any extent and on every sheet.
+    // makes a small node legible over a large one is the Shadow
+    // ([`shadow`](Self::shadow)) — each item multiplying the frame under it by
+    // what its own ink casts, at any extent and on every sheet.
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -1168,30 +1168,39 @@ pub struct ViewConfig {
     /// The endpoints stay fixed: full at the node's centre and zero where the
     /// reach ends.
     pub glow_curve: GlowCurve,
-    /// The Shadow: how wide every item's shadow is, in the same quad UV units
-    /// [`ring_gap`](Self::ring_gap) reads in. It is HALF this in σ
-    /// (`shadow::sigma_px` in harmonigraph-render), which puts a wide caster's
-    /// shadow all but out at one bar width.
+    /// The Shadow, dialled per GROUP of casters ([`ShadowSettings`]): the
+    /// lattice's geometry — nodes and the resting markers — and its text, the
+    /// note names and their drawn marks.
     ///
-    /// ONE length for the whole picture, and that is what makes it one bar. A
-    /// blur row convolves each caster at this σ; a distance row spends the same
-    /// width through its profile. Each item multiplies whatever is already in
-    /// the frame under it in the painter's order the pass already walks — so
-    /// what it casts is read off its own ink rather than off which draw it
-    /// belongs to, and a nearer item darkens a farther one wherever they overlap.
+    /// Each group says which renderer draws it, how wide its shadow is and how
+    /// dark it lands ([`crate::ShadowStyle`]). A group's width is in the same quad UV
+    /// units [`ring_gap`](Self::ring_gap) reads in, and it is HALF that in σ
+    /// (`shadow::sigma_points` in harmonigraph-render), which puts a wide
+    /// caster's shadow all but out at one width.
     ///
-    /// A blur of the INK and not of a circle around it: a node reaching a
+    /// TWO groups and not one bar, because a name is the only ink in the
+    /// picture whose SHAPE is meant to be read: a ring and a cross want a
+    /// shadow that says how thick they are, and a letterform wants one that
+    /// does not fill its counters. Two groups and not one per caster, because
+    /// everything else in the lattice is one reach — a shadow the eye can read
+    /// as coming from one light.
+    ///
+    /// Each item multiplies whatever is already in the frame under it in the
+    /// painter's order the pass already walks — so what it casts is read off
+    /// its own ink rather than off which draw it belongs to, and a nearer item
+    /// darkens a farther one wherever they overlap.
+    ///
+    /// A shadow of the INK and not of a circle around it: a node reaching a
     /// melody mark on one octave casts from that wedge and hugs its rings
     /// everywhere else, the empty middle its rings stand around casts nothing,
-    /// and a hairline ring casts a fainter shadow than a wide band does. Each
-    /// layer's own envelope is already in the coverage that is blurred, so a
-    /// releasing layer's shadow fades with its ink.
+    /// and a hairline ring casts a fainter shadow than a wide band does under
+    /// the Gaussian. Each layer's own envelope is already in what the cell
+    /// holds, so a releasing layer's shadow fades with its ink.
     ///
     /// It is spent on the FRAME rather than on the light alone, and the light
     /// takes it by being under everything: the halos are composited at the
     /// bottom of the scene pass, so a shadow lands on a neighbour's halo, on a
-    /// ring behind, and on a name, all at the depth
-    /// [`glow_shadow_depth`](Self::glow_shadow_depth) says.
+    /// ring behind, and on a name.
     ///
     /// Without it the light is at its brightest exactly where the rings are —
     /// the falloff is measured from the node's centre, so both sides of a ring
@@ -1199,71 +1208,14 @@ pub struct ViewConfig {
     /// on a bright field. A ring standing in a pool that brightens outward is
     /// what the eye reads as the ring being the source of the light.
     ///
-    /// The ceiling is [`GLOW_SHADOW_MAX`], one whole node radius. Nothing in
-    /// the picture clips it there: every caster's own quad is grown by the
-    /// blur's reach so that it holds the answer.
+    /// It is spent on the frame and never on a caster's own ink, which the draw
+    /// leaves unmultiplied — so an item is the one thing its own shadow never
+    /// darkens.
     ///
     /// Independent of [`glow_reach`](Self::glow_reach): an item casts with no
     /// light in the picture at all, onto the ground and onto whatever ink
     /// stands behind it.
-    pub glow_shadow: f32,
-    /// How dark a shadow lands where it is whole, 0..=1 — the factor the frame
-    /// is left with under a caster's solid middle, spent in STOPS across that
-    /// caster's own blur.
-    ///
-    /// In stops and not in proportion, because sight answers ratios: a factor
-    /// walked evenly in VALUE spends most of what can be SEEN of it in the
-    /// first fraction of the blur's width — at 0.85, half the visible swing is
-    /// gone by a fifth of the way out — and the shadow then reads as a dark rim
-    /// hugging the ink with an edge on it however wide the Shadow is dialled.
-    /// See `shadow_through` in lattice.wgsl.
-    ///
-    /// A FLOOR rather than a scale: the exponent is capped at 1, so a caster
-    /// wide against σ lands exactly here and a thin one lands short of it. 1
-    /// takes the frame under a wide caster to black; 0 is the picture with no
-    /// shadow in it at all, pixel for pixel, which is what makes this bar the
-    /// A/B on the whole feature.
-    ///
-    /// It is spent on the frame and never on the caster's own ink, which the
-    /// draw leaves unmultiplied — so an item is the one thing its own shadow
-    /// never darkens, and a ring standing in a pool cleared to the bare ground
-    /// still carries the colour of the halo around it.
-    ///
-    /// It is the atlas's second off switch: at 0 no cell is packed and every
-    /// draw multiplies by 1. Independent of
-    /// [`glow_reach`](Self::glow_reach).
-    pub glow_shadow_depth: f32,
-    /// What a note NAME's σ takes against the rest of the picture's,
-    /// 0..=[`GLOW_SHADOW_NAME_MAX`]. 1 is one width across the whole lattice
-    /// and is what a fresh view opens on.
-    ///
-    /// The one place the lattice's "one bar, one reach" is asked to bend, and
-    /// it is asked because a name is the only ink in the picture whose SHAPE is
-    /// meant to be read. A ring and a cross want a shadow that says how thick
-    /// they are; a letterform wants one that does not fill its counters, and
-    /// the width that does the first may not be the width that does the second.
-    ///
-    /// 0 is a name's ink cast with no blur at all — a hard-edged drop of the
-    /// letterforms themselves, the cell being packed with no padding and the
-    /// kernel collapsing to its centre tap.
-    ///
-    /// Nearly free of the atlas's cost model: σ is per CASTER where the cell is
-    /// packed (`pack` in `harmonigraph-render`'s `shadow.rs`), and each cell is
-    /// drawn at `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels, so a name
-    /// at three times the width is a cell a third the size rather than a kernel
-    /// three times as wide. What it does cost is the name's own quad, which
-    /// grows with its reach like every other caster's.
-    pub glow_shadow_name: f32,
-    /// Which of the two renderers every caster's ink is turned into a shadow by
-    /// — the SHAPE of its falloff, where [`glow_shadow`](Self::glow_shadow) is
-    /// how far it reaches and [`glow_shadow_depth`](Self::glow_shadow_depth)
-    /// how dark it lands.
-    ///
-    /// Both are scaled to the same reach, so switching does not move the Shadow
-    /// bar under it: what changes is where the darkness sits between the ink and
-    /// the edge, and whether a hairline's shadow carries the stroke's width or
-    /// its shape. See [`ShadowKernel`].
-    pub glow_shadow_kernel: ShadowKernel,
+    pub shadow: ShadowSettings,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -2243,19 +2195,17 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_curve = self.glow_curve.sanitized();
-        // The Shadow, which every caster's quad is grown by: a number from
-        // outside the bar is a quad nothing can fill.
-        self.glow_shadow =
-            finite_or(self.glow_shadow, fresh.glow_shadow).clamp(0.0, GLOW_SHADOW_MAX);
-        // The SHARES — of the frame a shadow takes, of the light a lit slice
-        // stands in, of the light's own peak, of a whole turn — so their range
-        // is the unit interval.
-        self.glow_shadow_depth =
-            finite_or(self.glow_shadow_depth, fresh.glow_shadow_depth).clamp(0.0, 1.0);
-        // A RATIO rather than a share, with a ceiling of its own beside the
-        // width's.
-        self.glow_shadow_name = finite_or(self.glow_shadow_name, fresh.glow_shadow_name)
-            .clamp(0.0, GLOW_SHADOW_NAME_MAX);
+        // Every Shadow group, over the groups the settings enumerate rather
+        // than by name, so a group added at step 7 arrives sanitized. The width
+        // is what every caster's quad is grown by — a number from outside the
+        // bar is a quad nothing can fill — and the depth is a SHARE of the
+        // frame, so the unit interval.
+        for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
+            style.width = finite_or(style.width, fresh.width).clamp(0.0, GLOW_SHADOW_MAX);
+            style.depth = finite_or(style.depth, fresh.depth).clamp(0.0, 1.0);
+        }
+        // The SHARES — of the light a lit slice stands in, of the light's own
+        // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
@@ -2558,19 +2508,11 @@ impl Default for ViewConfig {
             glow_reach: 4.546_375,
             glow_strength: 0.274_842_2,
             glow_curve: GlowCurve::default(),
-            // A broad shadow preserves the form of the ring and marker across
-            // the wide light field.
-            glow_shadow: 0.418_517_17,
-            // Just under half depth leaves the shadow legible without cutting
-            // the shared field back to the ground.
-            glow_shadow_depth: 0.477_784_4,
-            // One width across the whole picture, a ring, a cross and a name
-            // alike. The bar exists to ask whether a letterform wants
-            // otherwise; the fresh view is the answer being no.
-            glow_shadow_name: 1.0,
-            // Distance keeps a caster's form at this broad shadow width, where
-            // a blur would inherit too much of the caster's own thickness.
-            glow_shadow_kernel: ShadowKernel::Distance,
+            // Both groups at one style, which is the fresh picture with the
+            // groups not yet asked anything: the numbers themselves and why
+            // they are those numbers live in `impl Default for ShadowStyle`,
+            // that being the one source of a persisted field's fallback.
+            shadow: ShadowSettings::default(),
             // The whole field, which is the fresh picture with no bar in it:
             // every piece of the lattice's ink wears the light it stands in,
             // and the bar is there to pull a SOUNDING slice back out of its own

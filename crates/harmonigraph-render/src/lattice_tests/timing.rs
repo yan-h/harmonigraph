@@ -9,7 +9,7 @@
 //! encoder never signals on Metal.
 //!
 //! Two settings, because the Shadow bar's two ends cost differently: a
-//! caster's blur is `glow_shadow` node radii wide, so the top of the bar is
+//! caster's shadow is its group's width in node radii, so the top of the bar is
 //! the widest atlas cell and the largest grown quad the pass ever draws.
 //!
 //! ```text
@@ -39,7 +39,9 @@ fn a_frame_of_names_costs_this_much() {
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
     let mut scene = the_live_view();
-    scene.glow_shadow = harmonigraph_scene::GLOW_SHADOW_MAX;
+    for style in scene.shadow.groups_mut() {
+        style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
+    }
     time_a_frame_of_names(scene, "the top of the Shadow bar");
 }
 
@@ -59,12 +61,14 @@ fn a_frame_of_names_at_each_kernel_costs_this_much() {
     use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
     for kernel in [Gaussian, Distance] {
         for (shadow, where_) in [
-            (the_live_view().glow_shadow, "the live view"),
+            (the_live_view().shadow.lattice_geometry.width, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),
         ] {
             let mut scene = the_live_view();
-            scene.glow_shadow = shadow;
-            scene.glow_shadow_kernel = kernel;
+            for style in scene.shadow.groups_mut() {
+                style.width = shadow;
+                style.kernel = kernel;
+            }
             time_a_frame_of_names(scene, &format!("{kernel:?} at {where_}"));
         }
     }

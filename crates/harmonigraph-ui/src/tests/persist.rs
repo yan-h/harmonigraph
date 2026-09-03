@@ -346,12 +346,15 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 ///
 /// The resting marker's arm is one such reach, and the order it is repaired in
 /// is what keeps it safe: `sanitize` finishes the arm before it clamps the
-/// taper to it, so `clamp` never sees a NaN as its `max`. The Shadow is a lone
-/// number rather than half of a pair and rides the same repair.
+/// taper to it, so `clamp` never sees a NaN as its `max`. A Shadow group's
+/// width is a lone number rather than half of a pair and rides the same
+/// repair — and it is edited through its own `width:…,depth:` anchor, which is
+/// the shape only a `ShadowStyle` writes, so the edit cannot land on
+/// `plus_width` the day the two happen to hold the same number.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
     let cases: [(&str, &str, &str); 8] = [
-        ("glow_shadow", "NaN", "a NaN Shadow"),
+        ("width", "NaN", "a NaN Shadow width"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
@@ -368,7 +371,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         state.camera.yaw = 1.23;
         let saved = state.save_persist();
         let was = match key {
-            "glow_shadow" => state.view.glow_shadow,
+            "width" => state.view.shadow.lattice_geometry.width,
             "roll_outline" => state.spectrum_config.roll_outline,
             "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
@@ -377,7 +380,12 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             "plus_width" => state.view.plus_width,
             _ => state.spectrum_config.roll_lead_fade,
         };
-        let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
+        // Anchored on what follows, for `width`: a `ShadowStyle` is the only
+        // thing in the blob that writes a width with a depth after it, and
+        // both of its groups are edited at once.
+        let after = if key == "width" { "depth:" } else { "" };
+        let edited =
+            saved.replace(&format!("{key}:{was:?},{after}"), &format!("{key}:{value},{after}"));
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
         let mut restored = fresh();
@@ -385,7 +393,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let view = &restored.view;
         let cfg = &restored.spectrum_config;
         for (name, v) in [
-            ("glow_shadow", view.glow_shadow),
+            ("lattice geometry width", view.shadow.lattice_geometry.width),
+            ("lattice text width", view.shadow.lattice_text.width),
             ("roll_outline", cfg.roll_outline),
             ("roll_outline_fade", cfg.roll_outline_fade),
             ("roll_lead", cfg.roll_lead),

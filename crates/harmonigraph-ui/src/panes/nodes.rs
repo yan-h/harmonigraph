@@ -15,12 +15,11 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    GlowCurve, Pulse, ShadowKernel, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
-    GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX,
-    GLOW_SHADOW_NAME_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    GlowCurve, Pulse, ShadowKernel, ShadowSettings, ShadowStyle, SpectralReading, ViewConfig,
+    GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
+    GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -623,7 +622,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 /// colour it is, both before what holds it off the rings, and its own clock
 /// last. Everything under Reach greys while Reach is 0 rather than hiding, so
 /// the rows keep their place and the numbers they are dialled to stay
-/// readable — the arrangement the audio ring's own settings use.
+/// readable — the arrangement the audio ring's own settings use. The SHADOW
+/// blocks are the exception and stay live, for the reason
+/// [`shadow_groups`] gives.
 fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Glow");
     // A share of the node's radius, the unit the two gaps and the Clearance in
@@ -693,88 +694,15 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  and never shone. 0% keeps each sector's colour a distinct arc \
                  and 100% averages the node into one tint.",
             );
-        // The Shadow, beneath the light it lands on: ONE width, read out like
-        // the two gaps and the Clearance, every one of them a share of the
-        // node's radius, so a person comparing them is comparing one unit. A
-        // tenth of a percent, as the gaps are.
-        ValueBar::new(&mut view.glow_shadow, 0.0..=GLOW_SHADOW_MAX, "Shadow")
-            .display(|v| format!("{:.1}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How wide a shadow everything in the lattice casts — a node's \
-                 audio ring, octave band and marks, the cross standing at each \
-                 resting position, and every note name — as a share of the \
-                 node's radius. Each item's shadow is a blur of its own ink, \
-                 laid over whatever is already behind it, so a thin ring casts \
-                 a fainter one than a wide band and a nearer item darkens a \
-                 farther one wherever the two overlap. Nothing darkens itself. \
-                 0% is the picture with no shadow at all and 100% is one node \
-                 radius. Double-click to restore.",
-            );
-        ValueBar::new(&mut view.glow_shadow_depth, 0.0..=1.0, "Shadow depth")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How dark a shadow gets where it is deepest. 100% takes what is \
-                 under a solid ring to black, and lower leaves it sitting in a \
-                 dimmer pool of the light around it rather than in a void. It \
-                 is a FLOOR: a wide caster reaches it and a hairline one stops \
-                 short, which is how a shadow says how thick the ink casting it \
-                 is. 0% is the picture with no shadow at all.",
-            );
-        // The renderer, under the two bars that say how wide and how dark: it
-        // is the only setting here that changes what a shadow IS rather than
-        // how much of it there is, and the only one that costs atlas.
-        choice_row(
-            ui,
-            "Kernel",
-            &mut view.glow_shadow_kernel,
-            &[
-                (
-                    ShadowKernel::Distance,
-                    "Distance",
-                    "How far each point stands from the nearest ink. A blur of \
-                     a hairline is a smudge whose width is the hairline's, so \
-                     at a wide Shadow the whole lattice reads as one soft \
-                     blob; a distance is the same at a hairline as at a slab, \
-                     so a letter's counters, a cross's arms and a corner all \
-                     keep their shape. What it gives up is the pocket between \
-                     two strokes standing close.",
-                ),
-                (
-                    ShadowKernel::Gaussian,
-                    "Gaussian",
-                    "One plain blur — the conventional shadow, and what the \
-                     Shadow bars are calibrated against. A hairline's blur \
-                     carries the stroke's WIDTH rather than its shape, so the \
-                     picture softens as the Shadow opens.",
-                ),
-            ],
-        );
-        // The one bar in the section a single caster keeps to itself, and the
-        // one that breaks "one Shadow width across the picture" — see
-        // `ViewConfig::glow_shadow_name` for why a letterform is the ink
-        // allowed to ask.
-        ValueBar::new(&mut view.glow_shadow_name, 0.0..=GLOW_SHADOW_NAME_MAX, "Name shadow")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How wide a note name's own shadow is, as a share of the \
-                 Shadow width everything else in the lattice casts. 100% is \
-                 one width across the whole picture, which is what every other \
-                 item takes. A name is the only ink here whose SHAPE has to be \
-                 read, so the blur that says how thick a ring is may not be \
-                 the blur that keeps a letter legible: wider lifts the name \
-                 off the lattice on a soft pool, narrower keeps the shadow \
-                 inside the letterforms, and 0% is the letters dropped as a \
-                 hard-edged copy of themselves with no blur at all.",
-            );
-        // The ink's own share of the same field, under the bar that says the
-        // ground's: the pair is one question asked twice, and the answers are
-        // free of each other on purpose — a dark pool with a tinted ring in it
-        // is a picture no single coupled dial can name. Only the LIT ink is
-        // dialled, the rest of the lattice always taking the whole field, for
-        // the reason the hover text gives.
+    });
+    shadow_groups(ui, &mut view.shadow);
+    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+        // The INK's own share of the light, where a Shadow depth says the
+        // ground's: one question asked twice, and the answers are free of each
+        // other on purpose — a dark pool with a tinted ring in it is a picture
+        // no single coupled dial can name. Only the LIT ink is dialled, the
+        // rest of the lattice always taking the whole field, for the reason the
+        // hover text gives.
         ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
@@ -815,4 +743,97 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  more layer of the node.",
             );
     });
+}
+
+/// The Shadow, dialled per GROUP of casters: the lattice's geometry — its nodes
+/// and the resting markers — and its text, the note names and their marks.
+///
+/// **Stacked, not one set of bars behind a group picker.** Tuning a group is
+/// comparing it against the other, and a value that is not on screen is a value
+/// that has to be remembered between two drags. Three rows apiece is the whole
+/// of a group, so even the stacked form is short.
+///
+/// **Outside the light's own enable**, where the rest of the Glow section sits:
+/// an item casts with no light in the picture at all, onto the ground and onto
+/// whatever ink stands behind it, so a Reach at 0 has nothing to say about
+/// these (#572).
+///
+/// The bars are the same two under each heading and mean the same thing, which
+/// is the point of the arrangement: what differs between groups is the ink, not
+/// the question.
+fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
+    ui.label(egui::RichText::new("Shadow").strong());
+    shadow_group(
+        ui,
+        "Lattice geometry",
+        "a node's audio ring, octave band and marks, and the cross standing at \
+         each resting position",
+        &mut shadow.lattice_geometry,
+    );
+    shadow_group(ui, "Lattice text", "every note name and its marks", &mut shadow.lattice_text);
+}
+
+/// One group's three: which renderer draws it, how wide and how dark.
+///
+/// `casters` names the ink the group covers and is spent inside both hover
+/// texts, so a person reading either knows what the bar is about without
+/// looking up at the heading.
+///
+/// The kernel LEADS its pair, where the rest of the settings panes put a picker
+/// under the bars it shapes: here it says what the two bars under it mean — how
+/// far a Gaussian is blurred, or how far a distance's decay is measured — so
+/// reading down the block is reading the question before the answers.
+fn shadow_group(ui: &mut egui::Ui, name: &str, casters: &str, style: &mut ShadowStyle) {
+    ui.label(name);
+    choice_row(
+        ui,
+        "Kernel",
+        &mut style.kernel,
+        &[
+            (
+                ShadowKernel::Distance,
+                "Distance",
+                "How far each point stands from the nearest ink. A blur of a \
+                 hairline is a smudge whose width is the hairline's, so at a \
+                 wide Shadow the whole lattice reads as one soft blob; a \
+                 distance is the same at a hairline as at a slab, so a \
+                 letter's counters, a cross's arms and a corner all keep their \
+                 shape. What it gives up is the pocket between two strokes \
+                 standing close.",
+            ),
+            (
+                ShadowKernel::Gaussian,
+                "Gaussian",
+                "One plain blur — the conventional shadow, and what the Shadow \
+                 bars are calibrated against. A hairline's blur carries the \
+                 stroke's WIDTH rather than its shape, so this group softens as \
+                 the Shadow opens.",
+            ),
+        ],
+    );
+    // A share of the node's radius, read out like the two gaps and the
+    // Clearance in Note, so a person comparing them is comparing one unit. A
+    // tenth of a percent, as the gaps are.
+    ValueBar::new(&mut style.width, 0.0..=GLOW_SHADOW_MAX, "Shadow")
+        .display(|v| format!("{:.1}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(format!(
+            "How wide a shadow {casters} casts, as a share of the node's \
+             radius. Each item's shadow is read off its own ink and laid over \
+             whatever is already behind it, so a nearer item darkens a farther \
+             one wherever the two overlap. Nothing darkens itself. 0% is this \
+             group with no shadow at all and 100% is one node radius. \
+             Double-click to restore."
+        ));
+    ValueBar::new(&mut style.depth, 0.0..=1.0, "Shadow depth")
+        .display(|v| format!("{:.0}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(format!(
+            "How dark the shadow under {casters} gets where it is deepest. \
+             100% takes what is under solid ink to black, and lower leaves it \
+             sitting in a dimmer pool of the light around it rather than in a \
+             void. It is a FLOOR: wide ink reaches it and a hairline stops \
+             short, which is how a shadow says how thick the ink casting it \
+             is. 0% is this group with no shadow at all."
+        ));
 }

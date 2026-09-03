@@ -42,32 +42,27 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// has no cell and therefore pays none of this floor.
 pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
-/// σ of a caster's blur in the target's pixels, for a Shadow of `shadow` node
-/// radii over a node of `node_points` points, on a pane at `pixels_per_point`
-/// drawn at `render_scale`.
+/// σ of a caster's shadow in the pane's POINTS, for a group whose Shadow is
+/// `width` node radii over a node of `node_points` points.
 ///
 /// HALF the bar's width. A half-plane blurred at σ keeps `erfc(d / (σ√2)) / 2`
 /// of the light `d` out from its edge, which at `d = 2σ` is 2.3% — so one
 /// Shadow width is where a wide caster's shadow has all but run out, which is
-/// what the bar says it is.
+/// what the bar says it is, and the distance renderer's decay is windowed to
+/// nothing at `SHADOW_STOP` of the same widths.
 ///
-/// The frame's one σ, which is what a caster takes a RATIO of
-/// ([`Caster::sigma_scale`]) rather than what every caster is blurred at: one
-/// bar, one reach, across a ring, a cross and a name, save where a note name is
-/// dialled off it on purpose.
+/// PER CASTER and not per frame: a caster carries the σ its style group asked
+/// for ([`Caster::sigma_points`]), so a frame whose groups disagree packs each
+/// at its own width with no second conversion between them.
 ///
-/// Target pixels rather than points, because the cell is drawn at the target's
-/// own resolution and sampled back in points: `render_scale` is the term #496
-/// found missing from the field's reach, and it is here on purpose. Written as
-/// the POSITIVE test so a NaN out of a corrupt blob is no shadow rather than a
-/// kernel of NaNs.
-pub(crate) fn sigma_px(
-    shadow: f32,
-    node_points: f32,
-    pixels_per_point: f32,
-    render_scale: f32,
-) -> f32 {
-    let sigma = 0.5 * shadow * node_points * pixels_per_point * render_scale;
+/// In points and not in the target's pixels — points being what a distance cell
+/// holds and what the sampler measures against. The target's own scale enters
+/// once, where the cell is SIZED (`pack`'s `px_per_point`, the device's scale
+/// times the render scale, which is the term #496 found missing from the
+/// field's reach). Written as the POSITIVE test so a NaN out of a corrupt blob
+/// is no shadow rather than a kernel of NaNs.
+pub(crate) fn sigma_points(width: f32, node_points: f32) -> f32 {
+    let sigma = 0.5 * width * node_points;
     if sigma > 0.0 {
         sigma
     } else {
@@ -76,27 +71,32 @@ pub(crate) fn sigma_px(
 }
 
 /// What a caster hands the packer: its ink's bounding box in the pane's points
-/// (min, then size), how much of its shadow lands, 0..=1, and what its own σ
-/// takes against the frame's.
+/// (min, then size), how much of its shadow lands, 0..=1, and the style its
+/// group is dialled to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Caster {
     pub rect: [f32; 4],
     pub level: f32,
-    /// A RATIO on the frame's one σ ([`sigma_px`]), so a caster that wants the
-    /// picture's own width says 1 and the bar that dials the width dials this
-    /// caster with it.
+    /// This caster's own σ in the pane's points ([`sigma_points`]) — half its
+    /// group's Shadow width over a node's radius.
     ///
-    /// It is per caster because a note NAME is dialled against the rest of the
-    /// lattice (`ViewConfig::glow_shadow_name`): a letterform is the only ink
-    /// here whose shape is meant to be read, and the blur that says how thick a
-    /// ring is may not be the blur that leaves an `e` an `e`. Every other
-    /// caster passes 1.
+    /// Per caster because the GROUPS are: a ring and a cross want a shadow that
+    /// says how thick they are, and a letterform wants one that does not fill
+    /// its counters (`ShadowStyle`). Zero is a caster that darkens nothing —
+    /// either of its group's bars at the bottom — and takes no cell at all.
     ///
-    /// Each cell's own scale, pad and σ in texels come off this, so a caster at
+    /// The cell's scale, pad and σ in texels all come off this, so a caster at
     /// three times the width is a cell drawn a third the size rather than a
     /// kernel three times as wide: the blur's tap count is flat in this exactly
     /// as it is in the bar.
-    pub sigma_scale: f32,
+    pub sigma_points: f32,
+    /// Which renderer turns this caster's ink into its shadow — its group's.
+    ///
+    /// Per caster rather than per frame, which is what lets a frame whose
+    /// groups disagree schedule both paths: the fill branches on it, the blur
+    /// chain sweeps only the cells that hold coverage, and the scene draw reads
+    /// it back off [`ShadowCaster::shade`].
+    pub kernel: harmonigraph_scene::ShadowKernel,
     /// Whether this caster's distance is evaluated by its own scene draw
     /// instead of read out of a cell.
     ///
@@ -111,12 +111,15 @@ pub(crate) struct Caster {
 /// strength the name's rim colour carries — the one number a lattice name's
 /// `rim` holds (`LABEL_SHADOW` in harmonigraph_ui), so a name easing in as the
 /// marker under it eases out grows its shadow on the clock its ink arrives on —
-/// `sigma_scale`, which is a name's alone to be other than 1
-/// (`ViewConfig::glow_shadow_name`).
+/// and the style its group is dialled to (`ShadowSettings::lattice_text`).
 ///
 /// A run with no ink in it — every rect empty — is a caster of nothing, with
 /// its level zeroed rather than a box of infinities for the packer to size.
-pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Caster {
+pub(crate) fn caster_of(
+    glyphs: &[crate::GlyphInstance],
+    sigma_points: f32,
+    kernel: harmonigraph_scene::ShadowKernel,
+) -> Caster {
     let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in glyphs {
         for axis in 0..2 {
@@ -124,16 +127,12 @@ pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_scale: f32) -> Ca
             max[axis] = max[axis].max(g.rect[axis] + g.rect[axis + 2]);
         }
     }
+    let empty = Caster { rect: [0.0; 4], level: 0.0, sigma_points, kernel, direct_distance: false };
     if !(max[0] > min[0] && max[1] > min[1]) {
-        return Caster { rect: [0.0; 4], level: 0.0, sigma_scale, direct_distance: false };
+        return empty;
     }
     let level = glyphs.iter().map(|g| f32::from(g.rim[3]) / 255.0).fold(0.0, f32::max);
-    Caster {
-        rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]],
-        level,
-        sigma_scale,
-        direct_distance: false,
-    }
+    Caster { rect: [min[0], min[1], max[0] - min[0], max[1] - min[1]], level, ..empty }
 }
 
 /// One caster's cell, as every draw that touches it takes it: the cell's
@@ -281,7 +280,7 @@ pub(crate) struct ShadowCaster {
     /// cell is measured against, one Shadow width being 2σ. In points because
     /// that is what an exact distance cell holds: the sampler divides one by
     /// the other and the target's own pixel scale never enters, so a Render
-    /// scale moves neither. Per caster because [`Caster::sigma_scale`] is.
+    /// scale moves neither. Per caster because [`Caster::sigma_points`] is.
     ///
     /// w: unused.
     pub shade: [f32; 4],
@@ -298,35 +297,30 @@ pub(crate) const NO_CASTER: ShadowCaster =
 /// times the render scale — and `max_side` the device's texture limit.
 ///
 /// A PURE function of this frame, which is what the offline renderer's
-/// determinism rests on: the layout depends on the casters, σ, target scale,
-/// device limit and kernel, and nothing a previous frame left behind. The
-/// texture that holds it may be larger than `size` (it grows to demand and
-/// never shrinks, see [`ShadowTarget`]); the cells' texel
-/// coordinates are absolute, so that changes nothing sampled.
+/// determinism rests on: the layout depends on the casters — their boxes, their
+/// σ and their kernels — the target scale and the device limit, and nothing a
+/// previous frame left behind. The texture that holds it may be larger than
+/// `size` (it grows to demand and never shrinks, see [`ShadowTarget`]); the
+/// cells' texel coordinates are absolute, so that changes nothing sampled.
 ///
 /// A cell the atlas cannot hold — past `max_side` in either direction — is
 /// packed as no cell at all, its level zeroed so the box draws nothing. At the
 /// scales here that is over a hundred pane-fuls of names; the fallback
 /// criterion in #498 is what a frame that reaches it calls for.
-pub(crate) fn pack(
-    casters: &[Caster],
-    sigma_px: f32,
-    px_per_point: f32,
-    max_side: u32,
-    kernel: harmonigraph_scene::ShadowKernel,
-) -> Packed {
+///
+/// Every property that differs BETWEEN groups rides on the caster, so this walk
+/// never learns what a group is: a mixed frame is one shelf of cells whose
+/// kinds and widths differ, packed in one pass.
+pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
     // A finite positive number, which a NaN or an infinity out of a corrupt
     // blob is not: either is no shadow rather than a kernel of nothing.
     let positive = |x: f32| x.is_finite() && x > 0.0;
-    if casters.is_empty() || !positive(sigma_px) || !positive(px_per_point) {
+    if casters.is_empty() || !positive(px_per_point) {
         return Packed::default();
     }
-    let is_distance = kernel.is_distance();
-    // One caster's σ in the target's pixels: the frame's, scaled by what the
-    // caster asked for. `max` and not a branch, so a NaN out of a corrupt blob
-    // comes out as 0 — a hard-edged shadow of the caster's own ink rather than
-    // a kernel of nothing.
-    let sigma_of = |c: &Caster| (sigma_px * c.sigma_scale).max(0.0);
+    let is_distance = |c: &Caster| c.kernel.is_distance();
+    // One caster's σ in the target's pixels, which is where its cell is drawn.
+    let sigma_of = |c: &Caster| c.sigma_points * px_per_point;
     // A cell, sized off ITS OWN σ: drawn at `min(1, SIGMA_CELL_MAX / σ)` of the
     // target's pixels so σ is at most `SIGMA_CELL_MAX` texels whatever the
     // caster asked for, and padded by the kernel's reach in those same texels,
@@ -345,11 +339,8 @@ pub(crate) fn pack(
     // blur chain entirely.
     let shape = |c: &Caster| {
         let sigma = sigma_of(c);
-        // A σ of zero asks for no blur at all, and `SIGMA_CELL_MAX / 0` is an
-        // infinity the `min` answers: the cell is at the target's own
-        // resolution and its kernel collapses to the centre tap.
         let fit = (SIGMA_CELL_MAX / sigma).min(1.0);
-        let floor = if is_distance { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
+        let floor = if is_distance(c) { DISTANCE_TEXELS_PER_POINT / px_per_point } else { 0.0 };
         // More samples than the target has pixels buy no smoother contour and
         // turn the floor into supersampling at the small end.
         let scale = fit.max(floor).min(1.0);
@@ -358,17 +349,18 @@ pub(crate) fn pack(
         // the kind — the two renderers reach different multiples of it and
         // `ShadowKernel::reach_sigmas` is the one place that is written down.
         let texels = sigma * scale;
-        let pad = ((kernel.reach_sigmas() * texels).ceil() + 1.0) / k;
+        let pad = ((c.kernel.reach_sigmas() * texels).ceil() + 1.0) / k;
         // The BLUR chain's σ, which a distance cell has none of because it
         // bypasses that chain.
-        (scale, k, if is_distance { 0.0 } else { texels }, pad)
+        (scale, k, if is_distance(c) { 0.0 } else { texels }, pad)
     };
-    // What a caster's level comes to where it is spent: a level at zero, or a
-    // NaN out of the same corrupt blob, darkens nothing.
-    let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0;
+    // What a caster comes to where it is spent. A level at zero, a NaN out of a
+    // corrupt blob, or a group with either of its bars at the bottom — the
+    // width arriving as a σ of nothing — all darken nothing.
+    let casts = |c: &Caster| c.level.clamp(0.0, 1.0) > 0.0 && positive(c.sigma_points);
     // Whether this caster's own scene draw evaluates the field, which is a
     // caster with no cell to pack.
-    let direct = |c: &Caster| c.direct_distance && is_distance;
+    let direct = |c: &Caster| c.direct_distance && is_distance(c);
 
     // One entry per caster, in the order they arrived — the order every index
     // below is in. A direct caster keeps an empty entry to preserve those
@@ -443,7 +435,7 @@ pub(crate) fn pack(
         // churn when an atlas-only setting changes even though the scene draw
         // cannot read it.
         let (scale, k, sigma_cell, pad) = if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster) };
-        let kind = if is_distance { DISTANCE_KIND } else { 0.0 };
+        let kind = if is_distance(caster) { DISTANCE_KIND } else { 0.0 };
         let rect = rects[c];
         let [w, h] = sizes[c];
         let [x, y] = placed[c];
@@ -456,7 +448,7 @@ pub(crate) fn pack(
             who: [c as f32, kind, pad, 0.0],
         });
         if whole {
-            entry.shade = [level, kind, sigma_of(caster) / px_per_point, 0.0];
+            entry.shade = [level, kind, caster.sigma_points, 0.0];
             entry.cell = cell;
             if !direct {
                 entry.map = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, 0.0];
@@ -784,7 +776,36 @@ pub(crate) mod tests {
     /// A caster at the picture's own width, which is what every caster but a
     /// note name is. The tests that ask about the RATIO name it themselves.
     fn caster(x: f32, y: f32, w: f32, h: f32) -> Caster {
-        Caster { rect: [x, y, w, h], level: 1.0, sigma_scale: 1.0, direct_distance: false }
+        Caster {
+            rect: [x, y, w, h],
+            level: 1.0,
+            sigma_points: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            direct_distance: false,
+        }
+    }
+
+    /// A whole frame at ONE style: every caster at `sigma_px` in the target's
+    /// pixels, drawn by `kernel`.
+    ///
+    /// What a claim about the PACKING rather than about the groups is asked
+    /// at — the shelving, the resolution ladder, the atlas limit — none of
+    /// which is a question about which group a caster belongs to. σ in target
+    /// pixels because that is the unit those claims are stated in; the caster
+    /// carries points and the packer multiplies. The claims that ARE about
+    /// groups build their casters by hand.
+    fn pack_at(
+        casters: &[Caster],
+        sigma_px: f32,
+        px_per_point: f32,
+        max_side: u32,
+        kernel: harmonigraph_scene::ShadowKernel,
+    ) -> Packed {
+        let casters: Vec<Caster> = casters
+            .iter()
+            .map(|c| Caster { sigma_points: sigma_px / px_per_point, kernel, ..*c })
+            .collect();
+        pack(&casters, px_per_point, max_side)
     }
 
     /// One Gaussian, which is what every claim about the packing that is not
@@ -824,7 +845,7 @@ pub(crate) mod tests {
             // a power of two in each direction, which quantizes every reading
             // to a factor of two and hides what a row actually asked for.
             let area = |kernel: harmonigraph_scene::ShadowKernel| -> f64 {
-                pack(&casters, sigma, 2.0, 16384, kernel)
+                pack_at(&casters, sigma, 2.0, 16384, kernel)
                     .boxes
                     .iter()
                     .map(|b| f64::from(b.cell[2]) * f64::from(b.cell[3]))
@@ -925,7 +946,7 @@ pub(crate) mod tests {
     #[test]
     fn a_cells_sigma_is_at_most_three_texels_at_every_shadow_width() {
         for sigma_px in [0.05f32, 0.5, 1.0, 2.9, 3.0, 3.1, 10.0, 100.0, 5000.0] {
-            let packed = pack(&[caster(10.0, 10.0, 40.0, 12.0)], sigma_px, 2.0, 16384, one());
+            let packed = pack_at(&[caster(10.0, 10.0, 40.0, 12.0)], sigma_px, 2.0, 16384, one());
             let b = packed.boxes[0];
             assert!(
                 b.terms[1] <= SIGMA_CELL_MAX + 1e-4,
@@ -946,19 +967,25 @@ pub(crate) mod tests {
         }
     }
 
-    /// A frame with no caster packs no cell and asks for no atlas; so does one
-    /// whose Shadow is shut.
+    /// A frame with no caster packs nothing at all; a caster whose group is
+    /// SHUT keeps its entry and takes no cell.
+    ///
+    /// The entry has to stay, where the cell may not: a caster's index is what
+    /// every scene draw reaches it by, and dropping a shut group's entries
+    /// would slide every caster after them onto a neighbour's cell. What says
+    /// the group is shut is the zeroed entry — level 0, no cell — which every
+    /// reader answers 1 to with nothing sampled.
     #[test]
     fn a_frame_with_no_caster_packs_no_cell() {
-        assert_eq!(pack(&[], 4.0, 2.0, 16384, one()), Packed::default());
-        assert_eq!(
-            pack(&[caster(0.0, 0.0, 10.0, 10.0)], 0.0, 2.0, 16384, one(),),
-            Packed::default()
-        );
-        assert_eq!(
-            pack(&[caster(0.0, 0.0, 10.0, 10.0)], f32::NAN, 2.0, 16384, one(),),
-            Packed::default()
-        );
+        assert_eq!(pack_at(&[], 4.0, 2.0, 16384, one()), Packed::default());
+        for sigma in [0.0, f32::NAN] {
+            let packed = pack_at(&[caster(0.0, 0.0, 10.0, 10.0)], sigma, 2.0, 16384, one());
+            assert_eq!(packed.casters, vec![NO_CASTER], "a shut caster lost or kept an entry");
+            assert!(
+                packed.boxes.iter().all(|b| b.cell == [0.0; 4] && b.terms[2] == 0.0),
+                "a caster at σ {sigma} packed a cell",
+            );
+        }
     }
 
     /// Every cell lies inside the atlas and no two overlap, over a frame of
@@ -978,7 +1005,7 @@ pub(crate) mod tests {
             })
             .chain([caster(0.0, 0.0, 700.0, 10.0)])
             .collect();
-        let packed = pack(&casters, 6.0, 2.0, 16384, one());
+        let packed = pack_at(&casters, 6.0, 2.0, 16384, one());
         assert_eq!(packed.boxes.len(), casters.len());
         let rects: Vec<[u32; 4]> = packed.boxes.iter().map(|b| b.cell.map(|v| v as u32)).collect();
         for (i, r) in rects.iter().enumerate() {
@@ -998,7 +1025,7 @@ pub(crate) mod tests {
         }
         // The same frame packs the same way: a layout is a function of the
         // frame and nothing else.
-        assert_eq!(pack(&casters, 6.0, 2.0, 16384, one()), packed);
+        assert_eq!(pack_at(&casters, 6.0, 2.0, 16384, one()), packed);
     }
 
     /// A cell past the texture limit is no cell, with its level zeroed so its
@@ -1006,7 +1033,7 @@ pub(crate) mod tests {
     #[test]
     fn a_cell_the_atlas_cannot_hold_casts_nothing() {
         let casters: Vec<Caster> = (0..8).map(|_| caster(0.0, 0.0, 100.0, 100.0)).collect();
-        let packed = pack(&casters, 2.0, 1.0, 256, one());
+        let packed = pack_at(&casters, 2.0, 1.0, 256, one());
         assert_eq!(packed.size, [256, 256]);
         let cast: Vec<bool> = packed.boxes.iter().map(|b| b.terms[2] > 0.0).collect();
         assert!(cast.iter().any(|&c| c), "nothing fit an atlas that holds four cells");
@@ -1028,8 +1055,8 @@ pub(crate) mod tests {
     fn a_caster_that_darkens_nothing_takes_no_cell_and_no_room() {
         let live = caster(0.0, 0.0, 100.0, 100.0);
         let dead = Caster { level: 0.0, ..live };
-        let without = pack(&[live, live], 2.0, 1.0, 4096, one());
-        let with_dead = pack(&[live, dead, live], 2.0, 1.0, 4096, one());
+        let without = pack_at(&[live, live], 2.0, 1.0, 4096, one());
+        let with_dead = pack_at(&[live, dead, live], 2.0, 1.0, 4096, one());
         assert_eq!(with_dead.boxes[1].cell, [0.0; 4], "the dead caster took a cell");
         assert_eq!(with_dead.boxes[1].terms[2], 0.0, "the dead caster kept a level");
         assert_eq!(with_dead.size, without.size, "the dead caster sized the atlas");
@@ -1040,15 +1067,15 @@ pub(crate) mod tests {
         );
     }
 
-    /// σ is half the Shadow's width in target pixels, and shut for a width or
-    /// a node radius that is not a positive number.
+    /// σ is half the Shadow's width in the pane's points, and shut for a width
+    /// or a node radius that is not a positive number.
     #[test]
-    fn sigma_is_half_the_shadow_in_target_pixels() {
-        assert!((sigma_px(0.2, 30.0, 2.0, 1.5) - 9.0).abs() < 1e-5);
-        assert_eq!(sigma_px(0.0, 30.0, 2.0, 1.0), 0.0);
-        assert_eq!(sigma_px(0.2, 0.0, 2.0, 1.0), 0.0);
-        assert_eq!(sigma_px(f32::NAN, 30.0, 2.0, 1.0), 0.0);
-        assert_eq!(sigma_px(-1.0, 30.0, 2.0, 1.0), 0.0);
+    fn sigma_is_half_the_shadow_in_pane_points() {
+        assert!((sigma_points(0.2, 30.0) - 3.0).abs() < 1e-5);
+        assert_eq!(sigma_points(0.0, 30.0), 0.0);
+        assert_eq!(sigma_points(0.2, 0.0), 0.0);
+        assert_eq!(sigma_points(f32::NAN, 30.0), 0.0);
+        assert_eq!(sigma_points(-1.0, 30.0), 0.0);
     }
 
     /// The blur of one cell's ink stays inside that cell and keeps its mass:
@@ -1068,7 +1095,7 @@ pub(crate) mod tests {
         // Two casters side by side, both far wider than the blur reaches, so
         // the pair packs on one shelf with the second's cell touching the
         // first's.
-        let packed = pack(
+        let packed = pack_at(
             &[caster(0.0, 0.0, 80.0, 80.0), caster(0.0, 0.0, 80.0, 80.0)],
             SIGMA,
             1.0,
@@ -1203,17 +1230,18 @@ pub(crate) mod tests {
         let caster = Caster {
             rect: [40.0, 40.0, 20.0, 20.0],
             level: 1.0,
-            sigma_scale: 1.0,
+            sigma_points: 1.0,
+            kernel: ShadowKernel::Distance,
             direct_distance: false,
         };
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
         // target's full resolution or the blur's fit decides the cell.
         let sigma = 40.0;
         let terms = ShadowKernel::Distance;
-        let out = pack(&[caster], sigma, 1.0, 4096, terms);
+        let out = pack_at(&[caster], sigma, 1.0, 4096, terms);
         let cell = out.boxes[0];
         for px_per_point in [1.0f32, 1.5, 2.0, 4.0] {
-            let held = pack(&[caster], sigma * px_per_point, px_per_point, 8192, terms).boxes[0];
+            let held = pack_at(&[caster], sigma * px_per_point, px_per_point, 8192, terms).boxes[0];
             assert!(
                 (held.terms[0] - DISTANCE_TEXELS_PER_POINT).abs() < 1e-5,
                 "at {px_per_point} pixels a point the cell packed {} texels per point rather \
@@ -1232,9 +1260,60 @@ pub(crate) mod tests {
             "a distance cell is padded {pad} points where its curve reaches {want}",
         );
         // A blur cell belongs to the other fill and sampling branch.
-        let blur = pack(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian);
+        let blur = pack_at(&[caster], sigma, 1.0, 4096, ShadowKernel::Gaussian);
         assert_eq!(blur.boxes[0].who[1], 0.0, "a blur box says it holds a distance");
         assert!((blur.boxes[0].terms[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
+    }
+
+    /// A frame whose GROUPS disagree packs each caster at its own kernel and
+    /// its own width, on one shelf.
+    ///
+    /// The claim the two-group design rests on, and the one a packer that kept
+    /// either property per FRAME would fail while every uniform-frame reading
+    /// above went on passing: the kinds part, the resolutions part in the
+    /// direction each renderer's own rule says, and the σ each caster carries
+    /// to the shader is its own.
+    ///
+    /// The σ apart by a factor of four so the two resolutions cannot agree by
+    /// accident, and both past `SIGMA_CELL_MAX` so each is really sized by its
+    /// own rule rather than pinned at the target's resolution: the blur cell
+    /// then follows σ down and the distance cell stops at its quality floor.
+    #[test]
+    fn a_mixed_frame_packs_each_caster_at_its_own_style() {
+        use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+        let at = |sigma: f32, kernel| Caster {
+            rect: [0.0, 0.0, 40.0, 12.0],
+            level: 1.0,
+            sigma_points: sigma,
+            kernel,
+            direct_distance: false,
+        };
+        let (near, far) = (10.0, 40.0);
+        let packed = pack(&[at(near, Distance), at(far, Gaussian)], 1.0, 16384);
+        let [d, g] = [packed.boxes[0], packed.boxes[1]];
+        assert_eq!(d.who[1], DISTANCE_KIND, "the distance caster packed a coverage cell");
+        assert_eq!(g.who[1], 0.0, "the Gaussian caster packed a distance cell");
+        assert_eq!(d.terms[0], DISTANCE_TEXELS_PER_POINT, "the distance cell missed its floor");
+        assert!(
+            (g.terms[0] - SIGMA_CELL_MAX / far).abs() < 1e-5,
+            "the Gaussian cell packed {} texels a point rather than following its own σ",
+            g.terms[0],
+        );
+        assert_eq!(d.terms[1], 0.0, "the distance cell carries a blur σ");
+        assert!((g.terms[1] - SIGMA_CELL_MAX).abs() < 1e-4, "the Gaussian cell is past the cap");
+        // And what each hands the SHADER: its own kind and its own σ in points,
+        // which is what a sampler reading one frame's worth of casters spends.
+        let [ed, eg] = [packed.casters[0], packed.casters[1]];
+        assert_eq!([ed.shade[1], ed.shade[2]], [DISTANCE_KIND, near]);
+        assert_eq!([eg.shade[1], eg.shade[2]], [0.0, far]);
+        // One shelf, disjoint: a mixed frame is one packing rather than two.
+        assert!(d.cell[2] > 0.0 && g.cell[2] > 0.0, "a caster in the mixed frame got no cell");
+        assert!(
+            d.cell[0] + d.cell[2] <= g.cell[0] || g.cell[0] + g.cell[2] <= d.cell[0],
+            "the two cells overlap: {:?} and {:?}",
+            d.cell,
+            g.cell,
+        );
     }
 
     /// A caster that owns its exact distance keeps the profile metadata without
@@ -1246,16 +1325,17 @@ pub(crate) mod tests {
         let caster = Caster {
             rect: [40.0, 40.0, 20.0, 20.0],
             level: 1.0,
-            sigma_scale: 1.0,
+            sigma_points: 1.0,
+            kernel: ShadowKernel::Distance,
             direct_distance: true,
         };
-        let distance = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
+        let distance = pack_at(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert_eq!(distance.boxes[0].cell, [0.0; 4], "the direct caster packed an atlas cell");
         assert_eq!(distance.casters[0].shade[1], DISTANCE_KIND);
         assert_eq!(distance.casters[0].shade[2], 20.0);
         assert_eq!(distance.casters[0].shade[0], 1.0);
 
-        let blur = pack(&[caster], 40.0, 2.0, 4096, ShadowKernel::Gaussian);
+        let blur = pack_at(&[caster], 40.0, 2.0, 4096, ShadowKernel::Gaussian);
         assert!(blur.boxes[0].cell[2] > 0.0 && blur.boxes[0].cell[3] > 0.0);
         assert_eq!(blur.casters[0].shade[1], 0.0, "a Gaussian caster says it holds a distance");
     }
@@ -1269,15 +1349,16 @@ pub(crate) mod tests {
         let node = Caster {
             rect: [40.0, 40.0, 20.0, 20.0],
             level: 1.0,
-            sigma_scale: 1.0,
+            sigma_points: 1.0,
+            kernel: ShadowKernel::Distance,
             direct_distance: false,
         };
-        let exact = pack(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
+        let exact = pack_at(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
         assert_eq!(exact.boxes[0].who[1], DISTANCE_KIND);
 
-        let name = caster_of(&[crate::text::tests::glyph()], 1.0);
-        let name = pack(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
+        let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance);
+        let name = pack_at(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(name.boxes[0].cell[2] > 0.0 && name.boxes[0].cell[3] > 0.0);
         assert_eq!(name.boxes[0].who[1], DISTANCE_KIND);
     }
@@ -1299,9 +1380,11 @@ pub(crate) mod tests {
                 let blur_resolution = (SIGMA_CELL_MAX / sigma_points).min(px_per_point);
                 let distance_resolution = blur_resolution.max(DISTANCE_TEXELS_PER_POINT);
                 let distance =
-                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance).boxes[0];
+                    pack_at(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Distance).boxes
+                        [0];
                 let gaussian =
-                    pack(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian).boxes[0];
+                    pack_at(&[caster], sigma_px, px_per_point, 8192, ShadowKernel::Gaussian).boxes
+                        [0];
                 assert!(
                     (distance.terms[0] - distance_resolution).abs() < 1e-5,
                     "Distance at σ {sigma_points} points and {px_per_point} px/pt packed {} \

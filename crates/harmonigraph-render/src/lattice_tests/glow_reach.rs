@@ -361,7 +361,9 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_shadow = 0.16;
+        for style in scene.shadow.groups_mut() {
+            style.width = 0.16;
+        }
         scene
     };
     // The fixture's one node sits at the origin, which the camera is pointed

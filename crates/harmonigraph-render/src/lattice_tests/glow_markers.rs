@@ -5,7 +5,9 @@ use super::fixtures::*;
 use crate::*;
 
 fn with_shadow_kernel(mut scene: Scene, kernel: harmonigraph_scene::ShadowKernel) -> Scene {
-    scene.glow_shadow_kernel = kernel;
+    for style in scene.shadow.groups_mut() {
+        style.kernel = kernel;
+    }
     scene
 }
 
