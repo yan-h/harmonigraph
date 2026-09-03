@@ -238,6 +238,12 @@ whole-tree rewrite. Comments carry the rationale, so rewriting them in bulk
 is a change of content dressed as a sweep, and no reviewer can read past it
 to find the sentences that actually moved.
 
+The same reader is the reason a diff edits the lines that move rather than
+reprinting the file around them. Rewriting a file whole to change a few of
+its lines spends output on every line that did not move and marks the whole
+file as changed, which is the diff nobody can read past. Rewrite whole only
+where the file is short or most of it is genuinely moving.
+
 ## Two defects that actually ship here: cache keys and fixture reach
 
 Both are cheap to write, invisible to `ci.sh`, and each has landed more than
@@ -268,6 +274,13 @@ behind it. Issue #450 is the worked example: four shadow tests, each missing
 the shape it claims to measure for its own reason, and a disc passing for a
 cross through all 145. For a path this diff adds, name the test that executes
 it and check the fixture actually arrives.
+
+The count is the other half. A committed test is a file the tree maintains
+from then on, so it earns its place the way a comment does: one per
+behaviour the task states, sized like the tests already beside it. A scratch
+harness or a one-off probe is verification rather than coverage — run it and
+read it, and commit it only where something reads it again (see the ISSUE
+rule below).
 
 ## Backwards compatibility is not a constraint
 
@@ -335,6 +348,13 @@ expensive thing it produced: the list of what the bug is NOT. File that
 with `gh issue create` — reproduction, what was eliminated and by what
 measurement, what was tried and reverted, what is left to try — and link
 the PR the probes are in.
+
+A bug you tripped over rather than went looking for takes the same exit. It
+is an issue, not a hunk in this diff: a fix riding in on a branch whose
+review is about something else gets the least attention of anything in the
+PR, and it widens the range `/audit-merges` has to reason about. The
+exception is the one that pays for itself — the requested behaviour cannot
+work until the bug is fixed — and the PR body says so.
 
 `BACKLOG.md` is not that. An item there is a line of prose, restated at
 dispatch and deleted by whoever fixes it, so an investigation parked in it
