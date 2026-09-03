@@ -33,10 +33,10 @@
 //! comparison, the bless and the sheet are [`harmonigraph_golden::Gate`]; what
 //! is here is the scenes.
 //!
-//! The frames are Metal-on-this-Mac specific. GitHub Actions is off and
-//! `ci.sh` is the only gate, so that costs nothing today; a driver or OS
-//! update re-baselines all of them at once, and its signature is every scene
-//! moving by a small amount rather than one scene moving by a large one.
+//! The frames are Metal-on-macOS specific, so Full CI runs on macOS. A runner,
+//! driver or OS update can re-baseline all of them at once; its signature is
+//! every scene moving by a small amount rather than one scene moving by a
+//! large one.
 
 use super::fixtures::*;
 use crate::*;

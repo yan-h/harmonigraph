@@ -123,7 +123,8 @@ Open a PR (`gh pr create --draft`) whose body has three parts:
   shallow one, and this section is what makes the findings trustworthy.
 - **Range audited** — the `<since>..HEAD` range and the PR numbers in it.
 
-One commit per finding. Run `./ci.sh` before pushing.
+One commit per finding. Wait for GitHub Actions' Full CI check before handing
+off the draft PR.
 
 If nothing is found, say so in chat with the clean list and open no PR.
 

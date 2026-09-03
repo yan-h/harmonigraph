@@ -1,82 +1,8 @@
 #!/usr/bin/env bash
-# Gate `git push` on the local CI (same checks as .github/workflows/ci.yml).
-# Enable once:            git config core.hooksPath .githooks
-# Skip a one-off push:    git push --no-verify
-#
-# Three kinds of push cannot change ci.sh's answer, and this machine has six
-# performance cores, so a run it does not need is minutes of compiler taken
-# from whatever else is building. Git names every ref on stdin as
-# `<local ref> <local sha> <remote ref> <remote sha>`, which is enough to tell
-# them apart:
-#
-#   - A DELETION sends an all-zero local sha. Nothing arrives at the remote,
-#     so there is nothing to gate.
-#   - A tree that ALREADY PASSED is recorded by ci.sh (the stamp at the end of
-#     it). Re-pushing the same content — an amended message, a second branch,
-#     a retried push — asks a question already answered.
-#   - A push whose whole range is PROSE reaches no gate: nothing under
-#     `crates/` includes a `.md` and no test reads one, so the only code in
-#     the push is code the remote already gated when it arrived.
-#
-# Each is decided against the pushed COMMITS while ci.sh runs on the working
-# tree, which is why the stamp is written only from a clean tree — a dirty run
-# proves nothing about what the commit holds.
+# Keep the local push gate cheap; GitHub Actions runs the canonical full CI.
+# Enable once: git config core.hooksPath .githooks
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-# The COMMON dir, so every worktree reads and writes one stamp, and asked for
-# absolutely: `--git-common-dir` alone may answer relative to GIT_DIR, which is
-# set here and not when a person runs ci.sh, and the two callers have to agree
-# on the path or the stamp is written where it is never looked for.
-stamp="$(git rev-parse --path-format=absolute --git-common-dir)/ci-passed-trees"
-
-is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
-
-saw_ref=0
-need_ci=0
-while read -r _local_ref local_sha _remote_ref remote_sha; do
-  [ -n "${local_sha:-}" ] || continue
-  saw_ref=1
-
-  is_zero "$local_sha" && continue
-
-  tree=$(git rev-parse "$local_sha^{tree}")
-  if [ -f "$stamp" ] && grep -qxF "$tree" "$stamp"; then
-    continue
-  fi
-
-  # A new branch has no remote counterpart to diff against, so ask what it
-  # adds to main instead. Without a base nothing is known and the gate runs.
-  if is_zero "$remote_sha"; then
-    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
-  else
-    base=$remote_sha
-  fi
-  if [ -z "$base" ]; then
-    need_ci=1
-    continue
-  fi
-
-  # Every path the push touches has to be classified, so rename detection is
-  # wrong here: it reports a moved file once, under its DESTINATION, and a file
-  # carried from `crates/` to an exempt path would then read as prose while the
-  # push ships a deletion the remote has never gated. `--no-renames` lists both
-  # sides, and the source alone is enough to demand the gate.
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    case "$path" in
-      *.md | docs/* | LICENSE) ;;
-      *) need_ci=1 ;;
-    esac
-  done <<EOF
-$(git diff --name-only --no-renames "$base" "$local_sha")
-EOF
-done
-
-if [ "$saw_ref" = 1 ] && [ "$need_ci" = 0 ]; then
-  echo "pre-push: nothing in this push can change ci.sh's answer — skipped." >&2
-  echo "          (./ci.sh runs it anyway; git push --no-verify always skips.)" >&2
-  exit 0
-fi
-
-exec "$root/ci.sh"
+cd "$root"
+exec cargo fmt --all --check

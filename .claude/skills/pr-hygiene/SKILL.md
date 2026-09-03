@@ -5,15 +5,14 @@ description: How review, squashing, and agent definitions work in this repo. Use
 
 # Review happens at the merge boundary, not on the branch
 
-Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
-repo and branch protection is not available on this plan, so `ci.sh` via
-the `.githooks/pre-push` hook is the only automatic gate — one the hook
-skips for a push that cannot change its answer — and it checks formatting,
-clippy, the tests, the plugin package check, the two vendored crates' own
-tests, the rustdoc doc links, the `harmonigraph-core` dependency guard,
-worktree-reclaim ownership and lock cases, and the registered-worktree bundle
-swap, and pre-push skip cases — not judgement. `ci.sh`'s own header is the list
-to copy when this one looks stale.
+GitHub Actions runs `ci.sh` unchanged as the automatic full gate for pull
+requests and pushes to `main`. It checks formatting, workspace clippy and
+tests, the plugin package check, harmonigraph-render's own tests, both
+vendored crates, rustdoc links, the `harmonigraph-core` dependency guard,
+worktree-reclaim safety, and the registered-worktree bundle swap — not
+judgement. `ci.sh`'s own header is the list to copy when this one looks stale.
+The tracked pre-push hook checks formatting only, keeping compilation off the
+local push path.
 
 **No session reviews its own branch, and it has no command to do it with.**
 `/code-review` is a built-in whose frontmatter sets
@@ -92,13 +91,13 @@ comment and squashing costs nothing. In #98 that is what happened: the
 Iosevka stroke measurements and the atlas-quantization finding are in
 comments and survived intact.
 
-**Not a bisect argument, though it looks like one.** `.githooks/pre-push`
-gates the push and not each commit, so intermediate commits on any branch
-are unverified and a merge commit puts them on `main`. That sounds like it
-breaks `git bisect`, and it does not: `git bisect start --first-parent`
-tests only merge commits and squashes, each of which is a whole PR that
-passed `ci.sh` on its way up. Reach for that flag rather than for a reason
-to rewrite history.
+**Not a bisect argument, though it looks like one.** Full CI verifies the PR
+head and not each intermediate commit, so a merge commit still puts
+unverified intermediate commits on `main`. That sounds like it breaks `git
+bisect`, and it does not: `git bisect start --first-parent` tests only merge
+commits and squashes, each of which is a whole PR that passed Full CI at the
+merge boundary. Reach for that flag rather than for a reason to rewrite
+history.
 
 **Which is also why the history behind this rule is left alone.**
 Retroactively squashing what has already merged would mean force-pushing
