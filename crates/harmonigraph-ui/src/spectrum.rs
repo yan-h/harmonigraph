@@ -377,7 +377,7 @@ impl AudioSpectrum {
     /// resolution 20 ms reaches (via
     /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
     /// rungs of THIS interval, so the picture's grid tracks it).
-    /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
+    /// It costs 0.23 ms of FFT per column — 2.9% of a core, against 1.2% at
     /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.

@@ -11,6 +11,11 @@
 //! `reusing_a_stages_twiddles_does_not_move_a_single_bit` over in
 //! `spectrum.rs`, not anything here. `pitch_spectrum` is called through the
 //! public API, so that row alone is the real thing.
+//!
+//! The core rows run at HALF the window, which is the length a column
+//! transforms: `pitch_spectrum` packs its real window into `n / 2` complex
+//! points and untangles the bins afterwards. Timing them at the full window
+//! would measure a transform this crate does not run.
 
 use harmonigraph_core::spectrum::{SpectrumAnalyzer, DEFAULT_FFT_SIZE};
 use std::hint::black_box;
@@ -112,6 +117,26 @@ fn fft_table(re: &mut [f32], im: &mut [f32], tw: &[(f32, f32)]) {
     }
 }
 
+/// The untangle from `spectrum.rs`, over the bin range `pitch_spectrum` reads.
+/// Half of what the packing costs, and the half a bare half-length transform
+/// row would leave out.
+fn untangle(re: &[f32], im: &[f32], tw: &[(f32, f32)], power: &mut [f32]) {
+    let half = re.len();
+    for k in 2..half - 1 {
+        let (ws, wc) = tw[k];
+        let (ar, ai) = (re[k], im[k]);
+        let (cr, ci) = (re[half - k], im[half - k]);
+        let (sr, si) = (ar + cr, ai - ci);
+        let (dr, di) = (ar - cr, ai + ci);
+        let xr = sr + wc * di + ws * dr;
+        let xi = si + ws * di - wc * dr;
+        power[k] += 0.25 * (xr * xr + xi * xi);
+    }
+}
+
+/// `e^(-i * tau * k / n)` for `k` in `0..n / 2`. At the transform's own length
+/// that is the stage table `fft_table` subsamples by stride; at the REAL window
+/// length it is the table the untangle indexes by bin.
 fn twiddles(n: usize) -> Vec<(f32, f32)> {
     (0..n / 2)
         .map(|k| {
@@ -121,28 +146,47 @@ fn twiddles(n: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The ring unroll from `pitch_spectrum`: a modulo per sample.
+/// The ring walk `pitch_spectrum` pays for: a modulo per sample, tapering and
+/// PACKING into two buffers half the window long.
 fn unroll_modulo(ring: &[f32], window: &[f32], write: usize, re: &mut [f32], im: &mut [f32]) {
     let n = ring.len();
-    for i in 0..n {
-        let src = (write + i) % n;
-        re[i] = ring[src] * window[i];
-        im[i] = 0.0;
+    for j in 0..n / 2 {
+        let even = (write + 2 * j) % n;
+        let odd = (write + 2 * j + 1) % n;
+        re[j] = ring[even] * window[2 * j];
+        im[j] = ring[odd] * window[2 * j + 1];
     }
 }
 
-/// The same unroll as two contiguous runs, which is what the ring actually is.
+/// The same walk as two contiguous runs, which is what the ring actually is.
+///
+/// The packing is what makes this more than a `split_at`: an output point is
+/// two ADJACENT samples, so a head run of odd length leaves one point
+/// straddling the seam and starts the tail's own points one sample in. Either
+/// parity of `write` has to come out equal to [`unroll_modulo`], which `main`
+/// asserts before timing either.
 fn unroll_split(ring: &[f32], window: &[f32], write: usize, re: &mut [f32], im: &mut [f32]) {
     let n = ring.len();
+    let head_len = n - write;
     let (tail, head) = ring.split_at(write);
-    let (w_head, w_tail) = window.split_at(n - write);
-    for ((dst, r), w) in re[..n - write].iter_mut().zip(head).zip(w_head) {
-        *dst = r * w;
+    let (w_head, w_tail) = window.split_at(head_len);
+    let head_points = head_len / 2;
+    for j in 0..head_points {
+        re[j] = head[2 * j] * w_head[2 * j];
+        im[j] = head[2 * j + 1] * w_head[2 * j + 1];
     }
-    for ((dst, r), w) in re[n - write..].iter_mut().zip(tail).zip(w_tail) {
-        *dst = r * w;
+    let (mut j, mut t) = (head_points, 0);
+    if head_len % 2 == 1 {
+        re[j] = head[head_len - 1] * w_head[head_len - 1];
+        im[j] = tail[0] * w_tail[0];
+        j += 1;
+        t = 1;
     }
-    im.fill(0.0);
+    for d in j..n / 2 {
+        let s = t + 2 * (d - j);
+        re[d] = tail[s] * w_tail[s];
+        im[d] = tail[s + 1] * w_tail[s + 1];
+    }
 }
 
 /// How many timed rounds each row runs, of which the FASTEST is reported.
@@ -174,6 +218,8 @@ fn bench<F: FnMut()>(name: &str, iters: u32, mut f: F) -> f64 {
 
 fn main() {
     let n = DEFAULT_FFT_SIZE;
+    // The transform a column runs, which is half the window it analyzes.
+    let m = n / 2;
     let iters = 400;
     let signal: Vec<f32> =
         (0..n).map(|i| (i as f32 * 0.01).sin() * 0.5 + (i as f32 * 0.13).sin() * 0.2).collect();
@@ -183,30 +229,46 @@ fn main() {
             0.5 - 0.5 * phase.cos()
         })
         .collect();
-    let tw = twiddles(n);
+    let tw = twiddles(m);
+    let untw = twiddles(n);
 
-    println!("\nFFT core, n = {n}, {iters} iterations each");
-    let mut re = signal.clone();
-    let mut im = vec![0.0f32; n];
+    println!("\nFFT core, n = {m} (half of the {n}-sample window), {iters} iterations each");
+    // Packed as a column packs: even samples real, odd samples imaginary.
+    let packed_re: Vec<f32> = signal.iter().step_by(2).copied().collect();
+    let packed_im: Vec<f32> = signal.iter().skip(1).step_by(2).copied().collect();
+    let (mut re, mut im) = (packed_re.clone(), packed_im.clone());
     let per_block = bench("fft, twiddle per butterfly", iters, || {
-        re.copy_from_slice(&signal);
-        im.fill(0.0);
+        re.copy_from_slice(&packed_re);
+        im.copy_from_slice(&packed_im);
         fft_per_block(black_box(&mut re), black_box(&mut im));
     });
     let shipped = bench("fft_in_place (current)", iters, || {
-        re.copy_from_slice(&signal);
-        im.fill(0.0);
+        re.copy_from_slice(&packed_re);
+        im.copy_from_slice(&packed_im);
         fft_per_stage(black_box(&mut re), black_box(&mut im));
     });
     let table = bench("fft, precomputed twiddle table", iters, || {
-        re.copy_from_slice(&signal);
-        im.fill(0.0);
+        re.copy_from_slice(&packed_re);
+        im.copy_from_slice(&packed_im);
         fft_table(black_box(&mut re), black_box(&mut im), black_box(&tw));
     });
+    let mut power = vec![0.0f32; m];
+    let packing = bench("fft_in_place + untangle (a column's)", iters, || {
+        re.copy_from_slice(&packed_re);
+        im.copy_from_slice(&packed_im);
+        fft_per_stage(black_box(&mut re), black_box(&mut im));
+        untangle(black_box(&re), black_box(&im), black_box(&untw), black_box(&mut power));
+    });
 
-    println!("\nRing unroll (the loop feeding the FFT)");
-    let mut re2 = vec![0.0f32; n];
-    let mut im2 = vec![0.0f32; n];
+    println!("\nRing walk (the loop feeding the FFT)");
+    // An ODD `write`, so the split walk's seam falls mid-point rather than
+    // between two of them — the case its head/tail arithmetic exists for.
+    let mut re2 = vec![0.0f32; m];
+    let mut im2 = vec![0.0f32; m];
+    let (mut ref_re, mut ref_im) = (vec![0.0f32; m], vec![0.0f32; m]);
+    unroll_modulo(&signal, &window, 3457, &mut ref_re, &mut ref_im);
+    unroll_split(&signal, &window, 3457, &mut re2, &mut im2);
+    assert!(re2 == ref_re && im2 == ref_im, "the split walk is not the modulo walk");
     let modulo = bench("unroll with % per sample (current)", iters * 4, || {
         unroll_modulo(black_box(&signal), black_box(&window), 3457, &mut re2, &mut im2);
     });
@@ -223,21 +285,21 @@ fn main() {
     });
 
     println!("\nSummary");
-    let stages = n.trailing_zeros() as usize;
+    let stages = m.trailing_zeros() as usize;
     // Per stage the shipped order computes `half` twiddles and the per-block
-    // order computes them once per block, i.e. `half` times `n / len`.
-    println!("  sin_cos per FFT, current          {}", n - 1);
-    println!("  sin_cos per FFT, per butterfly    {}", (n / 2) * stages);
+    // order computes them once per block, i.e. `half` times `m / len`.
+    println!("  sin_cos per FFT, current          {}", m - 1);
+    println!("  sin_cos per FFT, per butterfly    {}", (m / 2) * stages);
     // What a shared table would have to hold: one per k of the LAST stage,
     // every earlier stage's angles being a subsampling of those.
-    println!("  distinct twiddles in the transform {}", n / 2);
+    println!("  distinct twiddles in the transform {}", m / 2);
     println!("  current vs per butterfly          {:.2}x faster", per_block / shipped);
     println!("  a twiddle table would be          {:.2}x faster", per_block / table);
-    println!("  unroll: split vs modulo           {:.2}x faster", modulo / split);
-    // `shipped`, not `per_block`: `whole` calls the FFT this crate now has, so
-    // dividing the OLD transform's time by it is not a share of anything (it
-    // printed 153%).
-    println!("  FFT as a share of pitch_spectrum  {:.0}%", shipped / whole * 100.0);
+    println!("  walk: split vs modulo             {:.2}x faster", modulo / split);
+    // The PACKING, not the bare transform: what a column spends on this stage
+    // is the half-length FFT and the untangle that unpacks it, and crediting
+    // only the first understates the stage it is a share of.
+    println!("  transform as a share of a column  {:.0}%", packing / whole * 100.0);
     // What the loop order actually merged saves. Crediting the table here —
     // the faster of the two, and the one NOT implemented — overstated it 11%.
     let saved = per_block - shipped;
