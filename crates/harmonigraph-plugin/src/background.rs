@@ -19,14 +19,14 @@
 //! draw ribbons and ridges that disagree — and a heatmap that disagrees with
 //! the roll above it is worse than one that admits the gap.
 //!
-//! **What it costs is a continuous FFT.** 0.42 ms per stereo column at the
-//! default 8192-point window, 125 columns a second: about 5% of a core for as
+//! **What it costs is a continuous FFT.** 0.23 ms per stereo column at the
+//! default 8192-point window, 125 columns a second: about 3% of a core for as
 //! long as the plugin is instantiated, paid now even by a project nobody opens
 //! the editor of, and paid continuously because a DAW streams silence as
 //! diligently as it streams music. Memory does not move — [`SpectrumHistory`]
 //! bounds itself at ~30 MB and already outlived the window, so this only
 //! reaches that bound sooner rather than raising it. The hop is the only lever
-//! if that ever needs to come down (32 ms instead of 8 puts it at 1.2%), but it
+//! if that ever needs to come down (32 ms instead of 8 puts it at 0.7%), but it
 //! is not one to reach for casually: the store's tiers, `live_slab`'s ladder
 //! and `COLUMNS_PER_SLAB` are all rungs of one shared `FFT_INTERVAL`, and a
 //! second hop rate is the exact shape of the duplicated-column bug those
@@ -230,9 +230,9 @@ impl Restore {
 /// **A drain is bounded by the RING, not by the poll**, and the difference is
 /// worth stating because the reassuring number is the wrong one. Descheduled
 /// past 1.37 s with the window shut, this wakes to a full ring and spends ~170
-/// columns of FFT — about 70 ms — under one lock; the steady state is a poll's
-/// worth, about a millisecond. Neither is a hang, but 70 ms on the host's main
-/// thread inside `gui_create` is the figure to argue with if #296 is ever
+/// columns of FFT — about 40 ms — under one lock; the steady state is a poll's
+/// worth, well under a millisecond. Neither is a hang, but 40 ms on the host's
+/// main thread inside `gui_create` is the figure to argue with if #296 is ever
 /// re-opened against this lock.
 ///
 /// A skipped round costs nothing: the ring carries seventeen of them even at

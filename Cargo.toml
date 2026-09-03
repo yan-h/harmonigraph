@@ -76,7 +76,7 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 # Persist format: RON round-trips NaN/inf floats (fresh egui_dock layout
 # rects are NaN; JSON turns them into null and fails to restore).
-ron = "0.8"
+ron = "0.12"
 # Hardware MIDI input for the standalone dev harness.
 midir = "0.11"
 raw-window-handle = "0.5"

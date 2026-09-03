@@ -43,9 +43,9 @@ impl SpectrumWindow {
 ///
 /// | tapers | noise sd | floor | per column |
 /// |---|---|---|---|
-/// | 1 | 4.55 dB | — | 0.17 ms |
-/// | 3 | 2.67 dB | +4.7 dB | 0.40 ms |
-/// | 5 | 2.01 dB | +7.1 dB | 0.66 ms |
+/// | 1 | 4.55 dB | — | 0.12 ms |
+/// | 3 | 2.67 dB | +4.7 dB | 0.24 ms |
+/// | 5 | 2.01 dB | +7.1 dB | 0.37 ms |
 ///
 /// The floor column is the catch, and it is not a defect: holding a full-scale
 /// sine at 0 dB means a line spread over a wider main lobe is scaled back up to

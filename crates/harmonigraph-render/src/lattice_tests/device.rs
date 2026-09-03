@@ -158,7 +158,7 @@ fn offscreen_composite_matches_direct_draw() {
         .offscreen
         .as_ref()
         .and_then(|o| o.shadow.as_ref())
-        .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
+        .map_or(&res.shadow_dummy_bind_group, |a| a.read());
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
         // The pane's own order, walked the same way `prepare` walks it — a
         // second expression of it here would make the two paths differ by draw

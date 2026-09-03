@@ -50,10 +50,52 @@ pub struct AudioSpectrum {
     /// [`SpectrumHistory`] and
     /// [`AudioSpectrum::push_history`].
     pub(crate) history: SpectrumHistory,
-    /// One per drawing surface — index 0 the docked Spectral pane (and the
-    /// offline render), index 1 the Video pane's preview — so two live
-    /// spectrograms in one frame don't overwrite each other's work.
-    pub(crate) spectrogram: [SpectrogramSurface; 2],
+    /// One per drawing surface, so two live spectrograms in one frame don't
+    /// overwrite each other's work. See [`SpectrogramSurfaces`] for what a
+    /// surface id is.
+    pub(crate) spectrogram: SpectrogramSurfaces,
+}
+
+/// Every drawing surface's heatmap state, indexed by the surface id its copy of
+/// the pane was drawn with: 0 the docked Spectral pane, 1 the Video pane's
+/// preview, and offline the placement's index in the layout (see
+/// [`draw_pane`](crate::draw_pane)).
+///
+/// Grown on first sight of an id rather than fixed at the two the editor draws,
+/// because a hand-written offline layout names as many Spectral placements as
+/// it likes and each one folds a grid of its own: the slab width a fold settles
+/// on comes off the pane's own depth in points, so two placements at different
+/// sizes sharing one surface would each invalidate the other's grid every
+/// frame.
+///
+/// What stays SHARED is the analyzer and the column ring it fills
+/// ([`AudioSpectrum::history`]): there is one input bus and one stream of
+/// columns, and a surface holds only what it folded out of them.
+#[derive(Default)]
+pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);
+
+impl SpectrogramSurfaces {
+    /// The surface's own state, empty on first sight of its id.
+    ///
+    /// A method on the field rather than on [`AudioSpectrum`], so a caller
+    /// folding new columns can hold the shared `history` borrow while this one
+    /// is out.
+    pub(crate) fn at(&mut self, surface: usize) -> &mut SpectrogramSurface {
+        if self.0.len() <= surface {
+            self.0.resize_with(surface + 1, SpectrogramSurface::default);
+        }
+        &mut self.0[surface]
+    }
+
+    /// Every surface an id has been asked for, for the readings and the
+    /// teardowns that are about all of them at once.
+    pub(crate) fn all(&self) -> impl Iterator<Item = &SpectrogramSurface> {
+        self.0.iter()
+    }
+
+    pub(crate) fn all_mut(&mut self) -> impl Iterator<Item = &mut SpectrogramSurface> {
+        self.0.iter_mut()
+    }
 }
 
 /// One drawing surface's heatmap: the slab grid it folds, and the statement of
@@ -263,7 +305,7 @@ impl Default for AudioSpectrum {
             anchor: None,
             last_samples: None,
             history: SpectrumHistory::default(),
-            spectrogram: [SpectrogramSurface::default(), SpectrogramSurface::default()],
+            spectrogram: SpectrogramSurfaces::default(),
         }
     }
 }
@@ -314,7 +356,7 @@ impl AudioSpectrum {
     /// from anything the GPU allocated, and are the one piece a new context does
     /// not invalidate.
     pub(crate) fn release_gpu_grids(&mut self) {
-        for surface in &mut self.spectrogram {
+        for surface in self.spectrogram.all_mut() {
             surface.gpu.release();
         }
     }
@@ -335,7 +377,7 @@ impl AudioSpectrum {
     /// resolution 20 ms reaches (via
     /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
     /// rungs of THIS interval, so the picture's grid tracks it).
-    /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
+    /// It costs 0.23 ms of FFT per column — 2.9% of a core, against 1.2% at
     /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
@@ -520,7 +562,7 @@ impl AudioSpectrum {
         &self.history
     }
 
-    /// Fallbacks taken across both surfaces since the plugin was opened: full
+    /// Fallbacks taken across every surface since the plugin was opened: full
     /// re-aggregations of the window, and full uploads of the grid.
     ///
     /// Both are CORRECT and both are expensive, which is the whole problem —
@@ -528,7 +570,7 @@ impl AudioSpectrum {
     /// distinguishes a working cache from one that has quietly stopped. The
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
     pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
-        self.spectrogram.iter().fold((0, 0), |(rebuilds, uploads), s| {
+        self.spectrogram.all().fold((0, 0), |(rebuilds, uploads), s| {
             (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), uploads + s.gpu.full_uploads())
         })
     }

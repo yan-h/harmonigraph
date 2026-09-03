@@ -133,7 +133,7 @@ fn a_node_distance_cell_matches_the_cpu_reference() {
         .and_then(|pane| pane.offscreen.as_ref())
         .and_then(|offscreen| offscreen.shadow.as_ref())
         .expect("the node packed a shadow atlas");
-    let bytes = crate::gpu_harness::readback_r16(&device, &queue, &target.textures[0], target.size);
+    let bytes = crate::gpu_harness::readback_r16(&device, &queue, target.texture(), target.size);
     let held = |x: u32, y: u32| {
         let i = ((y * target.size[0] + x) * 2) as usize;
         shadow::tests::half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
@@ -307,14 +307,18 @@ fn crosses_on_ground(arms: &[(f32, f32)], arm: f32, shadow: f32, depth: f32) -> 
 }
 
 /// The atlas this pane holds after its last shot, if it holds one.
-fn atlas_of(shooter: &Shooter) -> Option<[u32; 2]> {
+fn target_of(shooter: &Shooter) -> Option<&shadow::ShadowTarget> {
     shooter
         .resources
         .get::<LatticeResources>()
         .and_then(|res| res.panes.get(&shooter.pane))
         .and_then(|pane| pane.offscreen.as_ref())
         .and_then(|o| o.shadow.as_ref())
-        .map(|target| target.size)
+}
+
+/// Its size, which is all most readings here want of it.
+fn atlas_of(shooter: &Shooter) -> Option<[u32; 2]> {
+    target_of(shooter).map(|target| target.size)
 }
 
 /// A lit node's own light is DARKER just outside its rings than it is one
@@ -979,6 +983,40 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     );
     let moved = differing_pixels(&no_width, &cast);
     assert!(moved > 500, "opening the Shadow moved {moved} pixels, so neither claim above bites");
+}
+
+/// The blur's intermediate is held for a frame that blurs and for no other.
+///
+/// A second plane the atlas's whole size, and the atlas is at its widest under
+/// Distance, whose cells are floored at `DISTANCE_TEXELS_PER_POINT` rather than
+/// shrinking with σ — so the frame that would carry it unread is the frame it
+/// costs the most in. Both shots pack a real cell, which is what keeps the
+/// Distance reading from passing on a frame that allocated no atlas at all.
+#[test]
+fn only_a_frame_that_blurs_holds_the_blurs_intermediate() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let mut shot = |kernel: harmonigraph_scene::ShadowKernel| -> (bool, bool) {
+        let mut scene = on_ground(0.4, 1.0);
+        for style in scene.shadow.groups_mut() {
+            style.kernel = kernel;
+        }
+        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
+        shooter.shot_with(&scene, named);
+        let target = target_of(&shooter);
+        (target.is_some(), target.is_some_and(|t| t.holds_half()))
+    };
+    assert_eq!(
+        shot(harmonigraph_scene::ShadowKernel::Gaussian),
+        (true, true),
+        "a blurring frame is missing the plane its chain ping-pongs through",
+    );
+    assert_eq!(
+        shot(harmonigraph_scene::ShadowKernel::Distance),
+        (true, false),
+        "a frame with nothing to blur held a second atlas-sized plane",
+    );
 }
 
 /// At the top of the Shadow bar a caster's quad still holds the whole blur:

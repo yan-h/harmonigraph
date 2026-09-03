@@ -206,12 +206,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
-
-[[package]]
 name = "baseview"
 version = "0.1.4"
 dependencies = [
@@ -781,7 +775,7 @@ dependencies = [
  "pollster",
  "profiling",
  "raw-window-handle 0.6.2",
- "ron 0.12.2",
+ "ron",
  "serde",
  "static_assertions",
  "wasm-bindgen",
@@ -808,7 +802,7 @@ dependencies = [
  "log",
  "nohash-hasher",
  "profiling",
- "ron 0.12.2",
+ "ron",
  "serde",
  "smallvec",
  "unicode-segmentation",
@@ -1376,7 +1370,7 @@ dependencies = [
  "harmonigraph-ui",
  "image",
  "pollster",
- "ron 0.8.1",
+ "ron",
  "serde",
 ]
 
@@ -1463,7 +1457,7 @@ name = "harmonigraph-take"
 version = "0.3.0"
 dependencies = [
  "harmonigraph-core",
- "ron 0.8.1",
+ "ron",
  "serde",
 ]
 
@@ -1479,7 +1473,7 @@ dependencies = [
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
- "ron 0.8.1",
+ "ron",
  "serde",
 ]
 
@@ -2914,18 +2908,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "ron"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
-dependencies = [
- "base64",
- "bitflags 2.13.1",
- "serde",
- "serde_derive",
-]
 
 [[package]]
 name = "ron"

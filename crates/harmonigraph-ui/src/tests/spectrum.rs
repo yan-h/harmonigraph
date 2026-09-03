@@ -725,3 +725,64 @@ fn clearing_everything_empties_all_four_accumulations() {
     assert!(state.spectrum.history().is_empty(), "the spectrogram survived");
     assert!(state.glow_fade.is_empty(), "the lattice glow survived");
 }
+
+/// Two placements of one pane in a layout fold a grid each, keyed on the
+/// placement's index.
+///
+/// The slab width a fold settles on comes off the pane's own depth in points,
+/// so at UNEQUAL rects the two placements ask for runs of different lengths —
+/// which is what makes one surface between them destructive rather than merely
+/// shared: the second placement's fold replaces the first's every frame, and
+/// the first then draws a run cut for a rect it does not cover. At equal rects
+/// both folds agree and the picture comes out right by accident.
+///
+/// Each reading is calibrated against the same pane drawn alone, so what it
+/// pins is that a placement's grid is the one its own rect asks for rather than
+/// some number this test would have to restate.
+#[test]
+fn two_placements_of_one_pane_fold_a_grid_each() {
+    // The issue's own split of the frame, 0.0-0.3 and 0.3-1.0.
+    let screen = egui::vec2(500.0, 500.0);
+    let narrow = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(150.0, 500.0));
+    let wide = egui::Rect::from_min_max(egui::pos2(150.0, 0.0), egui::pos2(500.0, 500.0));
+
+    let seeded = || {
+        let mut state = fresh();
+        state.spectrum_config.show_spectrogram = true;
+        state.spectrum_config.roll_seconds = 10.0;
+        let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+        bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 2] = 1.0;
+        for i in 0..80 {
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &bins);
+        }
+        state
+    };
+    let draw = |state: &mut SharedState, placements: &[(usize, egui::Rect)]| {
+        let placements = placements.to_vec();
+        super::probe::painted_full(screen, |ui| {
+            for (surface, rect) in &placements {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                crate::draw_pane(&mut child, crate::Pane::Spectral, state, 100.0, *surface);
+            }
+        });
+    };
+    let slabs =
+        |state: &mut SharedState, surface| state.spectrum.spectrogram.at(surface).gpu.run_slabs();
+
+    let mut alone = seeded();
+    draw(&mut alone, &[(0, narrow)]);
+    let want_narrow = slabs(&mut alone, 0);
+    let mut alone = seeded();
+    draw(&mut alone, &[(0, wide)]);
+    let want_wide = slabs(&mut alone, 0);
+    assert!(want_narrow > 0, "the fixture drew no heatmap, so it never reached a fold at all");
+    assert_ne!(
+        want_narrow, want_wide,
+        "the two rects fold the same run, so neither can tell them apart"
+    );
+
+    let mut both = seeded();
+    draw(&mut both, &[(0, narrow), (1, wide)]);
+    assert_eq!(slabs(&mut both, 0), want_narrow, "the first placement is drawing the second's run");
+    assert_eq!(slabs(&mut both, 1), want_wide, "the second placement has no grid of its own");
+}
