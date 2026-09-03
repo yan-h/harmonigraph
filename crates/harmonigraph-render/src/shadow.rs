@@ -465,25 +465,84 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
     Packed { boxes, casters: packed_casters, size: [width, height] }
 }
 
-/// One pane's atlas: the two textures the blur ping-pongs between, and a bind
-/// group reading each.
+/// One pane's atlas: the plane every cell is drawn into, and the blur's
+/// intermediate for the frames that run one.
 ///
-/// `views[0]` holds the casters' ink after the pre-pass and the finished blur
-/// after [`blur`](Self::blur); `views[1]` is the half-blurred middle. Grown on
-/// demand and never shrunk (`Offscreen::ensure_shadow`), on the pane's own
+/// [`atlas`](Self::atlas) holds the casters' ink after the pre-pass and the
+/// finished blur after [`blur`](Self::blur). Grown on demand and never shrunk
+/// (`Offscreen::ensure_shadow`), on the pane's own
 /// [`Offscreen`](crate::Offscreen) so two panes never share one.
 pub(crate) struct ShadowTarget {
     pub(crate) size: [u32; 2],
+    atlas: Plane,
+    /// The half-blurred middle, held exactly while a frame packs a COVERAGE
+    /// cell ([`ensure_half`](Self::ensure_half)).
+    ///
+    /// A second plane the atlas's whole size, so a frame whose every group
+    /// answers a distance carries none of it — and that is the frame where it
+    /// would cost most, a distance cell's texels being floored at
+    /// [`DISTANCE_TEXELS_PER_POINT`] where a blur cell's shrink with σ.
+    half: Option<Plane>,
+}
+
+/// One atlas-sized R16Float target and the bind group that reads it, which are
+/// made together because neither is any use without the other.
+struct Plane {
     /// Kept only so a test can put ink in and read the blur back out
     /// (`a_cells_blur_stays_inside_its_own_cell_and_keeps_its_mass`). The
     /// `COPY_*` usages that needs are granted whatever the build, being a
     /// property of the texture rather than of the test.
     #[cfg(test)]
-    pub(crate) textures: [wgpu::Texture; 2],
-    pub(crate) views: [wgpu::TextureView; 2],
-    /// Reading `views[i]`, as every consumer of the atlas takes it
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// Reading `view`, as every consumer of the atlas takes it
     /// ([`read_layout`]).
-    pub(crate) reads: [wgpu::BindGroup; 2],
+    read: wgpu::BindGroup,
+}
+
+impl Plane {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        size: [u32; 2],
+        label: &str,
+    ) -> Plane {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: ATLAS_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let read = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lattice_shadow_atlas_read"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Plane {
+            #[cfg(test)]
+            texture,
+            view,
+            read,
+        }
+    }
 }
 
 impl ShadowTarget {
@@ -494,50 +553,8 @@ impl ShadowTarget {
         size: [u32; 2],
     ) -> Self {
         let size = [size[0].max(1), size[1].max(1)];
-        let texture = |label| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: ATLAS_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-        };
-        let textures = [texture("lattice_shadow_atlas"), texture("lattice_shadow_atlas_half")];
-        let views = [
-            textures[0].create_view(&Default::default()),
-            textures[1].create_view(&Default::default()),
-        ];
-        let read = |view: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("lattice_shadow_atlas_read"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            })
-        };
-        let reads = [read(&views[0]), read(&views[1])];
-        ShadowTarget {
-            size,
-            #[cfg(test)]
-            textures,
-            views,
-            reads,
-        }
+        let atlas = Plane::new(device, layout, sampler, size, "lattice_shadow_atlas");
+        ShadowTarget { size, atlas, half: None }
     }
 
     /// Whether this atlas can hold a layout of `size`.
@@ -545,7 +562,53 @@ impl ShadowTarget {
         self.size[0] >= size[0] && self.size[1] >= size[1]
     }
 
-    /// The pass that fills `views[0]` with the casters' ink: cleared, then the
+    /// The finished atlas as every scene draw binds it ([`read_layout`]).
+    pub(crate) fn read(&self) -> &wgpu::BindGroup {
+        &self.atlas.read
+    }
+
+    /// The atlas's own texture, for the tests that write ink into it and read
+    /// the finished cells back out.
+    #[cfg(test)]
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        &self.atlas.texture
+    }
+
+    /// Whether the blur's intermediate is held, which is the whole of what
+    /// `only_a_frame_that_blurs_holds_the_blurs_intermediate` measures.
+    #[cfg(test)]
+    pub(crate) fn holds_half(&self) -> bool {
+        self.half.is_some()
+    }
+
+    /// Hold the blur's intermediate while `want`, and drop it when not.
+    ///
+    /// Kept off the atlas's own allocation because a frame with no coverage
+    /// cell in it runs no blur pass and reads the plane nowhere else, so
+    /// holding it there would be a texture the atlas's whole size allocated,
+    /// regrown with the atlas, and never touched.
+    ///
+    /// Sized to the atlas it belongs to, so it is rebuilt with the atlas and
+    /// never separately — [`blur`](Self::blur) reads one at the other's
+    /// coordinates.
+    pub(crate) fn ensure_half(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        want: bool,
+    ) {
+        match (want, self.half.is_some()) {
+            (true, false) => {
+                let label = "lattice_shadow_atlas_half";
+                self.half = Some(Plane::new(device, layout, sampler, self.size, label));
+            }
+            (false, true) => self.half = None,
+            _ => {}
+        }
+    }
+
+    /// The pass that fills the atlas with the casters' ink: cleared, then the
     /// caller's draws.
     pub(crate) fn ink_pass<'a>(
         &'a self,
@@ -554,21 +617,25 @@ impl ShadowTarget {
         Self::pass(
             encoder,
             "lattice_shadow_ink_pass",
-            &self.views[0],
+            &self.atlas.view,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         )
     }
 
     /// The two blur passes over `count` cells of `boxes`, leaving the finished
-    /// atlas in `views[0]`.
+    /// atlas in [`atlas`](Self::atlas).
     ///
     /// The intermediate is cleared and the atlas is NOT. A frame whose groups
-    /// disagree holds both kinds of cell in `views[0]`, where a distance cell
+    /// disagree holds both kinds of cell in the atlas, where a distance cell
     /// arrives from the ink pass already final and no draw here rewrites it —
     /// so clearing on the way back would leave those cells at zero, which the
     /// scene pass reads as a standoff of nothing and spends as a WHOLE shadow
     /// over the caster's whole padded box. Every blur cell has its own rect
     /// redrawn in full, so loading costs the Gaussian nothing.
+    ///
+    /// A no-op with no intermediate held, which is a frame that packed no
+    /// coverage cell and so has nothing here to convolve
+    /// ([`ensure_half`](Self::ensure_half)).
     pub(crate) fn blur(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -576,23 +643,26 @@ impl ShadowTarget {
         boxes: &wgpu::Buffer,
         count: u32,
     ) {
+        let Some(half) = self.half.as_ref() else {
+            return;
+        };
         let (blur_x, blur_y) = pipelines;
         {
             let mut pass = Self::pass(
                 encoder,
                 "lattice_shadow_blur_pass",
-                &self.views[1],
+                &half.view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
             pass.set_pipeline(blur_x);
-            pass.set_bind_group(0, &self.reads[0], &[]);
+            pass.set_bind_group(0, &self.atlas.read, &[]);
             pass.set_vertex_buffer(0, boxes.slice(..));
             pass.draw(0..4, 0..count);
         }
         let mut pass =
-            Self::pass(encoder, "lattice_shadow_blur_pass", &self.views[0], wgpu::LoadOp::Load);
+            Self::pass(encoder, "lattice_shadow_blur_pass", &self.atlas.view, wgpu::LoadOp::Load);
         pass.set_pipeline(blur_y);
-        pass.set_bind_group(0, &self.reads[1], &[]);
+        pass.set_bind_group(0, &half.read, &[]);
         pass.set_vertex_buffer(0, boxes.slice(..));
         pass.draw(0..4, 0..count);
     }
@@ -1145,7 +1215,8 @@ pub(crate) mod tests {
         let size = [packed.size[0].max(64), packed.size[1]];
         let layout = read_layout(&device);
         let sampler = device.create_sampler(&Default::default());
-        let target = ShadowTarget::new(&device, &layout, &sampler, size);
+        let mut target = ShadowTarget::new(&device, &layout, &sampler, size);
+        target.ensure_half(&device, &layout, &sampler, true);
         let pipelines = create_cell_pipelines(&device, &layout);
 
         // The block: cell A's ink region — everything inside its padding —
@@ -1169,7 +1240,7 @@ pub(crate) mod tests {
         }
         assert!(mass_before > 100.0, "the fixture's block covers {mass_before} texels");
         queue.write_texture(
-            target.textures[0].as_image_copy(),
+            target.texture().as_image_copy(),
             &ink,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
@@ -1188,7 +1259,7 @@ pub(crate) mod tests {
         let mut encoder = device.create_command_encoder(&Default::default());
         target.blur(&mut encoder, (&pipelines.blur_x, &pipelines.blur_y), &boxes, 2);
         queue.submit([encoder.finish()]);
-        let bytes = crate::gpu_harness::readback(&device, &queue, &target.textures[0], size);
+        let bytes = crate::gpu_harness::readback(&device, &queue, target.texture(), size);
         let at = |x: u32, y: u32| -> f32 {
             let i = ((y * size[0]) * 4 + x * 2) as usize;
             half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))

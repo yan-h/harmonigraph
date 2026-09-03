@@ -225,7 +225,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             .offscreen
             .as_ref()
             .and_then(|o| o.shadow.as_ref())
-            .map_or(&res.shadow_dummy_bind_group, |a| &a.reads[0]);
+            .map_or(&res.shadow_dummy_bind_group, |a| a.read());
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
         let draw = |pipeline: &wgpu::RenderPipeline| {
