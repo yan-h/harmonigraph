@@ -20,6 +20,7 @@ A future diagnostic may compute the alternative result in shadow without changin
 **Compatibility outputs.** MTS-ESP is useful for a conventional global note/channel tuning table, but it does not naturally carry Harmonigraph's per-voice frozen adaptive assignments or collect note lifecycle.
 MPE requires channel allocation and bend-state recovery;
 VST3 adds another host and instrument interoperability matrix.
+Bitwig itself converts a note effect's per-note pitch to MPE or VST3 note expression for the instrument downstream, so the CLAP-only output already reaches non-CLAP instruments inside Bitwig.
 The initial implementation targets the actual personal environment —
 macOS, Bitwig and compatible CLAP instruments —
 and adds another backend only for a concrete instrument that needs it.
