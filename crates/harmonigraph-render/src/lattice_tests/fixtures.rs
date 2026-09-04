@@ -15,7 +15,12 @@ pub(super) fn one_shadow(
     kernel: harmonigraph_scene::ShadowKernel,
 ) -> harmonigraph_scene::ShadowSettings {
     let style = harmonigraph_scene::ShadowStyle { kernel, width, depth };
-    harmonigraph_scene::ShadowSettings { lattice_geometry: style, lattice_text: style }
+    harmonigraph_scene::ShadowSettings {
+        lattice_geometry: style,
+        lattice_text: style,
+        spectral_geometry: style,
+        spectral_text: style,
+    }
 }
 
 /// One marker for the fixtures below.

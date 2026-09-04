@@ -137,18 +137,9 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// this.
 const DOT: (f32, f32) = (0.7, 3.0);
 
-/// How much of the dot's radius is the dark backing ringing it.
-///
-/// A backing rather than a heavier dot, for the same reason the axis labels are
-/// haloed and a note ribbon is outlined: what is behind a mark here is a
-/// picture and not a background, so a low note's own colour — which is the dark
-/// end of the lattice's pitch ramp — has nothing to stand out against wherever
-/// the spectrum under it is loud. The dot keeps its true colour and the backing
-/// buys it an edge.
-///
-/// A width rather than a share, being an edge rather than a feature: it is what
-/// parts the note's colour from whatever is under it, and that job is the same
-/// size at every zoom.
+/// The retired fixed backing's inset. It remains only as the colored dot's
+/// established body size; the backing itself is now the inherited spectral
+/// geometry shadow.
 const DOT_RING_PT: f32 = 1.25;
 
 /// How far past the track's own thickness a note's mark may reach, as a share
@@ -481,13 +472,13 @@ impl Spiral {
     /// turn is inside the disc without asking. What the cap binds on is the
     /// floor in [`DOT`], which is a length in points and would otherwise draw a
     /// dot a quarter wider than the track on a small enough pane.
-    fn dot(&self) -> (f32, f32) {
+    fn dot(&self) -> f32 {
         let backed = (self.half() * DOT.0).max(DOT.1).min(self.half());
         // The fill is never under half the dot, so a track thin enough to
         // shrink the mark below two rings' worth still has a fill to carry the
         // note's colour — which is the half of the pair that says WHICH note
         // this is.
-        (backed, (backed - DOT_RING_PT).max(backed * 0.5))
+        (backed - DOT_RING_PT).max(backed * 0.5)
     }
 
     /// How much of its dialled size the rim names are drawn at: the whole band
@@ -554,7 +545,30 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
-    let marks = dots(&painter, &spiral, state, &lit);
+    let marks = dots(&spiral, state, &lit);
+    let dot_shadow = state.view.shadow.spectral_geometry.clamped();
+    if dot_shadow.casts() && !marks.is_empty() {
+        painter.add(harmonigraph_render::dot_shadow_paint_callback(
+            rect,
+            marks.clone(),
+            dot_shadow,
+            state.target_format,
+            crate::panes::lattice::pane_id(surface),
+            crate::text::spiral_shadow_surface(surface),
+        ));
+    }
+    for mark in &marks {
+        painter.circle_filled(
+            egui::pos2(mark.center[0], mark.center[1]),
+            mark.radius,
+            Color32::from_rgba_premultiplied(
+                mark.color[0],
+                mark.color[1],
+                mark.color[2],
+                mark.color[3],
+            ),
+        );
+    }
     // The LATTICE's bloom, on the dots. One setting for every picture rather
     // than a bar of its own here: the lattice's nodes, the roll's ribbons and
     // these dots are the same notes in the same colors, and a light one of them
@@ -591,7 +605,13 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
         // pair cannot name and would not pay for — see `SlideAxis`, where the
         // lattice's orbiting camera is the same answer.
         harmonigraph_render::SlideAxis::Across,
+        Some(state.view.shadow.spectral_text),
+        Some(crate::text::spiral_shadow_surface(surface)),
     );
+    painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
+        rect,
+        crate::text::spiral_shadow_surface(surface),
+    ));
 }
 
 /// Drag to slide the disc under the pane, scroll or pinch to magnify it, and
@@ -857,19 +877,16 @@ fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
 /// that cannot bloom — handed over it would only take light out of the halo the
 /// coloured disc does grow, which is the rule the roll's outline follows too.
 fn dots(
-    painter: &egui::Painter,
     spiral: &Spiral,
     state: &SharedState,
     sounding: &[Sounding],
 ) -> Vec<harmonigraph_render::GlowDot> {
-    let (backed, fill) = spiral.dot();
+    let fill = spiral.dot();
     sounding
         .iter()
         .map(|voice| {
             let at = spiral.at(voice.pitch, 0.0);
             let color = note_color(state, voice.pitch, voice.strength);
-            painter.circle_filled(at, backed, Color32::BLACK.gamma_multiply(0.75 * voice.strength));
-            painter.circle_filled(at, fill, color);
             harmonigraph_render::GlowDot {
                 center: [at.x, at.y],
                 radius: fill,
@@ -1303,7 +1320,7 @@ mod tests {
             for (low, high) in [(60.0f32, 84.0f32), (36.0, 96.0), (15.5, 135.1)] {
                 let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
                 let s = Spiral::new(rect, &cfg);
-                let (backed, _) = s.dot();
+                let backed = s.dot();
                 for pitch in [s.min_midi, s.max_midi] {
                     // Round the dot rather than out along the ray alone: it is
                     // a disc, so the point of it nearest the pane edge is not
@@ -1344,16 +1361,14 @@ mod tests {
         for side in [400.0f32, 300.0, 277.0, 250.0, 200.0, 160.0, 134.0, 120.0] {
             let rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(side, side));
             let s = Spiral::new(rect, &cfg);
-            let (backed, fill) = s.dot();
+            let fill = s.dot();
             assert!(
-                backed <= s.half(),
+                fill <= s.half(),
                 "a {side}pt pane draws a dot {} across on a {} track",
-                2.0 * backed,
+                2.0 * fill,
                 s.dr,
             );
-            // And the coloured fill is still inside its own backing, so the
-            // pair reads as a dot with an edge rather than as one flat disc.
-            assert!(fill > 0.0 && fill < backed, "a {side}pt pane fills {fill} of a {backed} dot",);
+            assert!(fill > 0.0, "a {side}pt pane lost its sounding-note dot");
         }
     }
 
@@ -1388,7 +1403,7 @@ mod tests {
             let mut state = fresh();
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
-            let fill = Spiral::new(PANE, &state.spectrum_config).dot().1;
+            let fill = Spiral::new(PANE, &state.spectrum_config).dot();
             state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
             // The COLOURED disc of the pair, not its backing: both are circles,
             // and counting either alone counts the notes once.
@@ -1417,41 +1432,12 @@ mod tests {
         for note in [55u8, 60, 67, 76] {
             state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
         }
-        let mut marks = Vec::new();
-        let shapes: Vec<egui::Shape> = painted_into(SCREEN, PANE, |ui| {
-            let spiral = Spiral::new(PANE, &state.spectrum_config);
-            let lit = sounding(&spiral, &state, 0.1);
-            marks = dots(ui.painter(), &spiral, &state, &lit);
-        })
-        .shapes
-        .into_iter()
-        .map(|s| s.shape)
-        .collect();
-
-        let fill = Spiral::new(PANE, &state.spectrum_config).dot().1;
-        let discs: Vec<&egui::epaint::CircleShape> = shapes
-            .iter()
-            .filter_map(|s| match s {
-                egui::Shape::Circle(c) if c.radius == fill => Some(c),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(discs.len(), 4, "the fixture's four notes are four coloured discs");
-        assert_eq!(marks.len(), discs.len(), "a mark per coloured disc");
-        for (mark, disc) in marks.iter().zip(&discs) {
-            assert_eq!(mark.center, [disc.center.x, disc.center.y], "a mark moved off its dot");
-            assert_eq!(mark.radius, disc.radius, "a mark is not its dot's size");
-            assert_eq!(mark.color, disc.fill.to_array(), "a mark is not its dot's colour");
-        }
-        // The pane paints TWO circles a note and hands over one of them: black
-        // is the one thing that cannot bloom, so a backing in this list would
-        // only take light out of the halo its own dot grows.
-        let circles = shapes.iter().filter(|s| matches!(s, egui::Shape::Circle(_))).count();
-        assert_eq!(
-            circles,
-            2 * marks.len(),
-            "each note is a backing and a fill, and only the fill is handed over",
-        );
+        let spiral = Spiral::new(PANE, &state.spectrum_config);
+        let lit = sounding(&spiral, &state, 0.1);
+        let marks = dots(&spiral, &state, &lit);
+        assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
+        assert!(marks.iter().all(|mark| mark.radius == spiral.dot()));
+        assert!(marks.iter().all(|mark| mark.color[3] > 0));
     }
 
     /// Nothing to light asks for no halo: the pane adds the callback for a lit
@@ -1756,7 +1742,7 @@ mod tests {
                 assert_eq!(s.ray(midi), fit.ray(midi), "zoom {zoom}: {midi} changed direction");
             }
             assert!(
-                (s.half() - fit.half() * zoom).abs() < 1e-3 && s.dot().0 > fit.dot().0,
+                (s.half() - fit.half() * zoom).abs() < 1e-3 && s.dot() > fit.dot(),
                 "zoom {zoom}: the track and the dot on it must grow with the picture",
             );
             // The names: same band, same size, and the same air between the ink

@@ -595,7 +595,19 @@ pub(crate) fn spectral_pane(
     names::draw(&painter, &note_names, text.names.label, &mut labels);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
-    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface), names_slide(&cfg));
+    labels.flush(
+        &painter,
+        rect,
+        state,
+        crate::text::spectral_labels(surface),
+        names_slide(&cfg),
+        Some(state.view.shadow.spectral_text),
+        Some(crate::text::spectral_shadow_surface(surface)),
+    );
+    painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
+        rect,
+        crate::text::spectral_shadow_surface(surface),
+    ));
 
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where

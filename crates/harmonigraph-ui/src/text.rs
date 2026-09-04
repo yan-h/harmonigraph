@@ -1,18 +1,10 @@
 //! Haloed label text: collected as glyphs here, drawn by
 //! `harmonigraph_render`'s own text module.
 //!
-//! Text on either picture pane needs to be lifted off what it lands on —
-//! note names over lit nodes, pitch labels over the spectrogram. Stamping
-//! that rim as geometry, the whole label repeated around two rings, is
-//! twenty more copies of every glyph: most of the geometry in a busy frame,
-//! and it makes labels a budget where every new one costs twenty-one draws
-//! of its own text.
-//!
-//! So a piece of text becomes one quad per glyph and the rim is computed
-//! per pixel from the same offsets (see `harmonigraph_render::text` for why the
-//! two are the same arithmetic). What a label costs does not depend on its
-//! rim, which is what makes labels something to place where they help
-//! rather than something to ration.
+//! Text on either picture pane needs to be lifted off what it lands on — note
+//! names over lit nodes, pitch labels over the spectrogram. Each glyph maps a
+//! fixed signed-distance patch onto its laid-out rect, so either Shadow kernel
+//! is derived from the same letterform while the visible ink stays egui's.
 //!
 //! egui still lays the text out. A [`TextBatch`] collects the glyphs of
 //! however many pieces of text a pane draws, and hands them over in one
@@ -31,13 +23,13 @@
 //! septimal chevron — are glyphs here too. They are rasterized by `marks`
 //! rather than by egui and packed into a sheet of their own
 //! ([`MarkAtlas`]), and from there everything is shared: one quad apiece, the
-//! rim from `fs_rim`'s arithmetic rather than a second bitmap, and a place in
+//! shadow from the same fixed SDF rather than repeated bitmap stamps, and a place in
 //! whichever run of letters they were collected with. That last is what the
 //! move is for — a mark on the painter is drawn over the finished picture,
 //! where the node in front that just covered the name beside it cannot reach
 //! it.
 
-use harmonigraph_render::{GlyphInstance, TextRing};
+use harmonigraph_render::GlyphInstance;
 
 /// Tell this context that its shell publishes egui's font texture to wgpu
 /// paint callbacks after applying the current frame's texture deltas.
@@ -55,40 +47,6 @@ fn renderer_font_texture_is_current(ctx: &egui::Context) -> bool {
     ctx.data(|data| {
         data.get_temp::<bool>(egui::Id::new("harmonigraph_renderer_font_texture")).unwrap_or(false)
     })
-}
-
-/// The halo's two rings, as (radius in points, stamp alpha, samples).
-///
-/// The sample counts are a cost, not a look: each is one more evaluation of
-/// the glyph's coverage per pixel. They were 16 and 16 —
-///
-///   - the crisp ring is opaque, so its samples only have to close the gap:
-///     at a 1.2pt radius, 12 land half a point apart and the union reads as
-///     one line (8 starts to scallop, 4 visibly thins on the diagonals);
-///   - the soft ring is a fade, and a fade is made of overlap. Halving its
-///     samples to 8 thins it, so its stamp alpha rises to compensate: 0.21
-///     against 0.15, tuned by rendering the pair and matching pixels rather
-///     than by the compositing arithmetic, which assumes an overlap count
-///     that in fact varies across the rim.
-///
-/// Radii are snapped to whole physical pixels before use: mixed
-/// cardinal/diagonal offsets and sub-pixel radii both read as a lumpy
-/// outline on a high-DPI display.
-const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
-
-/// One ring's radius on this display, rounded to a whole physical pixel.
-///
-/// A SIZE, and the one thing here that is still rounded now that positions
-/// are not: a sub-pixel or mixed-fraction radius reads as a lumpy outline,
-/// and unlike a position it is a constant of the frame, so rounding it
-/// cannot make anything step as it moves.
-///
-/// One rim for everything the pass draws, marks included: they are instances
-/// of the same shader, so the `+` and the letter beside it take their halo
-/// from one radius by construction rather than from two constants that have
-/// to be kept equal.
-fn ring_radius(radius: f32, ppp: f32) -> f32 {
-    (radius * ppp).round().max(1.0) / ppp
 }
 
 /// A text scale snapped so that text of `base` points lands on a whole
@@ -305,6 +263,15 @@ pub(crate) fn spectral_labels(surface: usize) -> u64 {
     batch(surface, 2)
 }
 
+/// Shared shadow targets are per destination surface and per pane kind.
+pub(crate) fn spectral_shadow_surface(surface: usize) -> u64 {
+    surface as u64 * 2
+}
+
+pub(crate) fn spiral_shadow_surface(surface: usize) -> u64 {
+    surface as u64 * 2 + 1
+}
+
 /// One glyph as the mirror identifies it: its size, its character, and the
 /// TEXEL it was found at.
 ///
@@ -466,15 +433,15 @@ impl TextBatch {
         out
     }
 
-    /// Add one piece of text, haloed. `outline` should be the skin's
+    /// Add one piece of text, shadowed. `outline` should be the skin's
     /// recessed surface (`theme::well`), which contrasts with any text color
     /// by construction; a transparent one draws the glyphs bare.
     ///
     /// Both colors' ALPHA is the label's strength, and each is worth it in
-    /// full: a rim at half covers half, exactly as the fill does, so fading
-    /// the pair together fades one thing (`fs_rim` in `harmonigraph_render`'s
-    /// text shader). Fading only the fill leaves the halo behind, and the
-    /// halo is the letter's own shape in the skin's darkest color.
+    /// full: a shadow at half covers half, exactly as the fill does, so fading
+    /// the pair together fades one thing. Fading only the fill leaves the
+    /// shadow behind, and the shadow is the letter's own shape in the skin's
+    /// knockout color.
     ///
     /// egui does the work that decides what the pixels are — shaping,
     /// rasterizing, and placing every glyph — and this reads the placement
@@ -684,6 +651,10 @@ impl TextBatch {
     /// rather than defaulted because the caller is the only one that knows:
     /// the analyzer's names ride its time axis and so scroll whichever way
     /// its orientation points that, and nothing here can see it.
+    ///
+    /// `shadow_surface_id` joins spectral text to the roll or spiral geometry
+    /// on the same destination surface. Unshadowed chrome passes `None`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn flush(
         &mut self,
         painter: &egui::Painter,
@@ -691,6 +662,8 @@ impl TextBatch {
         state: &crate::SharedState,
         pane_id: u64,
         slide: harmonigraph_render::SlideAxis,
+        shadow: Option<harmonigraph_scene::ShadowStyle>,
+        shadow_surface_id: Option<u64>,
     ) {
         if self.glyphs.is_empty() {
             return;
@@ -711,15 +684,18 @@ impl TextBatch {
             )
         };
         let marks = marks_if_changed(painter.ctx(), &state.instruments.font_atlas);
+        let sdf = shadow.map(|_| crate::text_sdf::sheet().atlas.clone());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
-            rings(painter.ctx()),
+            shadow,
             atlas,
             marks,
+            sdf,
             slide,
             state.target_format,
             pane_id,
+            shadow_surface_id,
         ));
     }
 
@@ -791,16 +767,6 @@ impl TextBatch {
             slide: harmonigraph_render::SlideAxis::default(),
         }
     }
-}
-
-/// The halo's rings at this display's scale, as the renderer takes them.
-fn rings(ctx: &egui::Context) -> [TextRing; 2] {
-    let ppp = ctx.pixels_per_point();
-    RINGS.map(|(radius, alpha, samples)| TextRing {
-        radius: ring_radius(radius, ppp),
-        alpha,
-        samples,
-    })
 }
 
 /// What one glyph renderer has received from an egui context.

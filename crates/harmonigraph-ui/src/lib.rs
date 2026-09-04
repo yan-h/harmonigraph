@@ -64,7 +64,7 @@ pub use panes::spiral::SpiralView;
 // through this crate, and where a type is defined is not their business.
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
-    ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_OUTLINE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
+    ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
 pub use harmonigraph_take::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,

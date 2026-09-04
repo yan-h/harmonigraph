@@ -268,22 +268,6 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     edge_bar(
         ui,
-        (&mut cfg.roll_outline, &mut cfg.roll_outline_fade),
-        crate::ROLL_OUTLINE_MAX,
-        "Outline",
-        {
-            let fresh = crate::SpectrumConfig::default();
-            (fresh.roll_outline, fresh.roll_outline_fade)
-        },
-        |v| format!("{v:.1}"),
-    )
-    .on_hover_text(
-        "A dark surround that stands each ribbon off the heatmap — in points, \
-         so it is the same edge at every zoom. Solid to the inner handle, gone \
-         by the outer. 0 draws none.",
-    );
-    edge_bar(
-        ui,
         (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
         crate::ROLL_LEAD_MAX,
         "Lead",

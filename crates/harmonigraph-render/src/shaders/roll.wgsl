@@ -53,6 +53,11 @@ struct Locals {
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
     depth_dir: vec2<f32>,
+    _axis_pad: vec2<f32>,
+    /// σ, depth, kernel kind (Distance = 1), and whole kernel reach, in points.
+    shadow: vec4<f32>,
+    shadow_atlas_size: vec2<f32>,
+    _shadow_pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -69,39 +74,40 @@ struct VertexOut {
     /// How far the outline reaches past the note's edge, in points, and 0 when
     /// the outline is off. It wraps every side — see [`outline_coverage`].
     @location(3) @interpolate(flat) outline_reach: f32,
-    /// How much of that reach the outline spends fading out, in points.
-    @location(4) @interpolate(flat) outline_fade: f32,
     /// How much of the box's LEADING end is a lead rather than the note itself,
     /// in points — 0 for the ordinary segment that is all note. See
     /// [`lead_coverage`].
-    @location(5) @interpolate(flat) lead: f32,
+    @location(4) @interpolate(flat) lead: f32,
     /// How much of that lead is spent fading out at the tip, in points.
-    @location(6) @interpolate(flat) lead_fade: f32,
+    @location(5) @interpolate(flat) lead_fade: f32,
     /// How much of the lead is still standing, 0..1.
-    @location(7) @interpolate(flat) lead_alpha: f32,
+    @location(6) @interpolate(flat) lead_alpha: f32,
     /// How far the outline's cap at the NOTE's own leading end reaches, in
     /// points. See [`cap_coverage`].
-    @location(8) @interpolate(flat) cap_reach: f32,
+    @location(7) @interpolate(flat) cap_reach: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(9) @interpolate(flat) core: vec4<f32>,
+    @location(8) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
-    @location(10) @interpolate(flat) outline: vec4<f32>,
+    @location(9) @interpolate(flat) outline: vec4<f32>,
+    /// Surface point and caster index for the Gaussian atlas read.
+    @location(10) at: vec2<f32>,
+    @location(11) @interpolate(flat) who: u32,
 };
 
 @vertex
 fn vs_note(
     @builtin(vertex_index) vertex: u32,
+    @builtin(instance_index) who: u32,
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
-    @location(4) outline_fade: f32,
-    @location(5) lead: f32,
-    @location(6) lead_fade: f32,
-    @location(7) lead_alpha: f32,
-    @location(8) cap_reach: f32,
-    @location(9) core: vec4<f32>,
-    @location(10) outline: vec4<f32>,
+    @location(4) lead: f32,
+    @location(5) lead_fade: f32,
+    @location(6) lead_alpha: f32,
+    @location(7) cap_reach: f32,
+    @location(8) core: vec4<f32>,
+    @location(9) outline: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -126,7 +132,7 @@ fn vs_note(
     // outline reaches a multiple of its own reach. The `slope` term is the
     // drift of the center line over the quad's own half-length, ends included.
     let skew = sqrt(1.0 + slope * slope);
-    let reach = outline_reach + 0.5 * locals.feather;
+    let reach = locals.shadow.w + 0.5 * locals.feather;
     let half_depth = half_extent.y + reach + 0.5 * locals.feather;
     let extent = vec2<f32>(
         half_extent.x + abs(slope) * half_depth + skew * reach,
@@ -147,15 +153,72 @@ fn vs_note(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
-    out.outline_reach = outline_reach;
-    out.outline_fade = outline_fade;
+    out.outline_reach = locals.shadow.w;
     out.lead = lead;
     out.lead_fade = lead_fade;
     out.lead_alpha = lead_alpha;
     out.cap_reach = cap_reach;
     out.core = core;
     out.outline = outline;
+    out.at = pos;
+    out.who = who;
     return out;
+}
+
+/// Rasterize the roll box field's coverage into a Gaussian cell. The quad is
+/// the packer's padded box; each point is projected back onto the roll's own
+/// pitch/depth axes before the same `box_distance` as the scene draw reads it.
+@vertex
+fn vs_shadow_cell(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) center: vec2<f32>,
+    @location(1) half_extent: vec2<f32>,
+    @location(2) shear: f32,
+    @location(3) outline_reach: f32,
+    @location(4) lead: f32,
+    @location(5) lead_fade: f32,
+    @location(6) lead_alpha: f32,
+    @location(7) cap_reach: f32,
+    @location(8) core: vec4<f32>,
+    @location(9) outline: vec4<f32>,
+    @location(10) box_rect: vec4<f32>,
+    @location(11) box_cell: vec4<f32>,
+    @location(12) box_meta: vec4<f32>,
+    @location(13) box_who: vec4<f32>,
+) -> VertexOut {
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex & 1u) == 1u),
+        select(0.0, 1.0, (vertex & 2u) == 2u),
+    );
+    let point = box_rect.xy + corner * box_rect.zw;
+    let delta = point - center;
+    var out: VertexOut;
+    let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
+    out.position = select(
+        no_quad(),
+        cell_clip(texel, locals.shadow_atlas_size, 1.0),
+        cell_packed(box_cell) && box_who.y < 0.5 * DISTANCE_KIND,
+    );
+    out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
+    out.half_extent = half_extent;
+    out.shear = shear;
+    out.outline_reach = locals.shadow.w;
+    out.lead = lead;
+    out.lead_fade = lead_fade;
+    out.lead_alpha = lead_alpha;
+    out.cap_reach = cap_reach;
+    out.core = core;
+    out.outline = outline;
+    out.at = point;
+    out.who = u32(box_who.x + 0.5);
+    return out;
+}
+
+@fragment
+fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
+    let d = box_distance(in);
+    let coverage = inside(d, 0.0) * lead_coverage(in);
+    return vec4<f32>(coverage, 0.0, 0.0, 1.0);
 }
 
 /// Coverage of everything on the near side of `edge`: how much of a
@@ -170,35 +233,22 @@ fn inside(d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// How much of the outline survives at distance `d` outside the note: solid
-/// against the note's edge, fading over the last `outline_fade` points of its
-/// reach, gone by `reach`.
-///
-/// The reach is a parameter rather than read off the instance because the cap
-/// at a led note's own end is given a shorter one ([`cap_coverage`]) — the same
-/// band, measured against a different edge and allowed less room.
-///
-/// TWO numbers rather than one: a fade tied to the reach makes a wider outline
-/// always a blurrier one, so how far it stands out and how softly it ends are
-/// set apart. A fade at or past the reach fades the whole of it, from the note's
-/// edge outward; a fade of 0 is a hard edge.
-///
-/// `d` is clamped at the note's edge rather than run on inward, which is what
-/// makes an outline of no reach paint NOTHING: run inward, its ramp would still
-/// be at full coverage across the note's own antialiased boundary, and every
-/// note would wear a dark fringe with the outline turned off.
-///
-/// The ramp is never narrower than one pixel, so a hard-edged outline is still
-/// an antialiased one. Under a pixel of reach the whole outline comes out
-/// FAINTER instead of snapping to a pixel of full black — [`inside`]'s bargain,
-/// taken here as well so the two edges of a hairline agree.
-///
-/// And never wider than the reach either, so a fade set past it eats outward
-/// rather than into the coverage against the note: whatever the two are set to,
-/// the outline is solid where it meets the note's edge.
+/// The selected common shadow renderer at this fragment. Distance consumes the
+/// box SDF directly; Gaussian reads the one blurred coverage cell made from
+/// that same SDF. The pane keeps only the outside half as its dark surround.
 fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    let w = max(min(in.outline_fade, reach), max(locals.feather, 1e-6));
-    return clamp((reach - max(d, 0.0)) / w, 0.0, 1.0);
+    if reach <= 0.0 || locals.shadow.y <= 0.0 {
+        return 0.0;
+    }
+    var full = standoff_coverage(d, 2.0 * locals.shadow.x);
+    if locals.shadow.z < 0.5 * DISTANCE_KIND {
+        full = shadow_kernel(in.who, in.at);
+    }
+    // The common style owns the profile, while `reach` may still shorten an
+    // interior cap when the pane has less room before its now-line. Keep that
+    // geometric bound hard: shortening a cap moves its end instead of dimming
+    // the whole profile.
+    return (1.0 - shadow_transmittance(full, locals.shadow.y, 1.0)) * inside(d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and

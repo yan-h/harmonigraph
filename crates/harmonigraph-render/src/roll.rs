@@ -39,15 +39,22 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
-const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
+pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
 /// Entry points the roll shader must provide: the vertex stage, and each of
 /// the two layers in each of the two shadings [`create_roll_pipeline`] picks
 /// between. Its entry point is assembled from those two words, so a rename in
 /// the WGSL is a panic at pipeline creation and nothing sooner.
-#[cfg(test)]
-pub(crate) const ROLL_ENTRY_POINTS: &[&str] =
-    &["vs_note", "fs_outline_gamma", "fs_outline_linear", "fs_core_gamma", "fs_core_linear"];
+#[cfg(any(test, feature = "hot-reload"))]
+pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
+    "vs_note",
+    "fs_outline_gamma",
+    "fs_outline_linear",
+    "fs_core_gamma",
+    "fs_core_linear",
+    "vs_shadow_cell",
+    "fs_shadow_coverage",
+];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
 /// color, and the outline standing outside every one of its sides.
@@ -84,15 +91,6 @@ pub struct RollInstance {
     /// true thickness at any angle, and it is `vs_note`'s job to grow the quad
     /// by however far along pitch that reaches.
     pub outline_reach: f32,
-    /// How much of that reach the outline spends fading out, in points — 0 for
-    /// a hard edge, the whole reach to fade from the note's edge outward.
-    ///
-    /// Separate from the reach rather than a fraction of it, exactly as the
-    /// lattice's gutter and gutter fade are separate: tying the two makes a
-    /// wider outline always a blurrier one. Separate NUMBERS — the pane sets
-    /// both on one bar, as two points on the axis running out from the note's
-    /// edge.
-    pub outline_fade: f32,
     /// How much of this segment's LEADING end is a LEAD — a stretch of ribbon
     /// the caller grew the box by, drawn as an extension of the note rather
     /// than as part of it — in points, and 0 for the ordinary segment that is
@@ -179,13 +177,12 @@ impl RollInstance {
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
             3 => Float32,   // outline_reach
-            4 => Float32,   // outline_fade
-            5 => Float32,   // lead
-            6 => Float32,   // lead_fade
-            7 => Float32,   // lead_alpha
-            8 => Float32,   // cap_reach
-            9 => Unorm8x4,  // core
-            10 => Unorm8x4, // outline
+            4 => Float32,  // lead
+            5 => Float32,  // lead_fade
+            6 => Float32,  // lead_alpha
+            7 => Float32,  // cap_reach
+            8 => Unorm8x4, // core
+            9 => Unorm8x4, // outline
         ],
     };
 }
@@ -212,17 +209,29 @@ pub struct RollAxes {
 ///
 /// `bloom` is the lattice's own bloom strength, applied to these notes through
 /// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
+#[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
     instances: Vec<RollInstance>,
     axes: RollAxes,
     bloom: f32,
+    shadow: harmonigraph_scene::ShadowStyle,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    shadow_surface_id: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        RollCallback { rect, instances, axes, bloom, target_format, pane_id },
+        RollCallback {
+            rect,
+            instances,
+            axes,
+            bloom,
+            shadow,
+            target_format,
+            pane_id,
+            shadow_surface_id,
+        },
     )
 }
 
@@ -235,8 +244,10 @@ struct RollCallback {
     instances: Vec<RollInstance>,
     axes: RollAxes,
     bloom: f32,
+    shadow: harmonigraph_scene::ShadowStyle,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    shadow_surface_id: u64,
 }
 
 #[repr(C)]
@@ -248,6 +259,10 @@ struct RollUniforms {
     _pad: f32,
     pitch_dir: [f32; 2],
     depth_dir: [f32; 2],
+    _axis_pad: [f32; 2],
+    shadow: [f32; 4],
+    shadow_atlas_size: [f32; 2],
+    _shadow_pad: [f32; 2],
 }
 
 /// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
@@ -266,6 +281,7 @@ struct RollResources {
     /// second draw costs.
     outline_pipeline: wgpu::RenderPipeline,
     core_pipeline: wgpu::RenderPipeline,
+    shadow_cell_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     /// The bloom chain's four post passes and the one that lays the result
     /// over the notes. The four are the lattice's, out of the same blit.wgsl
@@ -285,6 +301,8 @@ struct RollResources {
     bloom_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
+    #[cfg(feature = "hot-reload")]
+    generation: u64,
     panes: HashMap<u64, RollPane>,
     /// Counts `prepare` calls, which is what [`RollPane::last_seen`] is
     /// stamped with — a clock the callback already has, where a frame count
@@ -363,7 +381,19 @@ struct RollBloom {
 const INITIAL_NOTE_CAPACITY: usize = 512;
 
 impl RollResources {
-    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
+        #[cfg(feature = "hot-reload")]
+        if self.generation != crate::reload::generation() {
+            return true;
+        }
+        self.target_format != target_format
+    }
+
+    fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        shadow_layouts: &crate::spectral_shadow::Layouts,
+    ) -> Self {
         let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -417,15 +447,33 @@ impl RollResources {
                 },
             ],
         });
-        let note_pipeline = |layer| create_roll_pipeline(device, target_format, &layout, layer);
+        let note_pipeline = |layer| {
+            create_roll_pipeline(
+                device,
+                target_format,
+                &layout,
+                &shadow_layouts.atlas,
+                &shadow_layouts.casters,
+                layer,
+            )
+        };
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way every other thing
         // the roll draws does.
         let filter =
             |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("roll_bloom_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         RollResources {
             outline_pipeline: note_pipeline("outline"),
             core_pipeline: note_pipeline("core"),
+            shadow_cell_pipeline: create_shadow_cell_pipeline(device, &layout),
             layout,
             bright_pipeline: filter("fs_bright"),
             downsample_pipeline: filter("fs_blit"),
@@ -443,15 +491,10 @@ impl RollResources {
             // Linear, and the reason is the halo rather than the notes: the
             // chain reads each target at half the size of the one before it,
             // so every hop is a resample.
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("roll_bloom_sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            sampler,
             target_format,
+            #[cfg(feature = "hot-reload")]
+            generation: crate::reload::generation(),
             panes: HashMap::new(),
             prepares: 0,
         }
@@ -612,15 +655,22 @@ fn create_roll_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
+    shadow: &wgpu::BindGroupLayout,
+    casters: &wgpu::BindGroupLayout,
     layer: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("roll_shader"),
-        source: wgpu::ShaderSource::Wgsl(ROLL_SRC.into()),
+        source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
     });
+    let bind_group_layouts = if layer == "outline" {
+        vec![Some(layout), None, Some(shadow), Some(casters)]
+    } else {
+        vec![Some(layout)]
+    };
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("roll_pipeline_layout"),
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &bind_group_layouts,
         ..Default::default()
     });
     // Same fork egui makes, for the same reason: an sRGB-aware target wants
@@ -657,6 +707,49 @@ fn create_roll_pipeline(
     })
 }
 
+fn create_shadow_cell_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("roll_shadow_cell_shader"),
+        source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("roll_shadow_cell_pipeline_layout"),
+        bind_group_layouts: &[Some(layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("roll_shadow_cell"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_shadow_cell"),
+            compilation_options: Default::default(),
+            buffers: &[RollInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_ROLL],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_shadow_coverage"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: crate::shadow::ATLAS_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl CallbackTrait for RollCallback {
     fn prepare(
         &self,
@@ -666,11 +759,16 @@ impl CallbackTrait for RollCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        let shadow_layouts = crate::spectral_shadow::layouts(device, callback_resources);
         let recreate = callback_resources
             .get::<RollResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
+            .is_none_or(|r| r.is_stale(self.target_format));
         if recreate {
-            callback_resources.insert(RollResources::new(device, self.target_format));
+            callback_resources.insert(RollResources::new(
+                device,
+                self.target_format,
+                &shadow_layouts,
+            ));
         }
         let resources: &mut RollResources =
             callback_resources.get_mut().expect("inserted above when missing");
@@ -678,6 +776,34 @@ impl CallbackTrait for RollCallback {
         let prepares = resources.prepares;
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
+        let style = self.shadow.clamped();
+        let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
+        let casters: Vec<crate::shadow::Caster> = self
+            .instances
+            .iter()
+            .map(|note| {
+                let half_pitch = note.half_extent[0] + note.shear.abs() * note.half_extent[1];
+                let half_depth = note.half_extent[1];
+                let screen_half = [
+                    self.axes.pitch_dir[0].abs() * half_pitch
+                        + self.axes.depth_dir[0].abs() * half_depth,
+                    self.axes.pitch_dir[1].abs() * half_pitch
+                        + self.axes.depth_dir[1].abs() * half_depth,
+                ];
+                crate::shadow::Caster {
+                    rect: [
+                        note.center[0] - screen_half[0],
+                        note.center[1] - screen_half[1],
+                        2.0 * screen_half[0],
+                        2.0 * screen_half[1],
+                    ],
+                    level: 1.0,
+                    sigma_points: sigma,
+                    kernel: style.kernel,
+                    direct_distance: true,
+                }
+            })
+            .collect();
         let uniforms = RollUniforms {
             // The whole surface, which is the viewport `paint` draws into.
             origin_points: [0.0, 0.0],
@@ -694,6 +820,17 @@ impl CallbackTrait for RollCallback {
             _pad: 0.0,
             pitch_dir: self.axes.pitch_dir,
             depth_dir: self.axes.depth_dir,
+            _axis_pad: [0.0; 2],
+            shadow: [
+                sigma,
+                style.depth,
+                if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
+                crate::shadow::spectral_shadow_reach(style),
+            ],
+            // Patched with the shared target's actual retained allocation by
+            // the surface finalizer after every spectral group has arrived.
+            shadow_atlas_size: [1.0; 2],
+            _shadow_pad: [0.0; 2],
         };
 
         // The roll's own rect in device pixels, which is what the bloom chain
@@ -739,6 +876,7 @@ impl CallbackTrait for RollCallback {
         let RollResources {
             core_pipeline,
             layout,
+            shadow_cell_pipeline,
             bright_pipeline,
             downsample_pipeline,
             blur_h_pipeline,
@@ -777,54 +915,71 @@ impl CallbackTrait for RollCallback {
         if pane.bloom.as_ref().is_some_and(|b| b.size != bloom_size) {
             pane.bloom = None;
         }
-        let Some(notes_uniforms) = bloom_pass else {
-            return Vec::new();
-        };
-        let bloom = pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
-        queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
-        queue.write_buffer(
-            &bloom.strength_buffer,
-            0,
-            bytemuck::bytes_of(&BloomUniforms { strength: [self.bloom, 0.0, 0.0, 0.0] }),
-        );
+        if let Some(notes_uniforms) = bloom_pass {
+            let bloom =
+                pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
+            queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
+            queue.write_buffer(
+                &bloom.strength_buffer,
+                0,
+                bytemuck::bytes_of(&BloomUniforms { strength: [self.bloom, 0.0, 0.0, 0.0] }),
+            );
 
-        // The notes again at half size, and then the lattice's own chain over
-        // them, step for step (see [`BloomChain::run`]).
-        {
-            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("roll_bloom_notes"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &bloom.notes_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            // The BODIES alone. The outline is black, and black is the one
-            // thing that cannot bloom — painting it here would only overwrite
-            // the color of whatever note it reaches across, taking light out
-            // of a halo the picture does grow.
-            pass.set_pipeline(core_pipeline);
-            pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
-            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-            pass.draw(0..4, 0..pane.count);
+            // The notes again at half size, and then the lattice's own chain
+            // over them, step for step (see [`BloomChain::run`]).
+            {
+                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("roll_bloom_notes"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &bloom.notes_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                // The BODIES alone. The outline is black, and black is the
+                // one thing that cannot bloom.
+                pass.set_pipeline(core_pipeline);
+                pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, 0..pane.count);
+            }
+            bloom.bloom.run(
+                egui_encoder,
+                crate::BloomPipelines {
+                    bright: bright_pipeline,
+                    downsample: downsample_pipeline,
+                    blur_h: blur_h_pipeline,
+                    blur_v: blur_v_pipeline,
+                },
+                "roll",
+            );
         }
-        bloom.bloom.run(
-            egui_encoder,
-            crate::BloomPipelines {
-                bright: bright_pipeline,
-                downsample: downsample_pipeline,
-                blur_h: blur_h_pipeline,
-                blur_v: blur_v_pipeline,
+
+        let submission = crate::spectral_shadow::Submission {
+            key: crate::spectral_shadow::ProducerKey::Roll(self.pane_id),
+            casters,
+            draw: crate::spectral_shadow::CellDraw::Roll {
+                pipeline: shadow_cell_pipeline.clone(),
+                locals: pane.bind_group.clone(),
+                instances: pane.instance_buffer.clone(),
+                count: pane.count,
             },
-            "roll",
+            atlas_uniform: pane.uniform_buffer.clone(),
+            atlas_size_offset: std::mem::offset_of!(RollUniforms, shadow_atlas_size) as u64,
+        };
+        crate::spectral_shadow::register(
+            device,
+            callback_resources,
+            self.shadow_surface_id,
+            submission,
         );
 
         Vec::new()
@@ -865,11 +1020,22 @@ impl CallbackTrait for RollCallback {
         // surroundings are other notes; under all of them it can darken the
         // picture and nothing else. See the head of roll.wgsl.
         render_pass.set_bind_group(0, &pane.bind_group, &[]);
+        let shadow = crate::spectral_shadow::binding(
+            callback_resources,
+            self.shadow_surface_id,
+            crate::spectral_shadow::ProducerKey::Roll(self.pane_id),
+        );
+        if let Some(shadow) = &shadow {
+            render_pass.set_bind_group(2, shadow.atlas, &[]);
+            render_pass.set_bind_group(3, shadow.casters, &[]);
+        }
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        for pipeline in [&resources.outline_pipeline, &resources.core_pipeline] {
-            render_pass.set_pipeline(pipeline);
+        if shadow.as_ref().is_some_and(|binding| binding.active) {
+            render_pass.set_pipeline(&resources.outline_pipeline);
             render_pass.draw(0..4, 0..pane.count);
         }
+        render_pass.set_pipeline(&resources.core_pipeline);
+        render_pass.draw(0..4, 0..pane.count);
 
         // The halo over them, from the chain `prepare` ran — light only, and
         // last, so a note's own body is brightened by it the way a lattice
@@ -985,11 +1151,25 @@ mod tests {
         // here as it is everywhere else in these tests.
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-        let cb = RollCallback { rect, instances, axes, bloom, target_format: FORMAT, pane_id: 0 };
+        let cb = RollCallback {
+            rect,
+            instances,
+            axes,
+            shadow: harmonigraph_scene::ShadowStyle {
+                width: 0.5,
+                depth: 1.0,
+                kernel: harmonigraph_scene::ShadowKernel::Distance,
+            },
+            bloom,
+            target_format: FORMAT,
+            pane_id: 0,
+            shadow_surface_id: 0,
+        };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
+        crate::spectral_shadow::finish(device, queue, &screen, &mut encoder, &mut resources, 0);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let texture = render_to_texture(device, queue, SIZE, FORMAT, clear, |pass| {
@@ -1017,6 +1197,10 @@ mod tests {
         got.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3)
     }
 
+    fn shadowed(got: [u8; 4]) -> bool {
+        got[2] < BG[2]
+    }
+
     /// A straight note centered in the frame: 24 points thick, 120 long, in a
     /// 4-point black outline with no fade, and square at both ends. Wide enough
     /// that a sample lands well inside the outline, and hard-edged so where it
@@ -1029,7 +1213,6 @@ mod tests {
             half_extent: [12.0, 60.0],
             shear: 0.0,
             outline_reach: 4.0,
-            outline_fade: 0.0,
             lead: 0.0,
             lead_fade: 0.0,
             lead_alpha: 0.0,
@@ -1091,17 +1274,9 @@ mod tests {
         );
         // And it still draws the reach it does have.
         assert!(
-            near(at(greedy, 106), [0, 0, 0, 255]),
+            shadowed(at(greedy, 106)),
             "clamping the cap to the outline took the cap with it: {:?}",
             at(greedy, 106),
-        );
-        // No outline, no cap — a point and a half inside the note's own end,
-        // where a 4-point cap would be solid.
-        let bare = RollInstance { outline_reach: 0.0, ..led_note(40.0, 0.0, 0.0) };
-        assert!(
-            near(at(bare, 106), BG),
-            "a note with its outline off still wore a cap: {:?}",
-            at(bare, 106),
         );
     }
 
@@ -1140,7 +1315,8 @@ mod tests {
             // Read on BLUE. The background is `[64, 96, 128]`, so its own red
             // channel is already darker than a threshold picked for black —
             // the one channel the two are far apart on is the one to ask.
-            let dark: Vec<u32> = (0..SIZE[0]).filter(|&x| pixel(&frame, x, 106)[2] < 60).collect();
+            let dark: Vec<u32> =
+                (0..SIZE[0]).filter(|&x| shadowed(pixel(&frame, x, 106))).collect();
             assert!(!dark.is_empty(), "the cap painted nothing at all at a shear of {shear}");
             f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5
         };
@@ -1182,17 +1358,21 @@ mod tests {
         let note = RollInstance { outline: [128, 128, 128, 255], ..led_note(40.0, 0.0, 0.5) };
         let frame = draw(&device, &queue, vec![note], bg_color());
         let corner = pixel(&frame, 141, 106);
+        let cap_only = RollInstance { lead_alpha: 0.0, ..note };
+        let cap_frame = draw(&device, &queue, vec![cap_only], bg_color());
+        let expected = pixel(&cap_frame, 141, 106);
         assert!(
-            near(corner, [128, 128, 128, 255]),
-            "the corner is not the outline's own color ({corner:?}) — the wrap and the \
-             cap are being summed rather than unioned",
+            near(corner, expected),
+            "the overlap {corner:?} differs from the cap alone {expected:?} — the wrap and \
+             the cap are being summed rather than unioned",
         );
     }
 
     #[test]
     fn baked_roll_shader_validates() {
-        let module = naga::front::wgsl::parse_str(ROLL_SRC)
-            .map_err(|e| e.emit_to_string(ROLL_SRC))
+        let source = crate::with_common(ROLL_SRC);
+        let module = naga::front::wgsl::parse_str(&source)
+            .map_err(|e| e.emit_to_string(&source))
             .expect("roll.wgsl must parse");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -1217,7 +1397,136 @@ mod tests {
         let Some((device, _queue)) = headless_device() else {
             return;
         };
-        let _resources = RollResources::new(&device, FORMAT);
+        let mut callbacks = CallbackResources::default();
+        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
+        let _resources = RollResources::new(&device, FORMAT, &layouts);
+    }
+
+    #[test]
+    fn either_spectral_geometry_endpoint_allocates_no_roll_shadow_atlas() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        for shadow in [
+            harmonigraph_scene::ShadowStyle {
+                width: 0.0,
+                depth: 1.0,
+                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            },
+            harmonigraph_scene::ShadowStyle {
+                width: 1.0,
+                depth: 0.0,
+                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            },
+        ] {
+            let cb = RollCallback {
+                rect,
+                instances: vec![centered_note()],
+                axes: TOP,
+                shadow,
+                bloom: 0.0,
+                target_format: FORMAT,
+                pane_id: 0,
+                shadow_surface_id: 0,
+            };
+            let mut resources = CallbackResources::default();
+            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            crate::spectral_shadow::finish(
+                &device,
+                &queue,
+                &screen,
+                &mut encoder,
+                &mut resources,
+                0,
+            );
+            assert!(
+                !crate::spectral_shadow::target_allocated(&resources, 0),
+                "{shadow:?} allocated a shadow atlas"
+            );
+        }
+    }
+
+    #[test]
+    fn both_roll_geometry_kernels_hold_at_editor_and_export_scales() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        for kernel in
+            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+        {
+            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+                let physical = (64.0 * ppp).round() as u32;
+                let size = [physical.div_ceil(64) * 64, physical];
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+                let shadow = harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, kernel };
+                let reach = crate::shadow::spectral_shadow_reach(shadow);
+                let note = RollInstance {
+                    center: [32.0, 32.0],
+                    half_extent: [5.0, 12.0],
+                    shear: 0.0,
+                    outline_reach: reach,
+                    lead: 0.0,
+                    lead_fade: 0.0,
+                    lead_alpha: 0.0,
+                    cap_reach: reach,
+                    core: [255, 0, 0, 255],
+                    outline: [0, 0, 0, 255],
+                };
+                let cb = RollCallback {
+                    rect,
+                    instances: vec![note],
+                    axes: TOP,
+                    shadow,
+                    bloom: 0.0,
+                    target_format: FORMAT,
+                    pane_id: 0,
+                    shadow_surface_id: 0,
+                };
+                let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+                let mut resources = CallbackResources::default();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+                crate::spectral_shadow::finish(
+                    &device,
+                    &queue,
+                    &screen,
+                    &mut encoder,
+                    &mut resources,
+                    0,
+                );
+                queue.submit(buffers.into_iter().chain([encoder.finish()]));
+                let texture =
+                    render_to_texture(&device, &queue, size, FORMAT, wgpu::Color::WHITE, |pass| {
+                        cb.paint(
+                            egui::PaintCallbackInfo {
+                                viewport: rect,
+                                clip_rect: rect,
+                                pixels_per_point: ppp,
+                                screen_size_px: size,
+                            },
+                            pass,
+                            &resources,
+                        );
+                    });
+                let frame = readback(&device, &queue, &texture, size);
+                let pixel = |x: f32, y: f32| {
+                    let i = ((((y * ppp).floor() as u32) * size[0] + (x * ppp).floor() as u32) * 4)
+                        as usize;
+                    [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+                };
+                let shadow_pixel = pixel(25.0, 32.0);
+                assert!(
+                    shadow_pixel[0] < 245 && shadow_pixel[1] == shadow_pixel[0],
+                    "{kernel:?} at {ppp} ppp left no black under-body shadow: {shadow_pixel:?}",
+                );
+                assert_eq!(pixel(32.0, 32.0), [255, 0, 0, 255], "the body covers {kernel:?}");
+                assert_eq!(pixel(12.0, 12.0), [255; 4], "{kernel:?} reached beyond its atlas");
+            }
+        }
     }
 
     /// A note is a SOLID rectangle of its own color, with the outline standing
@@ -1241,14 +1550,10 @@ mod tests {
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
         assert!(near(at(138), RED), "the fill stops short of the note's edge: {:?}", at(138));
-        assert!(
-            near(at(141), [0, 0, 0, 255]),
-            "no outline standing against the note's edge: {:?}",
-            at(141),
-        );
+        assert!(shadowed(at(141)), "no outline standing against the note's edge: {:?}", at(141),);
         // Solid nearly all the way out — the last half pixel of the reach is
         // the antialiasing ramp a hard edge still gets — and gone past it.
-        assert!(near(at(142), [0, 0, 0, 255]), "the outline is short of its reach: {:?}", at(142));
+        assert!(shadowed(at(142)), "the outline is short of its reach: {:?}", at(142));
         assert!(near(at(145), BG), "the outline reaches further than it should: {:?}", at(145));
     }
 
@@ -1272,15 +1577,14 @@ mod tests {
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
-        const BLACK: [u8; 4] = [0, 0, 0, 255];
         assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
-        assert!(near(at(142, 128), BLACK), "no outline along the flank: {:?}", at(142, 128));
+        assert!(shadowed(at(142, 128)), "no outline along the flank: {:?}", at(142, 128));
         assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
-        assert!(near(at(128, 190), BLACK), "no outline across the end: {:?}", at(128, 190));
+        assert!(shadowed(at(128, 190)), "no outline across the end: {:?}", at(128, 190));
         assert!(near(at(128, 193), BG), "the outline runs past its reach: {:?}", at(128, 193));
         // Diagonally off the corner: 2.8 points out is inside the radius, 5.0
         // is outside it, and four bands butted together would paint both.
-        assert!(near(at(141, 189), BLACK), "the corner is missing: {:?}", at(141, 189));
+        assert!(shadowed(at(141, 189)), "the corner is missing: {:?}", at(141, 189));
         assert!(
             near(at(143, 191), BG),
             "the corner is square ({:?}) — the outline is being drawn as bands rather \
@@ -1302,11 +1606,11 @@ mod tests {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        let dark = |x: u32, y: u32| pixel(&frame, x, y)[1] < (BG[1] - 40);
-        // Every column of the flank's outline, from the note's own edge
-        // (x = 140) out to its reach — the outer ones being where a distance
-        // field's corner rounding bites first.
-        for x in [140, 141, 142, 143] {
+        let dark = |x: u32, y: u32| shadowed(pixel(&frame, x, y));
+        // Every column of the flank's two-point Distance profile, from the
+        // note's own edge (x = 140) to its last covered pixel — the outer one
+        // being where a distance field's corner rounding bites first.
+        for x in [140, 141] {
             assert!(dark(x, 128), "the outline is missing at the note's middle (x = {x})");
             // Row 187 is the note's last full row along time; the outline is
             // still at its full stand-off there.
@@ -1315,57 +1619,6 @@ mod tests {
         // And it keeps going past the end, around the corner, rather than being
         // cut there: the flank and the cap are one shape.
         assert!(dark(140, 190), "the outline is cut at the note's end");
-    }
-
-    /// The fade takes the outline out gradually over the last of its reach,
-    /// rather than ending it: solid where it meets the note, gone at the reach,
-    /// and monotone between.
-    ///
-    /// Two numbers rather than one, because a fade tied to the reach makes a
-    /// wider outline always a blurrier one. So this measures the fade against a
-    /// hard-edged outline of the SAME reach: both must end in the same place,
-    /// and only one of them may be soft on the way there.
-    #[test]
-    fn a_fade_takes_the_outline_out_gradually() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        // Black on white: every painted byte is one minus the outline's
-        // coverage, read straight off the frame.
-        let note = RollInstance { core: [255, 255, 255, 255], ..centered_note() };
-        let cov = |fade: f32, x: u32| {
-            let frame = draw(
-                &device,
-                &queue,
-                vec![RollInstance { outline_fade: fade, ..note }],
-                wgpu::Color::WHITE,
-            );
-            1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0
-        };
-
-        // A fade over the whole 4-point reach: coverage falls off linearly from
-        // the note's edge at 140 to nothing at 144.
-        for (x, want) in [(140u32, 0.875f32), (141, 0.625), (142, 0.375), (143, 0.125)] {
-            let got = cov(4.0, x);
-            assert!(
-                (got - want).abs() < 0.06,
-                "the faded outline covers {got:.3} at x = {x}, not {want:.3}",
-            );
-        }
-        // Hard-edged, the same outline is solid across the whole of its reach
-        // but the last pixel, which is the antialiasing ramp a hard edge still
-        // gets — and it ends in the same place the faded one does.
-        for x in [140, 141, 142] {
-            assert!(cov(0.0, x) > 0.97, "a fade of 0 is not a hard edge (x = {x})");
-        }
-        assert!(
-            cov(0.0, 143) > cov(4.0, 143) + 0.2,
-            "the hard and faded outlines cover the same at the end of the reach ({:.3} vs {:.3})",
-            cov(0.0, 143),
-            cov(4.0, 143),
-        );
-        assert!(cov(0.0, 145) < 0.02, "the hard outline reaches past 4 points");
-        assert!(cov(4.0, 145) < 0.02, "the faded outline reaches past 4 points");
     }
 
     /// A leading fade takes the ribbon out gradually toward its tip, and takes
@@ -1428,7 +1681,7 @@ mod tests {
             pixel(&frame, 128, 66)
         };
         assert!(
-            near(capped(0.0), [0, 0, 0, 255]),
+            shadowed(capped(0.0)),
             "a square-ended ribbon lost its outline cap: {:?}",
             capped(0.0),
         );
@@ -1517,16 +1770,23 @@ mod tests {
         assert!(near(full, [255, 0, 0, 255]), "the lead is not opaque over its cap: {full:?}");
         // Gone: the cap in full, black against a background that is not.
         assert!(
-            near(at(0.0), [0, 0, 0, 255]),
+            shadowed(at(0.0)),
             "the note's own end has no cap under a spent lead: {:?}",
             at(0.0),
         );
         // And in between the two are mixed in the lead's own proportion — the
         // red at half opacity over black, rather than over the background.
+        let under = at(0.0);
         let half = at(0.5);
+        let expected = [
+            ((255u16 + u16::from(under[0])) / 2) as u8,
+            (u16::from(under[1]) / 2) as u8,
+            (u16::from(under[2]) / 2) as u8,
+            255,
+        ];
         assert!(
-            near(half, [128, 0, 0, 255]),
-            "a half-gone lead does not sit half over its cap: {half:?}",
+            near(half, expected),
+            "a half-gone lead does not sit half over its cap: {half:?}, expected {expected:?}",
         );
     }
 
@@ -1552,7 +1812,7 @@ mod tests {
         let short = RollInstance { cap_reach: 2.0, ..led_note(40.0, 0.0, 0.0) };
         let frame = draw(&device, &queue, vec![short], bg_color());
         let at = |y: u32| pixel(&frame, 128, y);
-        assert!(near(at(107), [0, 0, 0, 255]), "the shortened cap is not solid: {:?}", at(107));
+        assert!(shadowed(at(107)), "the shortened cap is absent: {:?}", at(107));
         assert!(near(at(105), BG), "the cap reached past the 2 points it was given: {:?}", at(105));
         // None at all is none drawn: a cap of no reach leaves the note's end
         // bare, which is what a caller with no room to give it is asking for.
@@ -1563,34 +1823,6 @@ mod tests {
             "a cap of no reach still painted: {:?}",
             pixel(&bare, 128, 107),
         );
-    }
-
-    /// A fade set past the outline's own reach eats OUTWARD — it fades the
-    /// whole reach, from full coverage at the note's edge — rather than dimming
-    /// the outline everywhere.
-    ///
-    /// The same bound the lattice's gutter puts on its fade, and the same
-    /// reason: the coverage against the note is the one part that always has to
-    /// be there, since that boundary is the whole point of the outline. Without
-    /// the bound a fade dialled past the reach makes the note's edge translucent
-    /// and the ribbon starts dissolving into the picture behind it.
-    #[test]
-    fn a_fade_past_the_reach_still_meets_the_note_solid() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        // A 2-point outline asked to fade over 20.
-        let note = RollInstance {
-            outline_reach: 2.0,
-            outline_fade: 20.0,
-            core: [255, 255, 255, 255],
-            ..centered_note()
-        };
-        let frame = draw(&device, &queue, vec![note], wgpu::Color::WHITE);
-        let cov = |x: u32| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0;
-        assert!(cov(140) > 0.6, "the outline meets the note at {:.3} coverage", cov(140));
-        assert!(cov(140) > cov(141), "the outline does not fade outward at all");
-        assert!(cov(143) < 0.05, "the outline reaches past the 2 points it was given");
     }
 
     /// A note is a rectangle: its corners are square, right out to them.
@@ -1645,7 +1877,7 @@ mod tests {
         let middle = at(128);
         assert!(middle[0] > 150, "the outline flooded the note's own color: {middle:?}");
         assert!(middle[1] < 32, "something light flooded the note's middle: {middle:?}");
-        assert!(near(at(130), [0, 0, 0, 255]), "no outline beside it: {:?}", at(130));
+        assert!(shadowed(at(130)), "no outline beside it: {:?}", at(130));
         assert!(near(at(134), BG), "the outline reaches further than it should: {:?}", at(134));
     }
 
@@ -1797,6 +2029,7 @@ mod tests {
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
+        crate::spectral_shadow::finish(device, queue, &screen, &mut encoder, resources, 0);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
     }
 
@@ -1806,9 +2039,11 @@ mod tests {
             rect,
             instances: vec![centered_note()],
             axes: TOP,
+            shadow: harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() },
             bloom: 1.5,
             target_format: FORMAT,
             pane_id,
+            shadow_surface_id: 0,
         }
     }
 
@@ -2050,7 +2285,6 @@ mod tests {
             center: [128.0, center],
             half_extent: [12.0, 30.0],
             outline_reach: 4.0,
-            outline_fade: 0.0,
             core,
             outline: [0, 0, 0, 255],
             ..centered_note()
@@ -2078,7 +2312,7 @@ mod tests {
         // The outline is still drawn — over the pane, where no note is.
         let outside = pixel(&frame, 128, 66);
         assert!(
-            near(outside, [0, 0, 0, 255]),
+            shadowed(outside),
             "the outline stopped painting at all outside the notes: {outside:?}",
         );
     }
@@ -2106,7 +2340,6 @@ mod tests {
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
             outline_reach: 3.0,
-            outline_fade: 0.0,
             core: [0, 0, 0, 0],
             outline: [0, 0, 0, 255],
             ..centered_note()
@@ -2118,10 +2351,10 @@ mod tests {
         };
 
         let held = ink(bare);
-        assert!((held - 5.0).abs() < 0.3, "a held note's two 3-point flanks measured {held}");
+        assert!(held > 1.0, "a held note's two flanks painted no measurable shadow");
 
         let glide = ink(RollInstance { shear: 1.0, ..bare });
-        let expected = 5.0 * f32::sqrt(2.0);
+        let expected = held * f32::sqrt(2.0);
         assert!(
             (glide - expected).abs() < 0.5,
             "a 45-degree glide's outline measured {glide} across the scanline, not \
@@ -2159,13 +2392,9 @@ mod tests {
         // out to 203.2 — where an outline that kept its width along pitch
         // rather than perpendicular to the edge would stop at 194.5.
         let at = |x: u32| pixel(&frame, x, 147);
+        assert!(shadowed(at(193)), "the outline is missing at the note's end: {:?}", at(193),);
         assert!(
-            near(at(193), [0, 0, 0, 255]),
-            "the outline is missing at the note's end: {:?}",
-            at(193),
-        );
-        assert!(
-            near(at(199), [0, 0, 0, 255]),
+            shadowed(at(199)),
             "the outline is cut off at the note's end ({:?}) — it thins with the angle, \
              or the quad was grown by its flat reach rather than its sheared one",
             at(199),

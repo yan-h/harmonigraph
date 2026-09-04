@@ -101,9 +101,8 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
     (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
 }
 
-/// The dark surround standing outside a note: `(reach, fade, color)` — how far
-/// past the note's edge it goes, how much of that it spends fading out, and
-/// what it is at full coverage.
+/// The dark surround standing outside a note: its selected kernel's whole
+/// reach in screen points and its pane-owned colour.
 ///
 /// BLACK, and not a setting. The outline's job is to give a note a boundary
 /// against a heatmap, and the pane's own background is the color that tells
@@ -126,22 +125,16 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// note itself is making. The fade is a shape's ending rather than a strength:
 /// it is opaque against the note and gone at its reach, wherever it is drawn.
 ///
-/// Neither number scales with anything: the reach is in points, so it is the
-/// same edge at every zoom and every ribbon width. That is what makes the
-/// outline a constant of the picture rather than a reading of it — see
-/// [`SpectrumConfig::roll_outline`](crate::SpectrumConfig) for the trade, which
-/// is real and is at the wide end.
+/// The inherited spectral geometry width resolves to points, so it is the same
+/// edge at every zoom and every ribbon width.
 ///
 /// Off comes back zero-reach AND transparent, never one or the other: the reach
 /// is what the quad grows by to make room for the outline (and what the
 /// far-edge cull keeps a leaving note alive for), so an outline that will not
 /// paint must not be paid for either.
-fn outline(cfg: &crate::SpectrumConfig) -> (f32, f32, Color32) {
-    let reach = cfg.roll_outline.max(0.0);
-    if reach <= 0.0 {
-        return (0.0, 0.0, Color32::TRANSPARENT);
-    }
-    (reach, cfg.roll_outline_fade.clamp(0.0, reach), Color32::BLACK)
+fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
+    let reach = harmonigraph_render::spectral_shadow_reach(style.clamped());
+    (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
 }
 
 /// How far a SOUNDING note's ribbon carries past the now-line, and how much of
@@ -305,8 +298,10 @@ pub(super) fn draw_roll(
         // clamps and the roll does not is that difference in the other
         // direction.
         harmonigraph_render::bloom_strength(state.view.bloom_strength),
+        state.view.shadow.spectral_geometry,
         state.target_format,
         crate::panes::lattice::pane_id(surface),
+        crate::text::spectral_shadow_surface(surface),
     ));
 }
 
@@ -358,7 +353,7 @@ pub(super) fn note_instances(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_fade_px, outline_color) = outline(cfg);
+    let (outline_px, outline_color) = outline(state.view.shadow.spectral_geometry);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
@@ -683,8 +678,7 @@ pub(super) fn note_instances(
             // The reach is still the setting to be careful with at the wide
             // end, and on the shortest notes: a tapped key floored to a point
             // or two of length wears the full reach at both ends, so at the
-            // top of the bar it is a dot inside its own surround. See
-            // [`SpectrumConfig::roll_outline`](crate::SpectrumConfig).
+            // top of the Shadow bar it is a dot inside its own surround.
             //
             // Nothing else rides the outline — in particular, no band
             // approximating the bloom. The bloom the notes carry is the
@@ -800,7 +794,6 @@ pub(super) fn note_instances(
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
                 outline_reach: outline_px,
-                outline_fade: outline_fade_px,
                 lead: lead_px,
                 lead_fade: lead_fade_px,
                 lead_alpha: standing,
@@ -868,7 +861,16 @@ mod tests {
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
-        state.spectrum_config.roll_outline = outline;
+        state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+            width: outline
+                / harmonigraph_render::spectral_shadow_reach(harmonigraph_scene::ShadowStyle {
+                    width: 1.0,
+                    depth: 1.0,
+                    kernel: harmonigraph_scene::ShadowKernel::Distance,
+                }),
+            depth: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+        };
         state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         instances(&state, 0.05)
     }
@@ -982,7 +984,7 @@ mod tests {
     fn the_outline_is_opaque_black_at_every_reach_that_draws_it() {
         // Three settings across the bar's whole travel: the least it can be set
         // to above nothing, a modest one, and full.
-        for reach in [0.05, 2.0, crate::ROLL_OUTLINE_MAX] {
+        for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
             assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
@@ -998,33 +1000,6 @@ mod tests {
         let note = one(&off);
         assert_eq!(note.outline_reach, 0.0, "an outline of no reach still made room for one");
         assert_eq!(note.outline[3], 0, "an outline of no reach left a color behind");
-    }
-
-    /// The fade rides its own setting, and is bounded by the reach it softens:
-    /// past that it would be asking for an outline that never meets the note
-    /// solid, which is the one thing the outline is for.
-    ///
-    /// The same bound the lattice puts on its gutter fade, and the reason the
-    /// two are separate settings at all — a fade derived from the reach makes a
-    /// wider outline always a blurrier one, so the roll takes both and clamps
-    /// rather than deriving one from the other.
-    #[test]
-    fn the_fade_is_its_own_setting_and_stops_at_the_reach() {
-        let mut state = fresh();
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        let fade_at = |state: &mut SharedState, reach: f32, fade: f32| {
-            state.spectrum_config.roll_outline = reach;
-            state.spectrum_config.roll_outline_fade = fade;
-            let notes = instances(state, 0.05);
-            one(&notes).outline_fade
-        };
-        assert_eq!(fade_at(&mut state, 3.0, 0.0), 0.0, "a fade of 0 is a hard edge, not a default");
-        assert_eq!(fade_at(&mut state, 3.0, 1.0), 1.0, "the fade is not its own setting");
-        assert_eq!(fade_at(&mut state, 3.0, 3.0), 3.0, "a fade of the whole reach is allowed");
-        assert_eq!(fade_at(&mut state, 3.0, 9.0), 3.0, "a fade past the reach was not clamped");
-        // And an outline that is not drawn carries no fade to draw it with.
-        assert_eq!(fade_at(&mut state, 0.0, 2.0), 0.0, "an outline of no reach kept a fade");
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a
@@ -1777,7 +1752,7 @@ mod tests {
             state.spectrum_config.roll_lead = 0.05;
             state.spectrum_config.roll_lead_fade = 0.04;
             state.spectrum_config.roll_lead_release = release;
-            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.view.shadow.spectral_geometry.width = 1.0;
             state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
             state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
 
@@ -1902,6 +1877,9 @@ mod tests {
         state.spectrum_config.roll_lead = 0.05;
         state.spectrum_config.roll_lead_fade = 0.04;
         state.spectrum_config.roll_lead_release = 0.4;
+        // The retired roll setting opened at a two-point reach. Keep that
+        // geometry explicit: this test is about cap/lead timing, not defaults.
+        state.view.shadow.spectral_geometry.width = 0.25;
         state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
         state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
 
@@ -2159,7 +2137,8 @@ mod tests {
             // narrower is widened back out under the test's feet.
             state.spectrum_config.low_midi = 36.0;
             state.spectrum_config.high_midi = 60.0;
-            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            // The retired outline bar topped out at a four-point reach.
+            state.view.shadow.spectral_geometry.width = 0.5;
             state.tracker.handle_event(NoteEvent::on(2.0, 0, 62, 1.0));
             state.tracker.handle_event(NoteEvent {
                 time: 2.0 + after,

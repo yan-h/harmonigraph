@@ -331,6 +331,25 @@ mod tests {
         take
     }
 
+    fn spectral_shadow_take(enabled: bool) -> Take {
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        state.spectrum_config.show_roll = true;
+        state.spectrum_config.roll_fraction = 0.7;
+        state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            width: 0.75,
+            depth: f32::from(enabled),
+        };
+        state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            width: 0.75,
+            depth: f32::from(enabled),
+        };
+        let mut take = take();
+        take.header.ui_state = Some(state.save_persist());
+        take
+    }
+
     fn render_frames(settings: &Settings) -> Option<Vec<Vec<u8>>> {
         render_take(take(), settings)
     }
@@ -406,6 +425,37 @@ mod tests {
         let dark = render_frames(&settings).expect("a third run also has a GPU");
         let mid = first.len() / 2;
         assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
+    }
+
+    /// Offline export calls the same pane and paint callbacks as the editor;
+    /// exercise that shared route at every UI/export scale promised by #556.
+    /// The mixed frame is compared with its two depths shut so a passing render
+    /// must actually reach both spectral shadow groups, not merely produce a
+    /// plausible roll and axis at each scale.
+    #[test]
+    fn spectral_shadows_agree_with_the_shared_editor_path_at_every_export_scale() {
+        for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+            let settings = Settings {
+                layout: Layout::preset("spectral").expect("the spectral preset exists"),
+                size: [(320.0 * ppp).round() as u32, (200.0 * ppp).round() as u32],
+                pixels_per_point: ppp,
+                fps: 2.0,
+                start: 0.0,
+                end: 0.5,
+                audio_start: 0.0,
+                whole_song_spectrogram: false,
+            };
+            let Some(shadowed) = render_take(spectral_shadow_take(true), &settings) else {
+                return;
+            };
+            let bare = render_take(spectral_shadow_take(false), &settings)
+                .expect("the second run sees the same GPU");
+            assert_eq!(shadowed.len(), 1, "the fixture is one frame at {ppp} ppp");
+            assert_ne!(
+                shadowed[0], bare[0],
+                "the mixed spectral shadow changed no export pixel at {ppp} ppp",
+            );
+        }
     }
 
     /// Frames must actually change over time — a determinism test alone

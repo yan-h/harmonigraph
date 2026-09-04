@@ -39,6 +39,15 @@ fn persist_round_trips_camera_and_view() {
     state.view.plus_arm = 0.5;
     state.view.plus_width = 0.3;
     state.view.plus_taper = 0.07;
+    for (index, group) in state.view.shadow.groups_mut().into_iter().enumerate() {
+        group.width = 0.1 + index as f32 * 0.1;
+        group.depth = 0.2 + index as f32 * 0.1;
+        group.kernel = if index % 2 == 0 {
+            harmonigraph_scene::ShadowKernel::Distance
+        } else {
+            harmonigraph_scene::ShadowKernel::Gaussian
+        };
+    }
     // Which nodes are named, and the fresh view keeps the past -- so either
     // other mode is a value a project has to keep, and the one a fresh view
     // would overwrite if it did not.
@@ -72,6 +81,12 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.plus_arm, 0.5);
     assert_eq!(restored.view.plus_width, 0.3, "so does the thickness of its arms");
     assert_eq!(restored.view.plus_taper, 0.07, "and the taper on their ends");
+    assert_eq!(
+        restored.view.shadow.groups(),
+        state.view.shadow.groups(),
+        "all four independent Shadow styles round-trip",
+    );
+    assert!(!saved.contains("spiral_shadow"), "the spiral must not grow a persisted style");
     assert_eq!(
         restored.view.note_names,
         NoteNames::All,
@@ -274,8 +289,8 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     );
 }
 
-/// Every soft edge — the resting marker's arm and the taper on its ends, the
-/// roll's note outline, and the lead a held note carries over the now-line —
+/// Every paired soft edge — the resting marker's arm and the taper on its
+/// ends, and the lead a held note carries over the now-line —
 /// opens on a pair its own bar can reach: a fade no wider than the reach it is
 /// measured back from.
 ///
@@ -293,14 +308,6 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let saved = state.save_persist();
     let edited = saved
         .replace(
-            &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
-            "roll_outline_fade:9.0,",
-        )
-        .replace(
-            &format!("roll_outline:{:?},", state.spectrum_config.roll_outline),
-            "roll_outline:1.0,",
-        )
-        .replace(
             &format!("roll_lead_fade:{:?},", state.spectrum_config.roll_lead_fade),
             "roll_lead_fade:0.2,",
         )
@@ -311,11 +318,6 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 
     let mut restored = fresh();
     restored.load_persist(&edited);
-    assert_eq!(
-        (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
-        (1.0, 1.0),
-        "the outline's fade opened wider than the outline",
-    );
     assert_eq!(
         (restored.spectrum_config.roll_lead, restored.spectrum_config.roll_lead_fade),
         (0.05, 0.05),
@@ -353,10 +355,8 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// `plus_width` the day the two happen to hold the same number.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 8] = [
+    let cases: [(&str, &str, &str); 6] = [
         ("width", "NaN", "a NaN Shadow width"),
-        ("roll_outline", "inf", "an infinite outline"),
-        ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
         ("roll_lead_fade", "inf", "an infinite lead fade"),
         // The marker's own pair, and its width beside them — the width is a
@@ -372,8 +372,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let saved = state.save_persist();
         let was = match key {
             "width" => state.view.shadow.lattice_geometry.width,
-            "roll_outline" => state.spectrum_config.roll_outline,
-            "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
             "plus_arm" => state.view.plus_arm,
             "plus_taper" => state.view.plus_taper,
@@ -395,8 +393,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         for (name, v) in [
             ("lattice geometry width", view.shadow.lattice_geometry.width),
             ("lattice text width", view.shadow.lattice_text.width),
-            ("roll_outline", cfg.roll_outline),
-            ("roll_outline_fade", cfg.roll_outline_fade),
+            ("spectral geometry width", view.shadow.spectral_geometry.width),
+            ("spectral text width", view.shadow.spectral_text.width),
             ("roll_lead", cfg.roll_lead),
             ("roll_lead_fade", cfg.roll_lead_fade),
             ("plus_arm", view.plus_arm),
@@ -406,9 +404,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
-            cfg.roll_outline_fade <= cfg.roll_outline
-                && cfg.roll_lead_fade <= cfg.roll_lead
-                && view.plus_taper <= view.plus_arm,
+            cfg.roll_lead_fade <= cfg.roll_lead && view.plus_taper <= view.plus_arm,
             "{hint}: opened on a fade wider than its reach",
         );
         assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
@@ -1471,6 +1467,48 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
             full,
             "dropping {key:?} did not come back at the fresh-install value",
         );
+    }
+}
+
+#[test]
+fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
+    let mut endpoint = harmonigraph_scene::ShadowSettings::default();
+    for (index, group) in endpoint.groups_mut().into_iter().enumerate() {
+        group.width = 0.1 + index as f32 * 0.1;
+        group.depth = 0.2 + index as f32 * 0.1;
+    }
+    let full = ron::to_string(&endpoint).expect("Shadow settings serialize");
+    let pairs = top_level_pairs(&full);
+    assert_eq!(pairs.len(), 4, "the persisted endpoint is not exactly four groups: {full}");
+    assert!(!full.contains("spiral"), "the spiral grew a distinct persisted group: {full}");
+
+    for (missing, _) in &pairs {
+        let kept: Vec<&str> = pairs
+            .iter()
+            .filter(|(name, _)| name != missing)
+            .map(|(_, text)| text.as_str())
+            .collect();
+        let loaded: harmonigraph_scene::ShadowSettings =
+            ron::from_str(&format!("({})", kept.join(",")))
+                .unwrap_or_else(|e| panic!("dropping {missing} sank the endpoint: {e}"));
+        for (name, group) in [
+            ("lattice_geometry", loaded.lattice_geometry),
+            ("lattice_text", loaded.lattice_text),
+            ("spectral_geometry", loaded.spectral_geometry),
+            ("spectral_text", loaded.spectral_text),
+        ] {
+            let want = if name == missing {
+                harmonigraph_scene::ShadowStyle::default()
+            } else {
+                match name {
+                    "lattice_geometry" => endpoint.lattice_geometry,
+                    "lattice_text" => endpoint.lattice_text,
+                    "spectral_geometry" => endpoint.spectral_geometry,
+                    _ => endpoint.spectral_text,
+                }
+            };
+            assert_eq!(group, want, "dropping {missing} changed {name}");
+        }
     }
 }
 

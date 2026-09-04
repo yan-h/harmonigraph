@@ -611,11 +611,12 @@ impl ShadowKernel {
 pub struct ShadowStyle {
     /// Which of the two renderers turns this group's ink into its shadow.
     pub kernel: ShadowKernel,
-    /// How wide the shadow is, as a share of a node's radius,
-    /// 0..=[`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) — half of it is the σ a
-    /// Gaussian blurs at and the width a distance's decay is measured in, and
-    /// the whole of it times [`ShadowKernel::reach_sigmas`] is what every quad
-    /// in the group is grown by.
+    /// How wide the shadow is, 0..=[`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX),
+    /// as a share of the caster group's reference size. Lattice groups use a
+    /// node radius; spectral groups use the renderer's fixed four-point edge
+    /// unit so their shadows stay screen-constant across pitch zoom and pane
+    /// size. Half of that resolved width is the σ a Gaussian blurs at and the
+    /// resolved width is what a distance's decay is measured in.
     ///
     /// 0 is the picture with no shadow in it for this group, pixel for pixel:
     /// no cell is packed and every draw multiplies by 1.
@@ -682,10 +683,6 @@ impl ShadowStyle {
 /// letterform wants one that does not fill its counters, and the width that
 /// does the first may not be the width that does the second.
 ///
-/// The spectral pane's two groups (#556's step 7) are not here yet: its roll
-/// outline and its text rim still carry shadows of their own that these
-/// renderers do not draw, and a persisted value nothing reads is a setting the
-/// picture cannot answer for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowSettings {
@@ -693,6 +690,10 @@ pub struct ShadowSettings {
     pub lattice_geometry: ShadowStyle,
     /// The lattice's note names, letters and drawn marks alike.
     pub lattice_text: ShadowStyle,
+    /// The spectral roll's ribbons and the spiral's sounding-note dots.
+    pub spectral_geometry: ShadowStyle,
+    /// The spectral pane's note names and axis labels, and the spiral's names.
+    pub spectral_text: ShadowStyle,
 }
 
 impl ShadowSettings {
@@ -701,13 +702,18 @@ impl ShadowSettings {
     /// The one place the groups are enumerated, so a group added at step 7 is
     /// added to the struct and to this and to nothing else: the clamp, the
     /// sanitize and the tests that sweep the groups all read it.
-    pub fn groups(&self) -> [ShadowStyle; 2] {
-        [self.lattice_geometry, self.lattice_text]
+    pub fn groups(&self) -> [ShadowStyle; 4] {
+        [self.lattice_geometry, self.lattice_text, self.spectral_geometry, self.spectral_text]
     }
 
     /// The same, to write through — [`groups`](Self::groups)'s pair.
-    pub fn groups_mut(&mut self) -> [&mut ShadowStyle; 2] {
-        [&mut self.lattice_geometry, &mut self.lattice_text]
+    pub fn groups_mut(&mut self) -> [&mut ShadowStyle; 4] {
+        [
+            &mut self.lattice_geometry,
+            &mut self.lattice_text,
+            &mut self.spectral_geometry,
+            &mut self.spectral_text,
+        ]
     }
 
     /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
@@ -715,6 +721,8 @@ impl ShadowSettings {
         ShadowSettings {
             lattice_geometry: self.lattice_geometry.clamped(),
             lattice_text: self.lattice_text.clamped(),
+            spectral_geometry: self.spectral_geometry.clamped(),
+            spectral_text: self.spectral_text.clamped(),
         }
     }
 }

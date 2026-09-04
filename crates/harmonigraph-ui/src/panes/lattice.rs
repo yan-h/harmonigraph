@@ -269,6 +269,8 @@ fn draw_learn_overlay(
         state,
         crate::text::lattice_learn(surface),
         harmonigraph_render::SlideAxis::default(),
+        None,
+        None,
     );
 }
 
@@ -637,12 +639,8 @@ mod tests {
         (batch.pieces().to_vec(), scene)
     }
 
-    /// One quad per glyph, whatever the rim is doing.
-    ///
-    /// This is the whole point of drawing labels ourselves: stamping the rim
-    /// as geometry multiplies a label by twenty-one, making every new label a
-    /// cost decision. Here the rim is arithmetic in the fragment shader and
-    /// a piece of text costs its own glyphs and nothing else.
+    /// One visible quad per glyph, whatever its Shadow style is doing. The
+    /// caster pass uses the same glyph stream instead of stamping copies of it.
     #[test]
     fn a_label_costs_one_quad_per_glyph() {
         let mut batch = crate::text::TextBatch::default();

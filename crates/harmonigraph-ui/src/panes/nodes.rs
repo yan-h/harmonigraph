@@ -745,8 +745,9 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// The Shadow, dialled per GROUP of casters: the lattice's geometry — its nodes
-/// and the resting markers — and its text, the note names and their marks.
+/// The Shadow, dialled per GROUP of casters: geometry and text in the lattice,
+/// then geometry and text in the spectral pictures. The spiral inherits the
+/// spectral pair, so the four blocks are the whole persisted surface.
 ///
 /// **Stacked, not one set of bars behind a group picker.** Tuning a group is
 /// comparing it against the other, and a value that is not on screen is a value
@@ -771,6 +772,18 @@ fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
         &mut shadow.lattice_geometry,
     );
     shadow_group(ui, "Lattice text", "every note name and its marks", &mut shadow.lattice_text);
+    shadow_group(
+        ui,
+        "Spectral geometry",
+        "the piano roll's note ribbons and the spiral's sounding-note dots",
+        &mut shadow.spectral_geometry,
+    );
+    shadow_group(
+        ui,
+        "Spectral text",
+        "the analyzer's note names and axis labels, and the spiral's names",
+        &mut shadow.spectral_text,
+    );
 }
 
 /// One group's three: which renderer draws it, how wide and how dark.

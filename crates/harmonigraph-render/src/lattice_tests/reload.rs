@@ -60,6 +60,7 @@ fn an_edit_to_the_common_half_reaches_the_text_module_and_the_lattice_one() {
     let reloaded = poll_now(&mut watcher).expect("an edited common half is a reload");
     assert!(reloaded.lattice.contains("common TWO"), "the lattice module kept the old common half");
     assert!(reloaded.text.contains("common TWO"), "the text module kept the old common half");
+    assert_eq!(reloaded.common, "// common TWO\n");
     // ...and each is still its own module, not the same one twice.
     assert!(reloaded.lattice.contains("lattice one"));
     assert!(reloaded.text.contains("text one"));
@@ -129,7 +130,7 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     let _guard = reload::test_lock();
     let before = reload::generation();
     let marker = "// a_published_reload_raises_the_count_and_hands_over_the_source\n";
-    reload::publish(format!("{}{marker}", with_common(text::TEXT_SRC)));
+    reload::publish(format!("{}{marker}", with_common(text::TEXT_SRC)), COMMON_SRC.to_owned());
 
     assert!(
         reload::generation() > before,
