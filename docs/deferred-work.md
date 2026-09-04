@@ -9,14 +9,21 @@ Nothing here blocks anything today.
 
 **State.** Project-wide adaptive retuning is designed but not implemented.
 The active design is documented in [`adaptive-tuning.md`](adaptive-tuning.md):
-one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and immediate CLAP tuning expression chosen from the previous sealed project state and frozen until note-off.
+one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and fixed-delay central sequencing with sequential assignment.
+Each new assignment sees its predecessors across tracks, and its correction remains frozen through release.
+A missed assignment deadline delays the pending attack and reports a failure;
+late-stream retiming and persistent-failure/buffer-exhaustion behavior must be resolved before implementation.
 
-**Synchronized attacks and reconciliation.** A synchronized mode would hold the complete MIDI stream until every participating source had submitted a window, then report fixed latency and emit a jointly solved attack.
-The optimistic protocol already needs source progress and resolved time epochs to publish honest snapshots.
-Synchronization would additionally buffer the performance stream, wait for an attack-time barrier, negotiate latency and verify plugin delay compensation for the delayed output.
-Reconciliation would instead change pitches after their attack and need transition, glide, hysteresis and player-expression composition policy.
-Yan has analyzed and accepted cross-track blindness, so neither alternative nor a shadow/listening comparison gates implementation.
-Reopen this musical requirement only at his request.
+**Immediate and jointly optimized alternatives.** Independent immediate assignment from prior snapshots permits simultaneous cross-track notes to miss each other's choices.
+That does not meet the chosen musical requirement.
+Immediate shared-state serialization instead needs a real-time contention and event-ordering contract across host callbacks.
+The central sequencer accepts a measured fixed normal delay to keep one policy owner and complete chronological context.
+Joint chord optimization is unnecessary for that requirement:
+deterministic sequential assignment is sufficient to let each attack see its predecessors, without promising a unique absolute comma placement.
+None of these alternatives is an additional launch mode.
+
+**Reconciliation.** Adaptive movement of already-sounding voices is excluded absolutely by Yan's decision.
+It is not a deferred tuning mode, listening experiment or deadline-failure recovery option.
 
 **Compatibility outputs.** MTS-ESP is useful for a conventional global note/channel tuning table, but it does not naturally carry Harmonigraph's per-voice frozen adaptive assignments or collect note lifecycle.
 MPE requires channel allocation and bend-state recovery;
@@ -32,7 +39,8 @@ The initial storage is bounded and in-process, with no pointer-free arena or mem
 A cross-process transport would need its own layout, ownership, synchronization and recovery design.
 
 **Value / effort.** All are medium-to-high maintenance multipliers rather than cheap compatibility switches.
-Keep them parked until a measured musical or hosting failure identifies which specific cost would buy something useful.
+Reconciliation remains excluded;
+revisit another alternative only when a concrete musical or hosting requirement justifies its cost.
 
 ## Depth-buffer sorting
 
