@@ -555,6 +555,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
             state.target_format,
             crate::panes::lattice::pane_id(surface),
             crate::text::spiral_shadow_surface(surface),
+            painter.ctx().cumulative_pass_nr(),
         ));
     }
     for mark in &marks {
@@ -586,6 +587,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
             bloom,
             state.target_format,
             crate::panes::lattice::pane_id(surface),
+            painter.ctx().cumulative_pass_nr(),
         ));
     }
     // The names last, and outside the disc, so nothing in the picture is over
@@ -611,6 +613,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
         rect,
         crate::text::spiral_shadow_surface(surface),
+        painter.ctx().cumulative_pass_nr(),
     ));
 }
 

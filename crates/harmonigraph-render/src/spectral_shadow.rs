@@ -14,7 +14,7 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use crate::{create_vertex_buffer, shadow, wgpu};
 
 const INITIAL_CAPACITY: usize = 16;
-const SURFACE_TTL_PREPARES: u64 = 240;
+const SURFACE_TTL_PASSES: u64 = 120;
 
 #[derive(Clone)]
 pub(crate) struct Layouts {
@@ -98,7 +98,7 @@ struct Surface {
     submissions: Vec<Submission>,
     target: Option<shadow::ShadowTarget>,
     stats: ScheduleStats,
-    last_seen: u64,
+    last_seen_pass: u64,
 }
 
 pub(crate) struct Resources {
@@ -107,7 +107,6 @@ pub(crate) struct Resources {
     dummy: shadow::ShadowTarget,
     cells: shadow::CellPipelines,
     surfaces: HashMap<u64, Surface>,
-    prepares: u64,
 }
 
 impl Resources {
@@ -130,11 +129,10 @@ impl Resources {
             dummy,
             cells,
             surfaces: HashMap::new(),
-            prepares: 0,
         }
     }
 
-    fn surface(&mut self, device: &wgpu::Device, id: u64, prepares: u64) -> &mut Surface {
+    fn surface(&mut self, device: &wgpu::Device, id: u64, pass_nr: u64) -> &mut Surface {
         let caster_layout = &self.layouts.casters;
         let surface = self.surfaces.entry(id).or_insert_with(|| {
             let (casters, caster_bind) =
@@ -153,10 +151,10 @@ impl Resources {
                 submissions: Vec::new(),
                 target: None,
                 stats: ScheduleStats::default(),
-                last_seen: prepares,
+                last_seen_pass: pass_nr,
             }
         });
-        surface.last_seen = prepares;
+        surface.last_seen_pass = pass_nr;
         surface
     }
 }
@@ -171,20 +169,30 @@ pub(crate) fn layouts(
     callback_resources.get::<Resources>().expect("inserted above").layouts.clone()
 }
 
+pub(crate) fn register_for_pass(
+    device: &wgpu::Device,
+    callback_resources: &mut CallbackResources,
+    surface_id: u64,
+    submission: Submission,
+    pass_nr: u64,
+) {
+    if callback_resources.get::<Resources>().is_none() {
+        callback_resources.insert(Resources::new(device));
+    }
+    let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
+    let surface = resources.surface(device, surface_id, pass_nr);
+    surface.submissions.retain(|old| old.key != submission.key);
+    surface.submissions.push(submission);
+}
+
+#[cfg(test)]
 pub(crate) fn register(
     device: &wgpu::Device,
     callback_resources: &mut CallbackResources,
     surface_id: u64,
     submission: Submission,
 ) {
-    if callback_resources.get::<Resources>().is_none() {
-        callback_resources.insert(Resources::new(device));
-    }
-    let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-    let prepares = resources.prepares;
-    let surface = resources.surface(device, surface_id, prepares);
-    surface.submissions.retain(|old| old.key != submission.key);
-    surface.submissions.push(submission);
+    register_for_pass(device, callback_resources, surface_id, submission, 0);
 }
 
 pub(crate) struct Binding<'a> {
@@ -219,29 +227,28 @@ fn box_slice(buffer: &wgpu::Buffer, range: ProducerRange) -> wgpu::BufferSlice<'
     buffer.slice(stride * u64::from(range.start)..stride * u64::from(range.start + range.count))
 }
 
-pub(crate) fn finish(
+fn finish_for_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     screen: &ScreenDescriptor,
     encoder: &mut wgpu::CommandEncoder,
     callback_resources: &mut CallbackResources,
     surface_id: u64,
+    pass_nr: u64,
 ) {
     if callback_resources.get::<Resources>().is_none() {
         callback_resources.insert(Resources::new(device));
     }
     let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-    resources.prepares = resources.prepares.wrapping_add(1);
-    let prepares = resources.prepares;
     resources
         .surfaces
-        .retain(|_, surface| prepares.saturating_sub(surface.last_seen) < SURFACE_TTL_PREPARES);
+        .retain(|_, surface| pass_nr.saturating_sub(surface.last_seen_pass) < SURFACE_TTL_PASSES);
 
     let layouts = resources.layouts.clone();
     let sampler = resources.sampler.clone();
     let blur_x = resources.cells.blur_x.clone();
     let blur_y = resources.cells.blur_y.clone();
-    let surface = resources.surface(device, surface_id, prepares);
+    let surface = resources.surface(device, surface_id, pass_nr);
     surface.submissions.sort_by_key(|submission| submission.key.order());
 
     let mut casters = Vec::new();
@@ -382,16 +389,34 @@ pub(crate) fn finish(
     surface.submissions.clear();
 }
 
+#[cfg(test)]
+pub(crate) fn finish(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    screen: &ScreenDescriptor,
+    encoder: &mut wgpu::CommandEncoder,
+    callback_resources: &mut CallbackResources,
+    surface_id: u64,
+) {
+    finish_for_pass(device, queue, screen, encoder, callback_resources, surface_id, 0);
+}
+
 /// Finish the shared shadow field for one spectral or spiral surface.
 ///
 /// This callback paints nothing. Its position after the surface's producers
-/// is significant only because egui prepares callbacks in paint order.
-pub fn spectral_shadow_prepare_callback(rect: egui::Rect, surface_id: u64) -> egui::PaintCallback {
-    egui_wgpu::Callback::new_paint_callback(rect, FinishCallback { surface_id })
+/// is significant only because egui prepares callbacks in paint order;
+/// `pass_nr` is the painter context's cumulative pass number.
+pub fn spectral_shadow_prepare_callback(
+    rect: egui::Rect,
+    surface_id: u64,
+    pass_nr: u64,
+) -> egui::PaintCallback {
+    egui_wgpu::Callback::new_paint_callback(rect, FinishCallback { surface_id, pass_nr })
 }
 
 struct FinishCallback {
     surface_id: u64,
+    pass_nr: u64,
 }
 
 impl CallbackTrait for FinishCallback {
@@ -403,7 +428,15 @@ impl CallbackTrait for FinishCallback {
         encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        finish(device, queue, screen, encoder, callback_resources, self.surface_id);
+        finish_for_pass(
+            device,
+            queue,
+            screen,
+            encoder,
+            callback_resources,
+            self.surface_id,
+            self.pass_nr,
+        );
         Vec::new()
     }
 

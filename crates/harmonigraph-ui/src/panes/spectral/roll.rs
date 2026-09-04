@@ -302,6 +302,7 @@ pub(super) fn draw_roll(
         state.target_format,
         crate::panes::lattice::pane_id(surface),
         crate::text::spectral_shadow_surface(surface),
+        painter.ctx().cumulative_pass_nr(),
     ));
 }
 

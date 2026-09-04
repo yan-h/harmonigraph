@@ -289,6 +289,7 @@ pub(crate) fn draw_spectrogram(
         shades,
         target_format,
         crate::panes::lattice::pane_id(surface),
+        painter.ctx().cumulative_pass_nr(),
     ));
 }
 

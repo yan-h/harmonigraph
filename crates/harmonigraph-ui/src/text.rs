@@ -696,6 +696,7 @@ impl TextBatch {
             state.target_format,
             pane_id,
             shadow_surface_id,
+            painter.ctx().cumulative_pass_nr(),
         ));
     }
 
@@ -1733,8 +1734,11 @@ mod tests {
                         Some(state.view.shadow.spectral_text),
                         Some(surface),
                     );
-                    painter
-                        .add(harmonigraph_render::spectral_shadow_prepare_callback(rect, surface));
+                    painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
+                        rect,
+                        surface,
+                        painter.ctx().cumulative_pass_nr(),
+                    ));
                 },
             );
             for (id, delta) in &output.textures_delta.set {

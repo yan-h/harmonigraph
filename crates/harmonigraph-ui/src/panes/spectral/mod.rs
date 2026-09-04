@@ -620,6 +620,7 @@ pub(crate) fn spectral_pane(
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
         rect,
         crate::text::spectral_shadow_surface(surface),
+        painter.ctx().cumulative_pass_nr(),
     ));
 
     // The divider, over the plots so it stays findable against a loud

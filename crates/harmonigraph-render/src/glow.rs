@@ -111,16 +111,18 @@ impl GlowDot {
 /// across frames for one live copy of a pane: each id keeps a chain of its own,
 /// so an id minted per frame would build a chain per frame and hold every one
 /// of them until the sweep aged it out.
+/// `pass_nr` is the painter context's cumulative pass number.
 pub fn glow_paint_callback(
     rect: egui::Rect,
     dots: Vec<GlowDot>,
     strength: f32,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        GlowCallback { rect, dots, strength, target_format, pane_id },
+        GlowCallback { rect, dots, strength, target_format, pane_id, pass_nr },
     )
 }
 
@@ -134,6 +136,7 @@ struct GlowCallback {
     strength: f32,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    pass_nr: u64,
 }
 
 /// The disc pass's own uniforms (`Locals` in glow.wgsl).
@@ -182,20 +185,15 @@ struct GlowResources {
     /// that asks it for a halo — a strength of 0 pays for none of it — and
     /// leaves on [`GlowPane::evict_unseen`].
     panes: HashMap<u64, GlowPane>,
-    /// Counts `prepare` calls, which is what [`GlowPane::last_seen`] is stamped
-    /// with — a clock the callback already has, where a frame count would need
-    /// one to be plumbed in.
-    prepares: u64,
 }
 
-/// How many `prepare` calls a copy may go unseen before its chain is dropped.
+/// How many egui passes a copy may go unseen before its chain is dropped.
 ///
-/// A copy prepares once per frame while it is on screen and this clock counts
-/// every copy's prepare, so it is two seconds at 60 fps with one halo on screen
-/// and proportionally less with more. Long enough that a pane hidden for a
-/// frame keeps its textures, short enough that a closed one is not still
-/// holding four of them a minute later.
-const PANE_TTL_PREPARES: u64 = 120;
+/// A copy prepares once per pass while it is on screen, so this is about two
+/// seconds at 60 fps however many copies are live. Long enough that a pane
+/// hidden for a frame keeps its textures, short enough that a closed one is not
+/// still holding four of them a minute later.
+const PANE_TTL_PASSES: u64 = 120;
 
 /// The picture to bloom and the lattice's own [`crate::BloomChain`] over it:
 /// the marks rendered again offscreen, thresholded, blurred separably, and
@@ -229,10 +227,10 @@ struct GlowPane {
     /// a pane too small to have pixels — cannot lay down the one the frame
     /// before it left in quarter A.
     ready: bool,
-    /// The value of [`GlowResources::prepares`] when this copy last prepared,
-    /// whether or not it asked for a halo: a strength dialled to 0 and back is
-    /// one drag, and the copy is on screen throughout it.
-    last_seen: u64,
+    /// Egui's cumulative pass number when this copy last prepared, whether or
+    /// not it asked for a halo: a strength dialled to 0 and back is one drag,
+    /// and the copy is on screen throughout it.
+    last_seen_pass: u64,
 }
 
 /// Starting size of the instance buffer; it grows by `next_power_of_two` when a
@@ -326,7 +324,6 @@ impl GlowResources {
             }),
             target_format,
             panes: HashMap::new(),
-            prepares: 0,
         }
     }
 }
@@ -336,12 +333,7 @@ impl GlowPane {
     /// and quarter of THAT, so the halo is a constant share of the pane's own
     /// screen size — the rule the lattice's chain follows, which is what makes
     /// one bloom strength mean the same thing in every picture that grows one.
-    fn new(
-        device: &wgpu::Device,
-        resources: &GlowResources,
-        size: [u32; 2],
-        prepares: u64,
-    ) -> Self {
+    fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2], pass_nr: u64) -> Self {
         let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
         let discs_view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -413,18 +405,18 @@ impl GlowPane {
             strength_buffer,
             size,
             ready: false,
-            last_seen: prepares,
+            last_seen_pass: pass_nr,
         }
     }
 
-    /// Drop every copy that has not prepared for [`PANE_TTL_PREPARES`].
+    /// Drop every copy that has not prepared for [`PANE_TTL_PASSES`].
     ///
     /// A copy's id is its surface, and one that is no longer drawn simply stops
     /// calling back — there is no teardown to hang this on, so the copies still
     /// preparing are the only evidence of which ones exist. Run from whichever
     /// copy IS preparing, so a lone survivor still clears the others.
-    fn evict_unseen(panes: &mut HashMap<u64, GlowPane>, prepares: u64) {
-        panes.retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
+    fn evict_unseen(panes: &mut HashMap<u64, GlowPane>, pass_nr: u64) {
+        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
     }
 }
 
@@ -495,9 +487,7 @@ impl CallbackTrait for GlowCallback {
         }
         let resources: &mut GlowResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.prepares = resources.prepares.wrapping_add(1);
-        let prepares = resources.prepares;
-        GlowPane::evict_unseen(&mut resources.panes, prepares);
+        GlowPane::evict_unseen(&mut resources.panes, self.pass_nr);
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         // The pane's own rect in device pixels, which is what the chain is
@@ -530,7 +520,7 @@ impl CallbackTrait for GlowCallback {
         if !wants {
             if let Some(pane) = resources.panes.get_mut(&self.pane_id) {
                 pane.ready = false;
-                pane.last_seen = prepares;
+                pane.last_seen_pass = self.pass_nr;
             }
             return Vec::new();
         }
@@ -538,7 +528,7 @@ impl CallbackTrait for GlowCallback {
             // Built and then stored, rather than assigned in one expression:
             // the constructor reads the layouts and the sampler beside the map
             // it lands in.
-            let pane = GlowPane::new(device, resources, size, prepares);
+            let pane = GlowPane::new(device, resources, size, self.pass_nr);
             resources.panes.insert(self.pane_id, pane);
         }
 
@@ -554,7 +544,7 @@ impl CallbackTrait for GlowCallback {
             ..
         } = resources;
         let pane = panes.get_mut(&self.pane_id).expect("built above when missing");
-        pane.last_seen = prepares;
+        pane.last_seen_pass = self.pass_nr;
 
         if self.dots.len() > pane.capacity {
             pane.capacity = self.dots.len().next_power_of_two();
@@ -712,7 +702,14 @@ mod tests {
         dots: Vec<GlowDot>,
         strength: f32,
     ) -> (Vec<u8>, CallbackResources) {
-        let cb = GlowCallback { rect, dots, strength, target_format: FORMAT, pane_id: ONE_PANE };
+        let cb = GlowCallback {
+            rect,
+            dots,
+            strength,
+            target_format: FORMAT,
+            pane_id: ONE_PANE,
+            pass_nr: 0,
+        };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -865,6 +862,7 @@ mod tests {
             strength: 1.5,
             target_format: FORMAT,
             pane_id: ONE_PANE,
+            pass_nr: 0,
         };
         prepare(&lit, &mut resources);
         // ...and now a frame with the marks gone, over the chain the first one
@@ -875,6 +873,7 @@ mod tests {
             strength: 1.5,
             target_format: FORMAT,
             pane_id: ONE_PANE,
+            pass_nr: 1,
         };
         prepare(&quiet, &mut resources);
         let texture =
@@ -1013,6 +1012,7 @@ mod tests {
             strength: 1.5,
             target_format: FORMAT,
             pane_id,
+            pass_nr: 0,
         };
         let prepare = |cb: &GlowCallback, resources: &mut CallbackResources| {
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -1085,13 +1085,14 @@ mod tests {
         let mark = GlowDot { center: [16.0, 16.0], radius: 4.0, color: [200, 120, 60, 255] };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
-        let prepare = |pane_id, resources: &mut CallbackResources| {
+        let prepare = |pane_id, pass_nr, resources: &mut CallbackResources| {
             let cb = GlowCallback {
                 rect,
                 dots: vec![mark],
                 strength: 1.5,
                 target_format: FORMAT,
                 pane_id,
+                pass_nr,
             };
             let mut encoder = device.create_command_encoder(&Default::default());
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
@@ -1102,14 +1103,14 @@ mod tests {
             glow.panes.contains_key(&id)
         };
 
-        prepare(0, &mut resources);
-        prepare(1, &mut resources);
+        prepare(0, 0, &mut resources);
+        prepare(1, 0, &mut resources);
         assert!(live(&resources, 0) && live(&resources, 1), "two copies, two chains");
 
         // Only one of them keeps drawing, past the age the other's chain is
         // held for.
-        for _ in 0..PANE_TTL_PREPARES {
-            prepare(1, &mut resources);
+        for pass_nr in 1..=PANE_TTL_PASSES {
+            prepare(1, pass_nr, &mut resources);
         }
         assert!(!live(&resources, 0), "the retired copy is still holding a chain");
         assert!(live(&resources, 1), "the sweep took the copy that never stopped drawing");
@@ -1136,6 +1137,7 @@ mod tests {
                 strength: 1.5,
                 target_format: FORMAT,
                 pane_id: ONE_PANE,
+                pass_nr: 0,
             };
             let mut encoder = device.create_command_encoder(&Default::default());
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
