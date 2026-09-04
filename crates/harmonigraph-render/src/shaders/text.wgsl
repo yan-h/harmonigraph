@@ -330,8 +330,10 @@ const PATCH_MARGIN: f32 = 0.5;
 /// Measured on the visible fill at the size the spectral roll sets its names,
 /// as a share of each symbol's own ink: the current flat and sharp swing 4.1%
 /// and 3.8% along the named axis. They are the marks it is for — ink that is
-/// mostly vertical strokes, against a roll that scrolls sideways. The fixed
-/// SDF shadow is a separate path and does not multiply these texture reads.
+/// mostly vertical strokes, against a roll that scrolls sideways. A Distance
+/// shadow is produced separately from the fixed SDF; the lattice's Gaussian
+/// shadow cell reuses this reconstructed coverage and therefore pays the same
+/// tap count as its visible fill.
 ///
 /// ONE axis, and the caller's rather than x, because which way a label
 /// travels is a property of the pane and not of the filter. The roll's names
@@ -440,9 +442,10 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 ///
 /// Two taps [`FILTER_TAP`] either side along a scrolling label's axis, or the
 /// four corners of their Cartesian product for lattice labels that can move
-/// along both. The visible fill reads through here; the shadow is derived
-/// separately from the scale-free SDF, so changing the Shadow kernel does not
-/// multiply these taps.
+/// along both. The visible fill and the lattice's retained Gaussian shadow-cell
+/// producer read through here. A Distance shadow instead comes from the fixed
+/// scale-free SDF, while spectral Gaussian shadows rasterize coverage from that
+/// same SDF rather than this sheet.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     // Along the pane's own travel axes, which the sheets' texels are square
     // with: a glyph's quad is axis-aligned and its atlas patch is upright, so

@@ -2540,10 +2540,11 @@ pub(crate) mod tests {
                 .collect();
             let hi = smear.iter().copied().fold(0.0f32, f32::max);
             let lo = smear.iter().copied().fold(f32::INFINITY, f32::min);
-            let swing = (hi - lo) / hi.max(1e-6);
+            assert!(hi > 0.0, "the two-axis hairline on axis {axis} drew nothing at any phase");
+            let swing = (hi - lo) / hi;
             assert!(
                 swing <= 0.40,
-                "the two-axis filter left axis {axis}'s hairline at {:.1}% swing",
+                "the two-axis filter left axis {axis}'s hairline at {:.1}% swing ({lo:.2}..{hi:.2})",
                 100.0 * swing,
             );
         }
