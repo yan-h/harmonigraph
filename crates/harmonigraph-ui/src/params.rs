@@ -12,7 +12,7 @@
 //! and the seam that edits it together, which is how every call site already
 //! reads.
 
-pub use harmonigraph_take::params::{seconds, ParamKey, MAX_TUNING_OFFSET};
+pub use harmonigraph_take::params::{ParamKey, MAX_TUNING_OFFSET};
 
 /// Which of the plugin's audio inputs feeds every audio-derived picture.
 ///

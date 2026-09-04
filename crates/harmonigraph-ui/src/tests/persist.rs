@@ -1635,7 +1635,10 @@ fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     );
     // And one page is ONE page: the Colors body it was switched away from is
     // gone rather than still stacked above.
-    assert!(!drawn(&out, leaf, "Bloom"), "the Colors page is still drawn under the Lattice page",);
+    assert!(
+        !drawn(&out, leaf, "Pitch color range"),
+        "the Colors page is still drawn under the Lattice page",
+    );
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as

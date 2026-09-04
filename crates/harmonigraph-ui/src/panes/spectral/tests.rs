@@ -150,20 +150,13 @@ fn text_shrinks_with_the_pane() {
     assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
 }
 
-/// The Span readout carries its own unit, and switches to minutes at
-/// the point where seconds alone stop reading — including the seam,
-/// where a value that rounds up to a whole minute must be written as
-/// one rather than as "60.0s".
+/// History uses seconds for both the readout and numeric entry.
 #[test]
 fn the_span_readout_names_its_own_unit() {
-    assert_eq!(span_readout(1.0), "1.0s");
-    assert_eq!(span_readout(12.34), "12.3s");
-    assert_eq!(span_readout(59.9), "59.9s");
-    assert_eq!(span_readout(59.97), "1m 00s", "rounds up ACROSS the seam");
-    assert_eq!(span_readout(60.0), "1m 00s");
-    assert_eq!(span_readout(65.4), "1m 05s", "seconds are padded, so the width holds");
-    assert_eq!(span_readout(90.0), "1m 30s");
-    assert_eq!(span_readout(600.0), "10m 00s", "the top of the bar's range");
+    assert_eq!(span_readout(1.0), "1.0 s");
+    assert_eq!(span_readout(12.34), "12.3 s");
+    assert_eq!(span_readout(59.97), "60.0 s");
+    assert_eq!(span_readout(600.0), "600.0 s");
 }
 
 /// The level range is a window with two ends: the floor reads as silence

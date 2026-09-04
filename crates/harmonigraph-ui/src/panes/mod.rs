@@ -1,22 +1,4 @@
-//! The individual panes. Adding a pane = add a `Tab` variant, a title, and
-//! a body function in the matching submodule; it immediately participates
-//! in docking, and gets the shared state (hover, console, tracker) for free.
-//!
-//! [`tuning`] is how the lattice is tuned, and [`display`] is how everything
-//! is drawn — four PAGES behind a picker, one picture each (the rule that says
-//! which page a setting lands on is written out in [`display`]): Colors
-//! ([`color`], both color tables and the bloom over one of them), Lattice
-//! ([`view`] for what is framed, [`nodes`] for a played note's own layers,
-//! [`labels`] for the text on them, [`plus`] for the marker standing at each
-//! node position), Analyzer ([`spectral`]'s own settings), and System ([`system`], the
-//! plugin's render/layout knobs). Alongside are the [`spectral`] display, the
-//! [`spiral`] one beside it (the same analyzer wound onto a chroma circle),
-//! [`render`] (the Video tab), and [`notes`] (Console + Notes). This file holds
-//! the `Tab` enum, the `TabViewer` that dispatches to them, and the small
-//! helpers more than one pane needs.
-//!
-//! Each tab's name covers everything in it, which is the whole job a tab bar
-//! does: a subject its name omits is one nobody opens the tab to find.
+//! Dock panes and their shared controls. Display pages are dispatched by [`display`].
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
@@ -30,6 +12,7 @@ pub mod plus;
 pub mod glow_fade;
 pub mod labels;
 pub mod lattice;
+pub mod lighting;
 pub mod nodes;
 pub mod notes;
 /// The offline video frame, composed live so you can preview and adjust it
@@ -115,10 +98,8 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// How everything on screen is drawn: the Colors, Lattice, Analyzer and
-    /// System pages, one picture each behind a picker row — see [`display`] for
-    /// why one tab carries all four, and for the rule that says which page a
-    /// setting lands on.
+    /// How everything on screen is drawn: the Lattice, Analyzer, Colors,
+    /// Lighting and System pages behind the [`display`] picker.
     Display,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
@@ -407,12 +388,12 @@ pub(super) fn param_bar(
     key: ParamKey,
 ) -> egui::Response {
     let mut value = params.get(key);
-    let mut bar =
-        ValueBar::new(&mut value, key.range(), key.label()).eased(key.logarithmic()).decimals(2);
-    if let Some(display) = key.display() {
-        bar = bar.display(display);
-    }
-    let response = bar.show(ui);
+    let (scale, suffix, decimals) = key.unit();
+    let response = ValueBar::new(&mut value, key.range(), key.label())
+        .eased(key.logarithmic())
+        .unit(scale, suffix)
+        .decimals(decimals)
+        .show(ui);
     // Bracket drags so the host records one automation gesture per drag;
     // one-shot changes (typed values) go through set() alone.
     if response.drag_started() {
