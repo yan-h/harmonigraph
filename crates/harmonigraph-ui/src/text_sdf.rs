@@ -1,26 +1,38 @@
-//! The fixed signed-distance sheet behind lattice name shadows.
+//! The fixed signed-distance sheet behind text shadows.
 //!
 //! Visible text stays on egui's own coverage atlas. This sheet carries only
-//! the distance the shadow atlas needs, for the closed alphabet a lattice name
-//! can emit. It is generated from the same bundled face and drawn-mark
-//! rasterizer on every shell, so the editor and offline renderer do not have a
-//! second asset or a second outline to keep aligned.
+//! the distance the shadow atlas needs, for the closed alphabet any shadowed
+//! text producer can emit. The expensive exact distance transforms are baked
+//! into the binary at development time; a byte-for-byte regeneration test
+//! keeps that asset tied to the bundled face, drawn-mark rasterizer, and
+//! consumer alphabet.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use crate::marks::{mark_key, rasterize_mark, MarkKind, MARK_WEIGHT};
+use crate::marks::MarkKind;
+#[cfg(test)]
+use crate::marks::{mark_key, rasterize_mark, MARK_WEIGHT};
+
+const BAKED_SHEET: &[u8] = include_bytes!("../assets/text_sdf_sheet.bin");
+const BAKED_MAGIC: &[u8; 8] = b"HGSDF001";
 
 /// The outline is rasterized at sixteen times the lattice name's 30-point em.
+#[cfg(test)]
 const SOURCE_EM: f32 = 480.0;
 /// The near field keeps sub-pixel placement accurate around the zero contour.
+#[cfg(test)]
 pub(crate) const NEAR_TEXELS_PER_EM: f32 = 64.0;
+#[cfg(test)]
 pub(crate) const NEAR_PAD: u32 = harmonigraph_render::GLYPH_SDF_NEAR_PAD;
 /// The coarse field carries the smooth far range without making the near tile
 /// many thousands of source pixels across. Sixteen samples per em keep its
 /// conservative contour within a twentieth of an em of the near field.
+#[cfg(test)]
 pub(crate) const COARSE_TEXELS_PER_EM: f32 = 16.0;
+#[cfg(test)]
 pub(crate) const COARSE_PAD: u32 = harmonigraph_render::GLYPH_SDF_COARSE_PAD;
+#[cfg(test)]
 const SHEET_WIDTH: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,8 +42,8 @@ pub(crate) struct SdfPatch {
     pub(crate) coarse: [f32; 4],
 }
 
-/// One process-wide sheet. A separate offline process generates the same
-/// bytes from the same bundled inputs.
+/// One process-wide decoding of the bytes shared by the plugin and offline
+/// renderer binaries.
 pub(crate) struct SdfSheet {
     pub(crate) atlas: harmonigraph_render::GlyphSdfAtlas,
     type_patches: HashMap<char, SdfPatch>,
@@ -53,15 +65,124 @@ impl SdfSheet {
 
 pub(crate) fn sheet() -> &'static SdfSheet {
     static SHEET: OnceLock<SdfSheet> = OnceLock::new();
-    SHEET.get_or_init(build_sheet)
+    SHEET.get_or_init(|| {
+        decode_sheet(BAKED_SHEET)
+            .unwrap_or_else(|error| panic!("the bundled text SDF sheet is invalid: {error}"))
+    })
 }
 
-/// Pay the deterministic generation cost during theme setup rather than on
-/// the first frame that happens to show a note name.
+/// Decode the baked pixels during theme setup rather than on the first frame
+/// that happens to show shadowed text. This is a linear byte copy instead of
+/// the old font rasterization and 52 exact distance transforms.
 pub(crate) fn prepare() {
     let _ = sheet();
 }
 
+struct BakedCursor<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> BakedCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], String> {
+        let end = self.at.checked_add(N).ok_or_else(|| "offset overflow".to_owned())?;
+        let bytes =
+            self.bytes.get(self.at..end).ok_or_else(|| format!("truncated at byte {}", self.at))?;
+        self.at = end;
+        Ok(bytes.try_into().expect("the slice has the requested length"))
+    }
+
+    fn u32(&mut self) -> Result<u32, String> {
+        self.take().map(u32::from_le_bytes)
+    }
+
+    fn f32(&mut self) -> Result<f32, String> {
+        self.take().map(f32::from_le_bytes)
+    }
+
+    fn patch(&mut self) -> Result<SdfPatch, String> {
+        let mut values = [0.0; 8];
+        for value in &mut values {
+            *value = self.f32()?;
+            if !value.is_finite() {
+                return Err("patch metadata contains a non-finite coordinate".to_owned());
+            }
+        }
+        Ok(SdfPatch {
+            near: values[..4].try_into().expect("four near coordinates"),
+            coarse: values[4..].try_into().expect("four coarse coordinates"),
+        })
+    }
+}
+
+fn decode_sheet(bytes: &[u8]) -> Result<SdfSheet, String> {
+    let mut input = BakedCursor::new(bytes);
+    if input.take::<8>()? != *BAKED_MAGIC {
+        return Err("bad magic or unsupported version".to_owned());
+    }
+    let size = [input.u32()?, input.u32()?];
+    let type_count = usize::try_from(input.u32()?).map_err(|_| "type count overflow")?;
+    let mark_count = usize::try_from(input.u32()?).map_err(|_| "mark count overflow")?;
+    let pixel_count = usize::try_from(input.u32()?).map_err(|_| "pixel count overflow")?;
+    let expected_pixels = usize::try_from(size[0])
+        .ok()
+        .and_then(|width| {
+            usize::try_from(size[1]).ok().and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| "atlas dimensions overflow".to_owned())?;
+    if pixel_count != expected_pixels {
+        return Err(format!(
+            "header claims {pixel_count} pixels for a {}x{} atlas",
+            size[0], size[1]
+        ));
+    }
+
+    let mut type_patches = HashMap::with_capacity(type_count);
+    for _ in 0..type_count {
+        let scalar = input.u32()?;
+        let ch =
+            char::from_u32(scalar).ok_or_else(|| format!("invalid character U+{scalar:04X}"))?;
+        if type_patches.insert(ch, input.patch()?).is_some() {
+            return Err(format!("duplicate character `{ch}`"));
+        }
+    }
+
+    if mark_count != MarkKind::ALL.len() {
+        return Err(format!("expected {} marks, found {mark_count}", MarkKind::ALL.len()));
+    }
+    let mut mark_patches = HashMap::with_capacity(mark_count);
+    for (expected_tag, kind) in MarkKind::ALL.into_iter().enumerate() {
+        let tag = usize::try_from(input.u32()?).map_err(|_| "mark tag overflow")?;
+        if tag != expected_tag {
+            return Err(format!("expected mark tag {expected_tag}, found {tag}"));
+        }
+        mark_patches.insert(kind, input.patch()?);
+    }
+
+    let remaining = bytes.len() - input.at;
+    let expected_bytes = pixel_count
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| "pixel byte count overflow".to_owned())?;
+    if remaining != expected_bytes {
+        return Err(format!("expected {expected_bytes} pixel bytes, found {remaining}"));
+    }
+    let pixels = bytes[input.at..]
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("one encoded f32")))
+        .collect();
+
+    Ok(SdfSheet {
+        atlas: harmonigraph_render::GlyphSdfAtlas { image: Arc::new(pixels), size, key: 1 },
+        type_patches,
+        mark_patches,
+    })
+}
+
+#[cfg(test)]
 #[derive(Clone)]
 struct SourceGlyph {
     size: [usize; 2],
@@ -70,6 +191,7 @@ struct SourceGlyph {
     map: [f32; 4],
 }
 
+#[cfg(test)]
 struct Level {
     size: [u32; 2],
     pixels: Vec<f32>,
@@ -77,6 +199,7 @@ struct Level {
     ink: [f32; 4],
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct FloatAtlas {
     pixels: Vec<f32>,
@@ -84,6 +207,7 @@ struct FloatAtlas {
     shelf: (u32, u32, u32),
 }
 
+#[cfg(test)]
 impl FloatAtlas {
     fn put(&mut self, level: &Level) -> [f32; 4] {
         let [w, h] = level.size;
@@ -114,6 +238,7 @@ impl FloatAtlas {
     }
 }
 
+#[cfg(test)]
 fn build_sheet() -> SdfSheet {
     let mut atlas = FloatAtlas::default();
     let mut type_patches = HashMap::new();
@@ -147,12 +272,14 @@ fn build_sheet() -> SdfSheet {
     }
 }
 
+#[cfg(test)]
 fn pack_source(atlas: &mut FloatAtlas, source: &SourceGlyph) -> SdfPatch {
     let near = near_level(source);
     let coarse = coarse_level(source);
     SdfPatch { near: atlas.put(&near), coarse: atlas.put(&coarse) }
 }
 
+#[cfg(test)]
 fn type_sources() -> Vec<(char, SourceGlyph)> {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
@@ -195,6 +322,7 @@ fn type_sources() -> Vec<(char, SourceGlyph)> {
         .collect()
 }
 
+#[cfg(test)]
 fn shadowed_type_characters() -> Vec<char> {
     let mut chars = harmonigraph_core::NoteName::typeset_characters().to_vec();
     // The optional cents line is part of a lattice name run and adds a sign
@@ -205,6 +333,7 @@ fn shadowed_type_characters() -> Vec<char> {
     chars
 }
 
+#[cfg(test)]
 fn near_level(source: &SourceGlyph) -> Level {
     let source_pad = (0.5 * SOURCE_EM).ceil() as usize + 2;
     let [sw, sh] = source.size;
@@ -239,6 +368,7 @@ fn near_level(source: &SourceGlyph) -> Level {
     }
 }
 
+#[cfg(test)]
 fn coarse_level(source: &SourceGlyph) -> Level {
     let [sw, sh] = source.size;
     let scale = SOURCE_EM / COARSE_TEXELS_PER_EM;
@@ -272,6 +402,7 @@ fn coarse_level(source: &SourceGlyph) -> Level {
 /// Felzenszwalb-Huttenlocher's exact squared Euclidean distance transform,
 /// once to ink and once to clear. The half-pixel correction places zero on the
 /// threshold contour between the two pixel centres rather than on either one.
+#[cfg(test)]
 fn signed_distance(inside: &[bool], [w, h]: [usize; 2]) -> Vec<f32> {
     let to_ink = edt(inside, [w, h], true);
     let to_clear = edt(inside, [w, h], false);
@@ -282,6 +413,7 @@ fn signed_distance(inside: &[bool], [w, h]: [usize; 2]) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(test)]
 fn edt(mask: &[bool], [w, h]: [usize; 2], seeds: bool) -> Vec<f32> {
     const FAR: f32 = 1.0e20;
     let mut first = vec![0.0; w * h];
@@ -309,6 +441,7 @@ fn edt(mask: &[bool], [w, h]: [usize; 2], seeds: bool) -> Vec<f32> {
     result
 }
 
+#[cfg(test)]
 fn edt_line(input: &[f32], output: &mut [f32], sites: &mut [usize], bounds: &mut [f32]) {
     let n = input.len();
     debug_assert_eq!(output.len(), n);
@@ -344,6 +477,7 @@ fn edt_line(input: &[f32], output: &mut [f32], sites: &mut [usize], bounds: &mut
     }
 }
 
+#[cfg(test)]
 fn sample(values: &[f32], [w, h]: [usize; 2], x: f32, y: f32) -> f32 {
     let x = x.clamp(0.0, w.saturating_sub(1) as f32);
     let y = y.clamp(0.0, h.saturating_sub(1) as f32);
@@ -358,6 +492,54 @@ fn sample(values: &[f32], [w, h]: [usize; 2], x: f32, y: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_patch(bytes: &mut Vec<u8>, patch: SdfPatch) {
+        for value in patch.near.into_iter().chain(patch.coarse) {
+            bytes.extend(value.to_le_bytes());
+        }
+    }
+
+    fn encode_sheet(sheet: &SdfSheet) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(BAKED_MAGIC);
+        bytes.extend(sheet.atlas.size[0].to_le_bytes());
+        bytes.extend(sheet.atlas.size[1].to_le_bytes());
+        bytes.extend(
+            u32::try_from(sheet.type_patches.len()).expect("the type count fits").to_le_bytes(),
+        );
+        bytes.extend(
+            u32::try_from(sheet.mark_patches.len()).expect("the mark count fits").to_le_bytes(),
+        );
+        bytes.extend(
+            u32::try_from(sheet.atlas.image.len()).expect("the pixel count fits").to_le_bytes(),
+        );
+
+        let mut type_patches: Vec<_> = sheet.type_patches.iter().collect();
+        type_patches.sort_unstable_by_key(|(ch, _)| **ch);
+        for (&ch, &patch) in type_patches {
+            bytes.extend(u32::from(ch).to_le_bytes());
+            encode_patch(&mut bytes, patch);
+        }
+        for (tag, kind) in MarkKind::ALL.into_iter().enumerate() {
+            bytes.extend(u32::try_from(tag).expect("the mark tag fits").to_le_bytes());
+            encode_patch(&mut bytes, sheet.mark_patches[&kind]);
+        }
+        for &pixel in sheet.atlas.image.iter() {
+            bytes.extend(pixel.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn patch_has_ink(sheet: &SdfSheet, patch: [f32; 4]) -> bool {
+        let [width, height] = sheet.atlas.size;
+        let x0 = (patch[0].floor() as u32).min(width);
+        let y0 = (patch[1].floor() as u32).min(height);
+        let x1 = (patch[2].ceil() as u32).min(width);
+        let y1 = (patch[3].ceil() as u32).min(height);
+        (y0..y1).any(|y| {
+            (x0..x1).any(|x| sheet.atlas.image[(y * width + x) as usize].is_sign_negative())
+        })
+    }
 
     fn field_at(near: &Level, coarse: &Level, point: [f32; 2], source: [f32; 2]) -> (f32, f32) {
         let mapped = |level: &Level| {
@@ -472,6 +654,50 @@ mod tests {
         );
     }
 
+    /// Exact regeneration command:
+    ///
+    /// `HARMONIGRAPH_REGENERATE_TEXT_SDF=1 cargo test --release -p harmonigraph-ui
+    /// text_sdf::tests::regenerate_the_baked_sheet -- --ignored --exact`
+    #[test]
+    #[ignore = "writes the checked-in SDF asset"]
+    fn regenerate_the_baked_sheet() {
+        assert_eq!(
+            std::env::var("HARMONIGRAPH_REGENERATE_TEXT_SDF").as_deref(),
+            Ok("1"),
+            "set HARMONIGRAPH_REGENERATE_TEXT_SDF=1 to confirm the source-tree write",
+        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("text_sdf_sheet.bin");
+        std::fs::write(&path, encode_sheet(&build_sheet()))
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+    }
+
+    #[test]
+    fn the_baked_sheet_is_byte_identical_to_exact_regeneration() {
+        let start = std::time::Instant::now();
+        let regenerated = encode_sheet(&build_sheet());
+        eprintln!("exact text SDF regeneration: {:.3} ms", start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(BAKED_SHEET, regenerated);
+    }
+
+    /// Reproducible cold-path measurement (the printed duration excludes the
+    /// test harness):
+    ///
+    /// `cargo test --release -p harmonigraph-ui
+    /// text_sdf::tests::the_baked_sheet_decodes_without_generating_fields --
+    /// --exact --nocapture`
+    #[test]
+    fn the_baked_sheet_decodes_without_generating_fields() {
+        let start = std::time::Instant::now();
+        let decoded = decode_sheet(BAKED_SHEET).expect("the included sheet decodes");
+        eprintln!("baked text SDF decode: {:.3} ms", start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(
+            decoded.atlas.image.len(),
+            decoded.atlas.size.map(|side| side as usize).iter().product()
+        );
+    }
+
     #[test]
     fn every_shadowed_text_producer_character_and_drawn_mark_has_an_sdf() {
         let sheet = sheet();
@@ -489,22 +715,21 @@ mod tests {
         for ch in produced {
             assert!(sheet.type_patches.contains_key(&ch), "missing monospace `{ch}`");
         }
-        let (_, k_source) = type_sources()
-            .into_iter()
-            .find(|(ch, _)| *ch == 'k')
-            .expect("the spectral suffix is generated");
-        assert!(near_level(&k_source).pixels.iter().any(|&d| d < 0.0), "k has no near-field ink");
-        assert!(
-            coarse_level(&k_source).pixels.iter().any(|&d| d < 0.0),
-            "k has no coarse-field ink",
-        );
+        let k = sheet.type_patches[&'k'];
+        assert!(patch_has_ink(sheet, k.near), "the baked k has no near-field ink");
+        assert!(patch_has_ink(sheet, k.coarse), "the baked k has no coarse-field ink");
         let mut packed: Vec<char> = sheet.type_patches.keys().copied().collect();
         packed.sort_unstable();
         let mut expected = shadowed_type_characters();
         expected.sort_unstable();
         assert_eq!(packed, expected, "the fixed sheet carries an unused glyph");
         for kind in MarkKind::ALL {
-            assert!(sheet.mark_patches.contains_key(&kind), "missing {kind:?}");
+            let patch = sheet.mark_patches.get(&kind).unwrap_or_else(|| panic!("missing {kind:?}"));
+            assert!(patch_has_ink(sheet, patch.near), "the baked {kind:?} has no near-field ink");
+            assert!(
+                patch_has_ink(sheet, patch.coarse),
+                "the baked {kind:?} has no coarse-field ink"
+            );
         }
     }
 }
