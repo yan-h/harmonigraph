@@ -406,9 +406,11 @@ pub(super) fn total_light(px: &[u8]) -> i64 {
 /// pixel it covers completely carries its colour exactly and every other one
 /// carries a fraction of it: the brightest value in the set is the colour
 /// itself, read off the picture rather than converted by hand, and the pixels
-/// holding it are the ones with nothing showing through. What shows through
-/// the antialiased rim is the ground's share of whatever stands there, which is
-/// a claim about the ground.
+/// holding its brightest dither phase are certainly ones with nothing showing
+/// through. That is a subset of full coverage now that the final write uses
+/// stochastic rounding, but a deliberately strict one: what shows through the
+/// antialiased rim is the ground's share of whatever stands there, which is a
+/// claim about the ground.
 pub(super) fn fully_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
     let drawn: Vec<usize> = (0..bare.len())
         .step_by(4)
@@ -417,6 +419,23 @@ pub(super) fn fully_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
     let full: [u8; 3] =
         std::array::from_fn(|c| drawn.iter().map(|&i| inked[i + c]).max().unwrap_or(0));
     drawn.into_iter().filter(|&i| inked[i..i + 3] == full).collect()
+}
+
+/// The same flat ink, keeping both byte values that the final dither assigns
+/// to its fully covered interior. Callers that erode the set spatially, or only
+/// need a representative field of the shape, can keep the whole pattern rather
+/// than selecting the dither's brighter phase as [`fully_inked`] does.
+pub(super) fn solid_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
+    let drawn: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && inked[i..i + 4] != bare[i..i + 4])
+        .collect();
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| inked[i + c]).max().unwrap_or(0));
+    drawn
+        .into_iter()
+        .filter(|&i| (0..3).all(|c| inked[i + c] >= full[c].saturating_sub(1)))
+        .collect()
 }
 
 /// The slot mask naming middle C's octave — the one the node below sounds

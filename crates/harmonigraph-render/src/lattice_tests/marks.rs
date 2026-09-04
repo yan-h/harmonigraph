@@ -302,11 +302,11 @@ fn a_ring_part_way_through_its_fade_sits_between_the_two() {
     assert!(differing_pixels(&part, &none) > 0, "a quarter of a ring drew nothing at all");
     assert!(differing_pixels(&part, &full) > 0, "a quarter of a ring is the whole of one");
 
-    // Between the two, channel by channel. The slack is the compositing's own
-    // rounding — the ring is blended in 8-bit twice over — and not a tolerance
-    // on the claim: a level that reached the colour instead would leave the
-    // wedges the same coverage and paint them a different colour, which lands
-    // outside the pair wherever the ramp is not monotone in the channel.
+    // Between the two, channel by channel. The slack is the packed level and
+    // the final target's own dither/rounding, not a tolerance on the claim: a
+    // level that reached the colour instead would leave the wedges the same
+    // coverage and paint them a different colour, which lands outside the pair
+    // wherever the ramp is not monotone in the channel.
     let mut moved = 0;
     for ((p, a), b) in part.chunks(4).zip(full.chunks(4)).zip(none.chunks(4)) {
         for c in 0..3 {

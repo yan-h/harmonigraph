@@ -18,9 +18,9 @@ use crate::*;
 ///
 /// - Something moves, and enough of the lit ink to be the slice rather than a
 ///   rim of it.
-/// - NOTHING outside the lit ink moves, byte for byte — not the ghost ring the
-///   lit slice sits in, not the ring's silent wedges, not the halo and not the
-///   ground.
+/// - NOTHING outside the lit ink moves by more than the final output code — not
+///   the ghost ring the lit slice sits in, not the ring's silent wedges, not the
+///   halo and not the ground.
 ///
 /// The lit ink is FOUND rather than described, and found with the glow OFF in
 /// every shot that finds it: it is the pixels that move when the thing lighting
@@ -69,8 +69,9 @@ fn the_wash_reaches_a_lit_slice_and_nothing_else() {
 
     let full = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 1.0));
     let none = shooter.shot(&at(Some(slot), Some(sounding), 0.8, 0.0));
-    let moved: Vec<usize> =
-        (0..is_lit.len()).filter(|p| full[p * 4..p * 4 + 4] != none[p * 4..p * 4 + 4]).collect();
+    let moved: Vec<usize> = (0..is_lit.len())
+        .filter(|p| (0..4).any(|c| full[p * 4 + c].abs_diff(none[p * 4 + c]) > 1))
+        .collect();
     let moved_lit = moved.iter().filter(|&&p| is_lit[p]).count();
     let strays = moved.len() - moved_lit;
     assert!(

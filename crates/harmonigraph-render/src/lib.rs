@@ -272,6 +272,18 @@ pub fn bloom_strength(raw: f32) -> f32 {
 /// effects; the scene pipelines test `Always` so it never affects output.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// The lattice's colour between its own passes: the node light, both scene
+/// attachments, and every stage of the bloom chain.
+///
+/// The host surface is normally an 8-bit `Unorm` texture, which is the right
+/// final format and the wrong working one for a slow gradient. Reusing it here
+/// rounds a halo once when its nodes meld, again when it enters the scene, and
+/// once at every bloom hop. As the light fades, those fixed byte boundaries
+/// move across its radial falloff as visible rings. Half floats keep the field
+/// continuous until `fs_composite` dithers the one unavoidable 8-bit write in
+/// [`LatticeCallback::paint`].
+const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
@@ -1967,13 +1979,11 @@ struct Offscreen {
     /// 9/255 back out of the halo it crossed.
     ///
     /// A whole second colour target is what that costs, at the render-scaled
-    /// size — about 14 MB for a Retina-sized pane at scale 1, and it grows
-    /// with the square of the render scale like the two targets beside it.
-    /// What it does NOT cost is time: the scene pass and bloom chain over 384
-    /// overlapping lit nodes and 2300 glyphs at 1536x1024 median 0.359 ms with
-    /// this attachment and 0.365 ms without, which is the same within noise.
-    /// There is one more colour write per node fragment and nothing else — no
-    /// extra pass, no extra draw call, no extra geometry.
+    /// size — about 28 MB for a Retina-sized pane at scale 1 now that the
+    /// lattice works in half floats, and it grows with the square of the render
+    /// scale like the two targets beside it. There is one more colour write per
+    /// node fragment and nothing else — no extra pass, no extra draw call, no
+    /// extra geometry.
     ///
     /// There is also no cheaper slot. The bright pass samples a finished
     /// texture, so "after bloom but still interleaved with the nodes" does not
@@ -2044,9 +2054,9 @@ struct GlowTarget {
 /// average at no concentration — the mean a node's middle eases toward.
 ///
 /// Small: an f16 RGBA texel per angle per node, so a lattice of 400 lit nodes
-/// spends about 400 KB on the pair — a fortieth of the pane's own offscreen at
-/// that size. That is what the light costs in memory to stop costing a whole
-/// reading of the node per lit fragment.
+/// spends about 400 KB on the pair — a rounding error beside the pane-sized
+/// half-float attachments. That is what the light costs in memory to stop
+/// costing a whole reading of the node per lit fragment.
 struct InkStrip {
     /// The raw reading, in a PAIR that ping-pongs: the frame writes one and
     /// reads the other, which is what lets a row hold an average of this
@@ -2083,10 +2093,10 @@ struct InkStrip {
 const INK_STRIP_N: u32 = 64;
 
 /// What the strip is kept in: an f16 colour per angle, which is what the blur
-/// hands the light. Half floats rather than the target's own 8-bit format
-/// because a strip texel is a normalised colour beside a WEIGHT, and a weight
-/// is a layer's level times its width — small numbers, quantized to nothing by
-/// a byte.
+/// hands the light. The format is explicit rather than inherited from the
+/// scene because a strip texel is a normalised colour beside a WEIGHT, and a
+/// weight is a layer's level times its width — small numbers that must not be
+/// quantized away if the scene format changes.
 const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
@@ -3159,7 +3169,7 @@ impl LatticeResources {
         let (pipeline, plus_pipeline) = create_pipelines(
             device,
             &shader_src,
-            target_format,
+            LATTICE_COLOR_FORMAT,
             SceneLayouts {
                 uniforms: &bind_group_layout,
                 glow: &filter_layout,
@@ -3189,7 +3199,7 @@ impl LatticeResources {
         let glow_pipeline = create_glow_pipeline(
             device,
             &shader_src,
-            target_format,
+            LATTICE_COLOR_FORMAT,
             &bind_group_layout,
             &strip_layout,
         );
@@ -3207,9 +3217,10 @@ impl LatticeResources {
             &composite_layout,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
-        let glow_over_pipeline = create_glow_over_pipeline(device, target_format, &filter_layout);
+        let glow_over_pipeline =
+            create_glow_over_pipeline(device, LATTICE_COLOR_FORMAT, &filter_layout);
         let filter =
-            |entry| create_post_pipeline(device, entry, target_format, &filter_layout, None);
+            |entry| create_post_pipeline(device, entry, LATTICE_COLOR_FORMAT, &filter_layout, None);
         let bright_pipeline = filter("fs_bright");
         let downsample_pipeline = filter("fs_blit");
         let blur_h_pipeline = filter("fs_blur_h");
@@ -3236,7 +3247,7 @@ impl LatticeResources {
         let glyph_fill_pipeline = text::create_text_pipeline(
             device,
             &glyph_shader,
-            target_format,
+            LATTICE_COLOR_FORMAT,
             &glyph_layout,
             Some(&filter_layout),
             // The plain glyph quad, grown by the reconstruction filter's margin
@@ -3258,7 +3269,7 @@ impl LatticeResources {
             &glyph_layout,
             &shadow_layout,
             &caster_layout,
-            target_format,
+            LATTICE_COLOR_FORMAT,
             DEPTH_FORMAT,
         );
 
@@ -3290,7 +3301,7 @@ impl LatticeResources {
                 })
                 .create_view(&Default::default())
         };
-        let glow_dummy = stand_in("lattice_glow_dummy", target_format);
+        let glow_dummy = stand_in("lattice_glow_dummy", LATTICE_COLOR_FORMAT);
         let glow_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_dummy_bind_group"),
             layout: &filter_layout,
@@ -3447,7 +3458,7 @@ impl LatticeResources {
         let sdf_view = self.sdf.view_or(&self.blank_sdf);
         let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf.key());
         let shared = OffscreenShared {
-            format: self.target_format,
+            format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.composite_layout,
             filter_layout: &self.filter_layout,
             strip_layout: &self.strip_layout,
@@ -3721,7 +3732,7 @@ impl CallbackTrait for LatticeCallback {
                     let (pipeline, plus_pipeline) = create_pipelines(
                         device,
                         source,
-                        resources.target_format,
+                        LATTICE_COLOR_FORMAT,
                         SceneLayouts {
                             uniforms: &resources.bind_group_layout,
                             glow: &resources.filter_layout,
@@ -3743,7 +3754,7 @@ impl CallbackTrait for LatticeCallback {
                     let glow_pipeline = create_glow_pipeline(
                         device,
                         source,
-                        resources.target_format,
+                        LATTICE_COLOR_FORMAT,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
                     );
@@ -3774,7 +3785,7 @@ impl CallbackTrait for LatticeCallback {
                     let glyph_fill_pipeline = text::create_text_pipeline(
                         device,
                         &glyph_shader,
-                        resources.target_format,
+                        LATTICE_COLOR_FORMAT,
                         &resources.glyph_layout,
                         Some(&resources.filter_layout),
                         ("vs_glyph", "fs_fill_lit"),
@@ -3796,7 +3807,7 @@ impl CallbackTrait for LatticeCallback {
                         &resources.glyph_layout,
                         &resources.shadow_layout,
                         &resources.caster_layout,
-                        resources.target_format,
+                        LATTICE_COLOR_FORMAT,
                         DEPTH_FORMAT,
                     );
                     resources.glyph_fill_pipeline = glyph_fill_pipeline;

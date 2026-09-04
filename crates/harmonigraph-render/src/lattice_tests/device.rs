@@ -93,7 +93,7 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// attachment) and compositing through blit.wgsl reproduces what the
 /// old renderer produced by drawing straight into the egui pass. Runs
 /// the same scene through both paths and compares pixels; tolerance 3
-/// covers the 8-bit quantization of the intermediate texture.
+/// covers the final dither and the half-float working target's rounding.
 #[test]
 fn offscreen_composite_matches_direct_draw() {
     let Some((device, queue)) = headless_device() else {

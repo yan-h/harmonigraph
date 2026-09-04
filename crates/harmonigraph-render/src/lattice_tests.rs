@@ -14,6 +14,7 @@ mod golden;
 mod labels;
 mod marks;
 mod octaves;
+mod quantization;
 mod reload;
 mod shadows;
 mod shimmer;

@@ -53,6 +53,23 @@ struct BlitOut {
     @location(0) uv: vec2<f32>,
 };
 
+// One screen-fixed value in 0..1. The same low-discrepancy sequence egui uses
+// for its meshes, kept here because a paint callback's fragment never passes
+// through egui's shader and therefore does not inherit its dither.
+fn interleaved_gradient_noise(pixel: vec2<f32>) -> f32 {
+    let f = 0.06711056 * pixel.x + 0.00583715 * pixel.y;
+    return fract(52.9829189 * fract(f));
+}
+
+// Stochastic rounding for the one eight-bit boundary the lattice still has:
+// its final write into the host surface. The 0.95 leaves exact byte values
+// inside their own rounding cell, so a flat colour already representable by
+// the target stays flat rather than acquiring grain.
+fn dither_to_unorm8(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let noise = (interleaved_gradient_noise(pixel) - 0.5) * 0.95;
+    return rgb + vec3<f32>(noise / 255.0);
+}
+
 // Triangle-strip quad over the whole viewport (egui-wgpu sets the viewport
 // to the callback's rect). vertex_index 0..3 -> (0,0) (1,0) (0,1) (1,1).
 // The NDC-vs-texture y-flip is applied in every pass, so texture-to-
@@ -113,15 +130,25 @@ fn fs_blur_v(in: BlitOut) -> @location(0) vec4<f32> {
     return blur(in.uv, vec2<f32>(0.0, 1.0));
 }
 
-// Final composite into the egui pass. Bloom is added as pure light with
-// zero alpha: under premultiplied blending the halo brightens whatever is
-// behind it (pane background included) without occluding anything. With
-// strength 0 this reduces exactly to the plain scene blit.
+// Final composite into the egui pass. Bloom is added as pure light with zero
+// alpha: under premultiplied blending the halo brightens whatever is behind it
+// (pane background included) without occluding anything. The source textures
+// are half-float, so this is the first and only point at which the lattice's
+// gradients meet an eight-bit target; dither here turns a moving quantization
+// contour into screen-fixed sub-pixel grain. With strength 0 this reduces to
+// the dithered scene blit.
 @fragment
 fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
-    return scene + vec4<f32>(bloom.rgb * bu.misc2.w, 0.0);
+    let rgb = scene.rgb + bloom.rgb * bu.misc2.w;
+    // The quad covers the pane, including transparent pixels and the pure-alpha
+    // masks that cast black shadows. Leave zero source RGB exact: premultiplied
+    // blending still ADDS it, so noise there would invent light and stipple the
+    // pane fill or the dark centre of a shadow underneath.
+    let has_light = any(rgb > vec3<f32>(0.0));
+    let dithered = select(rgb, dither_to_unorm8(rgb, in.pos.xy), has_light);
+    return vec4<f32>(dithered, scene.a);
 }
 
 // The halo alone, over a picture the caller has already drawn into this pass.
