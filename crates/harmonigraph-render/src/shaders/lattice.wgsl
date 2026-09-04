@@ -2244,13 +2244,24 @@ struct NodeInk {
     // A share and not a switch, so a slice fading in carries its wash in with
     // it and no seam appears at a threshold nothing else in the picture has.
     lit: f32,
-    // The geometric footprint of every layer contributing any ink, before its
-    // own level is spent. A Gaussian uses it to keep the caster's blurred alpha
-    // from showing through that same caster during a release.
+    // The footprint every VISIBLE layer contributes: geometric coverage at an
+    // ordinary level, eased up across INK_FLOOR so the first nonzero packed
+    // level cannot punch a whole caster-shaped hole in the shadow before its
+    // ink appears. A Gaussian uses it to keep the caster's blurred alpha from
+    // showing through that same caster during a release.
     mask: f32,
     // The nearest layer whose level reaches the distance contour.
     sd: f32,
 };
+
+/// How much of a layer's geometric footprint may mask its own shadow.
+///
+/// Levels below the ink floor are still representable in the instance buffer,
+/// but not visible in the scene pass. Ease the mask through that same interval
+/// rather than turning a whole footprint on at the first value above zero.
+fn mask_level(level: f32) -> f32 {
+    return clamp(level / INK_FLOOR, 0.0, 1.0);
+}
 
 /// What every node layer answers at this fragment: its visible ink and the
 /// nearest half-level signed field the Distance cell stores.
@@ -2500,7 +2511,7 @@ fn node_ink(
     // with a zero of its own, which is what the ink does too.
     glyph_lit = audio.lit * audio.cov + glyph_lit * (1.0 - audio.cov);
     glyph = audio.cov + glyph * (1.0 - audio.cov);
-    let audio_mask = select(0.0, audio.layer.coverage, in.ring > 0.0);
+    let audio_mask = audio.layer.coverage * mask_level(in.ring);
     glyph_mask = audio_mask + glyph_mask * (1.0 - audio_mask);
 
     // Melody/bass marks: each one its own octave's slice, continued into the
@@ -2540,8 +2551,8 @@ fn node_ink(
     );
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
-    let melody_mask = select(0.0, melody_layer.coverage, melody_layer.level > 0.0);
-    let bass_mask = select(0.0, bass_layer.coverage, bass_layer.level > 0.0);
+    let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
+    let bass_mask = bass_layer.coverage * mask_level(bass_layer.level);
     node_sd = layer_distance(node_sd, melody_layer);
     node_sd = layer_distance(node_sd, bass_layer);
     // The two ends share the strip, so where they name DIFFERENT slices they
@@ -2674,7 +2685,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.mask, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
     }
     // A Gaussian's cell contains the caster's fading alpha, then calibrates
     // thin ink with a gain. Without a footprint mask that amplified blur shows

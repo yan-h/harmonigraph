@@ -992,6 +992,56 @@ fn a_gaussian_release_does_not_show_its_shadow_through_its_own_ring() {
     );
 }
 
+/// A mark too faint for the scene pass cannot cut a bright copy of its shape
+/// out of the Gaussian shadow underneath it.
+///
+/// Mark presence and mark level travel separately. The first nonzero packed
+/// level therefore reaches the mark geometry while its ink is still below the
+/// shader's floor. Its mask follows that level through the floor, and the
+/// final no-ink branch clears the mask with the ink; otherwise an invisible
+/// strip removes a whole strip of shadow for one frame at either end of its
+/// fade.
+#[test]
+fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
+    use harmonigraph_scene::ShadowKernel::Gaussian;
+
+    const SHADOW: f32 = 0.6;
+    const SUBFLOOR: f32 = 1.0 / 255.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = |level: f32, depth: f32| {
+        let mut scene = on_ground(SHADOW, depth);
+        scene.shadow.lattice_geometry.kernel = Gaussian;
+        scene.nodes[0].melody_slots = if level > 0.0 { MIDDLE_C } else { 0 };
+        scene.nodes[0].melody_level = level;
+        scene.nodes[0].glow.marked = f32::from(level > 0.0);
+        scene
+    };
+
+    // Find pixels well inside the mark from a full-strength copy over black,
+    // rather than assuming its screen angle or accepting a fixture whose mark
+    // never reached the frame.
+    let absent = shooter.shot(&scene(0.0, 0.0));
+    let full = shooter.shot(&scene(1.0, 0.0));
+    let body = fully_inked(&absent, &full);
+    assert!(body.len() > 20, "only {} pixels reach the mark's full coverage", body.len());
+
+    shooter.clear = over_ground();
+    let unmarked = shooter.shot(&scene(0.0, 1.0));
+    let subfloor = shooter.shot(&scene(SUBFLOOR, 1.0));
+    let lifted = body
+        .iter()
+        .map(|&i| brightness(&subfloor[i..i + 3]) - brightness(&unmarked[i..i + 3]))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        lifted.abs() <= 2,
+        "a {SUBFLOOR:.4} mark below the {INK_FLOOR:.2} ink floor lifted its Gaussian shadow by \
+         {lifted} brightness levels",
+    );
+}
+
 /// Neither Shadow bar at its bottom casts anything, allocates anything, or
 /// moves a single pixel — and the two bottoms draw the identical frame.
 ///
