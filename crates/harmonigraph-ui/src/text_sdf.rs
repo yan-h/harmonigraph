@@ -163,7 +163,7 @@ fn type_sources() -> Vec<(char, SourceGlyph)> {
     let _ = ctx.run_ui(raw, |ui| {
         placed.clear();
         let family = egui::FontFamily::Monospace;
-        for ch in lattice_type_characters() {
+        for ch in shadowed_type_characters() {
             let galley = ui.painter().layout_no_wrap(
                 ch.to_string(),
                 egui::FontId::new(SOURCE_EM, family.clone()),
@@ -195,11 +195,13 @@ fn type_sources() -> Vec<(char, SourceGlyph)> {
         .collect()
 }
 
-fn lattice_type_characters() -> Vec<char> {
+fn shadowed_type_characters() -> Vec<char> {
     let mut chars = harmonigraph_core::NoteName::typeset_characters().to_vec();
-    // The optional cents line is part of the same name run and can add a sign
-    // and decimal point beside NoteName's closed spelling.
-    chars.extend(['-', '.']);
+    // The optional cents line is part of a lattice name run and adds a sign
+    // and decimal point beside NoteName's closed spelling. Spectral frequency
+    // labels add the lower-case unit suffix. Level labels need only the same
+    // sign and digits already present here.
+    chars.extend(['-', '.', 'k']);
     chars
 }
 
@@ -471,11 +473,36 @@ mod tests {
     }
 
     #[test]
-    fn every_note_name_character_and_drawn_mark_has_an_sdf() {
+    fn every_shadowed_text_producer_character_and_drawn_mark_has_an_sdf() {
         let sheet = sheet();
-        for ch in harmonigraph_core::NoteName::typeset_characters() {
+        let mut produced = harmonigraph_core::NoteName::typeset_characters().to_vec();
+        produced.extend(format!("{:.2}", -987.65).chars());
+        for hz in [20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
+            produced.extend(crate::panes::spectral::frequency_label(hz).chars());
+        }
+        for db in [-100.0, -50.0, -20.0, 0.0] {
+            produced.extend(crate::panes::spectral::level_label(db).chars());
+        }
+        produced.sort_unstable();
+        produced.dedup();
+
+        for ch in produced {
             assert!(sheet.type_patches.contains_key(&ch), "missing monospace `{ch}`");
         }
+        let (_, k_source) = type_sources()
+            .into_iter()
+            .find(|(ch, _)| *ch == 'k')
+            .expect("the spectral suffix is generated");
+        assert!(near_level(&k_source).pixels.iter().any(|&d| d < 0.0), "k has no near-field ink");
+        assert!(
+            coarse_level(&k_source).pixels.iter().any(|&d| d < 0.0),
+            "k has no coarse-field ink",
+        );
+        let mut packed: Vec<char> = sheet.type_patches.keys().copied().collect();
+        packed.sort_unstable();
+        let mut expected = shadowed_type_characters();
+        expected.sort_unstable();
+        assert_eq!(packed, expected, "the fixed sheet carries an unused glyph");
         for kind in MarkKind::ALL {
             assert!(sheet.mark_patches.contains_key(&kind), "missing {kind:?}");
         }

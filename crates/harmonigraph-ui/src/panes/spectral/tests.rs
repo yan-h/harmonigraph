@@ -2560,7 +2560,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             state.spectrum_config.roll_fraction = 0.55;
             // The widest outline there is, so the reach that would cross the
             // line is as big as the setting allows, and a bloom over it.
-            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.view.shadow.spectral_geometry.width = 1.0;
             state.spectrum_config.roll_lead = lead;
             state.spectrum_config.roll_lead_fade = lead;
             state.view.bloom_strength = 1.2;

@@ -1,17 +1,7 @@
-// Haloed label text: one instanced quad per GLYPH, with the rim computed
-// per pixel instead of drawn as repeated copies of the text.
-//
-// The rim used to be the label stamped around two rings — 20 more copies of
-// every glyph, every frame, which on a lattice full of labels was most of
-// the geometry in the frame. It is the same rim here, arrived at from the
-// other side: every stamp shares one color, so their composite collapses to
-//
-//     alpha = 1 - PRODUCT over samples of (1 - ring_alpha * coverage_i)
-//
-// and a fragment can evaluate that by sampling the glyph's own atlas patch
-// at the same offsets. Not an approximation of the stamped rim — the same
-// arithmetic, with the loop moved from the CPU's shape list into the
-// fragment shader.
+// Label text: one instanced quad per glyph. Spectral labels put their fixed
+// glyph SDF into the shared shadow atlas and read either its exact distance or
+// the Gaussian made from coverage of that same field; lattice labels reuse the
+// same producers inside the lattice scene pass.
 //
 // Glyphs come from egui: it lays the text out, rasterizes into its font
 // atlas, and hands over each glyph's screen rect and atlas rect. This
@@ -20,7 +10,7 @@
 // A drawn MARK — the `+`, the chevron, the accidentals — is a glyph here too,
 // cut from a sheet of its own that the UI rasterizes and packs. It reaches the
 // framebuffer through everything below unchanged, which is the point of it
-// being here at all: it takes its rim from the same arithmetic instead of a
+// being here at all: it takes its shadow from the same SDF arithmetic instead of a
 // second bitmap, and its place in the lattice's draw order from the run of
 // letters it was collected with, so a node in front covers a name and its
 // marks together.
@@ -36,8 +26,8 @@ struct Locals {
     /// where `coverage` puts its two taps. See `FILTER_TAP`, which is how far
     /// along it they sit and why one axis rather than both.
     filter_axis: vec2<f32>,
-    /// Physical pixels per point: both sheets are rasterized at device scale,
-    /// so this converts a rim radius in points into a texel offset.
+    /// Physical pixels per point: both visible sheets are rasterized at device
+    /// scale.
     pixels_per_point: f32,
     /// How much of what stands under a name its shadow takes where that shadow
     /// is whole, 0..1 — the TEXT group's own depth
@@ -51,10 +41,7 @@ struct Locals {
     /// Beside the depth above so the pair fills a `vec2`'s 8-byte alignment
     /// with no pad of its own.
     shadow_atlas_size: vec2<f32>,
-    /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
-    /// Zero samples is a ring that isn't drawn.
-    ring0: vec4<f32>,
-    ring1: vec4<f32>,
+    _pad: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -70,7 +57,7 @@ const SHEET_MARK: u32 = 1u;
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     /// Atlas coordinate of this fragment, in TEXELS — outside the glyph's
-    /// own rect over the margin the rim reaches into.
+    /// own rect over the margin the reconstruction filter reaches into.
     @location(0) texel: vec2<f32>,
     /// The glyph's own patch of the atlas, in texels. Samples outside it
     /// belong to a different glyph and must read as nothing.
@@ -78,21 +65,12 @@ struct VertexOut {
     @location(2) @interpolate(flat) uv_max: vec2<f32>,
     /// Premultiplied sRGB, as egui carries `Color32`.
     @location(3) @interpolate(flat) fill: vec4<f32>,
-    @location(4) @interpolate(flat) rim: vec4<f32>,
     /// Which sheet this glyph is cut from, and that sheet's size in texels —
     /// carried rather than looked up per sample, so only the texture read
     /// itself has to choose.
     @location(5) @interpolate(flat) sheet: u32,
     @location(6) @interpolate(flat) sheet_size: vec2<f32>,
 };
-
-/// How far outside its own rect a glyph's rim can reach, in points.
-fn rim_reach() -> f32 {
-    return max(
-        select(0.0, locals.ring0.x, locals.ring0.z > 0.0),
-        select(0.0, locals.ring1.x, locals.ring1.z > 0.0),
-    );
-}
 
 /// A point of the pane, in points, as clip space.
 fn on_screen(pos: vec2<f32>) -> vec4<f32> {
@@ -119,7 +97,7 @@ fn vs_glyph(
     // Which sheet `uv` addresses.
     @location(7) sheet: u32,
 ) -> VertexOut {
-    var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
     out.position = on_screen(out.position.xy);
     return out;
 }
@@ -149,7 +127,7 @@ fn vs_glyph_cell(
     @location(10) box_meta: vec4<f32>,
     @location(11) box_who: vec4<f32>,
 ) -> VertexOut {
-    var out = glyph_vertex(vertex, rect, uv, fill, rim, sheet, rim_reach());
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
     let texel = cell_texel(out.position.xy, box_rect, box_cell, box_meta.x);
     // Drawn in plain screen space, so the `w` a cell's clip position is built
     // with is the 1 this quad already carries.
@@ -202,8 +180,7 @@ fn vs_glyph_distance_cell(
     let coarse_span = sdf_coarse.zw - sdf_coarse.xy;
     let valid = near_span.x > 0.0 && near_span.y > 0.0
         && coarse_span.x > 0.0 && coarse_span.y > 0.0
-        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0
-        && box_who.y >= 0.5;
+        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0;
 
     var out: SdfOut;
     let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
@@ -272,30 +249,16 @@ fn glyph_vertex(
     rect: vec4<f32>,
     uv: vec4<f32>,
     fill: vec4<f32>,
-    rim: vec4<f32>,
     sheet: u32,
-    grown_by: f32,
 ) -> VertexOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
     );
 
-    // Grown by whatever this draw paints outside the ink — the rim's reach, or
-    // the shadow's. The grown edge lands on a whole physical pixel (the rim's
-    // radius is snapped before it arrives), so the glyph's own texels stay
-    // aligned 1:1 with the framebuffer exactly as egui's own quad has them.
-    //
-    // Never less than the distance `coverage` reads into, whatever the caller
-    // asks for: a quad that stops at the ink cuts off the same edge column the
-    // margin exists to keep, and a caller asking for no rim at all is the one
-    // way to get one. That distance is the patch margin plus the offset its
-    // taps sit at, since a fragment a quarter texel inside the bound still
-    // reaches the bound with its outer tap. The two are the same distance in
-    // different spaces, so this is those texels expressed in points. Both
-    // rings drawn, it is three eighths of a point against the rim's two and
-    // changes nothing.
-    let reach = max(grown_by, (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point);
+    // Grown only by the distance `coverage` reads into. Shadows have their own
+    // packed boxes, so changing a style never changes the visible glyph quad.
+    let reach = (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point;
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
@@ -310,7 +273,7 @@ fn glyph_vertex(
     // margin below is still added in the raster's texels. The ink lands about
     // `(k - 1) * reach / (glyph + reach)` narrow of the quad, which is under
     // half a percent at the couple of percent of magnification the UI's size
-    // ladder can leave over, and the rim likewise. Sub-pixel, and the reason
+    // ladder can leave over. Sub-pixel, and the reason
     // the caller bounds `k` rather than this shader taking it per instance:
     // one more vertex attribute on every glyph in the frame, to correct
     // something below the grid it is drawn on.
@@ -320,7 +283,6 @@ fn glyph_vertex(
     out.uv_min = uv.xy;
     out.uv_max = uv.zw;
     out.fill = fill;
-    out.rim = rim;
     out.sheet = sheet;
     out.sheet_size = select(locals.atlas_size, locals.mark_atlas_size, sheet == SHEET_MARK);
     return out;
@@ -371,7 +333,7 @@ const PATCH_MARGIN: f32 = 0.5;
 /// is mostly VERTICAL strokes, against a roll that scrolls sideways — and the
 /// bill is a twentieth of their contrast, the flat's darkest pixel going from
 /// 0.87 to 0.86 and the sharp's from 1.00 to 0.95. Type pays nothing
-/// measurable: a letter's strokes are over a pixel and its halo saturates, so
+/// measurable: a letter's strokes are over a pixel, so
 /// every letter, digit and lattice name keeps a peak of 1.00 and improves
 /// besides.
 ///
@@ -456,7 +418,7 @@ fn sheet_alpha(in: VertexOut, texel: vec2<f32>) -> f32 {
 /// outside the glyph's own patch of it (plus [`PATCH_MARGIN`]) — past the
 /// transparent texel epaint leaves around every glyph a neighbouring letter
 /// begins, and reading that would smear pieces of unrelated letters into the
-/// rim.
+/// visible glyph.
 ///
 /// Inside the margin the answer is the atlas's own alpha only while the tap
 /// stays inside the atlas; against a wall it is that alpha scaled by
@@ -479,18 +441,12 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 /// The glyph's coverage at `texel`, reconstructed.
 ///
 /// Two taps [`FILTER_TAP`] either side along the axis a label travels, rather
-/// than the one the sampler gives. Both passes read through here — the fill
-/// once per fragment, the rim once per stamp — because the shimmer this
-/// answers is in the PICTURE and not in either half of it. Measured on the
+/// than the one the sampler gives. The visible fill reads through here; the
+/// shadow is derived separately from the scale-free SDF. Measured on the
 /// accidentals at the size the spectral roll sets its names, widening the
 /// fill alone takes the ink's own swing from 15.9% of its weight to 4.0% and
-/// leaves the composite at 12.5%, all but unmoved: the halo is a dilation of
-/// the same sub-pixel stroke through `1 - PRODUCT(1 - a)`, it covers several
-/// times the area the ink does, and it is where nearly all of what the eye
-/// catches lives. Through both, the composite falls to 4.2%.
-///
-/// The bill is the rim's, and it is the honest cost of this: twenty stamps a
-/// fragment become forty taps. The fill's own second tap is free beside it.
+/// leaves the visible ink at 4.0%. The second tap is the fixed cost of stable
+/// ink; changing the Shadow kernel does not multiply it.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     // Along the pane's own travel axis, which the sheets' texels are square
     // with: a glyph's quad is axis-aligned and its atlas patch is upright, so
@@ -499,64 +455,7 @@ fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     return 0.5 * (tap(in, texel - off) + tap(in, texel + off));
 }
 
-/// Accumulate one ring of the rim: `1 - PRODUCT(1 - alpha * coverage)`,
-/// which is the shape stamping the text around that ring composites to.
-///
-/// `alpha` is the ring's own opacity ALONE. The rim color's own alpha is the
-/// label's strength, and it lands on what this returns instead ([`fs_rim`]) —
-/// the one place the rim parts company with what stamping did, and
-/// deliberately, because stamping is wrong here. A strength inside the
-/// product is spent once per STAMP, and there are twenty of them: the label's
-/// level reaches the pixel as `1 - PRODUCT(1 - alpha * s)` where its fill
-/// reaches it as `s`, so a name a tenth of the way through its release still
-/// draws three quarters of its halo while its ink draws a tenth of itself.
-/// The halo IS the letter's shape dilated, so what that paints is the name as
-/// a near-black letter with a ghost of white inside it, holding until the
-/// last frames and then letting go at once.
-///
-/// On the accumulated opacity it is what the fill's own alpha already is: a
-/// rim at half strength covers half. The RING's opacity stays here, that
-/// being the halo's construction rather than the label's level — the tuned
-/// pair of sample counts (`RINGS` in `harmonigraph_ui::text`) mean what they
-/// meant, and a label at full strength composites to the pixel it did.
-fn ring(in: VertexOut, spec: vec4<f32>, acc: f32) -> f32 {
-    let samples = i32(spec.z + 0.5);
-    if samples <= 0 {
-        return acc;
-    }
-    let radius = spec.x * locals.pixels_per_point;
-    var open = 1.0 - acc;
-    for (var i = 0; i < samples; i = i + 1) {
-        let angle = 6.2831853 * f32(i) / f32(samples);
-        // The stamp is the glyph drawn at +offset, so the fragment reads the
-        // glyph at -offset to ask whether that stamp covers it.
-        let off = vec2<f32>(cos(angle), sin(angle)) * radius;
-        open = open * (1.0 - spec.y * coverage(in, in.texel - off));
-    }
-    return 1.0 - open;
-}
-
-/// The rim alone, premultiplied. Drawn as its own pass over every glyph
-/// before any fill, because that is the order stamping had: all of the rim,
-/// then all of the text. Two neighbouring letters otherwise darken each
-/// other's ink where their rims overlap.
-@fragment
-fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
-    if in.rim.a <= 0.0 {
-        discard;
-    }
-    var cov = ring(in, locals.ring0, 0.0);
-    cov = ring(in, locals.ring1, cov);
-    if cov <= 0.0 {
-        discard;
-    }
-    // Where the rim color's alpha is spent (see [`ring`]), and a scale of
-    // BOTH halves because `rim` arrives premultiplied: one number over the
-    // pair is the operation that leaves it so.
-    return in.rim * cov;
-}
-
-/// The glyphs themselves, over the rim.
+/// The glyphs themselves, over any shadow pass.
 @fragment
 fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
     let cov = coverage(in, in.texel);
@@ -653,8 +552,7 @@ fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> f32 {
     return mix(a, b, f.y);
 }
 
-@fragment
-fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+fn glyph_sdf_distance(in: SdfOut) -> f32 {
     let coarse_at = clamp(
         in.coarse_texel,
         in.coarse_bounds.xy + vec2<f32>(0.5),
@@ -679,13 +577,79 @@ fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
     // The coarse mask is deliberately conservative at its sparse resolution,
     // so its absolute distance does not meet the near field exactly. Hand off
     // inside the near tile instead of exposing that difference as a hard ring.
-    let distance = mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
-    return vec4<f32>(distance, 0.0, 0.0, 1.0);
+    return mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
+}
+
+@fragment
+fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(glyph_sdf_distance(in), 0.0, 0.0, 1.0);
+}
+
+/// Coverage of the exact same glyph field the Distance renderer stores. This
+/// is the Gaussian producer: one antialiased zero contour, followed by the
+/// shared separable blur.
+@fragment
+fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
+    let d = glyph_sdf_distance(in);
+    let aa = max(fwidth(d), 1.0e-6);
+    return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 
 @fragment
 fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
     return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
+}
+
+struct SpectralShadowOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) at: vec2<f32>,
+    @location(1) @interpolate(flat) rim: vec4<f32>,
+    @location(2) @interpolate(flat) who: u32,
+};
+
+/// A spectral glyph's shadow over its packed cell. One box per glyph keeps the
+/// skin-coloured knockout in the text compositor while both kernel producers
+/// stay in the common shadow atlas.
+@vertex
+fn vs_spectral_shadow(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) sdf_rect: vec4<f32>,
+    @location(3) sdf_near: vec4<f32>,
+    @location(4) sdf_coarse: vec4<f32>,
+    @location(5) fill: vec4<f32>,
+    @location(6) rim: vec4<f32>,
+    @location(7) sheet: u32,
+    @location(8) box_rect: vec4<f32>,
+    @location(9) box_cell: vec4<f32>,
+    @location(10) box_meta: vec4<f32>,
+    @location(11) box_who: vec4<f32>,
+) -> SpectralShadowOut {
+    let corner = vec2<f32>(
+        select(0.0, 1.0, (vertex & 1u) == 1u),
+        select(0.0, 1.0, (vertex & 2u) == 2u),
+    );
+    let at = box_rect.xy + corner * box_rect.zw;
+    var out: SpectralShadowOut;
+    out.position = select(no_quad(), on_screen(at), cell_packed(box_cell));
+    out.at = at;
+    out.rim = rim;
+    out.who = u32(box_who.x + 0.5);
+    return out;
+}
+
+@fragment
+fn fs_spectral_shadow(in: SpectralShadowOut) -> @location(0) vec4<f32> {
+    if in.rim.a <= 0.0 {
+        discard;
+    }
+    let full = shadow_kernel(in.who, in.at);
+    let alpha = 1.0 - shadow_transmittance(full, locals.shadow_depth, 1.0);
+    if alpha <= 0.0 {
+        discard;
+    }
+    return in.rim * alpha;
 }
 
 struct BoxOut {
@@ -752,7 +716,7 @@ fn vs_shadow_box(
 ///
 /// The LATTICE's box draw alone binds group 2. The bindings a pipeline must
 /// carry are the ones its entry point reads, so every other surface's text —
-/// which casts no shadow and draws through [`fs_rim`] and [`fs_fill`] — takes a
+/// which casts no shadow and draws through [`fs_fill`] — takes a
 /// layout with group 0 and nothing else, and a pane with no atlas has no dummy
 /// to bind.
 ///

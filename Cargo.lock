@@ -1466,6 +1466,7 @@ name = "harmonigraph-ui"
 version = "0.3.0"
 dependencies = [
  "egui",
+ "egui-wgpu",
  "egui_dock",
  "glam",
  "harmonigraph-core",
@@ -1473,6 +1474,7 @@ dependencies = [
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
+ "pollster",
  "ron",
  "serde",
 ]

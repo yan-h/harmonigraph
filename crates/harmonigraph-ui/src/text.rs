@@ -1,18 +1,10 @@
 //! Haloed label text: collected as glyphs here, drawn by
 //! `harmonigraph_render`'s own text module.
 //!
-//! Text on either picture pane needs to be lifted off what it lands on —
-//! note names over lit nodes, pitch labels over the spectrogram. Stamping
-//! that rim as geometry, the whole label repeated around two rings, is
-//! twenty more copies of every glyph: most of the geometry in a busy frame,
-//! and it makes labels a budget where every new one costs twenty-one draws
-//! of its own text.
-//!
-//! So a piece of text becomes one quad per glyph and the rim is computed
-//! per pixel from the same offsets (see `harmonigraph_render::text` for why the
-//! two are the same arithmetic). What a label costs does not depend on its
-//! rim, which is what makes labels something to place where they help
-//! rather than something to ration.
+//! Text on either picture pane needs to be lifted off what it lands on — note
+//! names over lit nodes, pitch labels over the spectrogram. Each glyph maps a
+//! fixed signed-distance patch onto its laid-out rect, so either Shadow kernel
+//! is derived from the same letterform while the visible ink stays egui's.
 //!
 //! egui still lays the text out. A [`TextBatch`] collects the glyphs of
 //! however many pieces of text a pane draws, and hands them over in one
@@ -31,13 +23,13 @@
 //! septimal chevron — are glyphs here too. They are rasterized by `marks`
 //! rather than by egui and packed into a sheet of their own
 //! ([`MarkAtlas`]), and from there everything is shared: one quad apiece, the
-//! rim from `fs_rim`'s arithmetic rather than a second bitmap, and a place in
+//! shadow from the same fixed SDF rather than repeated bitmap stamps, and a place in
 //! whichever run of letters they were collected with. That last is what the
 //! move is for — a mark on the painter is drawn over the finished picture,
 //! where the node in front that just covered the name beside it cannot reach
 //! it.
 
-use harmonigraph_render::{GlyphInstance, TextRing};
+use harmonigraph_render::GlyphInstance;
 
 /// Tell this context that its shell publishes egui's font texture to wgpu
 /// paint callbacks after applying the current frame's texture deltas.
@@ -55,40 +47,6 @@ fn renderer_font_texture_is_current(ctx: &egui::Context) -> bool {
     ctx.data(|data| {
         data.get_temp::<bool>(egui::Id::new("harmonigraph_renderer_font_texture")).unwrap_or(false)
     })
-}
-
-/// The halo's two rings, as (radius in points, stamp alpha, samples).
-///
-/// The sample counts are a cost, not a look: each is one more evaluation of
-/// the glyph's coverage per pixel. They were 16 and 16 —
-///
-///   - the crisp ring is opaque, so its samples only have to close the gap:
-///     at a 1.2pt radius, 12 land half a point apart and the union reads as
-///     one line (8 starts to scallop, 4 visibly thins on the diagonals);
-///   - the soft ring is a fade, and a fade is made of overlap. Halving its
-///     samples to 8 thins it, so its stamp alpha rises to compensate: 0.21
-///     against 0.15, tuned by rendering the pair and matching pixels rather
-///     than by the compositing arithmetic, which assumes an overlap count
-///     that in fact varies across the rim.
-///
-/// Radii are snapped to whole physical pixels before use: mixed
-/// cardinal/diagonal offsets and sub-pixel radii both read as a lumpy
-/// outline on a high-DPI display.
-const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
-
-/// One ring's radius on this display, rounded to a whole physical pixel.
-///
-/// A SIZE, and the one thing here that is still rounded now that positions
-/// are not: a sub-pixel or mixed-fraction radius reads as a lumpy outline,
-/// and unlike a position it is a constant of the frame, so rounding it
-/// cannot make anything step as it moves.
-///
-/// One rim for everything the pass draws, marks included: they are instances
-/// of the same shader, so the `+` and the letter beside it take their halo
-/// from one radius by construction rather than from two constants that have
-/// to be kept equal.
-fn ring_radius(radius: f32, ppp: f32) -> f32 {
-    (radius * ppp).round().max(1.0) / ppp
 }
 
 /// A text scale snapped so that text of `base` points lands on a whole
@@ -305,6 +263,15 @@ pub(crate) fn spectral_labels(surface: usize) -> u64 {
     batch(surface, 2)
 }
 
+/// Shared shadow targets are per destination surface and per pane kind.
+pub(crate) fn spectral_shadow_surface(surface: usize) -> u64 {
+    surface as u64 * 2
+}
+
+pub(crate) fn spiral_shadow_surface(surface: usize) -> u64 {
+    surface as u64 * 2 + 1
+}
+
 /// One glyph as the mirror identifies it: its size, its character, and the
 /// TEXEL it was found at.
 ///
@@ -466,15 +433,15 @@ impl TextBatch {
         out
     }
 
-    /// Add one piece of text, haloed. `outline` should be the skin's
+    /// Add one piece of text, shadowed. `outline` should be the skin's
     /// recessed surface (`theme::well`), which contrasts with any text color
     /// by construction; a transparent one draws the glyphs bare.
     ///
     /// Both colors' ALPHA is the label's strength, and each is worth it in
-    /// full: a rim at half covers half, exactly as the fill does, so fading
-    /// the pair together fades one thing (`fs_rim` in `harmonigraph_render`'s
-    /// text shader). Fading only the fill leaves the halo behind, and the
-    /// halo is the letter's own shape in the skin's darkest color.
+    /// full: a shadow at half covers half, exactly as the fill does, so fading
+    /// the pair together fades one thing. Fading only the fill leaves the
+    /// shadow behind, and the shadow is the letter's own shape in the skin's
+    /// knockout color.
     ///
     /// egui does the work that decides what the pixels are — shaping,
     /// rasterizing, and placing every glyph — and this reads the placement
@@ -684,6 +651,10 @@ impl TextBatch {
     /// rather than defaulted because the caller is the only one that knows:
     /// the analyzer's names ride its time axis and so scroll whichever way
     /// its orientation points that, and nothing here can see it.
+    ///
+    /// `shadow_surface_id` joins spectral text to the roll or spiral geometry
+    /// on the same destination surface. Unshadowed chrome passes `None`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn flush(
         &mut self,
         painter: &egui::Painter,
@@ -691,6 +662,8 @@ impl TextBatch {
         state: &crate::SharedState,
         pane_id: u64,
         slide: harmonigraph_render::SlideAxis,
+        shadow: Option<harmonigraph_scene::ShadowStyle>,
+        shadow_surface_id: Option<u64>,
     ) {
         if self.glyphs.is_empty() {
             return;
@@ -711,15 +684,18 @@ impl TextBatch {
             )
         };
         let marks = marks_if_changed(painter.ctx(), &state.instruments.font_atlas);
+        let sdf = shadow.map(|_| crate::text_sdf::sheet().atlas.clone());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
-            rings(painter.ctx()),
+            shadow,
             atlas,
             marks,
+            sdf,
             slide,
             state.target_format,
             pane_id,
+            shadow_surface_id,
         ));
     }
 
@@ -791,16 +767,6 @@ impl TextBatch {
             slide: harmonigraph_render::SlideAxis::default(),
         }
     }
-}
-
-/// The halo's rings at this display's scale, as the renderer takes them.
-fn rings(ctx: &egui::Context) -> [TextRing; 2] {
-    let ppp = ctx.pixels_per_point();
-    RINGS.map(|(radius, alpha, samples)| TextRing {
-        radius: ring_radius(radius, ppp),
-        alpha,
-        samples,
-    })
 }
 
 /// What one glyph renderer has received from an egui context.
@@ -1650,6 +1616,223 @@ mod tests {
         for glyph in &glyphs[1..] {
             assert_eq!(glyph.sdf_near, glyphs[0].sdf_near);
             assert_eq!(glyph.sdf_coarse, glyphs[0].sdf_coarse);
+        }
+    }
+
+    /// The `k` appended by the spectral frequency formatter reaches the fixed
+    /// field and both shipping renderer paths. The batch is reduced to the
+    /// formatter's `k` glyph before it is flushed, so no shadow from the
+    /// preceding digit can make a missing suffix pass.
+    #[test]
+    fn a_spectral_k_label_casts_both_kinds_of_shadow_on_the_gpu() {
+        use egui_wgpu::wgpu;
+
+        const SIZE: [u32; 2] = [128, 64];
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available; skipping");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("headless device");
+        let mut renderer = egui_wgpu::Renderer::new(
+            &device,
+            FORMAT,
+            egui_wgpu::RendererOptions {
+                predictable_texture_filtering: true,
+                ..Default::default()
+            },
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("spectral k shadow target"),
+            size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let context = crate::tests::probe::themed_at(1.0);
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        // epaint resolves a newly requested glyph into its atlas on the next
+        // pass. Settle the exact run first so this is a shadow test, not the
+        // font atlas's one-frame publication latency.
+        for _ in 0..2 {
+            let warm = context.run_ui(
+                egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                |ui| {
+                    let _ = ui.painter().layout_no_wrap(
+                        crate::panes::spectral::frequency_label(1_000.0),
+                        egui::FontId::monospace(24.0),
+                        egui::Color32::WHITE,
+                    );
+                },
+            );
+            for (id, delta) in &warm.textures_delta.set {
+                renderer.update_texture(&device, &queue, *id, delta);
+            }
+        }
+        use_renderer_font_texture(&context);
+
+        for (slot, kernel) in
+            [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+                .into_iter()
+                .enumerate()
+        {
+            let surface = spectral_shadow_surface(slot);
+            let mut state = crate::SharedState::new(FORMAT);
+            state.view.shadow.spectral_text =
+                harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, kernel };
+            let mut k_rect = None;
+            let mut batch_sdf_near = [0.0; 4];
+            let mut batch_sdf_coarse = [0.0; 4];
+            let output = context.run_ui(
+                egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                |ui| {
+                    let painter = ui.painter_at(rect);
+                    let mut batch = TextBatch::default();
+                    batch.text(
+                        &painter,
+                        egui::pos2(48.0, 32.0),
+                        egui::Align2::LEFT_CENTER,
+                        crate::panes::spectral::frequency_label(1_000.0),
+                        egui::FontId::monospace(24.0),
+                        egui::Color32::GREEN,
+                        egui::Color32::RED,
+                    );
+                    let k = batch
+                        .drawn
+                        .iter()
+                        .position(|(_, ch, _)| *ch == 'k')
+                        .expect("the shipping formatter appends k");
+                    let glyph = batch.glyphs[k];
+                    assert_ne!(glyph.sdf_near, [0.0; 4], "k has no near field");
+                    assert_ne!(glyph.sdf_coarse, [0.0; 4], "k has no coarse field");
+                    batch_sdf_near = glyph.sdf_near;
+                    batch_sdf_coarse = glyph.sdf_coarse;
+                    batch.glyphs = vec![glyph];
+                    batch.drawn.retain(|(_, ch, _)| *ch == 'k');
+                    k_rect = Some(egui::Rect::from_min_size(
+                        egui::pos2(glyph.rect[0], glyph.rect[1]),
+                        egui::vec2(glyph.rect[2], glyph.rect[3]),
+                    ));
+                    batch.flush(
+                        &painter,
+                        rect,
+                        &state,
+                        spectral_labels(slot),
+                        harmonigraph_render::SlideAxis::default(),
+                        Some(state.view.shadow.spectral_text),
+                        Some(surface),
+                    );
+                    painter
+                        .add(harmonigraph_render::spectral_shadow_prepare_callback(rect, surface));
+                },
+            );
+            for (id, delta) in &output.textures_delta.set {
+                renderer.update_texture(&device, &queue, *id, delta);
+            }
+            if let Some(texture) = renderer
+                .texture(&egui::TextureId::default())
+                .and_then(|entry| entry.texture.clone())
+            {
+                renderer.callback_resources.insert(texture);
+            }
+            let primitives = context.tessellate(output.shapes, 1.0);
+            let descriptor =
+                egui_wgpu::ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let callback_commands =
+                renderer.update_buffers(&device, &queue, &mut encoder, &primitives, &descriptor);
+            {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral k shadow pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                renderer.render(&mut pass, &primitives, &descriptor);
+            }
+            let bytes_per_row = SIZE[0] * 4;
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("spectral k shadow readback"),
+                size: u64::from(bytes_per_row * SIZE[1]),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            );
+            queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
+            let slice = readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |result| result.expect("map readback"));
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            let frame = slice.get_mapped_range();
+            let k = k_rect.expect("the k glyph was laid out");
+            let x0 = (k.min.x - 7.0).floor().max(0.0) as u32;
+            let x1 = (k.max.x + 7.0).ceil().min(SIZE[0] as f32) as u32;
+            let y0 = (k.min.y - 7.0).floor().max(0.0) as u32;
+            let y1 = (k.max.y + 7.0).ceil().min(SIZE[1] as f32) as u32;
+            let mut pixels = Vec::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let at = ((y * SIZE[0] + x) * 4) as usize;
+                    pixels.push(<[u8; 4]>::try_from(&frame[at..at + 4]).expect("one pixel"));
+                }
+            }
+            assert!(
+                pixels.iter().any(|&[r, g, b, a]| a > 0 && g > r && g > b),
+                "{kernel:?} did not draw the isolated k's visible ink",
+            );
+            let red_shadow = pixels.iter().any(|&[r, g, b, a]| a > 0 && r > g && r > b);
+            let max_red = pixels.iter().map(|pixel| pixel[0]).max().unwrap_or(0);
+            let max_red_dominance = pixels
+                .iter()
+                .map(|pixel| i16::from(pixel[0]) - i16::from(pixel[1].max(pixel[2])))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                red_shadow,
+                "{kernel:?} drew no k-colored shadow around the isolated k glyph {k:?}; \
+                 max red {max_red}, dominance {max_red_dominance}; SDF near {:?}, coarse {:?}, sheet {:?}",
+                batch_sdf_near,
+                batch_sdf_coarse,
+                crate::text_sdf::sheet().atlas.size,
+            );
+            drop(frame);
+            readback.unmap();
+            for id in &output.textures_delta.free {
+                renderer.free_texture(id);
+            }
         }
     }
 

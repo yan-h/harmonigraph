@@ -45,6 +45,20 @@ use axes::{
 use egui::Sense;
 use gestures::{drag_split, drag_zoom, spectrum_split};
 
+/// The compact frequency spelling drawn along the pane's pitch axis.
+pub(crate) fn frequency_label(hz: f32) -> String {
+    if hz >= 1_000.0 {
+        format!("{}k", hz / 1_000.0)
+    } else {
+        format!("{hz}")
+    }
+}
+
+/// The signed integer spelling drawn along the pane's level axis.
+pub(crate) fn level_label(db: f32) -> String {
+    db.to_string()
+}
+
 /// How faint a ruling is drawn against [`theme::hairline`], the pane's
 /// quietest line already: the marks that anchor a ladder first, the steps
 /// between them second.
@@ -323,8 +337,7 @@ pub(crate) fn spectral_pane(
         .filter(|ruling| ruling.numbered)
         .map(|ruling| {
             let hz = ruling.hz;
-            let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
-            (ruling.t, label)
+            (ruling.t, frequency_label(hz))
         })
         .collect();
 
@@ -567,7 +580,7 @@ pub(crate) fn spectral_pane(
     let level_depth = axes.dir_depth();
     let into = level_label_into(joined);
     for level in levels.iter().filter(|level| level.numbered) {
-        let label = format!("{}", level.db);
+        let label = level_label(level.db);
         let (pos, align) = axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, into);
         // Two corrections, on the two axes the anchor offsets along: the inset a
         // reader measures runs from the pane's edge to the digits, and the gap
@@ -595,7 +608,19 @@ pub(crate) fn spectral_pane(
     names::draw(&painter, &note_names, text.names.label, &mut labels);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
-    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface), names_slide(&cfg));
+    labels.flush(
+        &painter,
+        rect,
+        state,
+        crate::text::spectral_labels(surface),
+        names_slide(&cfg),
+        Some(state.view.shadow.spectral_text),
+        Some(crate::text::spectral_shadow_surface(surface)),
+    );
+    painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
+        rect,
+        crate::text::spectral_shadow_surface(surface),
+    ));
 
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where

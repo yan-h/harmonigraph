@@ -42,6 +42,26 @@ pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 /// has no cell and therefore pays none of this floor.
 pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 
+/// Screen-point reference behind the spectral groups' dimensionless Shadow
+/// width. At the top of the bar a spectral edge is four points wide; changing
+/// pane size or pitch zoom does not change it.
+pub(crate) const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
+
+/// A spectral style's σ in screen points.
+pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f32 {
+    sigma_points(style.width, SPECTRAL_WIDTH_POINTS)
+}
+
+/// How far a spectral style's selected renderer can paint past its caster.
+pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
+    let style = style.clamped();
+    if style.casts() {
+        spectral_sigma_points(style) * style.kernel.reach_sigmas()
+    } else {
+        0.0
+    }
+}
+
 /// σ of a caster's shadow in the pane's POINTS, for a group whose Shadow is
 /// `width` node radii over a node of `node_points` points.
 ///
@@ -214,6 +234,26 @@ impl ShadowBox {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             5 => Float32x4, 9 => Float32x4, 14 => Float32x4, 13 => Float32x4
+        ],
+    };
+
+    /// After a roll instance's ten attributes, for rasterizing its box SDF
+    /// into a Gaussian cell.
+    pub(crate) const BESIDE_ROLL: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![
+            10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4
+        ],
+    };
+
+    /// After a spiral dot's centre, radius and color, for rasterizing its
+    /// circle field into a Gaussian cell.
+    pub(crate) const BESIDE_DOTS: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![
+            3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
         ],
     };
 }
@@ -1181,6 +1221,23 @@ pub(crate) mod tests {
         assert_eq!(sigma_points(0.2, 0.0), 0.0);
         assert_eq!(sigma_points(f32::NAN, 30.0), 0.0);
         assert_eq!(sigma_points(-1.0, 30.0), 0.0);
+    }
+
+    /// Reach is paint reach, not merely the selected kernel's mathematical
+    /// support. Either shut bar leaves no pixels for the caller to cull or
+    /// enlarge geometry around.
+    #[test]
+    fn a_spectral_style_that_cannot_cast_has_no_reach() {
+        for kernel in
+            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+        {
+            let style = |width, depth| harmonigraph_scene::ShadowStyle { width, depth, kernel };
+            assert!(spectral_shadow_reach(style(1.0, 1.0)) > 0.0, "the live fixture is shut");
+            assert_eq!(spectral_shadow_reach(style(0.0, 1.0)), 0.0, "width endpoint");
+            assert_eq!(spectral_shadow_reach(style(1.0, 0.0)), 0.0, "depth endpoint");
+            assert_eq!(spectral_shadow_reach(style(f32::NAN, 1.0)), 0.0, "repaired width");
+            assert_eq!(spectral_shadow_reach(style(1.0, f32::NAN)), 0.0, "repaired depth");
+        }
     }
 
     /// The blur of one cell's ink stays inside that cell and keeps its mass:

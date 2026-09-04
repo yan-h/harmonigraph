@@ -374,8 +374,8 @@ pub struct SpectrumConfig {
     /// preserving it.
     pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile, 0 = none.
-    /// The profile's alone — a note's edge is the outline the roll's own pair of
-    /// settings draws (see [`roll_outline`](Self::roll_outline)). See
+    /// The profile's alone — note ribbons use
+    /// `ViewConfig::shadow.spectral_geometry`. See
     /// `panes::spectral::roll::keyline`.
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -418,27 +418,6 @@ pub struct SpectrumConfig {
     /// painted width — a note is a solid rectangle of its own color, with
     /// nothing straddling its boundary.
     pub roll_thickness: f32,
-    /// How far the dark outline around a note reaches past its edge, in POINTS,
-    /// 0 = no outline. It wraps every side, so a note is one bounded object
-    /// against the spectrogram rather than a ribbon with edged flanks.
-    ///
-    /// In points rather than semitones, unlike the ribbon it wraps: an edge is
-    /// there to be seen at all zooms, and one measured in semitones would thin
-    /// out as the pitch range opened — exactly where a picture full of notes
-    /// needs its edges most. What that costs is at the wide end, where the
-    /// ribbon floors at `MIN_RIBBON_PX` and a wide outline reaches over the
-    /// neighbouring semitone.
-    pub roll_outline: f32,
-    /// How much of that reach the outline spends fading out, in points: 0 is a
-    /// hard edge, and at or past the reach it fades over the whole of it.
-    ///
-    /// Two numbers rather than one: tying the fade to the reach makes a wider
-    /// outline always a blurrier one,
-    /// and how far a note stands off its background is a different question
-    /// from how sharply it does. They share one CONTROL — the Analyzer section's
-    /// Outline bar, a handle at each — because both are distances from the
-    /// note's edge, which makes them two points on one axis.
-    pub roll_outline_fade: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -455,7 +434,7 @@ pub struct SpectrumConfig {
     /// [`roll_lead_release`](Self::roll_lead_release)'s.
     ///
     /// A FRACTION OF THE ANALYZER rather than a length in points, which is where
-    /// this parts company with [`roll_outline`](Self::roll_outline) beside it,
+    /// this parts company with the spectral geometry Shadow beside it,
     /// and the two are worth telling apart. An outline is an EDGE: its job is to
     /// be seen at a fixed weight whatever it wraps, so a constant in points is
     /// exactly right and a share of anything would make it thin out. A lead is a
@@ -640,29 +619,7 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
-        // The outline and its fade, which are ONE control (the Analyzer section's
-        // Outline bar) over two numbers, and held to the same bound for the
-        // same reason as the lattice's gutter pair
-        // ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)):
-        // the fade is measured back from the reach, so a fade wider than its
-        // reach has no place on the axis to draw a handle. It draws as a fade
-        // over the whole reach either way — `roll.wgsl` floors it at the
-        // note's own edge — so the clamp costs the picture nothing.
-        //
-        // The finite check is not redundant with the clamp beside it: a NaN
-        // reach becomes the MAX of the fade's clamp, and `f32::clamp` asserts
-        // `min <= max`, which a NaN fails — taking the editor down as the
-        // project opens. The same trap the level pair below names.
         let fresh = SpectrumConfig::default();
-        self.roll_outline =
-            if self.roll_outline.is_finite() { self.roll_outline } else { fresh.roll_outline }
-                .clamp(0.0, ROLL_OUTLINE_MAX);
-        self.roll_outline_fade = if self.roll_outline_fade.is_finite() {
-            self.roll_outline_fade
-        } else {
-            fresh.roll_outline_fade
-        }
-        .clamp(0.0, self.roll_outline);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -798,13 +755,6 @@ pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
 pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 
-/// How far a note's outline may be taken, and how much of it may be fade — one
-/// number for both bars, since a fade past the reach it softens does nothing.
-/// Four points is a heavy surround at the ribbon widths this pane is used at:
-/// past it the outlines of two neighbouring semitones meet at any zoom worth
-/// reading, and the picture is outline with ribbons in it.
-pub(crate) const ROLL_OUTLINE_MAX: f32 = 4.0;
-
 /// How far a sounding note's ribbon may be carried into the spectrum, and how
 /// much of that may be fade — one number for both ends of the Lead bar, a fade
 /// past the reach it softens having nothing left to soften.
@@ -920,12 +870,6 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.3,
-            // Two points of outline with most of it fading: enough of a dark
-            // surround to separate a note from whatever the spectrogram is
-            // doing behind it, soft enough that it reads as the note standing
-            // off the picture rather than as a second shape drawn around it.
-            roll_outline: 2.0,
-            roll_outline_fade: 1.5,
             // A long tongue that stays solid nearly the whole way: a quarter of
             // the analyzer, with the last fifth of that spent fading. A
             // sounding note reaches well into the curve it is making and ends

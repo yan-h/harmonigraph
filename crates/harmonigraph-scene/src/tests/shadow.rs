@@ -17,7 +17,12 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             ShadowStyle { width: asked_width, depth: asked_depth, ..ShadowStyle::default() };
         let want = ShadowStyle { width, depth, ..ShadowStyle::default() };
         let mut view = ViewConfig {
-            shadow: ShadowSettings { lattice_geometry: asked, lattice_text: asked },
+            shadow: ShadowSettings {
+                lattice_geometry: asked,
+                lattice_text: asked,
+                spectral_geometry: asked,
+                spectral_text: asked,
+            },
             ..ViewConfig::default()
         };
         let scene =
@@ -31,6 +36,19 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             assert_eq!(kept, want, "the bar kept group {group} at {asked:?}");
         }
     }
+}
+
+#[test]
+fn the_endpoint_has_exactly_four_explicit_shadow_groups() {
+    let mut groups = ShadowSettings::default();
+    for (index, group) in groups.groups_mut().into_iter().enumerate() {
+        group.width = index as f32 * 0.1;
+    }
+    assert_eq!(
+        groups.groups().map(|group| group.width),
+        [0.0, 0.1, 0.2, 0.3],
+        "a group is missing from the explicit endpoint or aliases another group",
+    );
 }
 
 /// Either bar at its bottom is the whole of a group's shadow gone, and the two

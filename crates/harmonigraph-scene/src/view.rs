@@ -1169,21 +1169,23 @@ pub struct ViewConfig {
     /// reach ends.
     pub glow_curve: GlowCurve,
     /// The Shadow, dialled per GROUP of casters ([`ShadowSettings`]): the
-    /// lattice's geometry — nodes and the resting markers — and its text, the
-    /// note names and their drawn marks.
+    /// lattice's geometry and text, and the spectral pictures' geometry and
+    /// text. The spiral inherits the matching spectral pair rather than
+    /// carrying settings of its own.
     ///
     /// Each group says which renderer draws it, how wide its shadow is and how
-    /// dark it lands ([`crate::ShadowStyle`]). A group's width is in the same quad UV
-    /// units [`ring_gap`](Self::ring_gap) reads in, and it is HALF that in σ
-    /// (`shadow::sigma_points` in harmonigraph-render), which puts a wide
-    /// caster's shadow all but out at one width.
+    /// dark it lands ([`crate::ShadowStyle`]). A lattice group's width is a
+    /// share of node radius; a spectral group's uses the renderer's fixed
+    /// four-point edge unit so roll, axis and spiral shadows stay constant on
+    /// screen. Half the resolved width is σ (`shadow::sigma_points` in
+    /// harmonigraph-render).
     ///
-    /// TWO groups and not one bar, because a name is the only ink in the
+    /// FOUR groups and not one bar, because a name is the only ink in the
     /// picture whose SHAPE is meant to be read: a ring and a cross want a
     /// shadow that says how thick they are, and a letterform wants one that
-    /// does not fill its counters. Two groups and not one per caster, because
-    /// everything else in the lattice is one reach — a shadow the eye can read
-    /// as coming from one light.
+    /// does not fill its counters. Geometry and text repeat for the spectral
+    /// pictures because their compositors use different colours and paint
+    /// order; the renderer and the three settings stay the same.
     ///
     /// Each item multiplies whatever is already in the frame under it in the
     /// painter's order the pass already walks — so what it casts is read off

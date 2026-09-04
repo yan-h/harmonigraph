@@ -1,10 +1,8 @@
-// What lattice.wgsl and text.wgsl both spell, spelled once.
+// What the lattice, text, roll and spiral-dot shadow modules spell, spelled once.
 //
 // Not a module of its own. WGSL has no include and naga takes a string, so this
 // text is prepended to another module's own source at pipeline creation
-// (`with_common` in lib.rs) and compiled as one file with it. Its two callers
-// are the lattice's module and the text module; every other shader here stands
-// alone and is compiled as it is.
+// (`with_common` in lib.rs) and compiled as one file with it.
 //
 // What belongs here: arithmetic two modules run identically, and the resource
 // declarations that arithmetic reads — which every including module therefore

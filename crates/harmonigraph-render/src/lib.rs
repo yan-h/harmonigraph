@@ -56,9 +56,11 @@ pub use spectrogram::{
     SpectrogramShades, SpectrogramVertex,
 };
 
+mod dot_shadow;
 /// A halo alone, over marks a pane drew for itself — the third caller of
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
+pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 
 /// Label text, for the same reason the roll has its own callback: what a
@@ -66,13 +68,16 @@ pub use glow::{glow_paint_callback, GlowDot};
 /// stamp.
 mod text;
 pub use text::{
-    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, SlideAxis, TextRing,
-    GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
+    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, SlideAxis, GLYPH_SDF_COARSE_PAD,
+    GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
 };
 
-/// A name's shadow: its ink blurred into a cell of an atlas, which the name's
-/// own draw multiplies the frame by.
+/// Generic shadow packing and kernels, shared by every group.
 mod shadow;
+pub use shadow::spectral_shadow_reach;
+/// One combined atlas and blur schedule per spectral destination surface.
+mod spectral_shadow;
+pub use spectral_shadow::spectral_shadow_prepare_callback;
 
 /// The lattice's own labels: the glyphs of every node name it wants drawn,
 /// and which node each of them belongs to.
@@ -197,6 +202,31 @@ pub(crate) fn text_source() -> String {
     }
 }
 
+/// The roll and spiral-dot modules joined to the common half currently in
+/// force. Their own files remain baked; a common-shader reload still rebuilds
+/// them so every group uses one generation of the two kernels.
+pub(crate) fn roll_source() -> String {
+    #[cfg(feature = "hot-reload")]
+    {
+        module_source(&reload::common_source(), roll::ROLL_SRC)
+    }
+    #[cfg(not(feature = "hot-reload"))]
+    {
+        with_common(roll::ROLL_SRC)
+    }
+}
+
+pub(crate) fn dot_shadow_source() -> String {
+    #[cfg(feature = "hot-reload")]
+    {
+        module_source(&reload::common_source(), dot_shadow::SRC)
+    }
+    #[cfg(not(feature = "hot-reload"))]
+    {
+        with_common(dot_shadow::SRC)
+    }
+}
+
 /// What a committed reload leaves for the pipelines it cannot reach itself.
 ///
 /// The reload runs inside the lattice callback, which holds one entry of
@@ -212,6 +242,7 @@ mod reload {
     use std::sync::RwLock;
 
     static TEXT: RwLock<Option<String>> = RwLock::new(None);
+    static COMMON: RwLock<Option<String>> = RwLock::new(None);
     static GENERATION: AtomicU64 = AtomicU64::new(0);
 
     /// Held by every test that publishes or asks whether a build is current.
@@ -240,8 +271,9 @@ mod reload {
     /// other order hands out a raised count over the previous source, which is
     /// a rebuild that produces the build it was called to replace and then
     /// reports itself done.
-    pub(super) fn publish(text: String) {
+    pub(super) fn publish(text: String, common: String) {
         *TEXT.write().expect("no reader panics while holding this") = Some(text);
+        *COMMON.write().expect("no reader panics while holding this") = Some(common);
         GENERATION.fetch_add(1, Ordering::Release);
     }
 
@@ -252,6 +284,15 @@ mod reload {
             .expect("no writer panics while holding this")
             .clone()
             .unwrap_or_else(|| crate::with_common(crate::text::TEXT_SRC))
+    }
+
+    #[cfg(feature = "hot-reload")]
+    pub(super) fn common_source() -> String {
+        COMMON
+            .read()
+            .expect("no writer panics while holding this")
+            .clone()
+            .unwrap_or_else(|| crate::COMMON_SRC.to_owned())
     }
 }
 
@@ -306,7 +347,9 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
 /// The two modules a reload rebuilds, each already carrying the common half
 /// it was read beside.
 #[cfg(any(test, feature = "hot-reload"))]
+#[cfg_attr(all(test, not(feature = "hot-reload")), allow(dead_code))]
 struct ReloadedShaders {
+    common: String,
     lattice: String,
     text: String,
     /// Lines the common half takes in both modules above — the seam a naga
@@ -399,6 +442,7 @@ impl ShaderWatcher {
                 let text = std::fs::read_to_string(&self.text).ok()?;
                 self.mtime = Some(mtime);
                 Some(ReloadedShaders {
+                    common: common.clone(),
                     lattice: module_source(&common, &lattice),
                     text: module_source(&common, &text),
                     seam: common_lines(&common),
@@ -3714,6 +3758,22 @@ impl CallbackTrait for LatticeCallback {
             )
             .and_then(|()| {
                 validate_wgsl("text.wgsl", &reloaded.text, reloaded.seam, text::TEXT_ENTRY_POINTS)
+            })
+            .and_then(|()| {
+                validate_wgsl(
+                    "roll.wgsl",
+                    &module_source(&reloaded.common, roll::ROLL_SRC),
+                    reloaded.seam,
+                    roll::ROLL_ENTRY_POINTS,
+                )
+            })
+            .and_then(|()| {
+                validate_wgsl(
+                    "dot_shadow.wgsl",
+                    &module_source(&reloaded.common, dot_shadow::SRC),
+                    reloaded.seam,
+                    dot_shadow::ENTRY_POINTS,
+                )
             });
             match checked {
                 Ok(()) => {
@@ -3809,7 +3869,7 @@ impl CallbackTrait for LatticeCallback {
                     // of the map this one cannot reach: publishing raises the
                     // count they watch, and the next prepare that reads it
                     // rebuilds them against this same source.
-                    reload::publish(reloaded.text);
+                    reload::publish(reloaded.text, reloaded.common);
                     eprintln!("[harmonigraph-render] shaders hot-reloaded");
                 }
                 Err(err) => {
@@ -4054,8 +4114,7 @@ impl CallbackTrait for LatticeCallback {
                         // the two passes that draw one to walk. Zero samples is
                         // what says so (`ring`), and it is what keeps the fill's
                         // quad down to the reconstruction filter's own margin.
-                        ring0: [0.0; 4],
-                        ring1: [0.0; 4],
+                        _pad: [0.0; 4],
                     }),
                 );
             }
