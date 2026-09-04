@@ -19,6 +19,12 @@ pub struct AudioSpectrum {
     pub(crate) analyzer: harmonigraph_core::spectrum::ChannelBank,
     /// Smoothed display buckets (power; the pane maps to height).
     pub(crate) display: SpectrumBuckets,
+    /// Smoothed historical parabolic-peak candidate for the Spiral A/B.
+    /// Runtime-only, and never added to the Spectral pane or its history.
+    pub(crate) refined_peaks: SpectrumBuckets,
+    /// Smoothed frequency-reassigned candidate for the Spiral A/B.
+    /// Runtime-only, and never added to the Spectral pane or its history.
+    pub(crate) reassigned: SpectrumBuckets,
     /// FRAMES pushed since this analyzer was made, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
     /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
@@ -300,6 +306,8 @@ impl Default for AudioSpectrum {
         AudioSpectrum {
             analyzer: harmonigraph_core::spectrum::ChannelBank::new(48_000.0, 1),
             display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
+            refined_peaks: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
+            reassigned: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
             next_hop: 0,
             anchor: None,
@@ -345,6 +353,18 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
         return 1.0;
     }
     1.0 - (-dt / f64::from(seconds)).exp() as f32
+}
+
+/// Advance one displayed spectrum by one analysis hop. Every A/B candidate
+/// takes this exact path so attack and release cannot become part of the
+/// comparison.
+fn smooth_buckets(shown: &mut SpectrumBuckets, fresh: &SpectrumBuckets, attack: f32, release: f32) {
+    for (shown, new) in shown.iter_mut().zip(fresh) {
+        // POWER, so "louder" is the same comparison in dB — the levels are
+        // mapped through `loudness` well downstream of here.
+        let alpha = if *new > *shown { attack } else { release };
+        *shown += (new - *shown) * alpha;
+    }
 }
 
 impl AudioSpectrum {
@@ -486,7 +506,7 @@ impl AudioSpectrum {
                 break; // The batch ran out before the boundary.
             }
             self.next_hop = self.frames_seen + hop;
-            let Some(fresh) = self.analyzer.power_sum() else { continue };
+            let Some(fresh) = self.analyzer.power_sum_with_reassignment() else { continue };
 
             // Two coefficients, chosen per bucket by which way it is moving.
             // Derived from the hop actually in use rather than set on the bar,
@@ -494,12 +514,9 @@ impl AudioSpectrum {
             let step = hop as f64 / sr;
             let attack = hop_alpha(config.attack, step);
             let release = hop_alpha(config.release, step);
-            for (shown, new) in self.display.iter_mut().zip(&fresh) {
-                // POWER, so "louder" is the same comparison in dB — the levels
-                // are mapped through `loudness` well downstream of here.
-                let alpha = if *new > *shown { attack } else { release };
-                *shown += (new - *shown) * alpha;
-            }
+            smooth_buckets(&mut self.display, &fresh.pitch_spectrum, attack, release);
+            smooth_buckets(&mut self.refined_peaks, &fresh.refined_peaks, attack, release);
+            smooth_buckets(&mut self.reassigned, &fresh.reassigned, attack, release);
             // Keep the RAW spectrum for the spectrogram (the smoothed
             // `display` would smear one column into the next). Retention is
             // span-INDEPENDENT (see `push_history`): shrinking the span and
@@ -512,7 +529,10 @@ impl AudioSpectrum {
             // the newest frame fed so far sits on the anchored grid, so
             // consecutive columns are exactly `hop` frames apart.
             let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
-            self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
+            self.push_history(
+                boundary - self.analyzer.window_center_offset(),
+                &fresh.pitch_spectrum,
+            );
         }
     }
 
@@ -521,6 +541,20 @@ impl AudioSpectrum {
     /// only decides whether they are still live.
     pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS).then_some(&self.display)
+    }
+
+    /// The parabolically refined local-peak overlay, held for exactly as long
+    /// as the dense display it augments.
+    pub(crate) fn refined_peaks(&self, now: f64) -> Option<&SpectrumBuckets> {
+        self.last_samples
+            .is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+            .then_some(&self.refined_peaks)
+    }
+
+    /// The frequency-reassigned overlay, held for exactly as long as the dense
+    /// display it augments.
+    pub(crate) fn reassigned(&self, now: f64) -> Option<&SpectrumBuckets> {
+        self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS).then_some(&self.reassigned)
     }
 
     /// The most history ever kept, span-independent: the longest span the roll

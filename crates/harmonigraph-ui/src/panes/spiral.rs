@@ -18,10 +18,10 @@
 //! straight pitch axis in [`spectral`](super::spectral) cannot give: there an
 //! octave is a distance like any other, and here it is the same place.
 //!
-//! This draws the analyzer's CURRENT frame and nothing else — no trail, no
-//! history, and no sharpening of any kind. The picture is the existing
-//! [`AudioSpectrum::display`](crate::AudioSpectrum::display) buckets in polar
-//! coordinates, which is why it costs no DSP at all.
+//! This draws the analyzer's CURRENT frame and nothing else — no trail or
+//! history. This evaluation branch can add one of two sparse sharpening
+//! overlays from a temporary right-click menu; dense-only stays the default,
+//! and no choice is persisted.
 //!
 //! It shares the Analyzer's [`SpectrumConfig`](crate::SpectrumConfig) whole
 //! rather than carrying settings of its own. Its geometry follows the
@@ -46,6 +46,38 @@ use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::note_color;
 use super::spectral::spectrogram::{cell_color, footprint_mean};
 use crate::SharedState;
+
+/// Evaluation-only choice of what, if anything, sharpens the dense Spiral.
+/// Stored in egui's temporary memory by [`spiral_pane`], never in plugin state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SpectrumComparison {
+    #[default]
+    Dense,
+    RefinedPeaks,
+    Reassigned,
+}
+
+impl SpectrumComparison {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Dense => "Dense only",
+            Self::RefinedPeaks => "Dense + parabolic peaks",
+            Self::Reassigned => "Dense + reassignment",
+        }
+    }
+
+    fn overlay(
+        self,
+        spectrum: &crate::AudioSpectrum,
+        now: f64,
+    ) -> Option<&crate::spectrum::SpectrumBuckets> {
+        match self {
+            Self::Dense => None,
+            Self::RefinedPeaks => spectrum.refined_peaks(now),
+            Self::Reassigned => spectrum.reassigned(now),
+        }
+    }
+}
 
 /// How much of the disc's radius the hole in the middle keeps, as a share of
 /// the outer radius.
@@ -532,6 +564,24 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     let cfg = state.spectrum_config;
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+    let comparison_id = egui::Id::new(("spiral-spectrum-comparison", surface));
+    let mut comparison =
+        ui.data(|data| data.get_temp::<SpectrumComparison>(comparison_id)).unwrap_or_default();
+    response.context_menu(|ui| {
+        ui.label("Spiral spectrum");
+        ui.selectable_value(&mut comparison, SpectrumComparison::Dense, "Dense only");
+        ui.selectable_value(
+            &mut comparison,
+            SpectrumComparison::RefinedPeaks,
+            "Dense + parabolic peaks",
+        );
+        ui.selectable_value(
+            &mut comparison,
+            SpectrumComparison::Reassigned,
+            "Dense + reassignment",
+        );
+    });
+    ui.data_mut(|data| data.insert_temp(comparison_id, comparison));
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
@@ -542,6 +592,16 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64, 
     navigate(ui, &response, &fit, &mut state.spiral_view);
     let spiral = fit.framed(&state.spiral_view);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
+    if let Some(levels) = comparison.overlay(&state.spectrum, now) {
+        painter.add(egui::Shape::mesh(overlay_strip(&spiral, levels, &cfg)));
+        painter.text(
+            rect.left_top() + egui::vec2(8.0, 7.0),
+            egui::Align2::LEFT_TOP,
+            comparison.label(),
+            egui::FontId::monospace(11.0),
+            crate::theme::text_dim(),
+        );
+    }
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
@@ -743,6 +803,82 @@ fn strip(
         }
     }
     mesh
+}
+
+/// The selected sparse candidate over the unchanged dense strip.
+///
+/// Both candidates take this exact geometry, pitch resampling, dB mapping,
+/// gradient and alpha path. Their estimator is therefore the only variable in
+/// the A/B. A max is intentional here where it is not in [`strip`]: each sparse
+/// line is only two 3.125-cent buckets wide, so averaging a wide screen
+/// footprint would make it disappear as the view zoomed out and compare the
+/// renderer rather than the sharpening.
+fn overlay_strip(
+    spiral: &Spiral,
+    levels: &crate::spectrum::SpectrumBuckets,
+    cfg: &crate::SpectrumConfig,
+) -> egui::Mesh {
+    use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+
+    let span = spiral.max_midi - spiral.min_midi;
+    let (r_in, r_out) = spiral.bounds();
+    let cap = (span * BINS_PER_SEMITONE as f32).max(MIN_STEPS);
+    let steps = (arc_len(r_in, r_out, span / 12.0) / SEGMENT_PT).clamp(MIN_STEPS, cap) as usize;
+    let half_step = span / (2.0 * steps as f32);
+    let level = |midi: f32| {
+        let bucket_x = |m: f32| (m - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
+        footprint_peak(levels, bucket_x(midi - half_step), bucket_x(midi + half_step))
+    };
+
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=steps {
+        let midi = spiral.min_midi + span * i as f32 / steps as f32;
+        let mapped = spectrogram_level_db(cfg, power_db(level(midi)), midi);
+        let base = cell_color(cfg.spectrogram_gradient, mapped);
+        let color = Color32::from_rgba_unmultiplied(
+            base.r(),
+            base.g(),
+            base.b(),
+            (255.0 * mapped).round() as u8,
+        );
+        mesh.colored_vertex(spiral.at(midi, -spiral.half()), color);
+        mesh.colored_vertex(spiral.at(midi, spiral.half()), color);
+        if i > 0 {
+            let (a, b) = (2 * (i as u32 - 1), 2 * i as u32);
+            mesh.add_triangle(a, a + 1, b);
+            mesh.add_triangle(a + 1, b + 1, b);
+        }
+    }
+    mesh
+}
+
+/// Read a sparse line over one screen segment. Across more than one bucket the
+/// strongest deposit survives; inside one bucket the same dB-linear sampling
+/// as [`footprint_mean`] keeps motion continuous between bucket centres.
+fn footprint_peak(powers: &[f32], x0: f32, x1: f32) -> f32 {
+    if powers.is_empty() {
+        return 0.0;
+    }
+    let top = powers.len() as f32 - 1.0;
+    let first = x0.floor().clamp(0.0, top) as usize;
+    let last = x1.floor().clamp(0.0, top) as usize;
+    if last > first {
+        let lo = x0.clamp(0.0, powers.len() as f32);
+        let hi = x1.clamp(0.0, powers.len() as f32);
+        return powers[first..=last]
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, &power)| {
+                let bucket = (first + offset) as f32;
+                (hi.min(bucket + 1.0) > lo.max(bucket)).then_some(power)
+            })
+            .fold(0.0, f32::max);
+    }
+    let x = 0.5 * (x0 + x1) - 0.5;
+    let bucket = x.floor().clamp(0.0, (powers.len() as f32 - 2.0).max(0.0)) as usize;
+    let fraction = (x - bucket as f32).clamp(0.0, 1.0);
+    let (a, b) = (power_db(powers[bucket]), power_db(powers[(bucket + 1).min(powers.len() - 1)]));
+    10f32.powf(0.1 * (a + (b - a) * fraction))
 }
 
 /// How long a run of spiral between two radii is, over `turns` turns: the mean
@@ -1008,6 +1144,47 @@ mod tests {
     fn spiral(low: f32, high: f32) -> Spiral {
         let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
         Spiral::new(PANE, &cfg)
+    }
+
+    /// Each menu choice reads its own live product, and the default reads none.
+    /// Distinct nonzero buckets make both non-default match arms necessary.
+    #[test]
+    fn comparison_modes_select_distinct_live_products() {
+        let mut spectrum = crate::AudioSpectrum { last_samples: Some(1.0), ..Default::default() };
+        spectrum.refined_peaks[41] = 0.25;
+        spectrum.reassigned[73] = 0.5;
+
+        assert_eq!(SpectrumComparison::default(), SpectrumComparison::Dense);
+        assert!(SpectrumComparison::Dense.overlay(&spectrum, 1.0).is_none());
+        let peaks = SpectrumComparison::RefinedPeaks.overlay(&spectrum, 1.0).unwrap();
+        let reassigned = SpectrumComparison::Reassigned.overlay(&spectrum, 1.0).unwrap();
+        assert_eq!((peaks[41], peaks[73]), (0.25, 0.0));
+        assert_eq!((reassigned[41], reassigned[73]), (0.0, 0.5));
+    }
+
+    /// A two-bucket line must survive a screen segment spanning many buckets,
+    /// or widening the pitch range would compare two invisible estimators.
+    #[test]
+    fn sparse_footprints_keep_the_strongest_line() {
+        let mut powers = [0.0f32; 12];
+        powers[6] = 0.8;
+        assert_eq!(footprint_peak(&powers, 1.2, 10.7), 0.8);
+    }
+
+    /// The candidate mesh is transparent away from a line and visible on it,
+    /// so it augments rather than replaces the dense strip underneath.
+    #[test]
+    fn a_sparse_overlay_leaves_the_dense_strip_visible() {
+        use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+
+        let cfg = SpectrumConfig { low_midi: 60.0, high_midi: 72.0, ..Default::default() };
+        let spiral = Spiral::new(PANE, &cfg);
+        let mut powers = [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS];
+        let bucket = ((66.0 - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize;
+        powers[bucket] = 1.0;
+        let mesh = overlay_strip(&spiral, &powers, &cfg);
+        assert!(mesh.vertices.iter().any(|vertex| vertex.color.a() == 0));
+        assert!(mesh.vertices.iter().any(|vertex| vertex.color.a() > 0));
     }
 
     /// A framing, as a gesture would leave it: through the type's own clamp, so

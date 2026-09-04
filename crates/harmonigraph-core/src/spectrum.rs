@@ -96,17 +96,25 @@ pub const MAX_TAPERS: usize = 8;
 const INTERP_BIN_CEILING: usize =
     ((12 * BINS_PER_SEMITONE) as f32 / std::f32::consts::LN_2) as usize + 8;
 
-/// The ordinary filled spectrum together with a sparse frequency-reassigned
-/// overlay from the same analysis window.
+/// Normalized peak power below which the historical parabolic picker omits a
+/// local maximum. This is the old `1e-4` magnitude floor squared: keeping it is
+/// part of making the comparison about the estimator rather than about a newly
+/// chosen gate.
+const REFINED_PEAK_FLOOR_POWER: f32 = 1e-8;
+
+/// The ordinary filled spectrum together with two sparse sharpening candidates
+/// from the same analysis window.
 ///
 /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) stays the inexpensive
-/// filled product used by the existing panes. A consumer that wants sharpened
-/// partials asks for this pair instead, draws `pitch_spectrum` as its broadband
-/// floor, and augments it with `reassigned`; replacing the fill would make
-/// noise, breath, and cymbals collapse back into the speckle the filled product
-/// was introduced to preserve.
+/// filled product used by the existing panes. A comparison consumer draws
+/// `pitch_spectrum` as its broadband floor, then augments it with either the
+/// historical parabolically refined local peaks or frequency reassignment.
+/// Replacing the fill with either sparse product would make noise, breath, and
+/// cymbals collapse back into the speckle the filled product was introduced to
+/// preserve.
 pub struct ReassignedSpectrum {
     pub pitch_spectrum: [f32; SPECTRUM_BINS],
+    pub refined_peaks: [f32; SPECTRUM_BINS],
     pub reassigned: [f32; SPECTRUM_BINS],
 }
 
@@ -135,6 +143,9 @@ pub struct SpectrumAnalyzer {
     /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
     /// tapers it is a property of — see [`taper_norm_power`].
     norm_power: f32,
+    /// The corresponding line-energy normalization for the historical
+    /// three-bin peak estimate — see [`refined_peak_norm_power`].
+    refined_peak_norm_power: f32,
     /// The corresponding energy normalization for bins that are DEPOSITED
     /// rather than sampled at their peaks — see [`reassigned_norm_power`].
     reassigned_norm_power: f32,
@@ -183,6 +194,7 @@ impl SpectrumAnalyzer {
             reassignment_weights: Vec::new(),
             reassignment_derivative: Vec::new(),
             norm_power: 0.0,
+            refined_peak_norm_power: 0.0,
             reassigned_norm_power: 0.0,
             re: Vec::new(),
             im: Vec::new(),
@@ -214,6 +226,7 @@ impl SpectrumAnalyzer {
         self.reassignment_derivative =
             build_reassignment_derivative(fft_size, taper_count, &self.reassignment_weights);
         self.norm_power = taper_norm_power(&self.tapers, fft_size);
+        self.refined_peak_norm_power = refined_peak_norm_power(&self.tapers, fft_size);
         let reassignment_taper = combine_tapers(&self.tapers, fft_size, &self.reassignment_weights);
         self.reassigned_norm_power = reassigned_norm_power(&reassignment_taper, fft_size);
         self.re = vec![0.0; fft_size / 2];
@@ -331,7 +344,7 @@ impl SpectrumAnalyzer {
     /// The refinement had been hiding how little the FFT actually
     /// resolves down low; this shows it.
     pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
-        self.pitch_spectrum_impl(None)
+        self.pitch_spectrum_impl(None, None)
     }
 
     /// The unchanged filled pitch spectrum plus a sparse, frequency-reassigned
@@ -355,19 +368,25 @@ impl SpectrumAnalyzer {
     /// measured alongside `fft_bench`); the time-ramped alternative would buy
     /// no current consumer another transform's cost.
     pub fn pitch_spectrum_with_reassignment(&mut self) -> Option<ReassignedSpectrum> {
+        let mut refined_peaks = [0.0; SPECTRUM_BINS];
         let mut reassigned = [0.0; SPECTRUM_BINS];
-        let pitch_spectrum = self.pitch_spectrum_impl(Some(&mut reassigned))?;
-        Some(ReassignedSpectrum { pitch_spectrum, reassigned })
+        let pitch_spectrum =
+            self.pitch_spectrum_impl(Some(&mut refined_peaks), Some(&mut reassigned))?;
+        Some(ReassignedSpectrum { pitch_spectrum, refined_peaks, reassigned })
     }
 
     fn pitch_spectrum_impl(
         &mut self,
+        mut refined_peaks: Option<&mut [f32; SPECTRUM_BINS]>,
         mut reassigned: Option<&mut [f32; SPECTRUM_BINS]>,
     ) -> Option<[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
         }
 
+        if let Some(out) = refined_peaks.as_mut() {
+            out.fill(0.0);
+        }
         if let Some(out) = reassigned.as_mut() {
             out.fill(0.0);
             self.base_bin_re.fill(0.0);
@@ -390,6 +409,11 @@ impl SpectrumAnalyzer {
         // the untangle below fills, so a widening here is work as well as axis.
         let half = self.fft_size / 2;
         let (first, last) = (2usize, half - 2);
+        // The old peak picker reads one neighbour beyond the usable range. The
+        // dense fill still reads exactly `first..=last`, so computing those two
+        // scratch entries only for the comparison cannot move its result.
+        let power_first = if refined_peaks.is_some() { first - 1 } else { first };
+        let power_last = if refined_peaks.is_some() { last + 1 } else { last };
         for k in 0..self.taper_count {
             let taper = k * self.fft_size;
             // Unroll the ring into time order, tapered, and PACKED: the even
@@ -407,8 +431,8 @@ impl SpectrumAnalyzer {
                 &self.re,
                 &self.im,
                 &self.untangle_twiddles,
-                first,
-                last,
+                power_first,
+                power_last,
                 &mut self.bin_power,
             );
 
@@ -428,6 +452,18 @@ impl SpectrumAnalyzer {
                     &mut self.base_bin_im,
                 );
             }
+        }
+
+        if let Some(out) = refined_peaks.as_mut() {
+            deposit_refined_peaks(
+                &self.bin_power,
+                first,
+                last,
+                self.sample_rate / self.fft_size as f32,
+                self.norm_power,
+                self.refined_peak_norm_power,
+                out,
+            );
         }
 
         if let Some(out) = reassigned.as_mut() {
@@ -671,6 +707,49 @@ fn deposit_pitch(out: &mut [f32; SPECTRUM_BINS], hz: f32, power: f32) {
     out[lower + 1] += power * fraction;
 }
 
+/// Deposit the historical three-bin, parabolically refined local peaks.
+///
+/// This is deliberately an overlay beside the dense spectrum, not a return to
+/// the old peak-only analyzer. The peak condition, log-magnitude parabola,
+/// three-bin power and floor are the old estimator unchanged. Its line energy
+/// is normalized to the same full-scale-sine = 0 dB contract as reassignment,
+/// and [`deposit_pitch`] is shared so both candidates land on the current
+/// bucket-centre convention.
+fn deposit_refined_peaks(
+    bin_power: &[f32],
+    first: usize,
+    last: usize,
+    bin_hz: f32,
+    height_norm_power: f32,
+    line_norm_power: f32,
+    out: &mut [f32; SPECTRUM_BINS],
+) {
+    for k in first..=last {
+        let (prev, center, next) = (bin_power[k - 1], bin_power[k], bin_power[k + 1]);
+        // `>=` on one side means an exactly-between-bins tone, with two equal
+        // centre bins, still registers exactly once.
+        if !(center > prev && center >= next)
+            || center * height_norm_power < REFINED_PEAK_FLOOR_POWER
+        {
+            continue;
+        }
+        let mut bin = k as f32;
+        if prev > 0.0 && next > 0.0 {
+            // Log POWER has twice log magnitude in both numerator and
+            // denominator, so it gives exactly the old log-magnitude offset
+            // without taking three square roots first.
+            let (a, b, c) = (prev.ln(), center.ln(), next.ln());
+            let denominator = a - 2.0 * b + c;
+            if denominator.abs() > f32::EPSILON {
+                bin += (0.5 * (a - c) / denominator).clamp(-0.5, 0.5);
+            }
+        }
+        // The whole main lobe's three sampled bins, rather than its centre
+        // alone, keeps the level steadier as a tone crosses a bin boundary.
+        deposit_pitch(out, bin * bin_hz, (prev + center + next) * line_norm_power);
+    }
+}
+
 /// One [`SpectrumAnalyzer`] per input channel, combined into the single
 /// spectrum the display draws — see [`power_sum`](ChannelBank::power_sum).
 ///
@@ -798,7 +877,8 @@ impl ChannelBank {
         Some(total)
     }
 
-    /// The channels' mean filled and reassigned power from the same window.
+    /// The channels' mean filled, refined-peak and reassigned power from the
+    /// same window.
     ///
     /// This is the bank-level counterpart of
     /// [`SpectrumAnalyzer::pitch_spectrum_with_reassignment`], so a future
@@ -807,11 +887,15 @@ impl ChannelBank {
     pub fn power_sum_with_reassignment(&mut self) -> Option<ReassignedSpectrum> {
         let mut total = ReassignedSpectrum {
             pitch_spectrum: [0.0; SPECTRUM_BINS],
+            refined_peaks: [0.0; SPECTRUM_BINS],
             reassigned: [0.0; SPECTRUM_BINS],
         };
         for analyzer in &mut self.per_channel {
             let channel = analyzer.pitch_spectrum_with_reassignment()?;
             for (sum, p) in total.pitch_spectrum.iter_mut().zip(&channel.pitch_spectrum) {
+                *sum += p;
+            }
+            for (sum, p) in total.refined_peaks.iter_mut().zip(&channel.refined_peaks) {
                 *sum += p;
             }
             for (sum, p) in total.reassigned.iter_mut().zip(&channel.reassigned) {
@@ -820,6 +904,9 @@ impl ChannelBank {
         }
         let gain = 1.0 / self.per_channel.len() as f32;
         for sum in &mut total.pitch_spectrum {
+            *sum *= gain;
+        }
+        for sum in &mut total.refined_peaks {
             *sum *= gain;
         }
         for sum in &mut total.reassigned {
@@ -992,6 +1079,33 @@ fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
         .map(|taper| {
             let sum: f32 = taper.iter().sum();
             sum * sum
+        })
+        .sum();
+    4.0 / response
+}
+
+/// Normalize the three FFT bins a refined peak gathers so a full-scale,
+/// bin-centred sinusoid deposits total power one.
+///
+/// A real sine contributes half the taper transform at its positive-frequency
+/// line. The centre sees the taper's DC response and the two neighbours see its
+/// `+/-1` responses, so the gathered power is one quarter of the sum below.
+/// This is evaluated only when the taper configuration changes; the live peak
+/// pass remains a few comparisons and logarithms over the already-computed
+/// bins.
+fn refined_peak_norm_power(tapers: &[f32], n: usize) -> f32 {
+    let step = std::f32::consts::TAU / n as f32;
+    let response: f32 = tapers
+        .chunks(n)
+        .map(|taper| {
+            let (mut dc, mut adjacent_re, mut adjacent_im) = (0.0f32, 0.0f32, 0.0f32);
+            for (i, &weight) in taper.iter().enumerate() {
+                let angle = step * i as f32;
+                dc += weight;
+                adjacent_re += weight * angle.cos();
+                adjacent_im += weight * angle.sin();
+            }
+            dc * dc + 2.0 * (adjacent_re * adjacent_re + adjacent_im * adjacent_im)
         })
         .sum();
     4.0 / response
@@ -1278,6 +1392,20 @@ mod tests {
         analyzer.pitch_spectrum_with_reassignment().expect("window filled").reassigned
     }
 
+    /// The same live path as [`analyze_reassigned`], selecting the historical
+    /// parabolic candidate so its tests cannot pass through reassignment.
+    fn analyze_refined_peaks(fft_size: usize, hz: f32, sample_rate: f32) -> [f32; SPECTRUM_BINS] {
+        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+        analyzer.set_fft_size(fft_size);
+        let samples: Vec<f32> = (0..fft_size + 1234)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / sample_rate).sin())
+            .collect();
+        for chunk in samples.chunks(701) {
+            analyzer.push_samples(chunk);
+        }
+        analyzer.pitch_spectrum_with_reassignment().expect("window filled").refined_peaks
+    }
+
     fn peak_bucket(buckets: &[f32; SPECTRUM_BINS]) -> usize {
         (0..SPECTRUM_BINS).max_by(|&a, &b| buckets[a].total_cmp(&buckets[b])).unwrap()
     }
@@ -1355,6 +1483,54 @@ mod tests {
         }
     }
 
+    /// The comparison's adjacent design is the actual old peak picker, not a
+    /// raw-bin marker wearing its label. Asymmetric off-bin fixtures make the
+    /// parabolic offset necessary, including the bass case where a bin is much
+    /// wider than one output bucket.
+    #[test]
+    fn parabolic_peaks_place_between_bin_sinusoids() {
+        let sample_rate = 48_000.0;
+        let fft_size = DEFAULT_FFT_SIZE;
+        let bin_hz = sample_rate / fft_size as f32;
+        for bin in [14.37f32, 37.21, 75.73, 172.49] {
+            let expected_hz = bin * bin_hz;
+            let refined = analyze_refined_peaks(fft_size, expected_hz, sample_rate);
+            let peak = peak_bucket(&refined);
+            let got_midi = SPECTRUM_MIN_MIDI + (peak as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            let error_cents = 100.0 * (got_midi - hz_to_midi(expected_hz)).abs();
+            assert!(
+                error_cents <= 3.2,
+                "{expected_hz:.2} Hz parabolic peak landed {error_cents:.2}c away"
+            );
+            let total: f32 = refined.iter().sum();
+            assert!(refined[peak] > 0.35 * total, "the refined line was lost among sidelobes");
+        }
+    }
+
+    /// Equal UI gain must mean equal calibration: a brighter candidate would
+    /// win the visual A/B before its sharpness or noise behaviour was read.
+    /// Reach every taper count because each has a different three-bin response.
+    #[test]
+    fn a_refined_full_scale_sine_reads_unity_at_every_taper_count() {
+        let sample_rate = 48_000.0;
+        let fft_size = DEFAULT_FFT_SIZE;
+        let hz = 75.37 * sample_rate / fft_size as f32;
+        let samples: Vec<f32> = (0..fft_size + 1234)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / sample_rate).sin())
+            .collect();
+        for tapers in 1..=MAX_TAPERS {
+            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+            analyzer.set_tapers(tapers);
+            for chunk in samples.chunks(701) {
+                analyzer.push_samples(chunk);
+            }
+            let got = analyzer.pitch_spectrum_with_reassignment().expect("window filled");
+            let total: f32 = got.refined_peaks.iter().sum();
+            let db = 10.0 * total.max(1e-12).log10();
+            assert!(db.abs() < 1.5, "{tapers} tapers read a refined sine at {db:.2} dB");
+        }
+    }
+
     /// Sine tapers get wider as their order climbs, and near DC their estimates
     /// overlap the real signal's negative-frequency mirror. Reassigning every
     /// taper used for the FILLED spectrum moved 21 Hz by 27 cents at three
@@ -1426,6 +1602,7 @@ mod tests {
             }
             let expected = plain.pitch_spectrum().expect("window filled");
             let got = sharpened.pitch_spectrum_with_reassignment().expect("window filled");
+            assert!(got.refined_peaks.iter().any(|p| *p > 0.0), "peak overlay stayed empty");
             assert!(got.reassigned.iter().any(|p| *p > 0.0), "overlay stayed empty");
             let moved = expected
                 .iter()
