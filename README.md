@@ -21,6 +21,14 @@ Demonstration:
 
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
+## Planned adaptive tuning
+
+Project-wide adaptive MIDI retuning is designed but not implemented.
+The plan adds one lightweight Harmonigraph Tune note effect before each participating instrument path;
+the tuners automatically contribute their emitted note and pitch assignments to one full Harmonigraph and tune new attacks from its last sealed project state.
+Assignments are immediate and remain fixed for each note's lifetime.
+See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the decided behavior, the real-time protocol and the deliberately deferred alternatives.
+
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
 [`CLAUDE.md`](CLAUDE.md) is the house style they work under;
 GitHub Actions runs `./ci.sh` as the canonical full gate.
