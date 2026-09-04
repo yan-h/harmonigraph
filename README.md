@@ -25,8 +25,9 @@ Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
 Project-wide adaptive MIDI retuning is designed but not implemented.
 The plan adds one lightweight Harmonigraph Tune note effect before each participating instrument path;
-the tuners automatically contribute their emitted note and pitch assignments to one full Harmonigraph and tune new attacks from its last sealed project state.
-Assignments are immediate and remain fixed for each note's lifetime.
+one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a fixed delay.
+Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
+A missed assignment deadline delays the note further and reports a failure, rather than dropping it or emitting an unretuned attack.
 See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the decided behavior, the real-time protocol and the deliberately deferred alternatives.
 
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
