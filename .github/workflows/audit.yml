@@ -1,0 +1,198 @@
+# `cargo audit` against the RustSec advisory database: does this lockfile name a
+# crate version somebody has since reported a vulnerability in?
+#
+# Deliberately NOT part of `ci.sh`, which is the only gate this repo keeps
+# outside it. Everything in `ci.sh` is a function of the tree, so it answers the
+# same way today and next month and on a laptop with no network. This check is a
+# function of the tree AND the date AND github.com, because the advisory
+# database moves without the tree moving. Folding it in would make "ci.sh
+# passed" quietly stop meaning what it means, and would red a build nobody
+# touched on a stranger's publication schedule.
+#
+# It also runs the real `cargo audit` rather than RustSec's own action, for two
+# reasons that turned out to point the same way. This repository restricts
+# Actions to an allowlist (`Swatinem/rust-cache`, `mozilla-actions/sccache-action`
+# and GitHub's own), so `rustsec/audit-check` fails at startup here — and
+# widening a curated supply-chain allowlist in order to install a supply-chain
+# scanner is the wrong direction. Running the binary also settles what the
+# action left unclear: `.cargo/audit.toml` is definitely read, so a run here and
+# a run on a laptop cannot disagree about what is suppressed.
+name: Security audit
+
+on:
+  # The world-moved half. Weekly rather than the documented daily default:
+  # this repo's dependency set changes a few times a month, and a scheduled run
+  # is only worth its notification if the notification is still worth reading.
+  # Monday morning Pacific, and off the hour on purpose — scheduled runs bunch
+  # up at :00 and GitHub delays them under that load.
+  schedule:
+    - cron: '23 16 * * 1'
+
+  # The protect-the-merge half. Note there is NO `paths:` filter here, and that
+  # is load-bearing rather than an oversight: GitHub leaves a workflow skipped
+  # by a path filter permanently *Pending*, so the moment this check is made
+  # required, every PR that does not touch a dependency file would be blocked
+  # forever waiting on a run that is never going to happen. The job therefore
+  # always runs and always reports; what is conditional is the audit inside it.
+  pull_request:
+  push:
+    branches:
+      - main
+
+  # For asking the question between Mondays: `gh workflow run audit.yml`.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Only for the weekly run's issue. A red run on a schedule nobody is watching
+  # is a notification that expires; #597 is the worked example of the durable
+  # form being the one that was actually useful.
+  issues: write
+
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a run is reproducible and a bump is a visible commit. Also the
+  # cache key below, so changing it here refreshes the cached binary.
+  CARGO_AUDIT_VERSION: '0.22.2'
+
+jobs:
+  audit:
+    name: Security audit
+    # Ubuntu, unlike `Full CI`'s macos-latest, because nothing here compiles the
+    # crate: the check reads `Cargo.lock`, which resolves every platform at once
+    # and is byte-identical whatever runs it. That is also precisely why it
+    # reports the Wayland-only `quick-xml` pair that macOS never builds — see
+    # the ignore list and its guard in `.cargo/audit.toml`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # The whole history, because the next step diffs against the base to
+          # decide whether the dependency set actually moved.
+          fetch-depth: 0
+
+      # What the `paths:` filter used to do, moved inside the job so the check
+      # still reports on a PR it has nothing to say about. Fails OPEN: anything
+      # unexpected about the range means "audit it", because a security check
+      # that silently decides to skip itself is worse than one that runs twice.
+      - name: Did the dependency set move?
+        id: deps
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] || \
+             [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "reason=the whole point of this trigger" >> "$GITHUB_OUTPUT"
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          case "$base" in
+            ''|0000000000000000000000000000000000000000)
+              echo "reason=no usable base to diff against" >> "$GITHUB_OUTPUT"
+              echo "audit=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+          if ! changed=$(git diff --name-only "$base" "$GITHUB_SHA" 2>/dev/null); then
+            echo "reason=could not diff $base..$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The last two are this check auditing its own configuration: a change
+          # to what is suppressed has to show the result still passes.
+          if printf '%s\n' "$changed" | grep -Eq \
+            '(^|/)Cargo\.(toml|lock)$|^\.cargo/audit\.toml$|^\.github/workflows/audit\.yml$'; then
+            echo "reason=a dependency or audit-config file changed" >> "$GITHUB_OUTPUT"
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reason=no dependency or audit-config file in the diff" >> "$GITHUB_OUTPUT"
+            echo "audit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache cargo-audit
+        if: steps.deps.outputs.audit == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ env.CARGO_AUDIT_VERSION }}
+
+      - name: Install cargo-audit
+        if: steps.deps.outputs.audit == 'true'
+        run: |
+          set -euo pipefail
+          if [ -x "$HOME/.cargo/bin/cargo-audit" ]; then
+            echo "cached: $(cargo audit --version)"
+          else
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          fi
+
+      # The guard `.cargo/audit.toml`'s suppressions rest on, and the reason
+      # they are safe to hold. `cargo audit`'s ignore list is by advisory ID and
+      # applies GLOBALLY — it does not know that the entry was justified by
+      # `quick-xml` being unreachable on macOS. If a future dependency change
+      # pulls a vulnerable `quick-xml` in through a path macOS DOES build, the
+      # suppression would silently cover that too. So assert the premise
+      # mechanically rather than trusting a comment to age well.
+      #
+      # `cargo tree -i` exits 0 either way and prints nothing to stdout when the
+      # crate is absent, so the presence of output is the signal.
+      # Runnable by hand: cargo tree --target aarch64-apple-darwin -i quick-xml
+      - name: Are the suppressed crates still unreachable?
+        if: steps.deps.outputs.audit == 'true'
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            if cargo tree --target "$target" -i quick-xml 2>/dev/null | grep -q .; then
+              echo "::error file=.cargo/audit.toml::quick-xml is now reachable on $target."
+              echo "RUSTSEC-2026-0194/0195 are suppressed in .cargo/audit.toml only because"
+              echo "quick-xml is Wayland-gated and absent from the macOS graph. That premise"
+              echo "no longer holds, so the suppressions no longer do either: either upgrade"
+              echo "past 0.41.0 or delete those two ignore entries and handle what they hid."
+              exit 1
+            fi
+          done
+          echo "quick-xml is absent from both macOS targets; the suppressions still hold."
+
+      - name: Audit dependencies
+        if: steps.deps.outputs.audit == 'true'
+        run: cargo audit
+
+      - name: Nothing to audit
+        if: steps.deps.outputs.audit != 'true'
+        run: echo "Skipped — ${{ steps.deps.outputs.reason }}."
+
+      # Only the weekly run, and only when it found something. A PR run has an
+      # author already looking at a red check; a Monday run has nobody.
+      # One open issue at a time: a second Monday with the same advisory should
+      # not mint a second issue to close.
+      - name: Open an issue for what the weekly run found
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='Security audit: the weekly run failed on main'
+          existing=$(gh issue list --state open --search "in:title \"$title\"" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "already open as #$existing; not filing a duplicate"
+            exit 0
+          fi
+          {
+            echo 'The weekly security-audit run failed. cargo audit output:'
+            echo
+            echo '```'
+            cargo audit 2>&1 || true
+            echo '```'
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo 'Suppressions and their retirement conditions live in .cargo/audit.toml'
+          } > audit-issue.md
+          gh issue create --title "$title" --body-file audit-issue.md
