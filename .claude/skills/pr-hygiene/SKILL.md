@@ -41,11 +41,11 @@ and read the contact sheet the failure names before you do:
 a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.
 
 **Yan:
-run `/audit-merges` after a batch of merges lands.** Parallel sessions produce branches that are each correct against the `main` they started from, so the interesting bugs are the ones that do not exist until two of them are combined —
+run `/audit-merges` in Claude or `$audit-merges` in Codex after a batch of merges lands.** Parallel sessions produce branches that are each correct against the `main` they started from, so the interesting bugs are the ones that do not exist until two of them are combined —
 and a per-branch review is structurally blind to those.
 PR #85 is the worked example:
 12 PRs merged in one night, two real bugs, both of them a cache whose missing input arrived in a *different* PR.
-The command reads the combined diff and keeps a `last-merge-audit` tag so consecutive audits do not re-read the same range.
+The shared skill reads the combined diff and keeps a `last-merge-audit` tag so consecutive audits do not re-read the same range.
 
 ## Squash by default; merge-commit the exception
 
@@ -83,17 +83,23 @@ This rule is for the next PR, not the last thirty.
 
 ## The agents in `.claude/agents/`
 
-`merge-auditor` does the reading for `/audit-merges`.
+`merge-auditor` does the reading for the shared `audit-merges` skill.
 It hands back candidate findings and the fix is written in the calling session.
 That split is the point:
 it does not go from "this looks wrong" to a commit without the failing test in between.
 
+The host that invokes the skill owns the whole run.
+Claude's `/audit-merges` uses the Claude `merge-auditor` adapter;
+Codex's `$audit-merges` spawns Codex subagents directly.
+Both read `.claude/skills/audit-merges/references/merge-auditor.md` as the one audit brief, and neither shells out to the other agent product.
+
 Be precise about how much of that is enforced, because it is easy to read as more than it is.
-It is granted `Read, Grep, Glob, Bash`:
-`Write` and `Edit` are withheld, but **`Bash` writes files, and can commit**.
-So the split is instructed, not enforced —
+The Claude adapter is granted `Read, Grep, Glob, Bash`, while Codex subagents inherit the tools available to their Codex task.
+In Claude, `Write` and `Edit` are withheld, but **`Bash` writes files, and can commit**.
+Codex likewise relies on the shared brief's read-only instruction rather than a restricted tool grant.
+So the split is instructed, not fully enforced —
 the prompt tells it to return findings, and nothing stops it doing otherwise.
-`Bash` is granted deliberately:
+Shell access is retained deliberately:
 the #85 audit's findings were proved with `cargo test`, `git merge-base` and `git blame`, and a reviewer that cannot run the suite cannot tell a bug from a guess.
 What that costs when it goes wrong is on record:
 the retired `diff-reviewer` ran `load-plugin.sh` in three separate sessions, evicting the build Yan was testing, and successively more explicit prompts did not stop it.
@@ -112,9 +118,9 @@ So:
 if a fact has a natural home in a doc comment, that is where it goes, and a session finds it by reading.
 Reach for an agent when it restricts tools in a way that changes what can happen, encodes a repeatable job, or isolates genuinely noisy searching —
 not when a subsystem merely feels important.
-`/audit-merges` still checks the range for drift in whatever agents do exist, because nothing in the build can catch a prompt that has gone stale —
+The `audit-merges` skill still checks the range for drift in whatever agents do exist, because nothing in the build can catch a prompt that has gone stale —
 and it checks the skills and the scripts harder, since this rule is what keeps the rottable facts out of the agents and puts them there instead.
 
 CLAUDE.md owns when a PR is required;
 this file owns what happens at the merge boundary after one exists.
-An agent without `/audit-merges` runs the same procedure out of `.claude/commands/audit-merges.md` rather than substituting a per-branch review for it.
+An agent without the skill runs the same procedure out of `.claude/skills/audit-merges/SKILL.md` rather than substituting a per-branch review for it.
