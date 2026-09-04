@@ -5,6 +5,31 @@ not abandoned.
 Each entry carries enough context (state, the actual work, the catch, and a value/effort read) to pick it up cold later.
 Nothing here blocks anything today.
 
+## Adaptive-tuning alternatives
+
+**State.** Project-wide adaptive retuning is designed but not implemented.
+The active design is documented in [`adaptive-tuning.md`](adaptive-tuning.md):
+one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and immediate CLAP tuning expression chosen from the previous sealed project state and frozen until note-off.
+
+**Synchronized attacks and reconciliation.** A synchronized mode would hold the complete MIDI stream until every participating source had submitted a window, then report fixed latency and emit a jointly solved attack.
+It would add source watermarks, resolved epochs, sample-accurate event scheduling, latency negotiation, plugin-delay-compensation verification and a second failure/reset state machine.
+Reconciliation would instead change pitches after their attack and need transition, glide, hysteresis and player-expression composition policy.
+Neither is worthwhile without evidence that the optimistic frozen result is musically inadequate.
+A future diagnostic may compute the alternative result in shadow without changing MIDI and record discrepancy frequency, size and duration.
+
+**Compatibility outputs.** MTS-ESP is useful for a conventional global note/channel tuning table, but it does not naturally carry Harmonigraph's per-voice frozen adaptive assignments or collect note lifecycle.
+MPE requires channel allocation and bend-state recovery;
+VST3 adds another host and instrument interoperability matrix.
+The initial implementation targets the actual personal environment —
+macOS, Bitwig and compatible CLAP instruments —
+and adds another backend only for a concrete instrument that needs it.
+
+**Process and product variants.** A headless conductor, cross-process shared-memory transport, one full-plugin class that switches between tuner and hub roles, and a central MIDI rack all add lifecycle or routing surface without improving the intended workflow.
+The Bitwig spike may reopen only the packaging or process boundary if separate companion instances cannot share an in-process session reliably.
+
+**Value / effort.** All are medium-to-high maintenance multipliers rather than cheap compatibility switches.
+Keep them parked until a measured musical or hosting failure identifies which specific cost would buy something useful.
+
 ## Depth-buffer sorting
 
 **State.** The lattice renders through an offscreen color + `Depth32Float` pass (`crates/harmonigraph-render/src/lib.rs`).
