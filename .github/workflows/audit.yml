@@ -1,0 +1,90 @@
+# `cargo audit` against the RustSec advisory database: does this lockfile name a
+# crate version somebody has since reported a vulnerability in?
+#
+# Deliberately NOT part of `ci.sh`, which is the only gate this repo keeps
+# outside it. Everything in `ci.sh` is a function of the tree, so it answers the
+# same way today and next month and on a laptop with no network. This check is a
+# function of the tree AND the date AND github.com, because the advisory
+# database moves without the tree moving. Folding it in would make "ci.sh
+# passed" quietly stop meaning what it means, and would red a build nobody
+# touched on a stranger's publication schedule.
+#
+# So it gets its own workflow with two triggers, which is what RustSec's own
+# action recommends and what the ecosystem settled on: the filtered push/PR run
+# protects the merge, the weekly run protects against the world moving
+# underneath a tree nobody is editing.
+name: Security audit
+
+on:
+  # The world-moved half. Weekly rather than the documented daily default:
+  # this repo's dependency set changes a few times a month, and a scheduled run
+  # is only worth its notification if the notification is still worth reading.
+  # Monday morning Pacific, and off the hour on purpose — scheduled runs bunch
+  # up at :00 and GitHub delays them under that load.
+  schedule:
+    - cron: '23 16 * * 1'
+
+  # The protect-the-merge half. The paths filter is the reason this can block
+  # without being a nuisance: it fires only when the dependency set actually
+  # moves, so it never reds a PR about something else, and the author it does
+  # red is by definition the one who just changed the dependencies and can act.
+  #
+  # The last two entries are this check auditing its own configuration — a PR
+  # that edits the ignore list or this file has to demonstrate the result still
+  # passes, which is also how the very first run of this workflow got exercised.
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/audit.yml'
+
+  # For asking the question between Mondays, which is the whole of the manual
+  # workflow: `gh workflow run audit.yml`.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # On a `schedule` run the action opens an issue per advisory it finds; on
+  # push and pull_request it fails the check instead and prints to stdout. The
+  # issue is the point of the weekly run — a red run on a branch nobody is
+  # watching is a notification that expires, and #597 is the worked example of
+  # the durable form being what was actually useful.
+  issues: write
+  checks: write
+
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Security audit
+    # Ubuntu, unlike `Full CI`'s macos-latest, because nothing here compiles:
+    # the check reads `Cargo.lock`, which resolves every platform at once and is
+    # byte-identical whatever runs it. That is also precisely why it reports the
+    # Wayland-only `quick-xml` pair that macOS never builds — see the ignore
+    # list and its retirement condition in `.cargo/audit.toml`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Settings come from `.cargo/audit.toml` in the checkout rather than from
+      # an `ignore:` input here, so that a local `cargo audit` and this run
+      # cannot disagree about what is suppressed.
+      - name: Audit dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

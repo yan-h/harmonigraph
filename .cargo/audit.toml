@@ -1,0 +1,40 @@
+# `cargo audit`'s settings, read from the project root by the binary itself —
+# so a run here and the run in `.github/workflows/audit.yml` see one list, for
+# the same reason `ci.sh` holds every other gate: a check that says something
+# different locally than remotely is worse than no check.
+#
+# An entry below is a claim that an advisory cannot reach this tree, and it is
+# only as good as the condition that retires it. An ignore that outlives its
+# reason is a watcher that has quietly stopped watching, which is the too-wide
+# cache key in different clothes: it never goes stale and never goes still.
+# So each one carries what would remove it, and #597 carries the measurements.
+
+[advisories]
+ignore = [
+  # Both are `quick-xml` 0.39.4, both 7.5-high, and both arrive by the same
+  # Wayland-gated path: `wayland-scanner` <- `smithay-client-toolkit` <-
+  # `winit` <- `egui-wgpu`/`eframe`. macOS is the only target this repo builds,
+  # and on it the crate is not in the graph at all — `cargo tree -i quick-xml`
+  # prints "nothing to print" and it appears only under `--target all`.
+  #
+  # `Cargo.lock` is platform-independent, which is exactly why they are
+  # reported: audit reads the lockfile, not a resolved build, so it cannot see
+  # that this code is never compiled here.
+  #
+  # Reaching the fix (>=0.41.0) means a newer `wayland-scanner`, hence
+  # `smithay-client-toolkit`, hence `winit`, hence `eframe` — i.e. re-basing
+  # the seventeen vendored patches #409 settled to leave alone. Two advisories
+  # against code this platform never compiles are not that reason.
+  #
+  # REMOVE BOTH when the vendored stack next moves — #409's trigger is
+  # `egui-baseview` publishing against egui 0.36+ — then re-run and delete any
+  # line that no longer fires.
+  "RUSTSEC-2026-0194", # quadratic run time on duplicate attribute names
+  "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation (DoS)
+]
+
+# Deliberately NOT ignored, and deliberately not escalated either: RUSTSEC-2024-0436,
+# `paste` 1.0.15 unmaintained, reached through `egui_dock`. `unmaintained` is
+# informational, so it prints without failing the run — which is the right
+# weight. Listing it here would silence a line worth reading; promoting it to
+# an error would block on someone else's maintenance.
