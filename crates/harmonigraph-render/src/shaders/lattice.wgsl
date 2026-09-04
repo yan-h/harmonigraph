@@ -374,9 +374,10 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     );
 }
 
-// Whether this caster's shadow is a DISTANCE, which a marker evaluates from the
-// exact field its own scene draw holds rather than reading out of a cell.
-fn plus_is_distance(who: f32) -> bool {
+// Whether this caster's shadow is a DISTANCE. A marker uses the answer to
+// choose its exact field instead of a cell; a node uses it to leave that field's
+// existing half-level release alone while masking a Gaussian by its footprint.
+fn shadow_is_distance(who: f32) -> bool {
     let caster = u32(max(who, 0.0));
     if caster >= arrayLength(&shadow_casters) {
         return false;
@@ -398,7 +399,7 @@ fn plus_shadow_through(
         return ShadowThrough(1.0, 1.0);
     }
     let caster = u32(max(who, 0.0));
-    if !plus_is_distance(who) {
+    if !shadow_is_distance(who) {
         return shadow_through(who, points, level);
     }
     let full = standoff_coverage(d_points, 2.0 * shadow_casters[caster].shade.z);
@@ -2243,9 +2244,24 @@ struct NodeInk {
     // A share and not a switch, so a slice fading in carries its wash in with
     // it and no seam appears at a threshold nothing else in the picture has.
     lit: f32,
+    // The footprint every VISIBLE layer contributes: geometric coverage at an
+    // ordinary level, eased up across INK_FLOOR so the first nonzero packed
+    // level cannot punch a whole caster-shaped hole in the shadow before its
+    // ink appears. A Gaussian uses it to keep the caster's blurred alpha from
+    // showing through that same caster during a release.
+    mask: f32,
     // The nearest layer whose level reaches the distance contour.
     sd: f32,
 };
+
+/// How much of a layer's geometric footprint may mask its own shadow.
+///
+/// Levels below the ink floor are still representable in the instance buffer,
+/// but not visible in the scene pass. Ease the mask through that same interval
+/// rather than turning a whole footprint on at the first value above zero.
+fn mask_level(level: f32) -> f32 {
+    return clamp(level / INK_FLOOR, 0.0, 1.0);
+}
 
 /// What every node layer answers at this fragment: its visible ink and the
 /// nearest half-level signed field the Distance cell stores.
@@ -2289,6 +2305,7 @@ fn node_ink(
     // covers is the band radii; there is nothing left for a switch to say.
     var glyph = 0.0;
     var glyph_rgb = u.lattice_ground.rgb;
+    var glyph_mask = 0.0;
     // How much of that coverage is standing in a slice something has LIT — a
     // sounding octave, a wedge the analyzer is reading, a mark. A SHARE OF
     // `glyph` and not a fraction of it, premultiplied exactly as the colour
@@ -2373,6 +2390,7 @@ fn node_ink(
         }
         let shape_layer = outer_glyph(slot, oct, in.uv, band, band_in, band_out, aa);
         let shape = layer_coverage(shape_layer);
+        glyph_mask = max(glyph_mask, shape_layer.coverage);
         // This slot's bit in the mark masks, or none at all where the ring
         // names an octave the packing has no room for. The shift is CLAMPED
         // into the word rather than guarded by the range test alone: `select`
@@ -2432,6 +2450,7 @@ fn node_ink(
     let glyph_taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
     glyph = glyph * glyph_taper;
     glyph_lit = glyph_lit * glyph_taper;
+    glyph_mask = glyph_mask * glyph_taper;
     // The sheet, which the glyphs take too -- over every slice a note
     // currently lights, and the strip a melody or bass mark extends past the
     // band as well. A mark is the octave it names TOGETHER with the extension
@@ -2492,6 +2511,8 @@ fn node_ink(
     // with a zero of its own, which is what the ink does too.
     glyph_lit = audio.lit * audio.cov + glyph_lit * (1.0 - audio.cov);
     glyph = audio.cov + glyph * (1.0 - audio.cov);
+    let audio_mask = audio.layer.coverage * mask_level(in.ring);
+    glyph_mask = audio_mask + glyph_mask * (1.0 - audio_mask);
 
     // Melody/bass marks: each one its own octave's slice, continued into the
     // strip past the band. Their own layer, composited over the glyphs — a
@@ -2530,6 +2551,8 @@ fn node_ink(
     );
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
+    let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
+    let bass_mask = bass_layer.coverage * mask_level(bass_layer.level);
     node_sd = layer_distance(node_sd, melody_layer);
     node_sd = layer_distance(node_sd, bass_layer);
     // The two ends share the strip, so where they name DIFFERENT slices they
@@ -2538,6 +2561,7 @@ fn node_ink(
     // and the crossfade between two adjacent extensions is the one the octave
     // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
+    var mark_mask = max(melody_mask, bass_mask);
     // The marks' own shimmer (`mark_shimmer`, taken with the glyph layer's
     // above). ONE direction for both, not one each: they lie in one strip and
     // never overlap, so a single sweep crossing both reads as light passing
@@ -2554,7 +2578,9 @@ fn node_ink(
     // this just keeps a soft edge from ending on the boundary; starting it
     // any earlier eats the mark, which at the default band (outer 1.0)
     // lives entirely in this margin.
-    mark = mark * (1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d));
+    let mark_taper = 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
+    mark = mark * mark_taper;
+    mark_mask = mark_mask * mark_taper;
     glyph_rgb = (mark_rgb * mark + glyph_rgb * glyph * (1.0 - mark))
         / max(mark + glyph * (1.0 - mark), 1e-4);
     // A mark is LIT whole, with no term of its own to scale it: it is one
@@ -2564,6 +2590,7 @@ fn node_ink(
     // between them, which is the seam the shimmer above is shaped to avoid.
     glyph_lit = mark + glyph_lit * (1.0 - mark);
     glyph = mark + glyph * (1.0 - mark);
+    glyph_mask = mark_mask + glyph_mask * (1.0 - mark_mask);
 
     // The active note: glyph over (disc + glow), premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
@@ -2573,7 +2600,13 @@ fn node_ink(
     // is as lit as a whole one. The floor is the discard's own threshold read
     // from the other side — at no ink there is no share to take, and the
     // caller multiplies the answer by that same nothing.
-    return NodeInk(active_rgb, active_alpha, glyph_lit / max(active_alpha, 1e-4), node_sd);
+    return NodeInk(
+        active_rgb,
+        active_alpha,
+        glyph_lit / max(active_alpha, 1e-4),
+        glyph_mask,
+        node_sd,
+    );
 }
 
 /// What a draw lays down in the scene pass: one ink, and the two alphas that
@@ -2652,10 +2685,18 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.field_step, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
     }
-    let final_alpha = 1.0 - (1.0 - ink.alpha) * t.seen;
-    let bloom_alpha = 1.0 - (1.0 - ink.alpha) * t.bloom;
+    // A Gaussian's cell contains the caster's fading alpha, then calibrates
+    // thin ink with a gain. Without a footprint mask that amplified blur shows
+    // through the translucent caster and leaves a black shape late in the
+    // release. Keep the blur outside the footprint exactly as sampled, and
+    // leave Distance's half-level contour unchanged.
+    let shadow_exposure = select(1.0 - ink.mask, 1.0, shadow_is_distance(in.shadow_box.x));
+    let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
+    let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
+    let final_alpha = 1.0 - (1.0 - ink.alpha) * seen_through;
+    let bloom_alpha = 1.0 - (1.0 - ink.alpha) * bloom_through;
     if bloom_alpha < INK_FLOOR {
         discard;
     }
@@ -2898,7 +2939,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
     var stand = select(0.0, shadow_reach_uv(1.0) / arm, arm > 0.0);
-    if plus_is_distance(0.0) {
+    if shadow_is_distance(0.0) {
         stand = glow_shadow_reach() * shadow_casters[0].shade.z / max(arm_points, 1e-6);
     }
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);

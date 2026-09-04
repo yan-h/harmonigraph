@@ -942,6 +942,106 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
     assert_eq!(taken[3], 0.0, "a node with no ink left took {:.3} off the ground", taken[3]);
 }
 
+/// A Gaussian shadow stays outside the caster while its note fades.
+///
+/// The blur cell already carries the ring's fading alpha. Feeding that value
+/// through the Gaussian's calibration gain can still leave a deep shadow under
+/// the translucent ring, where its own ink no longer covers it. The caster's
+/// footprint masks that self-shadow, without masking the blur just outside it.
+/// Distance reaches the same picture below its half-level contour by dropping
+/// the ring from its analytic field; this pins the explicit Gaussian rule.
+#[test]
+fn a_gaussian_release_does_not_show_its_shadow_through_its_own_ring() {
+    use harmonigraph_scene::ShadowKernel::Gaussian;
+
+    const SHADOW: f32 = 0.6;
+    const RELEASE: f32 = 0.3;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = |ring: f32, depth: f32| {
+        let mut scene = ringing_only(ring, SHADOW, depth);
+        scene.shadow.lattice_geometry.kernel = Gaussian;
+        scene
+    };
+    let empty = shooter.shot(&scene(0.0, 0.0));
+    let full = shooter.shot(&scene(1.0, 0.0));
+    let body = fully_inked(&empty, &full);
+    assert!(body.len() > 50, "only {} pixels reach the ring's full coverage", body.len());
+
+    shooter.clear = over_ground();
+    let bare_scene = scene(RELEASE, 0.0);
+    let bare = shooter.shot(&bare_scene);
+    let cast = shooter.shot(&scene(RELEASE, 1.0));
+    let centre = on_screen(&bare_scene, SIZE, glam::Vec3::ZERO);
+    let inside_loss = body
+        .iter()
+        .map(|&i| brightness(&bare[i..i + 3]) - brightness(&cast[i..i + 3]))
+        .max()
+        .unwrap_or(0);
+    let row = centre.y.round() as u32;
+    let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
+    let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
+    assert!(
+        inside_loss.abs() <= 2,
+        "the fading ring lost {inside_loss} brightness levels to its own Gaussian shadow",
+    );
+    assert!(
+        outside_loss > 20,
+        "masking the caster left only {outside_loss} brightness levels of Gaussian shadow beside it",
+    );
+}
+
+/// A mark too faint for the scene pass cannot cut a bright copy of its shape
+/// out of the Gaussian shadow underneath it.
+///
+/// Mark presence and mark level travel separately. The first nonzero packed
+/// level therefore reaches the mark geometry while its ink is still below the
+/// shader's floor. Its mask follows that level through the floor, and the
+/// final no-ink branch clears the mask with the ink; otherwise an invisible
+/// strip removes a whole strip of shadow for one frame at either end of its
+/// fade.
+#[test]
+fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
+    use harmonigraph_scene::ShadowKernel::Gaussian;
+
+    const SHADOW: f32 = 0.6;
+    const SUBFLOOR: f32 = 1.0 / 255.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene = |level: f32, depth: f32| {
+        let mut scene = on_ground(SHADOW, depth);
+        scene.shadow.lattice_geometry.kernel = Gaussian;
+        scene.nodes[0].melody_slots = if level > 0.0 { MIDDLE_C } else { 0 };
+        scene.nodes[0].melody_level = level;
+        scene.nodes[0].glow.marked = f32::from(level > 0.0);
+        scene
+    };
+
+    // Find pixels well inside the mark from a full-strength copy over black,
+    // rather than assuming its screen angle or accepting a fixture whose mark
+    // never reached the frame.
+    let absent = shooter.shot(&scene(0.0, 0.0));
+    let full = shooter.shot(&scene(1.0, 0.0));
+    let body = fully_inked(&absent, &full);
+    assert!(body.len() > 20, "only {} pixels reach the mark's full coverage", body.len());
+
+    shooter.clear = over_ground();
+    let unmarked = shooter.shot(&scene(0.0, 1.0));
+    let subfloor = shooter.shot(&scene(SUBFLOOR, 1.0));
+    let lifted = body
+        .iter()
+        .map(|&i| brightness(&subfloor[i..i + 3]) - brightness(&unmarked[i..i + 3]))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        lifted.abs() <= 2,
+        "a {SUBFLOOR:.4} mark below the {INK_FLOOR:.2} ink floor lifted its Gaussian shadow by \
+         {lifted} brightness levels",
+    );
+}
+
 /// Neither Shadow bar at its bottom casts anything, allocates anything, or
 /// moves a single pixel — and the two bottoms draw the identical frame.
 ///
