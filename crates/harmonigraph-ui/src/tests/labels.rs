@@ -1183,9 +1183,9 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
 /// along, rather than inheriting the one-axis default used by stationary
 /// chrome and a horizontally scrolling roll.
 ///
-/// A real held name has to reach the callback: an empty batch also returns a
-/// default `LatticeLabels`, whose `Across` value would make this fail without
-/// proving that the live path carries the choice.
+/// A real held name has to reach the callback: checking the batch metadata on
+/// an empty scene would not prove that a label travelled through the live
+/// typesetting path with that choice.
 #[test]
 fn lattice_names_reconstruct_both_axes_the_camera_moves() {
     let mut state = fresh();
