@@ -209,6 +209,8 @@ pub struct RollAxes {
 ///
 /// `bloom` is the lattice's own bloom strength, applied to these notes through
 /// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
+/// `pass_nr` is the painter context's cumulative pass number, so cache lifetime
+/// follows frames rather than the number of sibling panes prepared in one.
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
@@ -219,6 +221,7 @@ pub fn roll_paint_callback(
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: u64,
+    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
@@ -231,6 +234,7 @@ pub fn roll_paint_callback(
             target_format,
             pane_id,
             shadow_surface_id,
+            pass_nr,
         },
     )
 }
@@ -248,6 +252,9 @@ struct RollCallback {
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: u64,
+    /// Egui's cumulative pass number, shared by every callback prepared before
+    /// this frame paints.
+    pass_nr: u64,
 }
 
 #[repr(C)]
@@ -315,22 +322,18 @@ struct RollResources {
     #[cfg(feature = "hot-reload")]
     generation: u64,
     panes: HashMap<u64, RollPane>,
-    /// Counts `prepare` calls, which is what [`RollPane::last_seen`] is
-    /// stamped with — a clock the callback already has, where a frame count
-    /// would need one to be plumbed in.
-    prepares: u64,
 }
 
-/// How many `prepare` calls a pane may go unseen before its buffers and its
+/// How many egui passes a pane may go unseen before its buffers and its
 /// bloom chain are dropped.
 ///
-/// A pane is prepared once per frame while it is on screen, so with the two
-/// rolls that can be live at once this is about a second at 60 fps. Long
+/// A pane is prepared once per pass while it is on screen, so this is about
+/// two seconds at 60 fps however many placements are live. Long
 /// enough that a pane hidden for a frame keeps everything, short enough that
 /// a closed one is not still holding a bloom chain a minute later: three
 /// textures the size of the pane it was shown at, which is the reason there is
 /// a sweep here at all rather than a map that only ever grows.
-const PANE_TTL_PREPARES: u64 = 120;
+const PANE_TTL_PASSES: u64 = 120;
 
 struct RollPane {
     uniform_buffer: wgpu::Buffer,
@@ -342,8 +345,8 @@ struct RollPane {
     /// asks for bloom, and rebuilt when the rect resizes — a roll with the
     /// strength at 0 pays for none of it.
     bloom: Option<RollBloom>,
-    /// The value of [`RollResources::prepares`] when this pane was last drawn.
-    last_seen: u64,
+    /// Egui's cumulative pass number when this pane was last drawn.
+    last_seen_pass: u64,
 }
 
 /// The roll's picture to bloom, and the lattice's own [`crate::BloomChain`] over it:
@@ -507,7 +510,6 @@ impl RollResources {
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
             panes: HashMap::new(),
-            prepares: 0,
         }
     }
 }
@@ -526,14 +528,14 @@ struct RollBloomShared<'a> {
 
 impl RollPane {
     /// This pane's buffers, made on first sight of its id and stamped with
-    /// `prepares` so [`RollPane::evict_unseen`] can tell a live pane from one
+    /// `pass_nr` so [`RollPane::evict_unseen`] can tell a live pane from one
     /// whose tab was closed.
     fn get<'a>(
         panes: &'a mut HashMap<u64, RollPane>,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         pane_id: u64,
-        prepares: u64,
+        pass_nr: u64,
     ) -> &'a mut RollPane {
         let pane = panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -561,22 +563,22 @@ impl RollPane {
                 capacity: INITIAL_NOTE_CAPACITY,
                 count: 0,
                 bloom: None,
-                last_seen: prepares,
+                last_seen_pass: pass_nr,
             }
         });
-        pane.last_seen = prepares;
+        pane.last_seen_pass = pass_nr;
         pane
     }
 
-    /// Drop every pane that has not been drawn for [`PANE_TTL_PREPARES`].
+    /// Drop every pane that has not been drawn for [`PANE_TTL_PASSES`].
     ///
     /// A roll's id is its surface (the docked pane, the Render preview), and a
     /// closed tab simply stops calling back — there is no teardown to hang
     /// this on, so the panes still being prepared are the only evidence of
     /// which ones exist. Run from whichever pane IS preparing, so a lone
     /// survivor still clears the others.
-    fn evict_unseen(panes: &mut HashMap<u64, RollPane>, prepares: u64) {
-        panes.retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
+    fn evict_unseen(panes: &mut HashMap<u64, RollPane>, pass_nr: u64) {
+        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
     }
 }
 
@@ -783,9 +785,6 @@ impl CallbackTrait for RollCallback {
         }
         let resources: &mut RollResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.prepares = resources.prepares.wrapping_add(1);
-        let prepares = resources.prepares;
-
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.clamped();
         let shadow = shadow_uniform(style);
@@ -902,8 +901,8 @@ impl CallbackTrait for RollCallback {
             sampler,
             format: *target_format,
         };
-        RollPane::evict_unseen(panes, prepares);
-        let pane = RollPane::get(panes, device, layout, self.pane_id, prepares);
+        RollPane::evict_unseen(panes, self.pass_nr);
+        let pane = RollPane::get(panes, device, layout, self.pane_id, self.pass_nr);
         if self.instances.len() > pane.capacity {
             pane.capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer =
@@ -982,11 +981,12 @@ impl CallbackTrait for RollCallback {
             atlas_uniform: pane.uniform_buffer.clone(),
             atlas_size_offset: std::mem::offset_of!(RollUniforms, shadow_atlas_size) as u64,
         };
-        crate::spectral_shadow::register(
+        crate::spectral_shadow::register_for_pass(
             device,
             callback_resources,
             self.shadow_surface_id,
             submission,
+            self.pass_nr,
         );
 
         Vec::new()
@@ -1171,6 +1171,7 @@ mod tests {
             target_format: FORMAT,
             pane_id: 0,
             shadow_surface_id: 0,
+            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1440,6 +1441,7 @@ mod tests {
                 target_format: FORMAT,
                 pane_id: 0,
                 shadow_surface_id: 0,
+                pass_nr: 0,
             };
             let mut resources = CallbackResources::default();
             let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1495,6 +1497,7 @@ mod tests {
                     target_format: FORMAT,
                     pane_id: 0,
                     shadow_surface_id: 0,
+                    pass_nr: 0,
                 };
                 let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
                 let mut resources = CallbackResources::default();
@@ -2054,6 +2057,7 @@ mod tests {
             target_format: FORMAT,
             pane_id,
             shadow_surface_id: 0,
+            pass_nr: 0,
         }
     }
 
@@ -2113,7 +2117,7 @@ mod tests {
         };
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-        let (docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
+        let (mut docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
         let mut resources = CallbackResources::default();
         prepare_once(&device, &queue, &mut resources, 1.0, &docked);
         prepare_once(&device, &queue, &mut resources, 1.0, &preview);
@@ -2126,10 +2130,34 @@ mod tests {
         assert_eq!(live(&resources), vec![0, 1], "both rolls should be holding buffers");
 
         // The preview's tab closes: the docked roll goes on drawing alone.
-        for _ in 0..PANE_TTL_PREPARES {
+        for pass_nr in 1..=PANE_TTL_PASSES {
+            docked.pass_nr = pass_nr;
             prepare_once(&device, &queue, &mut resources, 1.0, &docked);
         }
         assert_eq!(live(&resources), vec![0], "the closed pane is still holding its chain");
+    }
+
+    /// Egui prepares every callback in a frame before it paints any of them,
+    /// so the cache lifetime must not advance as each live pane prepares.
+    #[test]
+    fn every_pane_prepared_in_one_frame_survives_until_paint() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let mut resources = CallbackResources::default();
+
+        for pane_id in 0..=PANE_TTL_PASSES {
+            let pane = bloomed_callback(rect, pane_id);
+            prepare_once(&device, &queue, &mut resources, 1.0, &pane);
+        }
+
+        let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+        assert!(
+            roll.panes.contains_key(&0),
+            "the first live pane was evicted before egui reached its paint callback",
+        );
     }
 
     /// A thin ribbon glows in proportion to the ink it has, not a fraction of

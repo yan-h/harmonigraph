@@ -100,6 +100,12 @@ run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
 run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
   cargo doc --no-deps --quiet --workspace --document-private-items
 
+# The security audit has trigger-dependent behavior that no Rust test reaches:
+# scheduled and manual runs always scan, while a main push may legitimately
+# skip. Keep unlike triggers out of each other's cancellation groups so the
+# skip cannot erase the scan it was meant to complement.
+run .claude/tests/audit-workflow.sh
+
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.
 # That split is only defensible while the crate stays a self-contained
 # library, so its dependency list must stay empty: a GPL (or otherwise

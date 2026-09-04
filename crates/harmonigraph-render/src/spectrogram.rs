@@ -156,6 +156,8 @@ impl SpectrogramVertex {
 /// Draw `vertices` (a triangle list) into `rect`. `pane_id` must be unique per
 /// spectrogram shown in the same frame — each gets its own grid copy, which is
 /// the expensive thing here, and the pipeline is shared.
+/// `pass_nr` is the painter context's cumulative pass number.
+#[allow(clippy::too_many_arguments)]
 pub fn spectrogram_paint_callback(
     rect: egui::Rect,
     vertices: Vec<SpectrogramVertex>,
@@ -164,10 +166,11 @@ pub fn spectrogram_paint_callback(
     shades: SpectrogramShades,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        SpectrogramCallback { vertices, grid, read, shades, target_format, pane_id },
+        SpectrogramCallback { vertices, grid, read, shades, target_format, pane_id, pass_nr },
     )
 }
 
@@ -179,6 +182,7 @@ struct SpectrogramCallback {
     shades: SpectrogramShades,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    pass_nr: u64,
 }
 
 /// Bytes one slab occupies in the grid buffer: `bins` rounded up to
@@ -230,21 +234,16 @@ struct SpectrogramResources {
     layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, SpectrogramPane>,
-    /// Counts `prepare` calls, which is what [`SpectrogramPane::last_seen`] is
-    /// stamped with — a clock the callback already has, where a frame count
-    /// would need one plumbed in.
-    prepares: u64,
 }
 
-/// How many `prepare` calls a pane may go unseen before its buffers are
-/// dropped.
+/// How many egui passes a pane may go unseen before its buffers are dropped.
 ///
-/// A pane is prepared once per frame while it is on screen, so with the two
-/// spectrograms that can be live at once this is about a second at 60 fps.
+/// A pane is prepared once per pass while it is on screen, so this is about
+/// two seconds at 60 fps however many placements are live.
 /// What is being held is the grid copy — up to 15.7 MB for a whole-song ring
 /// at 4096 slabs — so a closed tab keeping one is worth a sweep, and a pane
 /// hidden for a frame keeping one is worth not rebuilding.
-const PANE_TTL_PREPARES: u64 = 120;
+const PANE_TTL_PASSES: u64 = 120;
 
 /// The grid's GPU copy and what it was built from. A new key rebuilds it from
 /// the whole run; the same key patches only the dirty slabs.
@@ -282,9 +281,8 @@ struct SpectrogramPane {
     /// Made with the grid buffer and the table, so it is remade whenever
     /// either is.
     bind_group: Option<wgpu::BindGroup>,
-    /// The value of [`SpectrogramResources::prepares`] when this pane was last
-    /// drawn.
-    last_seen: u64,
+    /// Egui's cumulative pass number when this pane was last drawn.
+    last_seen_pass: u64,
 }
 
 /// Starting size of a pane's vertex buffer; it grows by `next_power_of_two`
@@ -332,20 +330,19 @@ impl SpectrogramResources {
             layout,
             target_format,
             panes: HashMap::new(),
-            prepares: 0,
         }
     }
 }
 
 impl SpectrogramPane {
     /// This pane's buffers, made on first sight of its id and stamped with
-    /// `prepares` so [`SpectrogramPane::evict_unseen`] can tell a live pane
+    /// `pass_nr` so [`SpectrogramPane::evict_unseen`] can tell a live pane
     /// from one whose tab was closed.
     fn get<'a>(
         panes: &'a mut HashMap<u64, SpectrogramPane>,
         device: &wgpu::Device,
         pane_id: u64,
-        prepares: u64,
+        pass_nr: u64,
     ) -> &'a mut SpectrogramPane {
         let pane = panes.entry(pane_id).or_insert_with(|| SpectrogramPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -364,21 +361,21 @@ impl SpectrogramPane {
             grid: None,
             lut: None,
             bind_group: None,
-            last_seen: prepares,
+            last_seen_pass: pass_nr,
         });
-        pane.last_seen = prepares;
+        pane.last_seen_pass = pass_nr;
         pane
     }
 
-    /// Drop every pane that has not been drawn for [`PANE_TTL_PREPARES`].
+    /// Drop every pane that has not been drawn for [`PANE_TTL_PASSES`].
     ///
     /// A spectrogram's id is its surface (the docked pane, the Render
     /// preview), and a closed tab simply stops calling back — there is no
     /// teardown to hang this on, so the panes still being prepared are the
     /// only evidence of which ones exist. Run from whichever pane IS
     /// preparing, so a lone survivor still clears the others.
-    fn evict_unseen(panes: &mut HashMap<u64, SpectrogramPane>, prepares: u64) {
-        panes.retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
+    fn evict_unseen(panes: &mut HashMap<u64, SpectrogramPane>, pass_nr: u64) {
+        panes.retain(|_, pane| pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
     }
 }
 
@@ -449,12 +446,9 @@ impl CallbackTrait for SpectrogramCallback {
         }
         let resources: &mut SpectrogramResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.prepares = resources.prepares.wrapping_add(1);
-        let prepares = resources.prepares;
-
         let SpectrogramResources { layout, panes, .. } = resources;
-        SpectrogramPane::evict_unseen(panes, prepares);
-        let pane = SpectrogramPane::get(panes, device, self.pane_id, prepares);
+        SpectrogramPane::evict_unseen(panes, self.pass_nr);
+        let pane = SpectrogramPane::get(panes, device, self.pane_id, self.pass_nr);
 
         let bins = self.grid.bins as usize;
         let stride = slab_stride(self.grid.bins);
@@ -685,12 +679,18 @@ pub struct SpectrogramHeadless {
     device: wgpu::Device,
     queue: wgpu::Queue,
     resources: CallbackResources,
+    pass_nr: u64,
 }
 
 impl SpectrogramHeadless {
     pub fn new() -> Option<SpectrogramHeadless> {
         let (device, queue) = crate::gpu_harness::headless_device()?;
-        Some(SpectrogramHeadless { device, queue, resources: CallbackResources::default() })
+        Some(SpectrogramHeadless {
+            device,
+            queue,
+            resources: CallbackResources::default(),
+            pass_nr: 0,
+        })
     }
 
     /// One frame: the same `prepare`/`paint` a pane takes, into a fresh
@@ -715,8 +715,16 @@ impl SpectrogramHeadless {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
-        let callback =
-            SpectrogramCallback { vertices, grid, read, shades, target_format: format, pane_id };
+        self.pass_nr = self.pass_nr.wrapping_add(1);
+        let callback = SpectrogramCallback {
+            vertices,
+            grid,
+            read,
+            shades,
+            target_format: format,
+            pane_id,
+            pass_nr: self.pass_nr,
+        };
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let buffers =
@@ -1006,6 +1014,7 @@ mod tests {
             shades: shades(),
             target_format: FORMAT,
             pane_id: 0,
+            pass_nr: 0,
         }
     }
 
@@ -1417,7 +1426,7 @@ mod tests {
         let grid = grid_of(noisy_grid(BINS as usize, 6), BINS, 8, 0);
         let of_pane =
             |pane_id| SpectrogramCallback { pane_id, ..callback(full_quad(6), &grid, &read) };
-        let (docked, preview) = (of_pane(0), of_pane(1));
+        let (mut docked, preview) = (of_pane(0), of_pane(1));
         let mut resources = CallbackResources::default();
         prepare_once(&device, &queue, &mut resources, &docked);
         prepare_once(&device, &queue, &mut resources, &preview);
@@ -1435,7 +1444,8 @@ mod tests {
         };
         assert_eq!(held(&resources, 0), held(&resources, 1), "each pane sizes its own copy");
 
-        for _ in 0..PANE_TTL_PREPARES {
+        for pass_nr in 1..=PANE_TTL_PASSES {
+            docked.pass_nr = pass_nr;
             prepare_once(&device, &queue, &mut resources, &docked);
         }
         assert_eq!(live(&resources), vec![0], "the closed pane is still holding its grid");
