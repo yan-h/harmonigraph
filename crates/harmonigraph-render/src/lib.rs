@@ -1755,7 +1755,10 @@ struct LatticeResources {
     atlas: text::AtlasTexture,
     marks: text::AtlasTexture,
     blank: wgpu::Texture,
-    sdf: text::SdfTexture,
+    /// Identity of the shared SDF texture its glyph bind groups name. The
+    /// allocation itself is stored once in `CallbackResources` and is also
+    /// used by the standalone text renderer.
+    sdf_key: u64,
     blank_sdf: wgpu::Texture,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
@@ -3448,7 +3451,7 @@ impl LatticeResources {
             atlas: text::AtlasTexture::default(),
             marks: text::AtlasTexture::default(),
             blank: text::blank_atlas(device, queue),
-            sdf: text::SdfTexture::default(),
+            sdf_key: 0,
             blank_sdf: text::blank_sdf_atlas(device, queue),
             target_format,
             panes: HashMap::new(),
@@ -3484,7 +3487,7 @@ impl LatticeResources {
         shared_atlas: Option<&wgpu::Texture>,
         fallback_atlas: Option<&FontAtlas>,
         marks: Option<&FontAtlas>,
-        sdf: Option<&GlyphSdfAtlas>,
+        sdf_key: u64,
     ) {
         if let Some(atlas) = fallback_atlas.filter(|a| !self.atlas.holds(a)) {
             self.atlas.upload(device, queue, atlas);
@@ -3494,9 +3497,7 @@ impl LatticeResources {
         if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
             self.marks.upload(device, queue, marks);
         }
-        if let Some(sdf) = sdf {
-            self.sdf.upload(device, queue, sdf);
-        }
+        self.sdf_key = sdf_key;
     }
 
     /// The two sheets' sizes, as the glyph uniforms carry them.
@@ -3523,6 +3524,7 @@ impl LatticeResources {
         offscreen_size: Option<[u32; 2]>,
         screen_size: [u32; 2],
         wants: PaneTargets,
+        sdf: Option<&wgpu::Texture>,
     ) -> &mut PaneBuffers {
         let layout = &self.bind_group_layout;
         let caster_layout = &self.caster_layout;
@@ -3532,8 +3534,8 @@ impl LatticeResources {
         let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
         let atlas_view = self.atlas.view();
         let mark_view = self.marks.view_or(&self.blank);
-        let sdf_view = self.sdf.view_or(&self.blank_sdf);
-        let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf.key());
+        let sdf_view = sdf.unwrap_or(&self.blank_sdf).create_view(&Default::default());
+        let sheet_keys = (self.atlas.key(), self.marks.key(), self.sdf_key);
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.composite_layout,
@@ -3749,6 +3751,8 @@ impl CallbackTrait for LatticeCallback {
         // wgpu type before callbacks prepare. Clone the handle before taking a
         // mutable borrow from the resource map; its pixels remain shared.
         let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
+        let shared_sdf =
+            text::shared_sdf_texture(device, queue, callback_resources, self.sdf.as_ref());
         // Lazily (re)create shared resources. Recreate if the target format
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources
@@ -3932,7 +3936,7 @@ impl CallbackTrait for LatticeCallback {
             shared_atlas.as_ref(),
             self.atlas.as_ref(),
             self.marks.as_ref(),
-            self.sdf.as_ref(),
+            shared_sdf.key,
         );
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
@@ -4011,6 +4015,7 @@ impl CallbackTrait for LatticeCallback {
                 // no cells and a multiply of 1.
                 casters: packed.casters.len().max(1),
             },
+            shared_sdf.texture.as_ref(),
         );
 
         if self.instances.len() > pane.instance_capacity {

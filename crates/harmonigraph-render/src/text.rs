@@ -313,7 +313,10 @@ struct TextResources {
     /// And the drawn marks', which a session that never draws one leaves
     /// empty for its whole life.
     marks: AtlasTexture,
-    sdf: SdfTexture,
+    /// The process-shared SDF texture currently named by every pane's bind
+    /// group. The texture itself lives once in `CallbackResources` so lattice
+    /// labels and spectral text do not upload identical 2.7 MiB copies.
+    sdf_key: u64,
     blank: wgpu::Texture,
     blank_sdf: wgpu::Texture,
     /// The text callback does not cast lattice shadows, but shares this bind
@@ -497,10 +500,35 @@ impl SdfTexture {
     pub(crate) fn key(&self) -> u64 {
         self.key.unwrap_or(0)
     }
+}
 
-    pub(crate) fn view_or(&self, blank: &wgpu::Texture) -> wgpu::TextureView {
-        self.texture.as_ref().unwrap_or(blank).create_view(&Default::default())
+pub(crate) struct SharedSdf {
+    pub(crate) texture: Option<wgpu::Texture>,
+    pub(crate) key: u64,
+}
+
+/// Return the one GPU allocation shared by both callback resource families.
+/// A callback carrying no glyphs can still reuse an upload made earlier in the
+/// pass; it must not replace that binding with the blank texture.
+pub(crate) fn shared_sdf_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &mut CallbackResources,
+    atlas: Option<&GlyphSdfAtlas>,
+) -> SharedSdf {
+    if atlas.is_some() && resources.get::<SdfTexture>().is_none() {
+        resources.insert(SdfTexture::default());
     }
+    if let Some(atlas) = atlas {
+        resources
+            .get_mut::<SdfTexture>()
+            .expect("inserted above when missing")
+            .upload(device, queue, atlas);
+    }
+    resources.get::<SdfTexture>().map_or(SharedSdf { texture: None, key: 0 }, |texture| SharedSdf {
+        texture: texture.texture.clone(),
+        key: texture.key(),
+    })
 }
 
 struct TextPane {
@@ -944,7 +972,7 @@ impl TextResources {
             generation,
             atlas: AtlasTexture::default(),
             marks: AtlasTexture::default(),
-            sdf: SdfTexture::default(),
+            sdf_key: 0,
             blank: blank_atlas(device, queue),
             blank_sdf: blank_sdf_atlas(device, queue),
             panes: HashMap::new(),
@@ -986,7 +1014,7 @@ impl TextResources {
         shared_atlas: Option<&wgpu::Texture>,
         fallback_atlas: Option<&FontAtlas>,
         marks: Option<&FontAtlas>,
-        sdf: Option<&GlyphSdfAtlas>,
+        sdf: &SharedSdf,
     ) {
         let mut recreated = false;
         if let Some(atlas) = fallback_atlas.filter(|a| !self.atlas.holds(a)) {
@@ -997,8 +1025,9 @@ impl TextResources {
         if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
             recreated |= self.marks.upload(device, queue, marks);
         }
-        if let Some(sdf) = sdf {
-            recreated |= self.sdf.upload(device, queue, sdf);
+        if self.sdf_key != sdf.key {
+            self.sdf_key = sdf.key;
+            recreated = true;
         }
         if !recreated {
             return;
@@ -1007,7 +1036,8 @@ impl TextResources {
         let view = self.atlas.view_or(&self.blank);
         let mark_view = self.marks.view_or(&self.blank);
         let (layout, sampler) = (&self.layout, &self.sampler);
-        let sdf_view = self.sdf.view_or(&self.blank_sdf);
+        let sdf_view =
+            sdf.texture.as_ref().unwrap_or(&self.blank_sdf).create_view(&Default::default());
         for pane in self.panes.values_mut() {
             // The sizes alone, not the whole struct: a pane that has already
             // prepared wrote the rest of its uniforms this frame, and one that
@@ -1217,6 +1247,7 @@ impl CallbackTrait for TextCallback {
         // The shell inserts the current egui font texture under its concrete
         // wgpu type. Cloning this handle does not copy texture data.
         let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
+        let shared_sdf = shared_sdf_texture(device, queue, callback_resources, self.sdf.as_ref());
         match callback_resources.get_mut::<TextResources>() {
             // Stale pipelines are the whole of what a reload or a format change
             // owes; the atlas binding beside them updates independently, so
@@ -1246,7 +1277,7 @@ impl CallbackTrait for TextCallback {
             shared_atlas.as_ref(),
             self.atlas.as_ref(),
             self.marks.as_ref(),
-            self.sdf.as_ref(),
+            &shared_sdf,
         );
         // No atlas yet means the first frame arrived without one: nothing can
         // be drawn, and the next frame that sees a change will bring it.
@@ -1287,7 +1318,11 @@ impl CallbackTrait for TextCallback {
 
         let view = resources.atlas.view().expect("checked above");
         let mark_view = resources.marks.view_or(&resources.blank);
-        let sdf_view = resources.sdf.view_or(&resources.blank_sdf);
+        let sdf_view = shared_sdf
+            .texture
+            .as_ref()
+            .unwrap_or(&resources.blank_sdf)
+            .create_view(&Default::default());
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -1443,6 +1478,30 @@ pub(crate) mod tests {
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
     #[test]
+    fn lattice_and_spectral_text_share_one_sdf_texture() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut resources = CallbackResources::default();
+        let atlas = sdf_atlas();
+        let lattice = shared_sdf_texture(&device, &queue, &mut resources, Some(&atlas));
+        let spectral = shared_sdf_texture(&device, &queue, &mut resources, Some(&atlas));
+        let empty_pane = shared_sdf_texture(&device, &queue, &mut resources, None);
+
+        assert_eq!(lattice.key, atlas.key);
+        assert_eq!(spectral.key, lattice.key);
+        assert_eq!(empty_pane.key, lattice.key);
+        assert_eq!(
+            spectral.texture, lattice.texture,
+            "the second consumer allocated a duplicate SDF texture"
+        );
+        assert_eq!(
+            empty_pane.texture, lattice.texture,
+            "an empty callback forgot the process-shared SDF texture"
+        );
+    }
+
+    #[test]
     fn baked_text_shader_validates() {
         let seam = crate::common_lines(crate::COMMON_SRC);
         crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, TEXT_ENTRY_POINTS)
@@ -1583,7 +1642,14 @@ pub(crate) mod tests {
         let mut resources = TextResources::new(&device, &queue, FORMAT, &layouts);
 
         // A sheet in hand, the way a frame that has drawn one label leaves it.
-        resources.bind_sheets(&device, &queue, None, Some(&atlas()), Some(&mark_sheet()), None);
+        resources.bind_sheets(
+            &device,
+            &queue,
+            None,
+            Some(&atlas()),
+            Some(&mark_sheet()),
+            &SharedSdf { texture: None, key: 0 },
+        );
         assert!(
             !resources.atlas.is_empty() && !resources.marks.is_empty(),
             "the fixture never filled the atlas bindings, so what follows measures nothing",
@@ -1689,7 +1755,7 @@ pub(crate) mod tests {
             None,
             Some(&sheet),
             None,
-            None,
+            &SharedSdf { texture: None, key: 0 },
         );
         let fallback = resources.get::<TextResources>().unwrap();
         assert!(!fallback.atlas.shared, "the CPU fallback must own its texture");
