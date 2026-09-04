@@ -12,10 +12,11 @@ The active design is documented in [`adaptive-tuning.md`](adaptive-tuning.md):
 one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and immediate CLAP tuning expression chosen from the previous sealed project state and frozen until note-off.
 
 **Synchronized attacks and reconciliation.** A synchronized mode would hold the complete MIDI stream until every participating source had submitted a window, then report fixed latency and emit a jointly solved attack.
-It would add source watermarks, resolved epochs, sample-accurate event scheduling, latency negotiation, plugin-delay-compensation verification and a second failure/reset state machine.
+The optimistic protocol already needs source progress and resolved time epochs to publish honest snapshots.
+Synchronization would additionally buffer the performance stream, wait for an attack-time barrier, negotiate latency and verify plugin delay compensation for the delayed output.
 Reconciliation would instead change pitches after their attack and need transition, glide, hysteresis and player-expression composition policy.
-Neither is worthwhile without evidence that the optimistic frozen result is musically inadequate.
-A future diagnostic may compute the alternative result in shadow without changing MIDI and record discrepancy frequency, size and duration.
+Yan has analyzed and accepted cross-track blindness, so neither alternative nor a shadow/listening comparison gates implementation.
+Reopen this musical requirement only at his request.
 
 **Compatibility outputs.** MTS-ESP is useful for a conventional global note/channel tuning table, but it does not naturally carry Harmonigraph's per-voice frozen adaptive assignments or collect note lifecycle.
 MPE requires channel allocation and bend-state recovery;
@@ -27,7 +28,8 @@ and adds another backend only for a concrete instrument that needs it.
 
 **Process and product variants.** A headless conductor, cross-process shared-memory transport, one full-plugin class that switches between tuner and hub roles, and a central MIDI rack all add lifecycle or routing surface without improving the intended workflow.
 The Bitwig spike may reopen only the packaging or process boundary if separate companion instances cannot share an in-process session reliably.
-The session arena is written pointer-free so that a cross-process transport would be a backend change rather than a rewrite.
+The initial storage is bounded and in-process, with no pointer-free arena or memory-mapped ABI requirement.
+A cross-process transport would need its own layout, ownership, synchronization and recovery design.
 
 **Value / effort.** All are medium-to-high maintenance multipliers rather than cheap compatibility switches.
 Keep them parked until a measured musical or hosting failure identifies which specific cost would buy something useful.
