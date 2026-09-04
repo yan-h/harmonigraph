@@ -54,11 +54,12 @@ The status line under the toggle tells you where the file is going and how many 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
 so the render gets its spectrum and its soundtrack with no separate bounce and nothing to point at.
+It records whichever **Input** is selected on Display → Analyzer:
+Main, or the host-routed Sidechain.
+An unrouted Sidechain records silence and never falls back to Main.
 The catch is placement:
-the device has to be somewhere audio actually reaches it —
-after the instrument, or on a bus.
-On a pure note track there is nothing to record, and the take is notes-only (which still renders;
-you just get no spectrum curve).
+audio has to reach the selected input —
+put the device after the instrument or on a bus for Main, or route the wanted signal to its sidechain.
 
 The WAV is 32-bit float, exactly as the input arrives, and it carries the take time of its first sample —
 so arming part-way into a song still lines the sound up with the picture, in both the spectrum and the muxed track.
@@ -259,6 +260,8 @@ if it comes out low, the two files may not be the same performance, and `--align
 
 This needs the take to have recorded its own audio, which it does unless the device sat somewhere no audio reached it.
 Without a reference there is nothing to correlate against, and the bounce is assumed to start at take zero unless you say otherwise.
+For a Sidechain take, the replacement should resemble that selected sidechain signal;
+a different main mix may not correlate reliably, so give `--align` explicitly.
 
 ## Layouts
 
@@ -306,9 +309,9 @@ Panes draw in order, so a later one overlaps an earlier one if you want a roll i
 **Captured:** every note event with its own sub-frame timestamp (so a 60 fps render is not quantized to 60 fps —
 envelopes start where they actually started), per-note tuning and MPE bends, all eight automatable parameters over time, and the view/camera/spectrum settings.
 
-**Captured alongside the notes:** the input bus as 32-bit float, aligned to them.
+**Captured alongside the notes:** the selected analysis input as 32-bit float, aligned to them.
 
-**Not captured:** camera *movement* (the camera is a UI control, not an automatable parameter, so a take holds one fixed angle), anything you click mid-piece, and the audio (which comes from the bounce).
+**Not captured:** camera *movement* (the camera is a UI control, not an automatable parameter, so a take holds one fixed angle), and anything you click mid-piece.
 
 ## Why not just record the plugin window?
 

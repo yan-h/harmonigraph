@@ -174,6 +174,18 @@ impl EditorShared {
         (self.audio_channels.load(Ordering::Relaxed) as usize).max(1)
     }
 
+    /// Drain exactly what the process callback sent to the live analyzer.
+    /// Test-only because production has two clocked drainers, below and in
+    /// [`crate::background`], that also maintain the analyzer state around it.
+    #[cfg(test)]
+    pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
+        let mut samples = Vec::new();
+        while let Ok(sample) = self.audio_consumer.pop() {
+            samples.push(sample);
+        }
+        samples
+    }
+
     /// Frames the transport must be still before OnTransportStop ends a
     /// take. At the editor's repaint rate this is a fraction of a second
     /// — long enough to ride out a host reporting one stalled block,
@@ -194,9 +206,9 @@ impl EditorShared {
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
             // `audio: true` unconditionally, rather than from a setting: the
-            // render uses the plugin's input as the spectrogram, aligned to the
-            // picture by construction (no bounce, no offset). Silent-but-harmless
-            // if the plugin sits where no audio reaches it.
+            // render uses the selected analysis input as the spectrogram,
+            // aligned to the picture by construction (no bounce, no offset).
+            // Silent-but-harmless if no audio reaches that input.
             self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take.recording && recording {
             self.take

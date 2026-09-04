@@ -107,10 +107,10 @@ mod trigger_tests {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
-    /// Record the plugin's audio input into the take. Dormant, and nothing
-    /// reads it: the recorder captures audio unconditionally and every render
-    /// uses the take's own recording as soundtrack and spectrum, aligned to
-    /// the picture by construction — see `RenderRequest::build` in
+    /// Record the plugin's selected analysis input into the take. Dormant, and
+    /// nothing reads it: the recorder captures audio unconditionally and every
+    /// render uses the take's own recording as soundtrack and spectrum,
+    /// aligned to the picture by construction — see `RenderRequest::build` in
     /// `harmonigraph-record`, which passes neither `--audio` nor `--align`.
     /// (Named rather than linked: that crate depends on this one, not the
     /// other way round.)

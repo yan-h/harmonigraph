@@ -5,6 +5,7 @@
 
 use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
+use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
 
@@ -59,13 +60,20 @@ pub(super) fn span_readout(seconds: f32) -> String {
 
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state). The Display tab's Analyzer page.
-pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(crate) fn spectrum_settings_pane(
+    ui: &mut egui::Ui,
+    state: &mut SharedState,
+    params: &dyn ParamBackend,
+) {
     use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
 
     // What the page reaches, said once at the top rather than repeated on the
     // sections: every setting here is the analyzer's, and the Spiral is the
     // same analyzed frame wound onto a disc rather than a second one.
-    ui.weak("Drives the Analyzer pane — and the Spiral, which reads the same analyzer.");
+    ui.weak(
+        "Drives the Analyzer pane, the Spiral, and the lattice's audio rings — all read the same \
+         analyzer.",
+    );
 
     // ---- Plot -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
@@ -145,6 +153,29 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // same buckets, and giving the whole depth axis to the roll is what the
     // divider is for.
     section(ui, "Spectrum");
+    if let Some(mut input) = params.analysis_input() {
+        let before = input;
+        choice_row(
+            ui,
+            "Input",
+            &mut input,
+            &[
+                (
+                    AnalysisInput::Main,
+                    "Main",
+                    "Analyze the plug-in's main input without changing its pass-through audio",
+                ),
+                (
+                    AnalysisInput::Sidechain,
+                    "Sidechain",
+                    "Analyze the sidechain routed by the host. An unrouted sidechain is silence",
+                ),
+            ],
+        );
+        if input != before {
+            params.set_analysis_input(input);
+        }
+    }
     button_row(ui, |ui| {
         ui.label("Window");
         for (window, label) in [
@@ -350,4 +381,107 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             state.spectrum.clear_history();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+
+    use super::*;
+    use crate::params::ParamKey;
+
+    struct SourceBackend {
+        source: Cell<AnalysisInput>,
+        sets: RefCell<Vec<AnalysisInput>>,
+    }
+
+    impl Default for SourceBackend {
+        fn default() -> Self {
+            Self { source: Cell::new(AnalysisInput::Main), sets: RefCell::new(Vec::new()) }
+        }
+    }
+
+    impl ParamBackend for SourceBackend {
+        fn get(&self, key: ParamKey) -> f32 {
+            key.default_value()
+        }
+
+        fn set(&self, _key: ParamKey, _value: f32) {}
+
+        fn analysis_input(&self) -> Option<AnalysisInput> {
+            Some(self.source.get())
+        }
+
+        fn set_analysis_input(&self, input: AnalysisInput) {
+            self.source.set(input);
+            self.sets.borrow_mut().push(input);
+        }
+    }
+
+    struct NoSource;
+
+    impl ParamBackend for NoSource {
+        fn get(&self, key: ParamKey) -> f32 {
+            key.default_value()
+        }
+
+        fn set(&self, _key: ParamKey, _value: f32) {}
+    }
+
+    fn frame(
+        ctx: &egui::Context,
+        state: &mut SharedState,
+        backend: &dyn ParamBackend,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
+            |ui| spectrum_settings_pane(ui, state, backend),
+        )
+    }
+
+    fn text_center(output: &egui::FullOutput, wanted: &str) -> Option<egui::Pos2> {
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == wanted => {
+                Some(text.pos + text.galley.size() / 2.0)
+            }
+            _ => None,
+        })
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Only the plugin has a host-routable auxiliary bus, so only its backend
+    /// offers the row. The click goes through the real choice widget and back
+    /// through the capability seam exactly once.
+    #[test]
+    fn analysis_input_row_is_plugin_only_and_selects_sidechain() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let absent = frame(&ctx, &mut state, &NoSource, Vec::new());
+        assert!(
+            text_center(&absent, "Sidechain").is_none(),
+            "a shell with no auxiliary input offered a Sidechain choice",
+        );
+
+        let backend = SourceBackend::default();
+        let first = frame(&ctx, &mut state, &backend, Vec::new());
+        let sidechain = text_center(&first, "Sidechain")
+            .expect("a capable backend did not draw its Sidechain choice");
+        frame(&ctx, &mut state, &backend, vec![egui::Event::PointerMoved(sidechain)]);
+        frame(&ctx, &mut state, &backend, vec![press(sidechain, true)]);
+        frame(&ctx, &mut state, &backend, vec![press(sidechain, false)]);
+
+        assert_eq!(backend.source.get(), AnalysisInput::Sidechain);
+        assert_eq!(backend.sets.borrow().as_slice(), &[AnalysisInput::Sidechain]);
+    }
 }

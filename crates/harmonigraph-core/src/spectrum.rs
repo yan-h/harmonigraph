@@ -4,7 +4,7 @@
 //!
 //! Everything here is pure sample-in, buckets-out logic — no threads, no
 //! clocks, no allocation after construction — so the shells can feed it
-//! from wherever their audio comes from (the plugin's input bus, the
+//! from wherever their audio comes from (the plugin's selected input, the
 //! standalone's mock synth) and the whole pipeline stays unit-testable.
 //! The FFT is a hand-rolled iterative radix-2 (the crate deliberately has
 //! no dependencies) over a real-input packing, so a window of `n` real samples

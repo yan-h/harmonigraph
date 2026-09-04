@@ -14,6 +14,19 @@
 
 pub use harmonigraph_take::params::{seconds, ParamKey, MAX_TUNING_OFFSET};
 
+/// Which of the plugin's audio inputs feeds every audio-derived picture.
+///
+/// Shell capability rather than view state: the standalone has only its mock
+/// synth and the offline renderer has only the take's recorded audio, so only a
+/// plugin backend offers this choice. The plugin maps it onto a host parameter
+/// whose own enum carries the persisted stable IDs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnalysisInput {
+    #[default]
+    Main,
+    Sidechain,
+}
+
 /// Read/write access to the automatable parameters.
 ///
 /// Continuous edits (drags) should be bracketed with `begin_set`/`end_set`
@@ -23,6 +36,16 @@ pub use harmonigraph_take::params::{seconds, ParamKey, MAX_TUNING_OFFSET};
 pub trait ParamBackend {
     fn get(&self, key: ParamKey) -> f32;
     fn set(&self, key: ParamKey, value: f32);
+    /// Which live audio input the shell is analyzing, or `None` when the shell
+    /// has no choice of inputs to offer.
+    fn analysis_input(&self) -> Option<AnalysisInput> {
+        None
+    }
+    /// Change the live analysis input. A one-shot host parameter gesture in the
+    /// plugin; a no-op in shells that return `None` above.
+    fn set_analysis_input(&self, input: AnalysisInput) {
+        let _ = input;
+    }
     /// Start of a continuous edit (e.g. drag). Default: no-op.
     fn begin_set(&self, key: ParamKey) {
         let _ = key;

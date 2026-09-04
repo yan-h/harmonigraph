@@ -12,6 +12,9 @@ The plugin draws incoming MIDI on a 3-dimensional [Tonnetz](https://en.wikipedia
 - Each axis has its own tuning, so the lattice can be just, equal-tempered, or anywhere between.
 
 It also includes a spectrum analyzer for incoming audio, which feeds a spectrogram overlayed with incoming MIDI.
+The Analyzer page can read either the main input or a host-routed sidechain;
+Main is the default, and an unrouted Sidechain is silence rather than an automatic fallback.
+The same choice drives the spectrum, spectrogram, Spiral, lattice audio rings, and the audio recorded with a video take.
 
 Demonstration:
 [slipstream (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).

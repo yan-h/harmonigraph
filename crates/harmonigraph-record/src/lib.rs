@@ -92,11 +92,11 @@ const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 /// put a silent hole in the finished video.
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
-/// A take's WAV is always stereo, whatever the host's input bus carries. The
-/// spec handed to the writer, the reservation in [`Recorder::audio`] and the
-/// interleaving in `process` all read this one number: if any of them
-/// disagrees, the header describes frames the data does not have, and nothing
-/// downstream checks.
+/// A take's WAV is always stereo, whatever selected audio stream the host
+/// carries. The spec handed to the writer, the reservation in
+/// [`Recorder::audio`] and the interleaving in `process` all read this one
+/// number: if any of them disagrees, the header describes frames the data does
+/// not have, and nothing downstream checks.
 pub const TAKE_CHANNELS: usize = 2;
 
 /// How much of a block fits in an interleaved audio ring, in SAMPLES, rounded
@@ -601,7 +601,7 @@ impl Control {
 
     /// Begin a take. `ui_state` is the persist blob that decides how the
     /// replay will look; `sample_rate` stamps the header. `audio`
-    /// records the input bus alongside the notes.
+    /// records the selected audio stream alongside the notes.
     pub fn start(&self, sample_rate: f32, ui_state: String, audio: bool) {
         if self.is_recording() {
             return;
@@ -862,6 +862,67 @@ pub fn channel() -> (Recorder, Control) {
             render,
         },
     )
+}
+
+/// In-memory endpoints for dependent crates that need to reach their real
+/// [`Recorder`] wiring without starting this crate's file-writer thread.
+/// Compiled only when a dev-dependency explicitly asks for it.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod testing {
+    use super::*;
+
+    pub struct Capture {
+        _records: rtrb::Consumer<Entry>,
+        audio: rtrb::Consumer<f32>,
+        armed: Arc<AtomicBool>,
+        with_audio: Arc<AtomicBool>,
+    }
+
+    impl Capture {
+        pub fn arm_audio(&self) {
+            self.with_audio.store(true, Ordering::Relaxed);
+            self.armed.store(true, Ordering::Relaxed);
+        }
+
+        pub fn drain_audio(&mut self) -> Vec<f32> {
+            let mut samples = Vec::new();
+            while let Ok(sample) = self.audio.pop() {
+                samples.push(sample);
+            }
+            samples
+        }
+    }
+
+    pub fn channel() -> (Recorder, Capture) {
+        let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+        let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
+        let armed = Arc::new(AtomicBool::new(false));
+        let with_audio = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let rolling = Arc::new(AtomicBool::new(false));
+        let end_at_rewind = Arc::new(AtomicBool::new(false));
+        let hit_rewind = Arc::new(AtomicBool::new(false));
+        let recorder = Recorder {
+            producer,
+            audio,
+            with_audio: with_audio.clone(),
+            armed: armed.clone(),
+            dropped,
+            last_params: [f32::NAN; ParamKey::ALL.len()],
+            was_armed: false,
+            last_position: None,
+            rolling,
+            audio_started: false,
+            end_at_rewind,
+            hit_rewind,
+            finished: false,
+            advanced: false,
+            pending_split: false,
+        };
+        let capture = Capture { _records: records, audio: audio_consumer, armed, with_audio };
+        (recorder, capture)
+    }
 }
 
 /// Move queued audio into the WAV. Separate from [`drain`] because the
@@ -2769,13 +2830,13 @@ mod tests {
         ctrl.with_audio.store(true, Ordering::Relaxed);
         ctrl.stop(None);
         assert!(ctrl.armed.load(Ordering::Relaxed), "not recording, so there is nothing to stop");
-        assert!(rec.wants_audio(), "and nothing to stop reading the input bus for");
+        assert!(rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
         ctrl.recording.store(true, Ordering::Relaxed);
         ctrl.stop(None);
         assert!(!ctrl.armed.load(Ordering::Relaxed), "a running take disarms");
         assert!(!ctrl.is_recording());
-        assert!(!rec.wants_audio(), "and the audio thread stops reading the input bus");
+        assert!(!rec.wants_audio(), "and the audio thread stops reading the selected audio");
     }
 
     /// The rings the plugin ships with have room in them.
