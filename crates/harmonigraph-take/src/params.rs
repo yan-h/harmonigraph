@@ -16,18 +16,6 @@ use std::ops::RangeInclusive;
 
 use harmonigraph_core::tuning;
 
-/// How a NOTE TIME reads out: two decimals and the unit on the number.
-///
-/// One function for both of them — the mark Delay is a view setting and the
-/// Fade is a param, so they are built by different code and would otherwise
-/// carry two copies of this literal. They are one second each and are read
-/// against each other constantly (see [`ParamKey::logarithmic`]); retuning the
-/// readout has to move both or it makes them look like different kinds of
-/// setting again.
-pub fn seconds(v: f32) -> String {
-    format!("{v:.2} s")
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamKey {
     /// Offset of the lattice origin (C) in cents.
@@ -88,15 +76,15 @@ impl ParamKey {
 
     pub fn label(self) -> &'static str {
         match self {
-            ParamKey::COffset => "C offset (¢)",
-            ParamKey::Three => "Perfect fifth (¢)",
-            ParamKey::Five => "Major third (¢)",
-            ParamKey::Seven => "Harmonic seventh (¢)",
-            ParamKey::Tolerance => "Tolerance (¢)",
-            // No unit in the name: the readout carries it (see `display`).
-            ParamKey::Fade => "Fade",
-            ParamKey::DarkestPitch => "Darkest pitch",
-            ParamKey::BrightestPitch => "Brightest pitch",
+            ParamKey::COffset => "C pitch offset",
+            ParamKey::Three => "Perfect fifth",
+            ParamKey::Five => "Major third",
+            ParamKey::Seven => "Harmonic seventh",
+            ParamKey::Tolerance => "Note match tolerance",
+            // No unit in the name: the readout carries it (see `unit`).
+            ParamKey::Fade => "Note fade",
+            ParamKey::DarkestPitch => "Low color pitch",
+            ParamKey::BrightestPitch => "High color pitch",
         }
     }
 
@@ -111,8 +99,8 @@ impl ParamKey {
             ParamKey::Seven => "Harmonic Seventh (cents)",
             ParamKey::Tolerance => "Tuning Tolerance (cents)",
             ParamKey::Fade => "Note Fade (sec)",
-            ParamKey::DarkestPitch => "Darkest Pitch",
-            ParamKey::BrightestPitch => "Brightest Pitch",
+            ParamKey::DarkestPitch => "Low Color Pitch",
+            ParamKey::BrightestPitch => "High Color Pitch",
         }
     }
 
@@ -212,17 +200,14 @@ impl ParamKey {
         matches!(self, ParamKey::Tolerance)
     }
 
-    /// How the value READS OUT where a bare decimal would not say what it is.
-    /// `None` leaves the bar's plain formatting.
-    ///
-    /// The unit rides the NUMBER rather than the name, matching the Delay bar
-    /// above the Fade — a bar whose name carries the unit and one whose
-    /// readout does look like two different kinds of setting, and these two
-    /// are the same kind.
-    pub fn display(self) -> Option<fn(f32) -> String> {
+    /// Numeric UI units: displayed units per stored unit, suffix and precision.
+    /// Host automation and takes continue to store cents, seconds and MIDI pitch.
+    pub fn unit(self) -> (f32, &'static str, usize) {
         match self {
-            ParamKey::Fade => Some(seconds),
-            _ => None,
+            ParamKey::Fade => (1000.0, " ms", 0),
+            ParamKey::Tolerance => (1.0, "¢", 3),
+            ParamKey::COffset | ParamKey::Three | ParamKey::Five | ParamKey::Seven => (1.0, "¢", 2),
+            ParamKey::DarkestPitch | ParamKey::BrightestPitch => (1.0, " MIDI", 0),
         }
     }
 

@@ -98,7 +98,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             }
             // Unreachable, and here for the match rather than for the picture:
             // this preview composes `Layout::split`, which places the lattice
-            // and the spectral pane and nothing else, so the Video panel cannot
+            // and the Analyzer and nothing else, so the Video panel cannot
             // preview a spiral at all. The `spiral` layout preset is
             // render-only, and a frame that wants one beside something else is
             // a hand-written `.ron`.
@@ -128,8 +128,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // numbers, not one enum value, so there is nothing for choice_row's
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
-        ui.label("Aspect")
-            .on_hover_text("The frame's shape. Resolution below sets how big it renders.");
+        ui.label("Aspect ratio")
+            .on_hover_text("Shape of the exported video. Short edge sets its size in pixels.");
         let f = &mut state.take.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
@@ -156,7 +156,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         .collect();
     let options: Vec<(u32, &str, &str)> =
         sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
-    choice_row(ui, "Resolution", &mut state.take.render_config.short_edge, &options);
+    choice_row(ui, "Short edge (px)", &mut state.take.render_config.short_edge, &options);
     let f = &mut state.take.render_config.frame;
     // Named for where the LATTICE goes, so the row reads as the placement it
     // is — "Lattice: Top" rather than an axis plus a convention about which
@@ -165,10 +165,10 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // and a hint of its own.
     let sides = LatticeSide::ALL.map(|side| {
         let (label, hint) = match side {
-            LatticeSide::Left => ("Left", "Lattice left, spectral pane right"),
-            LatticeSide::Right => ("Right", "Lattice right, spectral pane left"),
-            LatticeSide::Top => ("Top", "Lattice above, spectral pane below"),
-            LatticeSide::Bottom => ("Bottom", "Lattice below, spectral pane above"),
+            LatticeSide::Left => ("Left", "Lattice left, Analyzer right"),
+            LatticeSide::Right => ("Right", "Lattice right, Analyzer left"),
+            LatticeSide::Top => ("Top", "Lattice above, Analyzer below"),
+            LatticeSide::Bottom => ("Bottom", "Lattice below, Analyzer above"),
         };
         (side, label, hint)
     });
@@ -181,8 +181,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // lattice or all spectrum is what the `lattice` and `spectral` layout
     // presets are for, and they say so in the render rather than by a slider
     // pushed to its stop.
-    ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui).on_hover_text(
-        "How much of the frame the lattice takes; the spectral pane gets the \
+    ValueBar::new(&mut f.split, 0.05..=0.95, label).percent().show(ui).on_hover_text(
+        "How much of the frame the lattice takes; the Analyzer gets the \
          rest.",
     );
 }
@@ -204,13 +204,9 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
     button_row(ui, |ui| {
         if ui
-            .button("Clear everything")
+            .button("Clear display history")
             .on_hover_text(
-                "Forget the lattice trail, the piano roll, the spectrogram, and \
-                 every node's own light, so the next take opens on an empty \
-                 picture. A note held across this is gone from the roll until \
-                 it is played again; the lattice keeps what is still sounding, \
-                 lit again on the next frame.",
+                "Clear lattice label history, MIDI ribbons, spectrogram history and lingering glow before recording. Held MIDI notes stay on the lattice but leave the roll until played again.",
             )
             .clicked()
         {
@@ -237,7 +233,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
 /// renderer turns the playhead on for `--playhead` or this setting, whichever
 /// says yes, so a plugin that also passed the flag would be answering a
 /// question the row is supposed to own — and passing it unconditionally would
-/// make "Live" unreachable. `RenderRequest::playhead` is what keeps the row
+/// make "Scrolling" unreachable. `RenderRequest::playhead` is what keeps the row
 /// deciding. The live preview can't lay a whole take out, so a Playhead choice
 /// leaves the preview's spectral region blank — see `playhead_placeholder`.
 fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -247,13 +243,11 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         "Spectrogram",
         &mut state.take.render_config.playhead,
         &[
-            (false, "Live", "Bake the live scrolling spectrogram, exactly as previewed here"),
+            (false, "Scrolling", "Bake the live scrolling spectrogram, exactly as previewed here"),
             (
                 true,
                 "Playhead",
-                "Lay the whole take's spectrogram out at once with a sweeping playhead. \
-                 Needs recorded audio. The live preview has neither, so it leaves that \
-                 region of the frame blank.",
+                "Show the entire recorded spectrogram with a moving playhead. Requires recorded audio; this region stays blank in the live preview.",
             ),
         ],
     );
@@ -264,28 +258,23 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // When a take finishes and turns into a video.
     choice_row(
         ui,
-        "Finish",
+        "Render when",
         &mut state.take.render_config.trigger,
         &[
             (
                 crate::RenderTrigger::OnDisarm,
-                "On disarm",
-                "Render when you switch Record take off — predictable, and works however the \
-                 transport behaves.",
+                "Record off",
+                "Finish recording and start rendering when you turn Record take off.",
             ),
             (
                 crate::RenderTrigger::OnTransportStop,
-                "On stop",
-                "Render as soon as the transport stops after recording something, or the \
-                 playhead jumps back — disarming at the same moment. A play-through renders \
-                 itself, and so does an audio export, which ends on the playhead being put back.",
+                "Transport stop",
+                "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
             ),
             (
                 crate::RenderTrigger::AtLoopEnd,
-                "At loop end",
-                "Record one arranger-loop pass, then end the moment the loop repeats and render \
-                 it — no manual stop to mistime. Turn LOOPING ON: it ends when the transport \
-                 wraps back. With looping off it just waits for you to disarm.",
+                "Loop end",
+                "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
             ),
         ],
     );
@@ -298,9 +287,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         if ui
             .button("Re-render take")
             .on_hover_text(
-                "Render the take you last recorded again, now, with the current \
-                 frame. Runs in the background; the video lands next to the take. \
-                 Pressing it during a render cancels that one and starts over.",
+                "Render the last take using the current frame settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
             )
             .clicked()
         {
@@ -429,9 +416,7 @@ fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Record");
     let rolling = state.take.rolling;
     record_button(ui, &mut state.take.recording, rolling, "Record take").on_hover_text(
-        "Record the performance — notes, automation, the current look, and the \
-         plugin's audio — to a .take file, stamped with transport position. \
-         Press again to stop; the take then renders to video.",
+        "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending under Render when.",
     );
     if !state.take.status.is_empty() {
         ui.weak(&state.take.status);
@@ -469,8 +454,7 @@ fn render_progress(ui: &mut egui::Ui, state: &mut SharedState) {
     };
     ui.add_space(2.0);
     crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
-        "Frames written of the frames this render is composing. It runs in \
-         the background — the DAW, and this window, keep going while it does.",
+        "Completed frames out of the total. Rendering runs in the background while the DAW and editor remain available.",
     );
     button_row(ui, |ui| {
         if ui

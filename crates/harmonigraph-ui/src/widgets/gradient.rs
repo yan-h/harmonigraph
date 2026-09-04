@@ -772,11 +772,11 @@ impl Spread {
     }
 
     /// What follows each number in the readout: the sign a percentage is
-    /// spelled with, and nothing for an `L*`, which is a bare coordinate on an
-    /// axis with no unit to name.
+    /// spelled with. Lightness counts perceptual black-to-white percent;
+    /// saturation counts the fraction of the available chroma.
     fn suffix(self) -> &'static str {
         match self {
-            Spread::Brightness => "",
+            Spread::Brightness => "%",
             Spread::Chroma => "%",
         }
     }
@@ -3150,10 +3150,10 @@ mod tests {
         let up = texts(Spread::Brightness, (64.0, 44.0));
         assert_eq!(up.len(), 2, "a name and one readout, not {up:?}");
         assert_eq!(up[0], "Brightness");
-        assert_eq!(up[1], "42 \u{2192} 86", "the bottom of the pitch range reads first");
+        assert_eq!(up[1], "42% \u{2192} 86%", "the bottom of the pitch range reads first");
         assert_eq!(
             texts(Spread::Brightness, (64.0, -44.0))[1],
-            "86 \u{2192} 42",
+            "86% \u{2192} 42%",
             "an inverted ramp draws the same two handles, so the readout is what says so",
         );
         let color = texts(Spread::Chroma, (0.64, 0.44));

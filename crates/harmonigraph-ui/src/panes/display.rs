@@ -1,34 +1,10 @@
-//! The Display tab: how everything on screen is drawn, one PAGE per picture —
-//! the [`color`](super::color) tables and the light on them, the lattice
-//! itself ([`view`](super::view), [`nodes`](super::nodes),
-//! [`labels`](super::labels), [`plus`](super::plus)), the Analyzer's own
-//! settings ([`spectral`](super::spectral)), and the machine around all of
-//! them ([`system`](super::system)).
-//!
-//! **A setting lives on the page named for the PICTURE it changes.** Anything
-//! about color lives on Colors, whichever picture it paints, because the two
-//! color tables are the one subject a reader comes here holding rather than a
-//! property of either picture; the Lattice page is the lattice and everything
-//! drawn on it; the Analyzer page is the analyzer, and the Spiral reading the
-//! same frame; System is the machine around the pictures rather than any of
-//! them. That makes a placement question "which picture does this move?" —
-//! answerable out of the render code — rather than "what is this about?",
-//! which is argued afresh in every docstring.
-//!
-//! Pages inside ONE tab rather than a tab each, because a settings tab is paid
-//! for in bar width at the editor's DEFAULT window: per-pane tabs overflow it,
-//! and egui_dock answers overflow by scrolling the bar, so every tab stays
-//! clickable and the one past the edge is one a new user never learns exists
-//! (#287). Pages also SWITCH rather than nest — exactly one body under the
-//! picker, never a body inside a body — and the picker's four names stay on
-//! screen whichever of them is showing, so the row is a permanent table of
-//! contents.
-//!
-//! Each page wears its pane's audited name (#286), "Analyzer" deliberately
-//! shared with the display pane's title — see [`tab_title`](super::tab_title).
+//! Display settings are grouped by picture, with shared Colors and Lighting
+//! pages and a System page for interface and performance controls.
+//! Pages wrap within one dock tab so every destination stays reachable.
 
 use super::color::color_pane;
 use super::labels::labels_pane;
+use super::lighting::lighting_pane;
 use super::nodes::nodes_pane;
 use super::plus::plus_pane;
 use super::spectral::spectrum_settings_pane;
@@ -38,15 +14,14 @@ use crate::params::ParamBackend;
 use crate::theme;
 use crate::SharedState;
 
-/// Display's pages, in the order the picker lists them: the colors every
-/// picture is painted with, then the lattice, then the analyzer beside it, and
-/// last the machine around them.
+/// Picture settings first, then shared appearance and system controls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DisplayPage {
     #[default]
     Colors,
     Lattice,
     Analyzer,
+    Lighting,
     System,
 }
 
@@ -56,17 +31,17 @@ impl DisplayPage {
     /// Built from an exhaustive `match` rather than written out as a bare
     /// literal, so the list cannot fall behind the enum — the same guard
     /// `SpectralOrientation::ALL` in this crate uses, for the same reason.
-    pub const ALL: [DisplayPage; 4] = {
+    pub const ALL: [DisplayPage; 5] = {
         use DisplayPage::*;
         // Exhaustive, and the compiler checks it. The arm is `()` because
         // what is wanted is the coverage error, not the value.
         const fn covered(page: DisplayPage) {
             match page {
-                Colors | Lattice | Analyzer | System => (),
+                Colors | Lattice | Analyzer | Lighting | System => (),
             }
         }
         covered(Colors);
-        [Colors, Lattice, Analyzer, System]
+        [Lattice, Analyzer, Colors, Lighting, System]
     };
 
     /// The page's name, on its picker label and nowhere else.
@@ -75,6 +50,7 @@ impl DisplayPage {
             DisplayPage::Colors => "Colors",
             DisplayPage::Lattice => "Lattice",
             DisplayPage::Analyzer => "Analyzer",
+            DisplayPage::Lighting => "Lighting",
             DisplayPage::System => "System",
         }
     }
@@ -99,6 +75,7 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
         DisplayPage::Colors => color_pane(ui, state, params),
         DisplayPage::Lattice => lattice_page(ui, state, params),
         DisplayPage::Analyzer => spectrum_settings_pane(ui, state, params),
+        DisplayPage::Lighting => lighting_pane(ui, state),
         DisplayPage::System => system_pane(ui, state),
     }
 }

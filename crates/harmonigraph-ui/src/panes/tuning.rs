@@ -66,6 +66,7 @@ fn tempered_bar(
     let mut value = derived;
     let response = ValueBar::new(&mut value, key.range(), key.label())
         .decimals(2)
+        .unit(1.0, "¢")
         .badge(comma.temperament())
         .magnet(derived, tuning::TEMPER_TOLERANCE)
         .show(ui)
@@ -273,6 +274,7 @@ pub(super) fn tuning_pane(
     // the leading rule `section` draws would be a line under nothing. Matches
     // the Display tab's pages, which open the same way under their picker.
     ui.heading("Tuning");
+    ui.weak("Set the pitch of each lattice step. 100 cents (¢) equals one semitone.");
     // Tuning sliders. A comma that is tempered out derives one of these axes
     // (meantone the major third, marvel the harmonic seventh), so that axis's
     // bar shows the derived value and is where the mode is released.
@@ -339,7 +341,7 @@ pub(super) fn tuning_pane(
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
     // rather than three numbers, so it gets its own heading.
-    section(ui, "Commas");
+    section(ui, "Temperaments");
     comma_controls(ui, state);
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a

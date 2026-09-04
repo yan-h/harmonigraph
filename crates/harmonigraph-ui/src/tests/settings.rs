@@ -106,6 +106,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
         SettingsPane::Page(DisplayPage::Colors),
         SettingsPane::Page(DisplayPage::Lattice),
         SettingsPane::Page(DisplayPage::Analyzer),
+        SettingsPane::Page(DisplayPage::Lighting),
         SettingsPane::Page(DisplayPage::System),
         SettingsPane::Tab(panes::Tab::Video),
     ] {
@@ -146,7 +147,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .map(|cs| cs.shape)
     .collect();
     let paths = crate::widgets::curve_paths(&shapes);
-    assert_eq!(paths.len(), 2, "the Lattice page drew {} curve previews", paths.len());
+    assert_eq!(paths.len(), 1, "the Lattice page drew {} curve previews", paths.len());
     let points = &paths[0];
     assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
@@ -187,7 +188,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 #[test]
 fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        SettingsPane::Page(DisplayPage::Lattice),
+        SettingsPane::Page(DisplayPage::Lighting),
         320.0,
         harmonigraph_scene::Projection::default(),
     )
@@ -197,7 +198,12 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     let paths = crate::widgets::curve_paths(&shapes);
     let descending: Vec<&Vec<egui::Pos2>> =
         paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
-    assert_eq!(descending.len(), 1, "the Lattice page drew {} descending curves", descending.len());
+    assert_eq!(
+        descending.len(),
+        1,
+        "the Lighting page drew {} descending curves",
+        descending.len()
+    );
     let points = descending[0];
     assert!(points.len() > 8, "the glow curve used only {} points", points.len());
 
@@ -315,7 +321,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["Render", "Spectrogram", "Live", "Playhead"] {
+    for row in ["Render", "Spectrogram", "Scrolling", "Playhead"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(
@@ -326,7 +332,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     }
     // Take-only, and gated on exactly the same flag: a shell that cannot record
     // has nothing for this to describe.
-    let row = "Finish";
+    let row = "Render when";
     let (with, _) = video_pane_shapes(true);
     assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
     let (without, _) = video_pane_shapes(false);
@@ -473,15 +479,16 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
 /// and is not, the Analyzer's piano-roll group having a bar of that name too,
-/// nor would a bare "Release", which the Glow section and the analyzer both
-/// draw. "Octave gap" is the Lattice page's own.
+/// nor would a bare "Spectrum release", which the Glow section and the analyzer both
+/// draw. "Sector gap" is the Lattice page's own.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
-    const CASES: [(DisplayPage, &str); 4] = [
-        (DisplayPage::Colors, "Bloom"),
-        (DisplayPage::Lattice, "Octave gap"),
-        (DisplayPage::Analyzer, "Level range"),
-        (DisplayPage::System, "Render scale"),
+    const CASES: [(DisplayPage, &str); 5] = [
+        (DisplayPage::Colors, "Pitch color range"),
+        (DisplayPage::Lattice, "Sector gap"),
+        (DisplayPage::Analyzer, "Spectrum level range"),
+        (DisplayPage::Lighting, "Bloom amount"),
+        (DisplayPage::System, "Render resolution"),
     ];
     for (page, needle) in CASES {
         let mut state = fresh();
@@ -779,7 +786,7 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Pitch range")),
+        ("a settings bar", Grab::Bar("Frequency range")),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -802,13 +809,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch range"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Frequency range"), Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch range"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Frequency range"), quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -989,7 +996,8 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
-    let name = bar_named(&out, "Release").expect("the Release bar is drawn on the Analyzer page");
+    let name =
+        bar_named(&out, "Spectrum release").expect("the Release bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
     let before = state.spectrum_config.release;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
@@ -1410,6 +1418,26 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
         .1
 }
 
+/// The spectrogram keeps its time axis when MIDI is hidden; ribbon-only
+/// controls are visibly disabled, so no live bar silently does nothing.
+#[test]
+fn history_stays_editable_without_midi_ribbons() {
+    let colors = |show_roll| {
+        let mut state = fresh();
+        state.spectrum_config.show_roll = show_roll;
+        state.spectrum_config.show_spectrogram = true;
+        let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+        let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
+        ["History duration", "Ribbon width", "Extension release"]
+            .map(|name| track_color(&shapes, one_text_y(&shapes, name)))
+    };
+    let shown = colors(true);
+    let hidden = colors(false);
+    assert_eq!(shown[0], hidden[0], "the spectrogram lost its history control");
+    assert_ne!(shown[1], hidden[1], "ribbon width stayed live without ribbons");
+    assert_ne!(shown[2], hidden[2], "extension release stayed live without ribbons");
+}
+
 /// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
 /// Spectrum — and both go dead with the ring itself, which is sized on the
 /// Layers bar two sections up.
@@ -1442,21 +1470,21 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
 
     let row = |(reading, width): (SpectralReading, f32), name: &str| {
         let shapes = audio_section_shapes(reading, width);
-        let reading_row = one_text_y(&shapes, "Reading");
-        let zoom = one_text_y(&shapes, "Zoom");
+        let reading_row = one_text_y(&shapes, "Ring display");
+        let zoom = one_text_y(&shapes, "Pitch span");
         let y = match name {
             // Taken by POSITION and not by paint order, so the row measured is
             // provably the Audio section's: a Tolerance drawn anywhere but
             // between the Reading row and Zoom fails here rather than being read
             // as this section's bar.
-            "Tolerance" => text_ys(&shapes, "Tolerance")
+            "Pitch tolerance" => text_ys(&shapes, "Pitch tolerance")
                 .into_iter()
                 .find(|y| *y > reading_row && *y < zoom)
                 .expect("the Audio section's Tolerance bar sits between Reading and Zoom"),
-            "Zoom" => zoom,
+            "Pitch span" => zoom,
             // Between the Reading row and Zoom, by position for the same
             // reason: it is the section's own bar or this measures nothing.
-            "Gate" => text_ys(&shapes, "Gate")
+            "Ring threshold" => text_ys(&shapes, "Ring threshold")
                 .into_iter()
                 .find(|y| *y > reading_row && *y < zoom)
                 .expect("the Audio section's Gate bar sits between Reading and Zoom"),
@@ -1466,8 +1494,8 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
     };
 
     const WIDE: f32 = 0.3;
-    let live = row((SpectralReading::Fold, WIDE), "Tolerance");
-    let dead = row((SpectralReading::Fold, WIDE), "Zoom");
+    let live = row((SpectralReading::Fold, WIDE), "Pitch tolerance");
+    let dead = row((SpectralReading::Fold, WIDE), "Pitch span");
     assert_ne!(live, dead, "a bar's track paints the same greyed and live, so nothing below bites");
 
     for (state, want_width, want_range, want_gate) in [
@@ -1480,8 +1508,12 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
         ((SpectralReading::Fold, 0.0), dead, dead, dead),
         ((SpectralReading::Spectrum, 0.0), dead, dead, dead),
     ] {
-        assert_eq!(row(state, "Tolerance"), want_width, "{state:?}: Tolerance is the wrong way");
-        assert_eq!(row(state, "Zoom"), want_range, "{state:?}: Zoom is the wrong way");
-        assert_eq!(row(state, "Gate"), want_gate, "{state:?}: Gate is the wrong way");
+        assert_eq!(
+            row(state, "Pitch tolerance"),
+            want_width,
+            "{state:?}: Tolerance is the wrong way"
+        );
+        assert_eq!(row(state, "Pitch span"), want_range, "{state:?}: Zoom is the wrong way");
+        assert_eq!(row(state, "Ring threshold"), want_gate, "{state:?}: Gate is the wrong way");
     }
 }

@@ -30,32 +30,9 @@ fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
 
-/// A short duration in milliseconds, which is the unit these times are read and
-/// argued about in — a hop is 8 ms and a release worth having is a couple of
-/// hundred, so seconds under a bar would be three leading zeros and a decision
-/// nobody can eyeball.
-pub(in crate::panes) fn ms_readout(seconds: f32) -> String {
-    format!("{:.0} ms", seconds.max(0.0) * 1000.0)
-}
-
-/// A duration as the roll's Span bar reads it out, carrying its own unit
-/// rather than naming one in the label: the bar runs from a second to ten
-/// minutes, and "300" under a fixed "(s)" is a number you have to divide
-/// before it means anything. "5m 00s" is the same value already read.
-///
-/// Tenths under a minute, whole seconds above it. The scale is eased, so the
-/// short spans get most of the travel and are where a tenth is a visible
-/// step; a tenth of a second inside five minutes is not.
+/// History is displayed and entered in seconds across the whole range.
 pub(super) fn span_readout(seconds: f32) -> String {
-    // Rounded to tenths BEFORE the branch, so a span that displays as a
-    // whole minute is written as one — 59.97s reads "1m 00s", never "60.0s".
-    let tenths = (seconds.max(0.0) * 10.0).round() as i64;
-    if tenths < 600 {
-        format!("{}.{}s", tenths / 10, tenths % 10)
-    } else {
-        let whole = (tenths + 5) / 10;
-        format!("{}m {:02}s", whole / 60, whole % 60)
-    }
+    format!("{:.1} s", seconds.max(0.0))
 }
 
 /// Settings for the Spectral pane's display and analyzer (persisted with
@@ -71,24 +48,11 @@ pub(crate) fn spectrum_settings_pane(
     // sections: every setting here is the analyzer's, and the Spiral is the
     // same analyzed frame wound onto a disc rather than a second one.
     ui.weak(
-        "Drives the Analyzer pane, the Spiral, and the lattice's audio rings — all read the same \
-         analyzer.",
+        "Audio analysis is shared by the Analyzer, Spiral and lattice audio rings. \
+                 View and history controls arrange the Analyzer picture.",
     );
 
-    // ---- Plot -----------------------------------------------------------
-    // Which way the plot runs, and how much of the pitch axis it shows. Time's
-    // own extent is the roll's Span, and lives with the roll — it is the one
-    // axis setting that means nothing without the layer it measures; the Level
-    // range lives with the Spectrum, which is not the only layer reading it.
-    //
-    // "Plot" rather than "Axes" for exactly that reason: two of the three axis
-    // extents are deliberately elsewhere, and a heading promising all three is
-    // one a reader learns not to trust.
-    //
-    // A plain heading rather than `section`: what stands above it is the page's
-    // own scope line rather than a section, so a rule between the two would cut
-    // the page off from its first heading instead of separating two groups.
-    ui.heading("Plot");
+    ui.heading("View");
     let cfg = &mut state.spectrum_config;
     // Named for the side the now-line is on, which is where the spectrum sits
     // and where a note arrives — so the setting says where to LOOK rather than
@@ -116,7 +80,7 @@ pub(crate) fn spectrum_settings_pane(
         };
         (side, label, hint)
     });
-    choice_row(ui, "Now-line", &mut cfg.orientation, &sides);
+    choice_row(ui, "Spectrum position", &mut cfg.orientation, &sides);
     // One control for both ends, because the two ends are one thing: the
     // window onto the analyzer's axis. Dragged in MIDI note (which is what
     // makes it a log-frequency zoom) and read out in Hz.
@@ -125,39 +89,39 @@ pub(crate) fn spectrum_settings_pane(
         &mut cfg.high_midi,
         harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
             ..=harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
-        "Pitch range",
+        "Frequency range",
     )
     .min_span(crate::PITCH_RANGE_MIN_SPAN)
     .display(hz_readout)
     .show(ui)
     .on_hover_text(
-        "The slice of the spectrum on show — and the Spiral's window. The scale \
-         is logarithmic: an octave is the same width everywhere. Drag either \
-         end, between them to slide, double-click for the full axis — or drag \
-         and scroll on the picture itself.",
+        "Visible frequency range, also used by the Spiral. \
+                 Each octave has equal width. \
+                 Drag the ends or the middle; double-click shows the full range.",
     );
     // No choice of what the markings say. They are the analyzer-standard
     // 1-2-5 frequency series, and were switchable to one at every C with
     // Bitwig octave numbers — which is what the note NAMES on the ribbons
     // already say, in the lattice's own spelling, at the pitch they are
     // sounding rather than at the nearest C below it.
-    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Marking size")
+    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Axis label scale")
+        .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
-            "Size of the axis labels and the pointer readout. Fixed against \
-             zoom — the axis doesn't change size when you zoom it.",
+            "Size of frequency labels and the pointer readout. \
+                 1× is the reference size; labels stay the same size when you zoom.",
         );
 
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
     // same buckets, and giving the whole depth axis to the roll is what the
     // divider is for.
-    section(ui, "Spectrum");
+    section(ui, "Audio analysis");
     if let Some(mut input) = params.analysis_input() {
         let before = input;
         choice_row(
             ui,
-            "Input",
+            "Audio input",
             &mut input,
             &[
                 (
@@ -177,7 +141,7 @@ pub(crate) fn spectrum_settings_pane(
         }
     }
     button_row(ui, |ui| {
-        ui.label("Window");
+        ui.label("Resolution");
         for (window, label) in [
             (SpectrumWindow::Fast, "Fast"),
             (SpectrumWindow::Balanced, "Balanced"),
@@ -198,19 +162,17 @@ pub(crate) fn spectrum_settings_pane(
     // against pitch, this trades cost and contrast against the estimate's own
     // noise, and no single row of buttons can name both.
     button_row(ui, |ui| {
-        ui.label("Tapers");
+        ui.label("Smoothing passes");
         for (tapers, label) in
             [(SpectrumTapers::One, "1"), (SpectrumTapers::Three, "3"), (SpectrumTapers::Five, "5")]
         {
             ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
-                SpectrumTapers::One => "one window: the sharpest picture, and the speckliest",
+                SpectrumTapers::One => "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost.",
                 SpectrumTapers::Three => {
-                    "three looks at the same audio: about half the \
-                     speckle, ~4.7 dB less room between a partial and the haze"
+                    "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."
                 }
                 SpectrumTapers::Five => {
-                    "five looks: steadier again, and coarser at the \
-                     bottom of the axis"
+                    "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."
                 }
             });
         }
@@ -222,31 +184,31 @@ pub(crate) fn spectrum_settings_pane(
         &mut cfg.floor_db,
         &mut cfg.ceiling_db,
         crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
-        "Level range",
+        "Spectrum level range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
     .display(db_readout)
     .show(ui)
     .on_hover_text(
-        "The slice of the level scale on show: the low end reads as silence, \
-         the high end as full height. The volume-color range controls heatmap \
-         brightness separately. Pull the \
-         top down to lift quiet material into the picture. Double-click for the \
-         full scale.",
+        "Levels mapped to zero and full spectrum height, also used by lattice audio rings. \
+                 Lower the upper end to enlarge quiet signals. \
+                 Audio colors have their own Level color range on Colors.",
     );
     // Two bars and not one, because a spectrum's two directions are different
     // events: a partial arriving is worth seeing when it happens, and the same
     // partial's noise wobbling down is not worth drawing at all.
-    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Attack")
-        .display(ms_readout)
+    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Spectrum attack")
+        .unit(1000.0, " ms").decimals(0)
         .show(ui)
-        .on_hover_text("How long the curve takes to rise to a louder reading. 0 lands instantly.");
-    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Release")
-        .display(ms_readout)
+        .on_hover_text("Response time for the spectrum curve to rise when audio gets louder. 0 ms responds immediately.");
+    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Spectrum release")
+        .unit(1000.0, " ms")
+        .decimals(0)
         .show(ui)
         .on_hover_text(
-            "How long it takes to fall to a quieter one. The long one: most of \
-             what reads as speckle is the estimate wobbling downward.",
+            "Response time for the spectrum curve to fall when audio gets quieter. \
+                 Increase for a steadier curve. \
+                 0 ms responds immediately.",
         );
     // Tilt: conventional stepped reference slopes. Snap stray persisted
     // values (e.g. from the short-lived continuous bar) onto a step.
@@ -258,8 +220,9 @@ pub(crate) fn spectrum_settings_pane(
     }
     button_row(ui, |ui| {
         ui.label("Tilt (dB/oct)").on_hover_text(
-            "Reference slope (dB/oct) that displays flat: 0 = raw power, \
-             -3 flattens pink noise, -4.5 flattens typical material",
+            "Reference slope in decibels per octave. \
+                 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies further. \
+                 Affects every audio view.",
         );
         // Five signed numbers side by side, so `option_label` sets them in
         // monospace: a proportional face gives "0.0" and "-1.5" different
@@ -270,116 +233,94 @@ pub(crate) fn spectrum_settings_pane(
         }
     });
 
-    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline").show(ui).on_hover_text(
-        "A light rim along the spectrum's profile, so its shape holds over the \
-         heatmap. 0 draws none. Each note ribbon has its own — see Outline under \
-         Piano roll.",
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline opacity")
+        .percent().show(ui).on_hover_text(
+        "Opacity of the outline along the spectrum curve. 0% hides the outline; 100% makes it fully visible.",
     );
 
-    // ---- Piano roll -----------------------------------------------------
-    section(ui, "Piano roll");
-    ui.checkbox(&mut cfg.show_roll, "Note history").on_hover_text(
-        "Draw incoming MIDI as a scrolling roll over the same pitch axis. \
-         Ribbons wear the note colors from the Colors page, so a note matches \
-         the lattice.",
+    section(ui, "History");
+    ui.checkbox(&mut cfg.show_roll, "Show MIDI notes").on_hover_text(
+        "Show played MIDI notes as ribbons over the shared time axis. \
+                 Their colors come from MIDI note colors on Colors.",
     );
-    ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "Span")
+    ui.checkbox(&mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
+        "Show audio levels as a frequency-versus-time heatmap. \
+                 Uses the shared History duration and the Audio level colors on Colors.",
+    );
+    ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "History duration")
         .eased(true)
         .decimals(1)
-        .display(span_readout)
+        .unit(1.0, " s").display(span_readout)
         .show(ui)
         .on_hover_text(
-            "Seconds of history the roll shows end to end, up to 10 minutes; \
-             short spans get most of the drag. Or drag the roll along its time \
-             axis — away from the now-line zooms in.",
+            "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
+                 Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width").show(ui).on_hover_text(
-        "Ribbon width, in semitones of the pitch axis — a note is as wide \
-             as the interval it would cover, at any zoom.",
-    );
-    edge_bar(
-        ui,
-        (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
-        crate::ROLL_LEAD_MAX,
-        "Lead",
-        {
-            let fresh = crate::SpectrumConfig::default();
-            (fresh.roll_lead, fresh.roll_lead_fade)
-        },
-        |v| format!("{:.1}%", v * 100.0),
-    )
-    .on_hover_text(
-        "How far a sounding note reaches past the now-line into the spectrum, \
-         as a share of it — so which notes are down reads off the picture. \
-         Solid to the inner handle, gone by the outer. 0 stops notes square on \
-         the line.",
-    );
-    ValueBar::new(&mut cfg.roll_lead_release, 0.0..=crate::ROLL_LEAD_RELEASE_MAX, "Lead release")
-        .decimals(2)
-        .display(|v| format!("{v:.2} s"))
-        .show(ui)
-        .on_hover_text(
-            "Seconds the lead takes to fade once the key is released. 0 cuts it \
-             the instant the note stops.",
-        );
-    ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
-        "Name each ribbon, in the lattice's own spelling — a just third reads \
-         E- rather than E plus cents. Where repeats crowd, the first keeps its \
-         name and the next waits for room. Needs Note history.",
-    );
-    ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-        ui.checkbox(&mut cfg.note_names_travel, "Name the far end").on_hover_text(
-            "Write names on the ribbon's other end — anchored to the note's \
-             onset rather than its newest edge. Held notes then travel with the \
-             picture instead of waiting at the now-line. Flips with the Now-line \
-             setting.",
-        );
-        ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
-            .show(ui)
-            .on_hover_text(
-                "Size of the ribbon names. They already grow as the pitch range \
-                 narrows; this sets their size relative to the ribbon.",
-            );
-    });
-
-    // ---- Spectrogram ----------------------------------------------------
-    section(ui, "Spectrogram");
-    ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
-        "A frequency-vs-time heatmap of the audio, behind the roll on the same \
-         time axis. Reads the Tilt, and takes its colors from the Colors page's \
-         Volume range. Turn Note history off to see it alone.",
-    );
-    // Where its colors are, rather than a second copy of the bars: the heatmap
-    // gradient is one of the two color tables, and both are dialled on the
-    // Colors page (see [`crate::panes::color`]).
-    ui.weak("Its colors are set on the Colors page.");
-
-    // One button for the pane's two accumulations rather than one under each
-    // section, because they are one picture: the ribbons and the heatmap are
-    // drawn in the same region on the same time axis, and what makes either
-    // worth clearing is stale history in that region — which is both of them
-    // at once, whatever put it there. A button per section clears one layer
-    // and leaves the other's leftovers in the same rectangle.
-    //
-    // At the pane's foot rather than in Piano roll or Spectrogram, since it
-    // belongs to neither: under a section heading a button reads as that
-    // section's, and this one names what it takes so it can stand after both.
-    // The lattice trail is a different pane's and stays there; the Video
-    // pane's "Clear everything" is what takes all four at once.
     button_row(ui, |ui| {
         if ui
-            .button("Clear roll and spectrogram")
+            .button("Clear analyzer history")
             .on_hover_text(
-                "Forget the played-note timeline and the accumulated spectral \
-                 history, emptying the pane of everything it has drawn over \
-                 time. A note held across this is gone from the roll until it \
-                 is played again.",
+                "Clear MIDI ribbons and spectrogram history. A held note reappears in the roll only when played again.",
             )
             .clicked()
         {
             state.tracker.clear_roll();
             state.spectrum.clear_history();
         }
+    });
+    section(ui, "MIDI ribbons");
+    ui.add_enabled_ui(cfg.show_roll, |ui| {
+        ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Ribbon width")
+            .unit(1.0, " st")
+            .show(ui)
+            .on_hover_text(
+                "Ribbon width in semitones (st), measured on the frequency axis. \
+                 1 st is the width of one semitone at any zoom.",
+            );
+        edge_bar(
+            ui,
+            (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+            crate::ROLL_LEAD_MAX,
+            "Held-note extension",
+            {
+                let fresh = crate::SpectrumConfig::default();
+                (fresh.roll_lead, fresh.roll_lead_fade)
+            },
+            |v| format!("{:.1}%", v * 100.0),
+        )
+        .on_hover_text(
+            "Distance held notes extend into the spectrum, as a percentage of its depth. \
+                 Solid to the inner handle, faded out by the outer. \
+                 0% stops notes at the history boundary.",
+        );
+        ValueBar::new(
+            &mut cfg.roll_lead_release,
+            0.0..=crate::ROLL_LEAD_RELEASE_MAX,
+            "Extension release",
+        )
+        .decimals(2)
+        .unit(1000.0, " ms")
+        .decimals(0)
+        .show(ui)
+        .on_hover_text(
+            "Time for the held-note extension to fade after release. 0 ms removes it immediately.",
+        );
+        ui.checkbox(&mut cfg.note_names, "Show note names").on_hover_text(
+        "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
+    );
+        ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
+            ui.checkbox(&mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
+                "Place labels at the start of each note so they travel with its onset. \
+                 Turn off to keep labels at the newest edge.",
+            );
+            ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text(
+                    "Text size relative to each MIDI ribbon. \
+                 1× is the reference size; labels also grow when you zoom in on frequency.",
+                );
+        });
     });
 }
 

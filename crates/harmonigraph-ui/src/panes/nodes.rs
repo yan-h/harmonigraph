@@ -1,61 +1,19 @@
-//! The node settings on the Display tab's Lattice page: how a sounding note is
-//! drawn — the audio ring at its centre, the octave band around that, the
-//! melody/bass marks on the outer held notes, the fade and clearance the whole
-//! node wears, and the light it gives off. Everything here is a layer of the
-//! *played note*, or the whole of one.
-//!
-//! The pitch gradient and Bloom are NOT here, though a node wears both: they
-//! are color, so they are on the Colors page ([`super::color`]) with the other
-//! table. The text a node carries is [`super::labels`], kept out because a
-//! label rides a hovered and a remembered node as readily as a sounding one.
+//! Lattice note layers, their sizes and timing. Lighting is on its own page.
 
-use super::spectral::settings::ms_readout;
 use super::{param_bar, section};
-use crate::params::{seconds, ParamBackend, ParamKey};
+use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    GlowCurve, Pulse, ShadowKernel, ShadowSettings, ShadowStyle, SpectralReading, ViewConfig,
-    GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
-    GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
-/// The sounding-note controls: the whole note first — the time it takes to
-/// arrive and leave, the clearance it keeps, and the light it gives off — then
-/// each layer of it reading outward from the center, and last the sweep the
-/// outermost layer can be set to run.
-///
-/// **Whole-note before the layers, because none of those settings belongs to a
-/// layer** — the SIZES especially, which are one stack read outward from the
-/// node's center, and the Ring gap, which is the one number standing every
-/// layer of it off the one inside — and because they are the ones reached for
-/// most.
-/// Filing them after Audio ring, Octaves and the marks would put the most-used
-/// controls under the ones reached for least, on the strength of an outward
-/// reading they are not part of. The Glow is whole-note too and sits with Note
-/// for that reason, under a heading of its own for the reason its section
-/// gives.
-///
-/// **Every layer's size is one bar, and each section below is then what that
-/// layer IS.** The three widths are not three independent numbers — a layer's
-/// inner edge is a sum over everything inside it, so a bar apiece can say how
-/// thick a ring is and never where it lands — and a heading apiece would split
-/// the one question a size on a node is asked, where does this sit, across
-/// three places holding a third of the answer each. The Layers bar in Note is
-/// the whole of it ([`StackBar`]), and what is left under each heading is the
-/// reading it carries, the colours it wears and the switches that are its own.
-///
-/// The layers then run in stack order, from the center out: the audio ring on
-/// the stack's own start, the octave band a Ring gap outside it, and the
-/// melody/bass marks past the band — the same order [`ViewConfig::rings`] lays
-/// them down in, so the column reads down as the node reads outward. Shimmer is
-/// last because it is the sweep the outermost layer carries rather than a layer
-/// of its own.
+/// Sizes and timing first, then the audio and MIDI layers and their accents.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     note_section(ui, &mut state.view, params);
-    glow_section(ui, &mut state.view);
     audio_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
     melody_bass_section(ui, &mut state.view);
@@ -65,7 +23,7 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
 /// pitch axis that runs once round the node. Independent of the audio ring.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Octaves");
+    section(ui, "MIDI octave ring");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
     // drawn on is, and where it sits, is the Layers bar up in Note — the
     // middle of its three handles, named MIDI there. The bar names layers by where each
@@ -93,19 +51,19 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     )
     .show(ui)
     .on_hover_text(
-        "How many octaves one turn of the node covers, of the eleven slots. \
-         Drag between the handles for full-size octaves, outside them for small \
-         extras at each end. Notes past either end light the outermost slice.",
+        "Octaves shown around each node. \
+                 Drag between the handles for full-size octaves, outside for smaller outer octaves. \
+                 Notes beyond the range use the end slices.",
     );
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
-    ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center")
+    ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center pitch")
         .integer()
-        .display(super::pitch_readout)
+        .unit(1.0, " MIDI")
+        .display(|midi| format!("{} / {midi:.0} MIDI", super::pitch_readout(midi)))
         .show(ui)
         .on_hover_text(
-            "The pitch at the top of the wheel, on every node. Each node shows \
-             its own octaves nearest this one.",
+            "Pitch at the top of every octave ring. Each node shows its own octaves nearest this pitch. Type a MIDI note number to set it.",
         );
     // The fringe is two bars rather than a list of named curves: the size is
     // the only thing that sets the outermost extra, the blend says how the
@@ -117,12 +75,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // fringe at size 1 is a second tier the same width as the first, and the
     // size bar is live there to drag back off it.
     ui.add_enabled_ui(view.octave_extras > 0, |ui| {
-        ValueBar::new(&mut view.octave_extra_size, MIN_EXTRA_SIZE..=1.0, "Extra size")
+        ValueBar::new(&mut view.octave_extra_size, MIN_EXTRA_SIZE..=1.0, "Outer octave scale")
+            .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "How wide an extra octave draws, as a share of an even slice. \
-                 Under 1 an extra is always narrower than a full octave; 1 \
-                 makes the wheel even.",
+                "Width of each outer octave relative to an equal slice. 1× makes all slices equal.",
             );
     });
     // Inert with one extra a side, where a ramp has nothing to rise between:
@@ -133,11 +90,13 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // both tiers are already the same width. The blend can only say how a
     // fringe falls away, never whether there is one.
     ui.add_enabled_ui(view.octave_extras > 1 && view.octave_extra_size < 1.0, |ui| {
-        ValueBar::new(&mut view.octave_extra_blend, 0.0..=1.0, "Extra blend")
+        ValueBar::new(&mut view.octave_extra_blend, 0.0..=1.0, "Outer octave taper")
+            .percent()
             .show(ui)
             .on_hover_text(
-                "How the extras grade: 0 is a flat fringe, 1 one ramp from the \
-                 outermost extra inward. The outermost never moves.",
+                "Size transition from outer to inner octaves. \
+                 0% keeps outer slices equally small; \
+                 100% widens them gradually toward the center.",
             );
     });
     // The padding between one indicator and the next is NOT here: it is the
@@ -171,7 +130,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
 /// read at a glance.
 fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Melody / bass");
+    section(ui, "Melody and bass marks");
     // Two boxes, not a four-way row: the marks are independent, they are
     // told apart by which slice each one extends rather than by hue, and a
     // note that is at once the highest and the lowest -- a lone held note, or
@@ -184,9 +143,9 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // `horizontal` so a narrow pane wraps them instead of running Bass off
     // the edge.
     button_row(ui, |ui| {
-        ui.checkbox(&mut view.mark_melody, "Melody")
+        ui.checkbox(&mut view.mark_melody, "Mark highest note")
             .on_hover_text("Extend the highest held note's octave slice past the band");
-        ui.checkbox(&mut view.mark_bass, "Bass")
+        ui.checkbox(&mut view.mark_bass, "Mark lowest note")
             .on_hover_text("Extend the lowest held note's octave slice past the band");
     });
     // A mark is the marked octave's own slice continued outward: it stands off
@@ -211,13 +170,14 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // 125ms) sit in the first third rather than crushed at the
         // bottom. Read out in seconds, the one value in this section that
         // is not a length.
-        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Delay")
-            .display(seconds)
+        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
+            .unit(1000.0, " ms")
+            .decimals(0)
             .show(ui)
             .on_hover_text(
-                "How long a note must stay the melody or the bass before \
-                 its mark fades in — keeps fast playing from flickering \
-                 marks. 0 marks instantly.",
+                "Time the highest or lowest note must stay in place before its mark appears. \
+                 Increase to avoid flicker during fast passages. \
+                 0 ms marks immediately.",
             );
     });
 }
@@ -230,25 +190,9 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// told apart from.
 const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
     (Pulse::Off, "Off", "Steady — no sweep"),
-    (
-        Pulse::Bands,
-        "Bands",
-        "Parallel bands laid diagonally, travelling along their own normal. \
-         The plainest reading of light crossing the lattice",
-    ),
-    (
-        Pulse::Checker,
-        "Checker",
-        "Two crossed gratings multiplied: a checkerboard with the corners \
-         rounded off, its light and dark cells swapping as the sheet slides",
-    ),
-    (
-        Pulse::Hex,
-        "Hex",
-        "Three gratings sixty degrees apart: a honeycomb of bright cells. \
-         Tessellates with the lattice where a checkerboard fights it — the \
-         rows here run three ways, not two",
-    ),
+    (Pulse::Bands, "Bands", "Diagonal bands of light moving across the melody and bass marks."),
+    (Pulse::Checker, "Checker", "A moving checkerboard of light on the melody and bass marks."),
+    (Pulse::Hex, "Hex", "A moving honeycomb of light on the melody and bass marks."),
 ];
 
 /// Shimmer: the shape the sheet crossing the lattice takes, and how it is
@@ -265,37 +209,35 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
 /// where a session leaves it when nothing should shimmer, not a state the
 /// pane has to protect the row from reaching.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Shimmer");
+    section(ui, "Mark shimmer");
     // Off is its own option rather than a checkbox beside the row: one row
     // says both whether the lattice shimmers and how.
     choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
     ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
-        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed").show(ui).on_hover_text(
-            "How fast the sheet travels, in lattice units a second — \
-                 the same rate on screen and in a render. 0 freezes it.",
+        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Travel speed")
+        .unit(1.0, " steps/s").show(ui).on_hover_text(
+            "Pattern movement in lattice steps per second. 0 freezes the pattern.",
         );
         // Eased, because the range is three orders wide and the useful
         // settings are not spread evenly over it: the tight end is a
         // different picture every few hundredths (0.05 to 0.1 halves the
         // periods on a node), where the wide end changes little between 8
         // and 15. Geometric travel gives each end the same share of the bar.
-        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Spacing")
+        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Pattern spacing")
+        .unit(1.0, " steps")
             .eased(true)
             .show(ui)
             .on_hover_text(
-                "The pattern's wavelength, one bright peak to the next, in \
-                 lattice units. Around five nodes reads as a sweep; under \
-                 one node it becomes a texture.",
+                "Distance between bright peaks, in lattice steps. \
+                 Larger spacing makes broad sweeps; smaller spacing makes a fine texture.",
             );
-        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity").show(ui).on_hover_text(
-            "How far a peak stands above the trough beside it — the \
-                 same ratio on dark notes as bright ones. 0 is no shimmer, \
-                 1 the tuned depth.",
+        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Contrast")
+        .unit(1.0, "×").show(ui).on_hover_text(
+            "Brightness contrast between peaks and troughs. 0 removes shimmer; 1× is the reference contrast.",
         );
-        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness").show(ui).on_hover_text(
-            "How gradually the light arrives: high fades peak into \
-                 trough across the whole period, low narrows the peak to a \
-                 hard band.",
+        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Edge softness")
+        .percent().show(ui).on_hover_text(
+            "Transition from a bright peak to a dark trough. 0% gives narrow, hard bands; 100% gives a smooth wave.",
         );
     });
 }
@@ -323,7 +265,10 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// place as the row is clicked along.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Audio ring");
-    // "Reading" and not "Ring", though the ring is what it fills: what this row
+    if !view.spectral_ring_draws() {
+        ui.weak("Use the Audio handle in Note layers above to give the ring a width.");
+    }
+    // "Ring display" and not "Ring", though the ring is what it fills: what this row
     // picks is which of two measurements the ring carries, which is the word the
     // rest of the audio channel uses for it, and a row named for the layer would
     // read as the layer's own switch when it is nothing of the kind.
@@ -339,23 +284,18 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         choice_row(
             ui,
-            "Reading",
+            "Ring display",
             &mut view.spectral_reading,
             &[
                 (
                     SpectralReading::Fold,
-                    "Fold",
-                    "One reading per wedge, taken at that octave's own pitch: how \
-                     much is sounding there, folded onto the node. A timbre \
-                     lights a constellation around its own node. The reading for \
-                     a screenful of nodes.",
+                    "Octave levels",
+                    "One audio level per octave slice. Useful for seeing which harmonics are present across many nodes.",
                 ),
                 (
                     SpectralReading::Spectrum,
                     "Spectrum",
-                    "Each wedge is a window of the raw spectrum bent into its \
-                     arc, so a partial's detuning paints off-center. The reading \
-                     for one node up close.",
+                    "The detailed spectrum within each octave slice. Useful for inspecting detuning on one node at close zoom.",
                 ),
             ],
         );
@@ -379,20 +319,17 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // handle — never greyed, since a control that greyed itself out at 0 could
     // not be dragged off it.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
-        ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Gate")
+        ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Ring threshold")
             // A percentage of the Level window, which is the axis the ring's
             // own colours are read off — so what the number names is a colour
             // on the ring rather than a dB the analyzer's window could move
             // out from under.
-            .display(|level| format!("{:.0}%", level * 100.0))
+            .percent()
             .show(ui)
             .on_hover_text(
-                "How loud a node's loudest wedge has to read before that node \
-                 draws a ring at all, as a share of the analyzer's Level \
-                 window. 0 rings every node, silence included; dialled up, a \
-                 ring means something is sounding there. A node you are playing \
-                 rings whatever this says, and rings arrive and leave on the \
-                 Fade.",
+                "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analyzer. \
+                 MIDI notes always show their rings. \
+                 0% also shows silent rings.",
             );
         // Under the Gate because it is a property OF the gate rather than a
         // second decision beside it: what it moves is where the same threshold
@@ -400,34 +337,33 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(
             &mut view.spectral_ring_hysteresis,
             0.0..=SPECTRAL_HYSTERESIS_MAX,
-            "Gate hold",
+            "Threshold hysteresis",
         )
-        .display(|level| format!("{:.0}%", level * 100.0))
+        .percent()
         .show(ui)
         .on_hover_text(
-            "How far the Gate drops once a node is lit, so a level sitting on \
-             the threshold stops switching. 0 is one threshold. The Fade sets \
-             how SLOWLY a ring comes and goes; this sets how RARELY.",
+            "How far the threshold drops once a ring appears, in percentage points of the Spectrum level range. \
+                 Increase to stop rings flickering near the threshold.",
         );
-        ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Ring attack")
-            .display(ms_readout)
+        ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Level attack")
+            .unit(1000.0, " ms").decimals(0)
             .show(ui)
             .on_hover_text(
-                "How long a wedge takes to brighten toward a louder reading. Its \
-             own time, not the analyzer's: the Spectral pane wants what is \
-             there, and the ring wants whether a harmonic is present.",
+                "Response time when audio in an octave slice gets louder. \
+                 Independent of the Analyzer curve. \
+                 0 ms responds immediately.",
             );
         ValueBar::new(
             &mut view.spectral_ring_release,
             0.0..=SPECTRAL_BALLISTICS_MAX,
-            "Ring release",
+            "Level release",
         )
-        .display(ms_readout)
+        .unit(1000.0, " ms").decimals(0)
         .show(ui)
         .on_hover_text(
-            "How long it takes to dim toward a quieter one. The knob for \
-             twinkle: most of what shimmers between partials is the estimate \
-             wobbling downward.",
+            "Response time when audio in an octave slice gets quieter. \
+                 Increase to steady fluctuating harmonics. \
+                 0 ms responds immediately.",
         );
     });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
@@ -439,15 +375,16 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(
             &mut view.spectral_width,
             SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
-            "Tolerance",
+            "Pitch tolerance",
         )
-        .display(|cents| format!("{cents:.0}¢"))
+        .unit(1.0, "¢")
+        .decimals(0)
         .show(ui)
         .on_hover_text(
-            "How far off an octave's own pitch a partial may sit and still light \
-             its wedge, in cents. A weight, not a cutoff: distance reads as \
-             dimness. Narrow suits just intonation; tempered material wants it \
-             wider. Fold reading only.",
+            "Pitch distance over which audio can light an octave slice. \
+                 More distant pitches appear dimmer. \
+                 Widen for tempered music. \
+                 Used by Octave levels only.",
         );
     });
     // The SPECTRUM reading's zoom, under the Tolerance it stands opposite: how
@@ -458,16 +395,15 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(
             &mut view.spectral_ring_range,
             SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
-            "Zoom",
+            "Pitch span",
         )
         // A decimal below ten cents: the bar's floor is 0.5¢, and "{:.0}"
         // would read it out as the zero the floor exists to forbid.
+        .unit(1.0, "¢").decimals(1)
         .display(|cents| if cents < 10.0 { format!("{cents:.1}¢") } else { format!("{cents:.0}¢") })
         .show(ui)
         .on_hover_text(
-            "How much spectrum one wedge shows, in cents around that octave's \
-             own pitch. At the top of the bar a wedge spans its whole octave and \
-             the ring joins into one continuous reading. Spectrum reading only.",
+            "Frequency span within each octave slice, in cents. 1200¢ shows a full octave. Used by Spectrum only.",
         );
     });
 }
@@ -483,15 +419,15 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// release reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    section(ui, "Note");
+    section(ui, "Note layers");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
     // is where they have to LOOK like the one setting they are.
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
-        "Seconds a note takes to arrive, and to leave once released — the whole \
-         node at once, the audio ring's coming and going included. Short notes \
-         still reach full brightness. 0 switches on and off outright.",
+        "Fade-in and fade-out time for the whole node, including audio-ring visibility. \
+                 Short notes still reach full brightness. \
+                 0 ms switches immediately.",
     );
     // Linear like every bar around it, and for the same reason: the whole
     // range is one unit, so every hundredth of it — the readout's own
@@ -507,6 +443,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // function itself — a release is the same curve upside down, and picking
     // the falling one would be picking a direction the setting does not have.
     ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Fade curve")
+        .percent()
         .curve(|shape, p| {
             // The scene's own curve, not a second copy of the formula: the
             // preview is only worth drawing if it cannot disagree with the
@@ -521,9 +458,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         })
         .show(ui)
         .on_hover_text(
-            "The curve both ends of the Fade run on, drawn as an arrival. 0 is \
-             a straight line; higher moves fast and settles slowly, the way a \
-             struck note decays.",
+            "Shape of the note fade. \
+                 0% is linear; higher values change quickly at first and settle slowly. \
+                 The line previews the fade-in.",
         );
     // Every layer's size, in the one bar that can show where each of them
     // lands: one stack read outward from the node's center — where it begins,
@@ -539,13 +476,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // gap under it is not on this bar's axis at all, and is here anyway — see
     // there.
     StackBar::new(view).show(ui).on_hover_text(
-        "A node's cross-section, from its center out: the empty middle its \
-             light fills, the audio ring, the octave band and the melody/bass \
-             strip, each named on its own cell where there is room for it. Drag \
-             a handle to set the stretch inside it — 0 removes a layer and the \
-             ones outside close up, and on the middle it seats the whole stack \
-             on the node's center. The line is the node's edge, which only the \
-             marks may cross. Double-click to restore.",
+        "Node layers from the center out: empty center, audio ring, MIDI octave ring, then melody and bass marks. \
+                 Drag a handle to resize its layer; zero width hides it. \
+                 Double-click resets.",
     );
     // A node's two paddings, together and directly under the bar that draws one
     // of them. They are the same question asked on the node's two axes — how
@@ -569,301 +502,16 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // resolution three decimals of the stored number gives, so the readout
     // trades no precision for the point: the fresh 5.2% and the 4.8% beside it
     // are one number at a coarser one, which is where the bar would go quiet
-    // exactly as it is being dialled in. Typing still takes the bare stored
-    // number, as it does under every other display formatter here.
-    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Ring gap")
-        .decimals(3)
-        .display(|v| format!("{:.1}%", v * 100.0))
+    // exactly as it is being dialled in. Numeric entry uses the displayed
+    // percentage too; the widget converts it back to the stored fraction.
+    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Layer gap").percent().show(ui).on_hover_text(
+        "Space between concentric layers, as a percentage of the node radius. 0% joins the layers.",
+    );
+    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Sector gap")
+        .percent()
         .show(ui)
         .on_hover_text(
-            "The padding between one ring of a node and the next, and before \
-             the melody/bass marks, as a share of the node's radius. 0 closes \
-             the stack up solid.",
+            "Space between octave slices in the audio ring, MIDI ring and marks, as a percentage of the node radius. \
+                 0% joins the slices.",
         );
-    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Octave gap")
-        .decimals(3)
-        .display(|v| format!("{:.1}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(
-            "The padding between one octave sector and the next — on the band, \
-             on the audio ring's wedges and down a mark's sides — as a share of \
-             the node's radius. 0 closes the ring into a solid annulus.",
-        );
-    // What a node CLEARS around itself is not here: it is the Glow section's
-    // Shadow directly below, which is one length for the hole and the shadow laid
-    // over it. A bar of its own here would be the same distance said twice.
-    //
-    // The glow is NOT here either, though it is the whole node's as everything
-    // above is: it has a section of its own directly below, and a heading is
-    // what lets every bar in it drop the "Glow" from its name.
-}
-
-/// Glow: the light a node gives off — the ONLY light it has, every layer of
-/// the stack being a crisp shape. Laid in the same octave colours the band is,
-/// reaching past the node's outermost drawn edge and filling the empty middle
-/// its rings stand around.
-///
-/// **A section of its own, directly under Note**, and not the tail of it: a
-/// glow is the whole node's rather than any layer's, which is what Note is
-/// for, but it is also one feature carrying a bar for every question asked of
-/// one light. A column of them all named "Glow …" at the foot of Note is one
-/// word the eye has to skip past to find the one that differs; a heading says
-/// the word once. It leads the layers rather than following Shimmer because,
-/// like everything in Note, it is reached for more than any one layer is.
-///
-/// **Not with Bloom**, which it otherwise reads like, because the two are
-/// different settings of different things. Bloom is one number over every
-/// picture the plugin draws and it thresholds, so it is the bright end of the
-/// gradient blowing out — colour, which is why it sits with the table that
-/// makes it. This is a layer of a node, dialled where a node's other layers
-/// are.
-///
-/// The bars run in the order the questions do: what the light IS before what
-/// colour it is, both before what holds it off the rings, and its own clock
-/// last. Everything under Reach greys while Reach is 0 rather than hiding, so
-/// the rows keep their place and the numbers they are dialled to stay
-/// readable — the arrangement the audio ring's own settings use. The SHADOW
-/// blocks are the exception and stay live, for the reason
-/// [`shadow_groups`] gives.
-fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Glow");
-    // A share of the node's radius, the unit the two gaps and the Clearance in
-    // Note read in, and measured from the same place: the reach is a distance
-    // out from the node's edge exactly as the Clearance is. Eased, because the
-    // bar spans two pictures rather than one range of one: the accent — a halo
-    // reaching about as far as the gap to a neighbour — is the bottom eighth
-    // of it, and the wash is everything above. Cubic travel gives the accent
-    // half the bar, so a light meant to sit on its own node is still dialled a
-    // hundredth at a time, and the far end is reachable in the same drag.
-    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Reach")
-        .eased(true)
-        .decimals(3)
-        .display(|v| format!("{:.0}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(
-            "How far past its own edge a node's light spreads, as a share of \
-             its radius. Neighbouring nodes' light melds where it overlaps — \
-             around 100% reaches a neighbour, and several hundred washes the \
-             whole lattice in one field. 0 turns the glow off, leaving the \
-             rings alone.",
-        );
-    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
-        ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Strength")
-            .show(ui)
-            .on_hover_text("How much light a node lays down. 1 is the tuned amount.");
-        ValueBar::new(
-            &mut view.glow_curve.shape,
-            GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
-            "Shape",
-        )
-        .decimals(2)
-        .magnet(0.0, 0.15)
-        .display(|shape| {
-            if shape.abs() < f32::EPSILON {
-                "Linear".to_owned()
-            } else if shape > 0.0 {
-                format!("Fast {shape:.2}")
-            } else {
-                format!("Slow {:.2}", -shape)
-            }
-        })
-        .curve(|shape, p| GlowCurve { shape }.sample(p))
-        .show(ui)
-        .on_hover_text(
-            "How the light fades from the node's full-bright centre at the \
-                 left to the edge of its Reach at the right. The middle is \
-                 linear; drag right for a fast exponential-like fall, or left \
-                 to hold the light before a late fall.",
-        );
-        // What colour the light comes out, between the amount of it and the
-        // Shadow under it. "Color blend" and not "Spread": under this heading,
-        // beside a Reach that is about distance, a "spread" reads as how far
-        // the light goes, and this moves no light at all. It reads as a
-        // percentage because it is a SHARE — of a whole turn — and not a
-        // distance.
-        ValueBar::new(&mut view.glow_blend, 0.0..=1.0, "Color blend")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How far round the node its own colours are averaged into the \
-                 colour of its light. The glow is what the node is PLAYING, \
-                 blurred round it — the octave band's colours and the melody \
-                 and bass marks', each weighted by how lit it is and how wide \
-                 the Layers bar made it, with the audio ring left out: a ring \
-                 is what the room is doing rather than the note, so it is drawn \
-                 and never shone. 0% keeps each sector's colour a distinct arc \
-                 and 100% averages the node into one tint.",
-            );
-    });
-    shadow_groups(ui, &mut view.shadow);
-    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
-        // The INK's own share of the light, where a Shadow depth says the
-        // ground's: one question asked twice, and the answers are free of each
-        // other on purpose — a dark pool with a tinted ring in it is a picture
-        // no single coupled dial can name. Only the LIT ink is dialled, the
-        // rest of the lattice always taking the whole field, for the reason the
-        // hover text gives.
-        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How much of the light a SOUNDING slice washes over its own \
-                 ink — a lit octave indicator, a wedge the analyzer is \
-                 reading, and the melody or bass mark continuing one. 100% \
-                 lays the whole field over it and the slice melts into its own \
-                 halo; lower brings it back out of the light until, at 0%, it \
-                 is drawn exactly as it is with the glow off. \
-                 Everything else in the lattice — a silent slice's grey, an \
-                 empty wedge, the resting crosses between the nodes — always \
-                 takes the whole light, which is what keeps it from reading as \
-                 holes punched where the light is brightest. It reads the \
-                 light before the shadow takes any, so it is free of the depth \
-                 above: a full depth with a wash on it is a slice standing in \
-                 a dark pool and still wearing the halo's colour.",
-            );
-        // The light's own clock, last, under everything it shapes. Its own pair
-        // and not the note Fade in Note, because a halo is the slow part of the
-        // picture: on the layers' envelopes it flickers with the marks, which
-        // are meant to be fast.
-        ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Attack")
-            .display(ms_readout)
-            .show(ui)
-            .on_hover_text(
-                "How long a node's light takes to come up behind the note that \
-                 lit it. Its colour arrives on the same time, so a chord's hue \
-                 morphs in rather than switching.",
-            );
-        ValueBar::new(&mut view.glow_release, 0.0..=GLOW_BALLISTICS_MAX, "Release")
-            .display(ms_readout)
-            .show(ui)
-            .on_hover_text(
-                "How long it takes to leave. A node keeps glowing after every \
-                 layer on it has gone silent, holding the colour it last had, \
-                 which is what makes the light read as light rather than as one \
-                 more layer of the node.",
-            );
-    });
-}
-
-/// The Shadow, dialled per GROUP of casters: geometry and text in the lattice,
-/// then geometry and text in the spectral pictures. The spiral inherits the
-/// spectral pair, so the four blocks are the whole persisted surface.
-///
-/// **Stacked, not one set of bars behind a group picker.** Tuning a group is
-/// comparing it against the other, and a value that is not on screen is a value
-/// that has to be remembered between two drags. Three rows apiece is the whole
-/// of a group, so even the stacked form is short.
-///
-/// **Outside the light's own enable**, where the rest of the Glow section sits:
-/// an item casts with no light in the picture at all, onto the ground and onto
-/// whatever ink stands behind it, so a Reach at 0 has nothing to say about
-/// these (#572).
-///
-/// The bars ask the same two questions under each heading. Width follows the
-/// renderer the group belongs to: lattice ink scales from a node radius, while
-/// spectral ink uses the fixed four-point reference its flat picture has.
-fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
-    ui.label(egui::RichText::new("Shadow").strong());
-    shadow_group(
-        ui,
-        "Lattice geometry",
-        "a node's audio ring, octave band and marks",
-        "a share of the node's radius",
-        "one node radius",
-        &mut shadow.lattice_geometry,
-    );
-    shadow_group(
-        ui,
-        "Lattice text",
-        "every note name and its drawn marks, and the cross at each resting position",
-        "a share of the node's radius",
-        "one node radius",
-        &mut shadow.lattice_text,
-    );
-    shadow_group(
-        ui,
-        "Spectral geometry",
-        "the piano roll's note ribbons and the spiral's sounding-note dots",
-        "a share of a fixed four-point reference",
-        "four screen points",
-        &mut shadow.spectral_geometry,
-    );
-    shadow_group(
-        ui,
-        "Spectral text",
-        "the analyzer's note names and axis labels, and the spiral's names",
-        "a share of a fixed four-point reference",
-        "four screen points",
-        &mut shadow.spectral_text,
-    );
-}
-
-/// One group's three: which renderer draws it, how wide and how dark.
-///
-/// `casters` names the ink the group covers and is spent inside both hover
-/// texts, so a person reading either knows what the bar is about without
-/// looking up at the heading.
-///
-/// The kernel LEADS its pair, where the rest of the settings panes put a picker
-/// under the bars it shapes: here it says what the two bars under it mean — how
-/// far a Gaussian is blurred, or how far a distance's decay is measured — so
-/// reading down the block is reading the question before the answers.
-fn shadow_group(
-    ui: &mut egui::Ui,
-    name: &str,
-    casters: &str,
-    width_reference: &str,
-    full_width: &str,
-    style: &mut ShadowStyle,
-) {
-    ui.label(name);
-    choice_row(
-        ui,
-        "Kernel",
-        &mut style.kernel,
-        &[
-            (
-                ShadowKernel::Distance,
-                "Distance",
-                "How far each point stands from the nearest ink. A blur of a \
-                 hairline is a smudge whose width is the hairline's, so at a \
-                 wide Shadow the whole lattice reads as one soft blob; a \
-                 distance is the same at a hairline as at a slab, so a \
-                 letter's counters, a cross's arms and a corner all keep their \
-                 shape. What it gives up is the pocket between two strokes \
-                 standing close.",
-            ),
-            (
-                ShadowKernel::Gaussian,
-                "Gaussian",
-                "One plain blur — the conventional shadow, and what the Shadow \
-                 bars are calibrated against. A hairline's blur carries the \
-                 stroke's WIDTH rather than its shape, so this group softens as \
-                 the Shadow opens.",
-            ),
-        ],
-    );
-    // A tenth of a percent, as the lattice gaps beside these groups are.
-    ValueBar::new(&mut style.width, 0.0..=GLOW_SHADOW_MAX, "Shadow")
-        .display(|v| format!("{:.1}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(format!(
-            "How wide a shadow {casters} casts, as {width_reference}. Each \
-             item's shadow is read off its own ink and laid over \
-             whatever is already behind it, so a nearer item darkens a farther \
-             one wherever the two overlap. Nothing darkens itself. 0% is this \
-             group with no shadow at all and 100% is {full_width}. \
-             Double-click to restore."
-        ));
-    ValueBar::new(&mut style.depth, 0.0..=1.0, "Shadow depth")
-        .display(|v| format!("{:.0}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(format!(
-            "How dark the shadow under {casters} gets where it is deepest. \
-             100% takes what is under solid ink to black, and lower leaves it \
-             sitting in a dimmer pool of the light around it rather than in a \
-             void. It is a FLOOR: wide ink reaches it and a hairline stops \
-             short, which is how a shadow says how thick the ink casting it \
-             is. 0% is this group with no shadow at all."
-        ));
 }

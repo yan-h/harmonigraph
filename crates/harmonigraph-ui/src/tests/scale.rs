@@ -356,6 +356,7 @@ fn every_bar_has_its_declared_height() {
         SettingsPane::Page(DisplayPage::Colors),
         SettingsPane::Page(DisplayPage::Lattice),
         SettingsPane::Page(DisplayPage::Analyzer),
+        SettingsPane::Page(DisplayPage::Lighting),
         SettingsPane::Tab(panes::Tab::Video),
     ] {
         for step in 0..=16u8 {
