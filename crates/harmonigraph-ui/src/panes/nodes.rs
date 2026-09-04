@@ -163,13 +163,9 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // pane, because it is about these two marks alone: the octave
         // sectors they continue answer immediately whatever this says.
         //
-        // Linear, unlike the wide bars that need easing to be draggable
-        // at their fine end: one second of travel puts a hundredth of it
-        // — the readout's own resolution — a couple of pixels apart, and
-        // the settings that matter (a passing sixteenth at 120bpm is
-        // 125ms) sit in the first third rather than crushed at the
-        // bottom. Read out in seconds, the one value in this section that
-        // is not a length.
+        // A linear bar gives practical delays (a sixteenth note at 120 bpm
+        // lasts 125 ms) enough room without easing. Display whole milliseconds;
+        // the stored value and range stay in seconds.
         ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
             .unit(1000.0, " ms")
             .decimals(0)

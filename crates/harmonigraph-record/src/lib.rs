@@ -235,7 +235,7 @@ impl RenderRequest {
             size: config.frame.pixels(config.short_edge),
             // Not forced: the take carries the Video pane's Spectrogram choice
             // and the renderer reads it, so passing `--playhead` here would
-            // OR itself over a "Live" the user had picked and the row would
+            // OR itself over a "Scrolling" the user had picked and the row would
             // control nothing.
             playhead: None,
         }
@@ -1475,7 +1475,7 @@ fn spawn_render(
         // playhead on for `--playhead` OR the take's own recorded setting,
         // so a flag passed unconditionally here is one the Video pane's
         // Spectrogram row can never turn back off — which is exactly what
-        // it was, and why picking "Live" did nothing. Left alone, the
+        // it was, and why picking "Scrolling" did nothing. Left alone, the
         // take's setting is the whole answer, in both directions.
         if request.playhead == Some(true) {
             command.arg("--playhead");
@@ -1889,7 +1889,7 @@ mod tests {
     ///
     /// It ORs `--playhead` with the take's own recorded setting, so a flag
     /// passed here can only add. Passing it unconditionally would make the
-    /// Video pane's "Live" choice unreachable: the pane writes
+    /// Video pane's "Scrolling" choice unreachable: the pane writes
     /// `playhead: false` into the take and the flag would turn it straight
     /// back on. Leaving it unset is what lets the row decide both
     /// ways, so this holds the request to saying nothing.

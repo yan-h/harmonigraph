@@ -298,7 +298,6 @@ pub(crate) fn spectrum_settings_pane(
             0.0..=crate::ROLL_LEAD_RELEASE_MAX,
             "Extension release",
         )
-        .decimals(2)
         .unit(1000.0, " ms")
         .decimals(0)
         .show(ui)
