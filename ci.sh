@@ -48,6 +48,12 @@ run cargo test --workspace
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
 
+# #615's optional apparatus exercises the actual CLAP boundary and callback
+# allocation guard. Default workspace tests cannot see this feature.
+run cargo clippy -p harmonigraph-plugin --all-targets --features tuning-probe -- -D warnings
+run cargo test -p harmonigraph-plugin --features tuning-probe,nice-plug/assert_process_allocs \
+  probe::tests::
+
 # ...and RUN harmonigraph-render's own tests in that same configuration, which
 # is the half a check cannot do. The unification above does not merely compile
 # the plugin with hot-reload on, it also deletes every

@@ -14,6 +14,10 @@ use parking_lot::Mutex;
 
 mod background;
 mod editor;
+#[cfg(feature = "tuning-probe")]
+mod probe;
+#[cfg(feature = "tuning-probe")]
+use probe::HarmonigraphTune;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
@@ -38,6 +42,8 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    #[cfg(feature = "tuning-probe")]
+    probe: probe::Hub,
     /// Keeps the spectrogram's history running while the editor window is
     /// closed (see [`background`]). Held only to be dropped with the plugin,
     /// which is what stops its thread.
@@ -417,6 +423,8 @@ impl Default for Harmonigraph {
             params.ui_state.clone(),
         );
         Harmonigraph {
+            #[cfg(feature = "tuning-probe")]
+            probe: probe::Hub::default(),
             params,
             note_producer: producer,
             audio_producer,
@@ -480,10 +488,16 @@ impl Plugin for Harmonigraph {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
+        #[cfg(feature = "tuning-probe")]
+        if !self.probe.initialize(buffer_config, _context.plugin_api()) {
+            return false;
+        }
         true
     }
 
     fn reset(&mut self) {
+        #[cfg(feature = "tuning-probe")]
+        self.probe.reset();
         self.samples_processed = 0;
         // After a transport reset, note-offs for held notes may never
         // arrive; tell the GUI to release everything. Time 0.0 is the
@@ -503,6 +517,10 @@ impl Plugin for Harmonigraph {
         aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        #[cfg(feature = "tuning-probe")]
+        if !self.probe.process(context.transport()) {
+            return ProcessStatus::Error("#615 hub probe run invalid; inspect trace");
+        }
         let block_start = self.samples_processed;
         let block_samples = buffer.samples();
         let transport = context.transport();
@@ -603,11 +621,26 @@ impl Plugin for Harmonigraph {
         }
 
         self.samples_processed += block_samples as u64;
+        #[cfg(feature = "tuning-probe")]
+        if self.probe.keep_alive() {
+            return ProcessStatus::KeepAlive;
+        }
         ProcessStatus::Normal
+    }
+
+    #[cfg(feature = "tuning-probe")]
+    fn deactivate(&mut self) {
+        self.probe.deactivate();
     }
 }
 
 impl ClapPlugin for Harmonigraph {
+    #[cfg(feature = "tuning-probe")]
+    const CLAP_PROCESS_TRACE: bool = true;
+    #[cfg(feature = "tuning-probe")]
+    fn clap_process_trace(&mut self, event: nice_plug::wrapper::clap::ProcessTrace<'_>) {
+        self.probe.hook(event);
+    }
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("Tonnetz harmony and spectrum visualizer");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
@@ -623,7 +656,10 @@ impl Vst3Plugin for Harmonigraph {
         &[Vst3SubCategory::Fx, Vst3SubCategory::Analyzer];
 }
 
+#[cfg(not(feature = "tuning-probe"))]
 nice_export_clap!(Harmonigraph);
+#[cfg(feature = "tuning-probe")]
+nice_export_clap!(Harmonigraph, HarmonigraphTune);
 nice_export_vst3!(Harmonigraph);
 
 #[cfg(test)]

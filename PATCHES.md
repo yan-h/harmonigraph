@@ -1,7 +1,18 @@
 # Carried patches against upstream dependencies
 
-Two dependencies carry local patches, both wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
-Keep this file current when bumping either.
+Three dependencies carry local patches, wired in via `[patch.crates-io]` in the workspace `Cargo.toml`.
+Keep this file current when bumping them.
+
+## nice-plug — vendored at `vendor/nice-plug/`
+
+- **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests.
+- **Patch**: an opt-in `ClapPlugin::CLAP_PROCESS_TRACE` hook in `src/wrapper/clap.rs` and `src/wrapper/clap/wrapper.rs` exposes enclosing callback entry/exit, raw CLAP clocks, exact sub-block boundaries, processing start/stop and final host output acceptance.
+An atomic counter records actual latency queries without calling the plugin under a potentially reentrant latency query.
+Ordinary plugins keep the flag false, compiling out processing observations.
+- **Why**: #615 cannot infer a shared clock or callback boundaries from Rust `Plugin::process()` counters.
+The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifies the actual CLAP wrapper through an exported-factory fixture.
+- **Upgrade**: replace the vendored upstream files, retain the standalone `[workspace]` table, and reapply the hook sites.
+No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
 

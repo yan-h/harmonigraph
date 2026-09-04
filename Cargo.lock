@@ -1387,6 +1387,7 @@ name = "harmonigraph-plugin"
 version = "0.3.0"
 dependencies = [
  "baseview",
+ "clap-sys",
  "crossbeam",
  "egui",
  "egui-baseview",
@@ -1395,11 +1396,13 @@ dependencies = [
  "harmonigraph-record",
  "harmonigraph-render",
  "harmonigraph-ui",
+ "libc",
  "nice-plug",
  "parking_lot",
  "raw-window-handle 0.5.2",
  "rtrb",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2090,8 +2093,6 @@ dependencies = [
 [[package]]
 name = "nice-plug"
 version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5158967c27b26738f339bfd912cf386a3d88241a4111e8a79a8e42aa055c8b5"
 dependencies = [
  "anyhow",
  "anymap3",
@@ -2112,7 +2113,7 @@ dependencies = [
  "serde_json",
  "vst3",
  "widestring",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]

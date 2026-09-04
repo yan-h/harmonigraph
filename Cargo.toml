@@ -15,7 +15,7 @@ members = [
     "xtask",
 ]
 # The vendored crates are their own workspaces, only referenced via [patch].
-exclude = ["vendor/baseview", "vendor/egui-baseview"]
+exclude = ["vendor/baseview", "vendor/egui-baseview", "vendor/nice-plug"]
 
 [workspace.package]
 version = "0.3.0"
@@ -89,6 +89,7 @@ raw-window-handle = "0.5"
 [patch.crates-io]
 baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }
+nice-plug = { path = "vendor/nice-plug" }
 
 [profile.release]
 # Cross-crate LTO reaches exactly one artifact here, and it is not the plugin.
