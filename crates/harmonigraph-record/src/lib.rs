@@ -864,6 +864,67 @@ pub fn channel() -> (Recorder, Control) {
     )
 }
 
+/// In-memory endpoints for dependent crates that need to reach their real
+/// [`Recorder`] wiring without starting this crate's file-writer thread.
+/// Compiled only when a dev-dependency explicitly asks for it.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod testing {
+    use super::*;
+
+    pub struct Capture {
+        _records: rtrb::Consumer<Entry>,
+        audio: rtrb::Consumer<f32>,
+        armed: Arc<AtomicBool>,
+        with_audio: Arc<AtomicBool>,
+    }
+
+    impl Capture {
+        pub fn arm_audio(&self) {
+            self.with_audio.store(true, Ordering::Relaxed);
+            self.armed.store(true, Ordering::Relaxed);
+        }
+
+        pub fn drain_audio(&mut self) -> Vec<f32> {
+            let mut samples = Vec::new();
+            while let Ok(sample) = self.audio.pop() {
+                samples.push(sample);
+            }
+            samples
+        }
+    }
+
+    pub fn channel() -> (Recorder, Capture) {
+        let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+        let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
+        let armed = Arc::new(AtomicBool::new(false));
+        let with_audio = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let rolling = Arc::new(AtomicBool::new(false));
+        let end_at_rewind = Arc::new(AtomicBool::new(false));
+        let hit_rewind = Arc::new(AtomicBool::new(false));
+        let recorder = Recorder {
+            producer,
+            audio,
+            with_audio: with_audio.clone(),
+            armed: armed.clone(),
+            dropped,
+            last_params: [f32::NAN; ParamKey::ALL.len()],
+            was_armed: false,
+            last_position: None,
+            rolling,
+            audio_started: false,
+            end_at_rewind,
+            hit_rewind,
+            finished: false,
+            advanced: false,
+            pending_split: false,
+        };
+        let capture = Capture { _records: records, audio: audio_consumer, armed, with_audio };
+        (recorder, capture)
+    }
+}
+
 /// Move queued audio into the WAV. Separate from [`drain`] because the
 /// volume is different by orders of magnitude: one ring read per pass
 /// rather than per sample.

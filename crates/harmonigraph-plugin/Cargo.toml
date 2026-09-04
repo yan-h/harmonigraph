@@ -30,3 +30,8 @@ rtrb = { workspace = true }
 crossbeam = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+# The process fixture arms the real Recorder but captures into memory, so a
+# test can reach take audio without writing into ~/Music.
+harmonigraph-record = { workspace = true, features = ["test-support"] }

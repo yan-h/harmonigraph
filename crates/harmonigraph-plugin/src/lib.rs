@@ -257,11 +257,10 @@ impl ParamBackend for PluginParamBackend<'_> {
 
 // The decisions `process` makes that do not need a host.
 //
-// `process` only runs with a live `Buffer` and `ProcessContext`, so nothing
-// inside it can be reached from a test. These are the parts where being wrong
-// is SILENT — a ring left out of phase, a take stamped on the wrong clock —
-// which is exactly the class a build cannot catch and a listener notices late.
-// They live out here so they can be tested; `process` stays the wiring.
+// A focused fixture below reaches the real process wiring with live buffers,
+// but these are the decisions whose edge cases are clearer as pure values — a
+// ring left out of phase, a take stamped on the wrong clock — and exactly the
+// class a build cannot catch and a listener notices late.
 
 /// What this block's take timestamps hang off, before the recorder gets a say.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -359,6 +358,14 @@ fn take_right_channel(channels: usize) -> usize {
     usize::from(channels > 1)
 }
 
+/// One stereo frame for the take WAV, from the same selected buffer the live
+/// analyzer reads. The caller has already established that the buffer has at
+/// least one channel and that `frame` is in range.
+fn take_stereo_frame(input: &Buffer<'_>, frame: usize) -> [f32; TAKE_CHANNELS] {
+    let planes = input.as_slice_immutable();
+    [planes[0][frame], planes[take_right_channel(planes.len())][frame]]
+}
+
 /// One source decision for the whole process block. Both the live analyzer and
 /// the take recorder read the returned buffer, so changing the source can never
 /// put the live and offline pictures on opposite inputs. Missing auxiliary data
@@ -436,20 +443,18 @@ impl Plugin for Harmonigraph {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    // Audio passes through untouched, but is tapped for the GUI's spectrum
-    // analyzer — INTERLEAVED, channel by channel, not as a mixdown (see
-    // `process`, and `interleaved_reservation` for what that costs). MIDI is
-    // forwarded verbatim.
+    // Main audio passes through untouched. The selected input is tapped for
+    // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
+    // mixdown (see `process`, and `interleaved_reservation` for what that
+    // costs). MIDI is forwarded verbatim.
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: NonZeroU32::new(2),
         main_output_channels: NonZeroU32::new(2),
         aux_input_ports: &[new_nonzero_u32(2)],
-        names: PortNames {
-            main_input: Some("Main Input"),
-            main_output: Some("Main Output"),
-            aux_inputs: &["Visualization Input"],
-            ..PortNames::const_default()
-        },
+        // nice-plug 0.1.5's `main_output_name` accidentally reads
+        // `main_input`, so leave both main names unset to get the distinct
+        // generated Input/Output pair. The sidechain name is unaffected.
+        names: PortNames { aux_inputs: &["Visualization Input"], ..PortNames::const_default() },
         ..AudioIOLayout::const_default()
     }];
 
@@ -590,11 +595,9 @@ impl Plugin for Harmonigraph {
             // a mono input for.
             if self.take.wants_audio() && channels > 0 {
                 self.take.mark_audio_start(origin);
-                let right = take_right_channel(channels);
-                let planes = analysis_input.as_slice_immutable();
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
-                    (0..block_samples).flat_map(|frame| [planes[0][frame], planes[right][frame]]);
+                    (0..block_samples).flat_map(|frame| take_stereo_frame(analysis_input, frame));
                 self.take.audio(&mut interleaved, wanted);
             }
         }
@@ -627,6 +630,8 @@ nice_export_vst3!(Harmonigraph);
 mod tests {
     use std::time::{Duration, Instant};
 
+    use nice_plug::params::InternalParamMut;
+
     use super::*;
 
     /// How long a "the analyzer has done the work" assertion waits before it
@@ -641,6 +646,52 @@ mod tests {
     /// ever spends this — [`columns_once_analyzed`] returns on the round that
     /// lands — so it costs the suite only when it is about to fail anyway.
     const ANALYSIS_DEADLINE: Duration = Duration::from_secs(5);
+
+    struct EmptyProcessContext {
+        transport: Transport,
+    }
+
+    impl EmptyProcessContext {
+        fn new() -> Self {
+            Self { transport: Transport::new(DEFAULT_SAMPLE_RATE as f32) }
+        }
+    }
+
+    impl ProcessContext<Harmonigraph> for EmptyProcessContext {
+        fn plugin_api(&self) -> PluginApi {
+            PluginApi::Standalone
+        }
+
+        fn execute_background(&self, _task: ()) {}
+
+        fn execute_gui(&self, _task: ()) {}
+
+        fn transport(&self) -> &Transport {
+            &self.transport
+        }
+
+        fn next_event(&mut self) -> Option<PluginNoteEvent<Harmonigraph>> {
+            None
+        }
+
+        fn send_event(&mut self, _event: PluginNoteEvent<Harmonigraph>) {}
+
+        fn set_latency_samples(&self, _samples: u32) {}
+
+        fn set_current_voice_capacity(&self, _capacity: u32) {}
+    }
+
+    fn stereo_buffer<'a>(left: &'a mut [f32], right: &'a mut [f32]) -> Buffer<'a> {
+        assert_eq!(left.len(), right.len());
+        let frames = left.len();
+        let mut buffer = Buffer::default();
+        // SAFETY: both slices stay borrowed for the returned buffer's lifetime,
+        // and the assertion above establishes nice-plug's equal-length contract.
+        unsafe {
+            buffer.set_slices(frames, |channels| *channels = vec![left, right]);
+        }
+        buffer
+    }
 
     /// Columns the background analyzer has produced, or `None` if
     /// [`ANALYSIS_DEADLINE`] passed without one.
@@ -861,8 +912,65 @@ mod tests {
         };
         assert_eq!(layout.main_input_channels.map(NonZeroU32::get), Some(2));
         assert_eq!(layout.main_output_channels.map(NonZeroU32::get), Some(2));
+        assert_eq!(layout.main_input_name(), "Input");
+        assert_eq!(layout.main_output_name(), "Output");
         assert_eq!(layout.aux_input_ports, &[new_nonzero_u32(2)]);
         assert_eq!(layout.aux_input_name(0).as_deref(), Some("Visualization Input"));
+    }
+
+    /// Reach the feature through the callback the host actually invokes. The
+    /// main and sidechain samples are all distinct, so selecting either wrong
+    /// plane or accidentally writing into the pass-through cannot hide behind
+    /// equality. An in-memory recorder arms the real take branch, so its
+    /// captured samples prove that path uses the same selected buffer without
+    /// writing a take into the user's Music directory.
+    #[test]
+    fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
+        let mut plugin = Harmonigraph::default();
+        // SAFETY: this emulates the host wrapper setting a parameter while the
+        // owned parameter object remains alive for the whole process call.
+        assert!(unsafe {
+            plugin.params.analysis_input._internal_set_plain_value(AnalysisInputParam::Sidechain)
+        });
+        let (recorder, mut take_capture) = harmonigraph_record::testing::channel();
+        plugin.take = recorder;
+        take_capture.arm_audio();
+
+        let shared = plugin.editor_shared.clone();
+        let mut shared = shared.lock();
+        let mut main_left = [1.0, 2.0, 3.0, 4.0];
+        let mut main_right = [5.0, 6.0, 7.0, 8.0];
+        let expected_main_left = main_left;
+        let expected_main_right = main_right;
+        let mut sidechain_left = [11.0, 12.0, 13.0, 14.0];
+        let mut sidechain_right = [21.0, 22.0, 23.0, 24.0];
+        let expected_sidechain = [11.0, 21.0, 12.0, 22.0, 13.0, 23.0, 14.0, 24.0];
+
+        {
+            let mut main = stereo_buffer(&mut main_left, &mut main_right);
+            let sidechain = stereo_buffer(&mut sidechain_left, &mut sidechain_right);
+            let mut inputs = [sidechain];
+            let mut outputs = [];
+            let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
+            assert!(matches!(
+                plugin.process(&mut main, &mut aux, &mut EmptyProcessContext::new()),
+                ProcessStatus::Normal,
+            ));
+        }
+
+        assert_eq!(main_left, expected_main_left, "process changed the main left pass-through");
+        assert_eq!(main_right, expected_main_right, "process changed the main right pass-through");
+        assert_eq!(
+            shared.drain_analysis_audio_for_test().as_slice(),
+            &expected_sidechain,
+            "the live analyzer received Main instead of Sidechain",
+        );
+        assert_eq!(
+            take_capture.drain_audio().as_slice(),
+            &expected_sidechain,
+            "the armed take received Main instead of Sidechain",
+        );
+        assert_eq!(plugin.samples_processed, expected_main_left.len() as u64);
     }
 
     /// Source selection is explicit and block-wide. Silence says nothing about
