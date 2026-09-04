@@ -96,6 +96,20 @@ pub const MAX_TAPERS: usize = 8;
 const INTERP_BIN_CEILING: usize =
     ((12 * BINS_PER_SEMITONE) as f32 / std::f32::consts::LN_2) as usize + 8;
 
+/// The ordinary filled spectrum together with a sparse frequency-reassigned
+/// overlay from the same analysis window.
+///
+/// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) stays the inexpensive
+/// filled product used by the existing panes. A consumer that wants sharpened
+/// partials asks for this pair instead, draws `pitch_spectrum` as its broadband
+/// floor, and augments it with `reassigned`; replacing the fill would make
+/// noise, breath, and cymbals collapse back into the speckle the filled product
+/// was introduced to preserve.
+pub struct ReassignedSpectrum {
+    pub pitch_spectrum: [f32; SPECTRUM_BINS],
+    pub reassigned: [f32; SPECTRUM_BINS],
+}
+
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
@@ -111,9 +125,16 @@ pub struct SpectrumAnalyzer {
     tapers: Vec<f32>,
     /// How many of them, so the flat `tapers` can be walked without dividing.
     taper_count: usize,
+    /// The negative time derivative of each entry in `tapers`, in the same
+    /// flattened layout. The sign makes the issue's `omega + Im(X_dh X*)/|X|²`
+    /// form agree with this FFT's negative-exponent convention.
+    derivative_tapers: Vec<f32>,
     /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
     /// tapers it is a property of — see [`taper_norm_power`].
     norm_power: f32,
+    /// The corresponding energy normalization for bins that are DEPOSITED
+    /// rather than sampled at their peaks — see [`reassigned_norm_power`].
+    reassigned_norm_power: f32,
     /// FFT scratch, HALF the window long: the real window is PACKED into a
     /// complex signal of half the length, transformed at that length, and
     /// untangled back into bins — see [`untangle_real_power`].
@@ -139,6 +160,10 @@ pub struct SpectrumAnalyzer {
     /// end is ever written; the rest is allocated once so the fill never has to
     /// grow it.
     bin_mag: Vec<f32>,
+    /// Complex bins of the ordinary taper while the derivative-taper FFT uses
+    /// `re`/`im`. Reused across tapers and calls; only reassignment writes it.
+    base_bin_re: Vec<f32>,
+    base_bin_im: Vec<f32>,
 }
 
 impl SpectrumAnalyzer {
@@ -151,12 +176,16 @@ impl SpectrumAnalyzer {
             filled: 0,
             tapers: Vec::new(),
             taper_count: 0,
+            derivative_tapers: Vec::new(),
             norm_power: 0.0,
+            reassigned_norm_power: 0.0,
             re: Vec::new(),
             im: Vec::new(),
             untangle_twiddles: Vec::new(),
             bin_power: Vec::new(),
             bin_mag: Vec::new(),
+            base_bin_re: Vec::new(),
+            base_bin_im: Vec::new(),
         };
         analyzer.configure(DEFAULT_FFT_SIZE, 1);
         analyzer
@@ -176,12 +205,16 @@ impl SpectrumAnalyzer {
         self.write = 0;
         self.filled = 0;
         self.tapers = build_tapers(fft_size, taper_count);
+        self.derivative_tapers = build_derivative_tapers(fft_size, taper_count);
         self.norm_power = taper_norm_power(&self.tapers, fft_size);
+        self.reassigned_norm_power = reassigned_norm_power(&self.tapers, fft_size);
         self.re = vec![0.0; fft_size / 2];
         self.im = vec![0.0; fft_size / 2];
         self.untangle_twiddles = build_untangle_twiddles(fft_size);
         self.bin_power = vec![0.0; fft_size / 2];
         self.bin_mag = vec![0.0; fft_size / 2];
+        self.base_bin_re = vec![0.0; fft_size / 2];
+        self.base_bin_im = vec![0.0; fft_size / 2];
     }
 
     /// Change the analysis window length (a power of two): longer =
@@ -290,8 +323,41 @@ impl SpectrumAnalyzer {
     /// The refinement had been hiding how little the FFT actually
     /// resolves down low; this shows it.
     pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
+        self.pitch_spectrum_impl(None)
+    }
+
+    /// The unchanged filled pitch spectrum plus a sparse, frequency-reassigned
+    /// overlay, both measured from one window.
+    ///
+    /// This is frequency reassignment only: one derivative-window FFT per
+    /// taper. There is no time-ramped window and no time correction because a
+    /// current-frame consumer has no reassigned time axis to draw. The ordinary
+    /// fill is computed by exactly the same path as [`pitch_spectrum`](Self::pitch_spectrum),
+    /// while the extra transform sharpens coherent partials into `reassigned`.
+    ///
+    /// For an 8192-sample Hann window at 48 kHz, half-bin sinusoids from 85 Hz
+    /// to 1.01 kHz measure within 1.6 cents (one half of the 3.125-cent output
+    /// grid), where selecting an FFT bin alone is 59 to 5 cents away. The
+    /// frequency half adds about 0.07 ms to a one-taper column on the measured
+    /// arm64 host (0.19 ms combined versus 0.12 ms for the fill alone, release,
+    /// measured alongside `fft_bench`); the time-ramped alternative would buy
+    /// no current consumer another transform's cost.
+    pub fn pitch_spectrum_with_reassignment(&mut self) -> Option<ReassignedSpectrum> {
+        let mut reassigned = [0.0; SPECTRUM_BINS];
+        let pitch_spectrum = self.pitch_spectrum_impl(Some(&mut reassigned))?;
+        Some(ReassignedSpectrum { pitch_spectrum, reassigned })
+    }
+
+    fn pitch_spectrum_impl(
+        &mut self,
+        mut reassigned: Option<&mut [f32; SPECTRUM_BINS]>,
+    ) -> Option<[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
+        }
+
+        if let Some(out) = reassigned.as_mut() {
+            out.fill(0.0);
         }
 
         // One transform per taper, summed into `bin_power`. The tapers are
@@ -331,6 +397,41 @@ impl SpectrumAnalyzer {
                 last,
                 &mut self.bin_power,
             );
+
+            if let Some(out) = reassigned.as_mut() {
+                // The derivative transform needs the same scratch, so retain
+                // the ordinary transform's COMPLEX bins — power alone has lost
+                // the phase the cross-spectrum below needs.
+                untangle_real_complex(
+                    &self.re,
+                    &self.im,
+                    &self.untangle_twiddles,
+                    first,
+                    last,
+                    &mut self.base_bin_re,
+                    &mut self.base_bin_im,
+                );
+                for j in 0..half {
+                    let even = (self.write + 2 * j) % self.fft_size;
+                    let odd = (self.write + 2 * j + 1) % self.fft_size;
+                    self.re[j] = self.ring[even] * self.derivative_tapers[taper + 2 * j];
+                    self.im[j] = self.ring[odd] * self.derivative_tapers[taper + 2 * j + 1];
+                }
+                fft_in_place(&mut self.re, &mut self.im, &self.untangle_twiddles);
+                deposit_reassigned_bins(
+                    &self.base_bin_re,
+                    &self.base_bin_im,
+                    &self.re,
+                    &self.im,
+                    &self.untangle_twiddles,
+                    first,
+                    last,
+                    self.fft_size,
+                    self.sample_rate,
+                    self.reassigned_norm_power,
+                    out,
+                );
+            }
         }
 
         // Amplitude normalization so a unit sine reads as ~1.0, precomputed
@@ -488,6 +589,69 @@ fn reconstruct(bin_mag: &[f32], k: usize, t: f32) -> f32 {
         + m1 * (t3 - t2)
 }
 
+/// Add the ordinary taper's energy to the log-pitch bucket named by the
+/// derivative taper's instantaneous-frequency estimate.
+///
+/// The cross-spectrum is the issue's frequency-only form,
+/// `omega_hat = omega + Im(X_dh * conj(X_h)) / |X_h|²`. `dh` is the NEGATIVE
+/// derivative because [`fft_in_place`] uses a negative exponential. Frequencies
+/// are deposited linearly between the two bucket centres around them: one
+/// output bucket alone would quantize motion in 3.125-cent steps, while this
+/// keeps both the location and the energy continuous as a partial crosses one.
+#[allow(clippy::too_many_arguments)]
+fn deposit_reassigned_bins(
+    base_re: &[f32],
+    base_im: &[f32],
+    derivative_re: &[f32],
+    derivative_im: &[f32],
+    twiddles: &[(f32, f32)],
+    first: usize,
+    last: usize,
+    fft_size: usize,
+    sample_rate: f32,
+    norm_power: f32,
+    out: &mut [f32; SPECTRUM_BINS],
+) {
+    let radians_to_hz = sample_rate / std::f32::consts::TAU;
+    for k in first..=last {
+        let (dr, di) = untangle_real_bin(derivative_re, derivative_im, twiddles, k);
+        let (xr, xi) = (base_re[k], base_im[k]);
+        let power = xr * xr + xi * xi;
+        if power <= f32::EPSILON {
+            continue;
+        }
+        let cross_im = di * xr - dr * xi;
+        let omega = std::f32::consts::TAU * k as f32 / fft_size as f32 + cross_im / power;
+        let hz = omega * radians_to_hz;
+        if !hz.is_finite() {
+            continue;
+        }
+        deposit_pitch(out, hz, power * norm_power);
+    }
+}
+
+/// Deposit at a fractional location on the log-frequency output grid.
+fn deposit_pitch(out: &mut [f32; SPECTRUM_BINS], hz: f32, power: f32) {
+    let midi = hz_to_midi(hz);
+    if !midi.is_finite() || !(SPECTRUM_MIN_MIDI..SPECTRUM_MAX_MIDI).contains(&midi) {
+        return;
+    }
+    // Bucket `b` is centred at `MIN + (b + 0.5) / BINS_PER_SEMITONE`.
+    let at = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
+    if at <= 0.0 {
+        out[0] += power;
+        return;
+    }
+    let lower = at.floor() as usize;
+    let fraction = at - lower as f32;
+    if lower + 1 >= SPECTRUM_BINS {
+        out[SPECTRUM_BINS - 1] += power;
+        return;
+    }
+    out[lower] += power * (1.0 - fraction);
+    out[lower + 1] += power * fraction;
+}
+
 /// One [`SpectrumAnalyzer`] per input channel, combined into the single
 /// spectrum the display draws — see [`power_sum`](ChannelBank::power_sum).
 ///
@@ -614,6 +778,36 @@ impl ChannelBank {
         }
         Some(total)
     }
+
+    /// The channels' mean filled and reassigned power from the same window.
+    ///
+    /// This is the bank-level counterpart of
+    /// [`SpectrumAnalyzer::pitch_spectrum_with_reassignment`], so a future
+    /// display consumer can add the sharpened overlay without mixing its input
+    /// channels to mono or running the ordinary FFT twice.
+    pub fn power_sum_with_reassignment(&mut self) -> Option<ReassignedSpectrum> {
+        let mut total = ReassignedSpectrum {
+            pitch_spectrum: [0.0; SPECTRUM_BINS],
+            reassigned: [0.0; SPECTRUM_BINS],
+        };
+        for analyzer in &mut self.per_channel {
+            let channel = analyzer.pitch_spectrum_with_reassignment()?;
+            for (sum, p) in total.pitch_spectrum.iter_mut().zip(&channel.pitch_spectrum) {
+                *sum += p;
+            }
+            for (sum, p) in total.reassigned.iter_mut().zip(&channel.reassigned) {
+                *sum += p;
+            }
+        }
+        let gain = 1.0 / self.per_channel.len() as f32;
+        for sum in &mut total.pitch_spectrum {
+            *sum *= gain;
+        }
+        for sum in &mut total.reassigned {
+            *sum *= gain;
+        }
+        Some(total)
+    }
 }
 
 /// The `count` tapers for a window of `n` samples, laid end to end.
@@ -672,6 +866,35 @@ fn build_tapers(n: usize, count: usize) -> Vec<f32> {
     tapers
 }
 
+/// The negative derivative, per sample, of every taper from [`build_tapers`].
+///
+/// A negative derivative is a sign convention, not a different estimator: the
+/// reassignment formula is written as an ADDITION while this module's FFT uses
+/// `e^-iωt`. Differentiating the positive Hann/sine forms and negating them here
+/// keeps that sign visible at the source rather than hiding it in the
+/// cross-spectrum later.
+fn build_derivative_tapers(n: usize, count: usize) -> Vec<f32> {
+    if count <= 1 {
+        return (0..n)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / n as f32;
+                -std::f32::consts::PI / n as f32 * phase.sin()
+            })
+            .collect();
+    }
+    let scale = (2.0 / (n as f32 + 1.0)).sqrt();
+    let mut derivatives = Vec::with_capacity(count * n);
+    for k in 0..count {
+        let order = (k + 1) as f32;
+        let slope = -scale * std::f32::consts::PI * order / (n as f32 + 1.0);
+        derivatives.extend((0..n).map(|i| {
+            let phase = std::f32::consts::PI * order * (i as f32 + 1.0) / (n as f32 + 1.0);
+            slope * phase.cos()
+        }));
+    }
+    derivatives
+}
+
 /// The scale that puts a full-scale sine at 1.0, for `tapers` of `n` samples
 /// each — applied to the power SUMMED over them, not to the mean.
 ///
@@ -713,6 +936,21 @@ fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
         })
         .sum();
     4.0 / response
+}
+
+/// Normalize power DEPOSITED from every positive-frequency FFT bin so a
+/// full-scale sinusoid sums to one.
+///
+/// [`taper_norm_power`] normalizes the HEIGHT of a sampled spectral peak. A
+/// reassigned line gathers the WHOLE main lobe at one frequency instead, so
+/// applying that scale would count a Hann line 1.5 times. Parseval gives the
+/// gathered positive-frequency energy of a unit sine as
+/// `n * sum(taper²) / 4`; its reciprocal is this scale. Keeping the two norms
+/// separate is what lets the filled floor retain its established dB contract
+/// while the new overlay reports the same 0 dB for the same sine.
+fn reassigned_norm_power(tapers: &[f32], n: usize) -> f32 {
+    let taper_energy: f32 = tapers.iter().map(|w| w * w).sum();
+    4.0 / (n as f32 * taper_energy)
 }
 
 /// The twiddles [`untangle_real_power`] reads: `e^(-i * tau * k / n)` for every
@@ -788,6 +1026,36 @@ fn untangle_real_power(
         let xr = sr + wc * di + ws * dr;
         let xi = si + ws * di - wc * dr;
         power[k] += 0.25 * (xr * xr + xi * xi);
+    }
+}
+
+/// The complex real-input FFT bin that [`untangle_real_power`] reduces to
+/// power. Kept only for the reassignment cross-spectrum; the ordinary analyzer
+/// still takes the shorter power-only path.
+fn untangle_real_bin(re: &[f32], im: &[f32], twiddles: &[(f32, f32)], k: usize) -> (f32, f32) {
+    let half = re.len();
+    let (ws, wc) = twiddles[k];
+    let (ar, ai) = (re[k], im[k]);
+    let (cr, ci) = (re[half - k], im[half - k]);
+    let (sr, si) = (ar + cr, ai - ci);
+    let (dr, di) = (ar - cr, ai + ci);
+    (0.5 * (sr + wc * di + ws * dr), 0.5 * (si + ws * di - wc * dr))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn untangle_real_complex(
+    re: &[f32],
+    im: &[f32],
+    twiddles: &[(f32, f32)],
+    first: usize,
+    last: usize,
+    out_re: &mut [f32],
+    out_im: &mut [f32],
+) {
+    for k in first..=last {
+        let (xr, xi) = untangle_real_bin(re, im, twiddles, k);
+        out_re[k] = xr;
+        out_im[k] = xi;
     }
 }
 
@@ -935,6 +1203,21 @@ mod tests {
         analyzer.pitch_spectrum().expect("window filled")
     }
 
+    /// Feed one sinusoid through the whole rolling analyzer and return only
+    /// the new, sparse overlay. Kept separate from [`analyze_with`] so the
+    /// reassignment test cannot accidentally validate the unchanged resample.
+    fn analyze_reassigned(fft_size: usize, hz: f32, sample_rate: f32) -> [f32; SPECTRUM_BINS] {
+        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+        analyzer.set_fft_size(fft_size);
+        let samples: Vec<f32> = (0..fft_size + 1234)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / sample_rate).sin())
+            .collect();
+        for chunk in samples.chunks(701) {
+            analyzer.push_samples(chunk);
+        }
+        analyzer.pitch_spectrum_with_reassignment().expect("window filled").reassigned
+    }
+
     fn peak_bucket(buckets: &[f32; SPECTRUM_BINS]) -> usize {
         (0..SPECTRUM_BINS).max_by(|&a, &b| buckets[a].total_cmp(&buckets[b])).unwrap()
     }
@@ -976,6 +1259,107 @@ mod tests {
             "amplitude 0.8 should read ~0.64 at its pitch, got {}",
             buckets[peak]
         );
+    }
+
+    /// Frequency reassignment earns its extra FFT by recovering frequencies
+    /// BETWEEN the FFT's samples, especially in the bass where a raw bin is
+    /// wider than a semitone. The fixtures sit exactly halfway between bins so
+    /// selecting a raw maximum cannot satisfy the assertion: its error falls
+    /// from 59 cents at 85 Hz to 5 cents at 1.01 kHz, all above the stated
+    /// 2-cent tolerance of the reassigned log-grid peak.
+    #[test]
+    fn reassignment_places_between_bin_sinusoids_within_two_cents() {
+        let sample_rate = 48_000.0;
+        let fft_size = DEFAULT_FFT_SIZE;
+        let bin_hz = sample_rate / fft_size as f32;
+        for bin in [14.5f32, 37.5, 75.5, 172.5] {
+            let expected_hz = bin * bin_hz;
+            assert!(
+                (bin - bin.round()).abs() > 0.49,
+                "fixture {expected_hz:.2} Hz is not between bins"
+            );
+            let raw_hz = bin.round() * bin_hz;
+            let raw_error_cents = 1200.0 * (raw_hz / expected_hz).log2().abs();
+            assert!(raw_error_cents > 4.5, "raw bin is already precise at {expected_hz:.2} Hz");
+
+            let reassigned = analyze_reassigned(fft_size, expected_hz, sample_rate);
+            let peak = peak_bucket(&reassigned);
+            let got_midi = SPECTRUM_MIN_MIDI + (peak as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            let error_cents = 100.0 * (got_midi - hz_to_midi(expected_hz)).abs();
+            assert!(
+                error_cents <= 2.0,
+                "{expected_hz:.2} Hz (raw-bin error {raw_error_cents:.1}c) reassigned to \
+                 {:.2} Hz, {error_cents:.2}c away",
+                midi_to_hz(got_midi),
+            );
+        }
+    }
+
+    /// Asking for the overlay cannot change the broadband floor beside it. The
+    /// three-taper case reaches the path where derivative FFTs and base FFTs
+    /// alternate through the same scratch before the next taper is accumulated.
+    #[test]
+    fn reassignment_leaves_the_filled_spectrum_bit_identical() {
+        let sample_rate = 48_000.0;
+        let fft_size = DEFAULT_FFT_SIZE;
+        let samples: Vec<f32> = (0..fft_size + 1234)
+            .map(|i| {
+                let t = i as f32 / sample_rate;
+                0.6 * (std::f32::consts::TAU * 219.7 * t).sin()
+                    + 0.2 * (std::f32::consts::TAU * 1010.8 * t).sin()
+            })
+            .collect();
+        for tapers in [1, 3] {
+            let mut plain = SpectrumAnalyzer::new(sample_rate);
+            let mut sharpened = SpectrumAnalyzer::new(sample_rate);
+            plain.set_tapers(tapers);
+            sharpened.set_tapers(tapers);
+            for chunk in samples.chunks(701) {
+                plain.push_samples(chunk);
+                sharpened.push_samples(chunk);
+            }
+            let expected = plain.pitch_spectrum().expect("window filled");
+            let got = sharpened.pitch_spectrum_with_reassignment().expect("window filled");
+            assert!(got.reassigned.iter().any(|p| *p > 0.0), "overlay stayed empty");
+            let moved = expected
+                .iter()
+                .zip(&got.pitch_spectrum)
+                .position(|(a, b)| a.to_bits() != b.to_bits());
+            assert_eq!(moved, None, "{tapers}-taper fill first moved at bucket {moved:?}");
+        }
+    }
+
+    /// Reassignment gathers a window's whole main lobe instead of sampling its
+    /// peak, so it has its own Parseval normalization. Reach both the Hann and
+    /// sine-taper derivative branches and hold the display's established
+    /// full-scale-sine = 0 dB contract to within the same 1.5 dB used by the
+    /// filled spectrum.
+    #[test]
+    fn a_reassigned_full_scale_sine_reads_unity_at_every_taper_count() {
+        let sample_rate = 48_000.0;
+        let fft_size = DEFAULT_FFT_SIZE;
+        let hz = 75.5 * sample_rate / fft_size as f32;
+        let samples: Vec<f32> = (0..fft_size + 1234)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / sample_rate).sin())
+            .collect();
+        for tapers in 1..=MAX_TAPERS {
+            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+            analyzer.set_tapers(tapers);
+            for chunk in samples.chunks(701) {
+                analyzer.push_samples(chunk);
+            }
+            let got = analyzer.pitch_spectrum_with_reassignment().expect("window filled");
+            let peak = peak_bucket(&got.reassigned);
+            let got_midi = SPECTRUM_MIN_MIDI + (peak as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            let error_cents = 100.0 * (got_midi - hz_to_midi(hz)).abs();
+            assert!(
+                error_cents <= 2.0,
+                "{tapers} tapers reassigned {hz:.2} Hz {error_cents:.2}c away"
+            );
+            let total: f32 = got.reassigned.iter().sum();
+            let db = 10.0 * total.max(1e-12).log10();
+            assert!(db.abs() < 1.5, "{tapers} tapers read a reassigned sine at {db:.2} dB");
+        }
     }
 
     /// The bottom of the axis draws at every window length, not just the one
