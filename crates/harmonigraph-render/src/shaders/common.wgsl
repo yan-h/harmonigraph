@@ -225,8 +225,9 @@ const SHADOW_STOP: f32 = 2.0;
 // black.
 //
 // A 1024th and not a 255th, so that top is exactly black under a solid caster:
-// the scene target is 8-bit, so a factor under half a code value of anything it
-// can hold rounds the frame away, which is what the top of that bar says it does.
+// a pure shadow contributes zero source RGB, and on the final 8-bit host target
+// a factor under half a code value of any pane fill rounds the frame away. That
+// is what the top of the bar says it does.
 const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 
 // What a caster's shadow leaves of the frame under one fragment, 0..=1: `keep`

@@ -1124,12 +1124,13 @@ fn shimmer_sharpness() -> f32 {
 //
 // A multiply and not an addition, and that is what the sheet MEANS rather than
 // how it is arithmetically spelled. The values here are gamma-encoded — the
-// targets are UNORM and nothing decodes on the way in — so a multiply here is a
-// multiply in linear light too, which is a pure luminance scale: while it fits,
-// it slides a color along its own chromaticity, holding hue and saturation
-// exactly at every phase. That is what light falling on a surface does, and it
-// is the model that keeps the sheet ONE SIZE, because a ratio is the same ratio
-// on every color where an amount of light is not.
+// half-float working targets and the host's UNORM surface are both non-sRGB, so
+// nothing decodes on the way in — and a channel ratio therefore remains the
+// same through every pass: while it fits, the sheet slides a color along its
+// own chromaticity, holding hue and saturation exactly at every phase. That is
+// what light falling on a surface does, and it is the model that keeps the
+// sheet ONE SIZE, because a ratio is the same ratio on every color where an
+// amount of light is not.
 //
 // It does not always fit, and `shimmer_light` is where that is dealt with: a
 // crest with nowhere left to go pales toward white rather than clipping. So the

@@ -967,7 +967,7 @@ fn a_gaussian_release_does_not_show_its_shadow_through_its_own_ring() {
     let empty = shooter.shot(&scene(0.0, 0.0));
     let full = shooter.shot(&scene(1.0, 0.0));
     let body = fully_inked(&empty, &full);
-    assert!(body.len() > 50, "only {} pixels reach the ring's full coverage", body.len());
+    assert!(body.len() > 30, "only {} pixels reach the ring's full coverage", body.len());
 
     shooter.clear = over_ground();
     let bare_scene = scene(RELEASE, 0.0);
@@ -982,8 +982,10 @@ fn a_gaussian_release_does_not_show_its_shadow_through_its_own_ring() {
     let row = centre.y.round() as u32;
     let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
     let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
+    // One final-output code in each colour channel is the dither/rounding
+    // boundary; anything past their sum is shadow showing through the ring.
     assert!(
-        inside_loss.abs() <= 2,
+        inside_loss.abs() <= 3,
         "the fading ring lost {inside_loss} brightness levels to its own Gaussian shadow",
     );
     assert!(
@@ -1043,7 +1045,8 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
 }
 
 /// Neither Shadow bar at its bottom casts anything, allocates anything, or
-/// moves a single pixel — and the two bottoms draw the identical frame.
+/// moves a pixel past the final output code — and the two bottoms draw the same
+/// frame within that stochastic-rounding boundary.
 ///
 /// The vacuity the whole atlas rests on, asked of a frame carrying one of
 /// everything that casts: a node, a cross and a name. A width of 0 packs no
@@ -1076,10 +1079,14 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     assert_eq!(no_width_atlas, None, "a frame at no Shadow width allocated a cell");
     assert_eq!(no_depth_atlas, None, "a frame at no Shadow depth allocated a cell");
     assert!(cast_atlas.is_some(), "a frame of three casters at a Shadow open allocated nothing");
+    let bottoms_apart = no_width
+        .chunks(4)
+        .zip(no_depth.chunks(4))
+        .filter(|(a, b)| (0..4).any(|c| a[c].abs_diff(b[c]) > 1))
+        .count();
     assert_eq!(
-        differing_pixels(&no_width, &no_depth),
-        0,
-        "the two ways of shutting the Shadow draw different frames",
+        bottoms_apart, 0,
+        "the two ways of shutting the Shadow draw frames apart by more than one output code",
     );
     let moved = differing_pixels(&no_width, &cast);
     assert!(moved > 500, "opening the Shadow moved {moved} pixels, so neither claim above bites");

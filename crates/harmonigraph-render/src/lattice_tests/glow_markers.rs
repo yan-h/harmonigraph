@@ -353,7 +353,7 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
         let square = shooter.shot(&scene(0.0, 1.0));
         let tapered = shooter.shot(&scene(0.0, TAPERED));
         let body: std::collections::BTreeSet<usize> =
-            fully_inked(&bare, &square).into_iter().collect();
+            solid_inked(&bare, &square).into_iter().collect();
         let row = SIZE[0] as usize * 4;
         let fading: Vec<usize> = body
             .iter()
@@ -593,7 +593,7 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     // The glow OFF is what the marker is measured against: no light at the
     // pixel is the one setting left that takes the wash out of the picture.
     let off = shooter.shot(&at(0.0, true));
-    let marker = fully_inked(&bare, &off);
+    let marker = solid_inked(&bare, &off);
     assert!(
         marker.len() > 300,
         "the marker covers {} pixels the node had not already covered",
