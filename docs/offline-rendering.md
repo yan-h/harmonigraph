@@ -75,9 +75,11 @@ moment.
 (Unlike the project's saved `ui-state` blob, which only updates when the editor window closes —
 the trap `read-plugin-state.py` documents.
 You can also override it at render time with `--ui-state`.)
-- **The device has to be in the note path**, exactly as it is live. What it
-no longer needs is *audio* —
-the spectrum is fed from the bounced WAV at render time, so the device's position only has to be right for MIDI.
+- **The device has to receive both the notes and the selected audio input.**
+The notes drive the lattice,
+and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
+A manual render can replace that recording with `--audio`,
+but a device on a pure note track records silence unless the wanted audio is routed to its sidechain.
 
 > **Why a button and not automatic.** The first version armed itself when
 > nice-plug reported `ProcessMode::Offline`, on the theory that exporting
