@@ -1,6 +1,6 @@
-//! The shadow a node's rings and a resting cross cast: the selected kernel of
-//! the item's own ink, multiplied into everything already in the frame under
-//! it by the item's own draw (`shadow_through` in lattice.wgsl).
+//! The shadow a node's rings, a resting cross and a name cast: the selected
+//! kernel of the item's own ink, multiplied into everything already in the
+//! frame under it by the item's own draw (`shadow_through` in lattice.wgsl).
 
 use super::fixtures::*;
 use crate::*;
@@ -1660,7 +1660,6 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
     let scene_of = |text: f32| -> Scene {
         let mut scene = on_ground(GEOMETRY, 0.85);
         scene.shadow.lattice_text.width = text;
-        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         scene
     };
     // The name clear of the node under it, so what the group widens lands on
@@ -1711,6 +1710,70 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
     );
 }
 
+/// A resting marker inherits the WHOLE lattice-text shadow style and none of
+/// the node geometry's: renderer, width, reach and depth.
+///
+/// The caster and uniform assertions pin the handoff on either side of the
+/// CPU/GPU boundary. The rendered controls then prove the shader spends that
+/// handoff: shutting the text depth removes the marker's shadow, while moving
+/// every geometry term leaves a markers-only frame byte-identical.
+#[test]
+fn a_marker_inherits_the_text_groups_whole_shadow() {
+    use harmonigraph_scene::{ShadowKernel, ShadowStyle};
+
+    let geometry = ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.12, depth: 0.2 };
+    let text = ShadowStyle { kernel: ShadowKernel::Distance, width: 0.62, depth: 0.85 };
+    let scene_of = |geometry: ShadowStyle, text: ShadowStyle| {
+        let mut scene = crosses_on_ground(&[(0.0, 1.0)], 0.5, text.width, text.depth);
+        scene.shadow.lattice_geometry = geometry;
+        scene.shadow.lattice_text = text;
+        scene
+    };
+    let scene = scene_of(geometry, text);
+    let callback = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        1,
+        None,
+    );
+    assert_eq!(callback.casters.len(), 1, "the marker fixture did not make its one caster");
+    assert_eq!(callback.casters[0].kernel, text.kernel, "the marker inherited the node renderer");
+    let want_sigma = shadow::sigma_points(text.width, scene.node_radius * points_per_world(&scene));
+    assert!(
+        (callback.casters[0].sigma_points - want_sigma).abs() < 1e-4,
+        "the marker's σ is {} rather than the text group's {want_sigma}",
+        callback.casters[0].sigma_points,
+    );
+    assert_eq!(
+        callback.uniforms.plus_shadow,
+        [text.width, text.kernel.reach_sigmas(), 0.0, text.depth],
+        "the marker shader did not inherit the text group's whole style",
+    );
+
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let inherited = shooter.shot(&scene);
+    let text_off = shooter.shot(&scene_of(geometry, ShadowStyle { depth: 0.0, ..text }));
+    let moved = differing_pixels(&inherited, &text_off);
+    assert!(moved > 200, "the text group's depth moved only {moved} marker pixels");
+
+    let other_geometry = ShadowStyle {
+        kernel: ShadowKernel::Distance,
+        width: harmonigraph_scene::GLOW_SHADOW_MAX,
+        depth: 1.0,
+    };
+    let geometry_moved = shooter.shot(&scene_of(other_geometry, text));
+    assert_eq!(
+        differing_pixels(&inherited, &geometry_moved),
+        0,
+        "changing the node shadow moved a markers-only frame",
+    );
+}
+
 /// A frame whose two groups are drawn by DIFFERENT renderers draws each group
 /// by its OWN renderer, over the ground that group darkens.
 ///
@@ -1746,7 +1809,6 @@ fn a_frame_whose_groups_disagree_draws_both_renderers() {
         scene.shadow.lattice_text.kernel = text;
         scene.shadow.lattice_geometry.width = widths[0];
         scene.shadow.lattice_text.width = widths[1];
-        scene.pluses = vec![one_marker(glam::Vec3::new(1.6, 0.0, 0.0), 0.3, CROSS_INK, 1.0)];
         scene
     };
     // The name clear of the node under it, so the two groups' shadows land on

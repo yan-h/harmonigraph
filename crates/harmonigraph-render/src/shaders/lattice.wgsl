@@ -132,28 +132,30 @@ struct Uniforms {
     // normalized exponential in x. The fixed full/zero endpoints are supplied
     // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
     glow_curve: vec4<f32>,
-    // The SHADOW's dials. x: how wide it is, as a share of a node's radius —
-    // the σ every caster's ink is spent at (`shadow::sigma_points`) and the reach
-    // every quad is grown by (`shadow_reach_uv`); y: how far the chosen
-    // renderer reaches past a caster's ink in the picture's own σ
-    // (`ShadowKernel::reach_sigmas`), which is what a quad is grown BY; w: how
-    // dark it lands, 1 taking the frame under a solid caster down to
-    // `SHADOW_KEEP_FLOOR`. z unused and zeroed by the CPU.
+    // The LATTICE GEOMETRY group's SHADOW dials. x: how wide it is, as a share
+    // of a node's radius — the σ a node's ink is spent at
+    // (`shadow::sigma_points`) and the reach every node quad is grown by
+    // (`shadow_reach_uv`); y: how far the chosen renderer reaches past a
+    // caster's ink in the picture's own σ (`ShadowKernel::reach_sigmas`), which
+    // is what a quad is grown BY; w: how dark it lands, 1 taking the frame under
+    // a solid caster down to `SHADOW_KEEP_FLOOR`. z unused and zeroed by the
+    // CPU.
     //
     // A reach and not a σ RATIO in y, because the two renderers do not end at
     // the same multiple of their own width: the ratio times a constant answers
     // for a Gaussian and would cut a distance's window off a third of the way
     // in. The multiple is spent on the CPU, so a quad here is one number.
     //
-    // Every number on it is the FRAME's, one Shadow across the picture: what a
-    // single caster takes of that is `Caster::sigma_scale`, spent on the CPU
-    // where its cells are packed.
-    //
-    // Read wherever a caster spends its cell (`shadow_through`), which is every
-    // ink draw of the scene pass. NOT zeroed with misc10: a shadow is cast with
-    // no light in the picture at all. Zero in x is the whole feature off, and
-    // `glow_shadow` is the one test anything takes.
+    // Read wherever a node spends its cell (`shadow_through`). NOT zeroed with
+    // misc10: a shadow is cast with no light in the picture at all. Zero in x
+    // is the geometry group's off switch, and `glow_shadow` is the one test a
+    // node takes.
     misc11: vec4<f32>,
+    // The resting markers' shadow, inherited from the LATTICE TEXT group. The
+    // same four terms and layout as `misc11`: width, the renderer's reach in σ,
+    // unused, and depth. Names read the same group's style from text.wgsl's own
+    // uniform; this row exists because a marker is drawn by this module.
+    plus_shadow: vec4<f32>,
     // The node glow's plumbing row, which is not a dial. x: how many rows the
     // ink strip has — the row map's CAPACITY and not this frame's instance
     // count, rows being handed out per node and held for as long as that node's
@@ -281,22 +283,20 @@ const INK_STRIP_N: u32 = 64u;
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
-// The Shadow: how wide every caster's blur is, as a share of a node's radius.
-//
-// ONE length for the whole picture — a node's rings, a resting cross, a name's
-// box — so that what an item casts is read off the item's own ink rather than
-// off which draw it belongs to. σ is half of it (`shadow::sigma_points`), where the
-// derivation of that half is stated.
+// The geometry group's Shadow: how wide a node's shadow is, as a share of its
+// radius. A resting marker takes the same units from `u.plus_shadow`, inherited
+// from the text group, while a name's own pipeline receives that group directly.
+// σ is half of the resolved width (`shadow::sigma_points`), where the derivation
+// of that half is stated.
 //
 // A share of the node's radius, like the two gaps it sits with in the view, and
 // taken from the HOME node's radius alone: a caster on a smaller sheet casts
 // the same width in points, the Shadow being one length across the picture
 // rather than a share of each item.
 //
-// Zero is the whole feature off — no atlas is packed and every draw multiplies
-// by 1 — and it is the one test anything takes. NOT zeroed with the glow:
-// `u.misc11` is packed whatever `misc10` says, a shadow being cast with no
-// light in the picture at all.
+// Zero is the geometry group off — its nodes pack no cells and each multiplies
+// by 1. NOT zeroed with the glow: `u.misc11` is packed whatever `misc10` says,
+// a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
     return max(u.misc11.x, 0.0);
 }
@@ -320,6 +320,21 @@ fn glow_shadow_depth() -> f32 {
 // quads as one Gaussian does.
 fn glow_shadow_reach() -> f32 {
     return max(u.misc11.y, SHADOW_REACH_SIGMAS);
+}
+
+// The text-group counterparts used by a resting marker. Kept as one row in the
+// uniform so changing which group a marker inherits cannot leave one of its
+// width, renderer reach or depth behind with the nodes.
+fn plus_shadow_width() -> f32 {
+    return max(u.plus_shadow.x, 0.0);
+}
+
+fn plus_shadow_depth() -> f32 {
+    return clamp(u.plus_shadow.w, 0.0, 1.0);
+}
+
+fn plus_shadow_reach() -> f32 {
+    return max(u.plus_shadow.y, SHADOW_REACH_SIGMAS);
 }
 
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
@@ -360,7 +375,7 @@ struct ShadowThrough {
 // A caster with no cell leaves the frame exactly whole — a frame with no atlas
 // (either Shadow bar at its bottom) packs none at all, and every draw multiplies
 // by 1 with nothing sampled.
-fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
+fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> ShadowThrough {
     if level <= 0.0 {
         return ShadowThrough(1.0, 1.0);
     }
@@ -369,7 +384,7 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough {
     // however many attachments read it.
     let full = shadow_kernel(u32(max(who, 0.0)), points);
     return ShadowThrough(
-        shadow_transmittance(full, glow_shadow_depth(), level),
+        shadow_transmittance(full, depth, level),
         shadow_transmittance(full, 1.0, level),
     );
 }
@@ -400,11 +415,11 @@ fn plus_shadow_through(
     }
     let caster = u32(max(who, 0.0));
     if !shadow_is_distance(who) {
-        return shadow_through(who, points, level);
+        return shadow_through(who, points, level, plus_shadow_depth());
     }
     let full = standoff_coverage(d_points, 2.0 * shadow_casters[caster].shade.z);
     return ShadowThrough(
-        shadow_transmittance(full, glow_shadow_depth(), distance_level),
+        shadow_transmittance(full, plus_shadow_depth(), distance_level),
         shadow_transmittance(full, 1.0, distance_level),
     );
 }
@@ -2665,7 +2680,12 @@ fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
     // never reaches is the shadow by itself, and that is most of the quad.
-    let t = shadow_through(in.shadow_box.x, in.shadow_at.xy, in.shadow_at.z);
+    let t = shadow_through(
+        in.shadow_box.x,
+        in.shadow_at.xy,
+        in.shadow_at.z,
+        glow_shadow_depth(),
+    );
     if !g.paints {
         // The ink's own threshold, spelled here too and NOT behind `EARLY_OUT`:
         // this branch is the full path with an alpha of zero, so it has to
@@ -2939,9 +2959,10 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     //
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
-    var stand = select(0.0, shadow_reach_uv(1.0) / arm, arm > 0.0);
+    let plus_reach_uv = 0.5 * plus_shadow_width() * plus_shadow_reach() / 1.8;
+    var stand = select(0.0, plus_reach_uv / arm, arm > 0.0);
     if shadow_is_distance(0.0) {
-        stand = glow_shadow_reach() * shadow_casters[0].shade.z / max(arm_points, 1e-6);
+        stand = plus_shadow_reach() * shadow_casters[0].shade.z / max(arm_points, 1e-6);
     }
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON

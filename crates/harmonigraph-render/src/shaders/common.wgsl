@@ -235,9 +235,10 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // as a share of the result rather than inside the exponent.
 //
 // The whole of the arithmetic a caster's draw multiplies by, whatever the caster
-// is — a node's rings, a resting cross, a name's box — so that one Shadow bar is
-// one darkness. What differs between them is where the kernel is SAMPLED and
-// which uniform the depth arrives in, and both stay with the caller.
+// is — a node's rings, a resting cross, a name's box — so every Shadow group
+// spends its depth by the same curve. What differs between them is where the
+// kernel is SAMPLED and which uniform the depth arrives in, and both stay with
+// the caller.
 //
 // `full` arrives already in 0..=1 and already spent through whatever its own
 // renderer owes — the gain on a Gaussian, the standoff's decay on a distance
