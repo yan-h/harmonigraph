@@ -9,6 +9,33 @@ GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the des
 The musical assignment algorithm is deliberately outside this design.
 This document fixes the product and real-time contracts that algorithm will run inside.
 
+## Design priorities
+
+This feature is optimized first for one person's maintained macOS/Bitwig workflow, not for format or host coverage.
+Correct musical state, an inspectable failure mode and one small execution path outrank compatibility that has no current use.
+Add another format, transport, mode or control only when it serves a concrete project and is cheap enough to carry in every later change.
+
+Host behavior is evidence rather than architecture.
+Where the design depends on Bitwig process grouping, callback order, voice identity or CLAP event delivery, issue [#615](https://github.com/yan-h/harmonigraph/issues/615) measures the premise and either records the supported constraint or stops the downstream work.
+
+## Decision record
+
+This table preserves the strongest alternative and the condition that can reopen each choice.
+A later implementation should not broaden a row merely because its rejected branch is technically possible.
+
+| Decision | Chosen design | Strongest alternative | Why this won | Reopen only when |
+|---|---|---|---|---|
+| Attack timing | Immediate optimistic assignment, frozen through release | Synchronized attacks or later reconciliation | Avoids MIDI buffering, live latency, PDC, transition policy and a second failure state machine; simultaneous cross-track blindness is expected to be negligible in practice | Listening or shadow measurement demonstrates a musically material discrepancy |
+| Plugin boundary | Separate lightweight Harmonigraph Tune CLAP companion | Full-plugin instances or one class with persisted Hub/Tuner roles | Keeps the pre-instrument device and its lifecycle small and gives the host a clear note-effect identity | #615 shows separate classes cannot share a reliable supported process/session topology |
+| Snapshot age | Latest snapshot sealed before the current processing region | Fixed sample look-behind horizon | Uses the freshest causally complete context without a latency or staleness parameter | #615 shows materially different live/offline results across buffer configurations |
+| State authority | Assignment emitted downstream for each voice | Ideal assignment recomputed later by the hub | Future notes and recorded takes must use the pitch Harmonigraph actually requested rather than a hypothetical result | A real downstream pitch-feedback mechanism exists and is worth integrating |
+| Pitch output | CLAP per-note tuning expression only | MTS-ESP, MPE or VST3 note output | Matches sample-timed per-voice frozen assignments and the actual personal host while adding no external tuning service | A required instrument cannot consume it or #615 disproves reliable delivery |
+| Session transport | In-process registry under a documented Bitwig hosting mode | Cross-process shared memory | Avoids process discovery, crash recovery and stale shared state for compatibility that is not currently needed | #615 shows no usable in-process topology or a concrete workflow requires another hosting mode |
+| Hub ownership | Full Harmonigraph, normally on Master | Headless conductor or elected tuner peer | Reuses the existing configuration, display, take and combined-audio location without another authority or plugin role | The hub cannot remain active in the supported graph or a project demonstrably needs tuning without a full Harmonigraph |
+| Unhealthy session | Discard remote context and pass new notes through unretuned | Continue with stale context or a local-only adaptive mode | Failure is obvious and deterministic and cannot silently substitute a different tuning system | Measured transient session gaps make the fail-open result more disruptive than an explicitly designed alternative |
+| Participation UI | One Participating/Off control | Independent visibility, context and retune switches | Minimizes persisted states, combinations and tests before anchors or monitor-only tracks have a concrete musical contract | A real project requires a specific excluded combination |
+| Policy location | Same pure policy runs in each tuner | Hub-precomputed next-note map | Naturally includes the tuner's newer local overlay and same-sample batch without another response path | Profiling shows the actual policy is too expensive on the audio thread |
+
 ## User workflow
 
 One full Harmonigraph is the project's state hub, combined note display and take recorder.
@@ -54,19 +81,22 @@ A note ending changes future context but does not move the survivors.
 This behavior is chronological and can be path-dependent.
 That is the product semantics rather than an approximation awaiting a globally synchronized answer.
 
-## Actual pitches are authoritative
+## Emitted assignments are authoritative
 
-The project state contains the pitches the tuners actually emitted, not a recomputed ideal chord.
-Otherwise a later note could adapt to a pitch no instrument is sounding.
+The project state contains the pitch assignments the tuners emitted downstream, not a recomputed ideal chord.
+This is not a measurement of the resulting acoustic pitch:
+a receiving instrument may ignore or smooth the expression or add its own modulation.
+Within Harmonigraph's observable event protocol, the emitted assignment is nevertheless the only honest authority.
+Otherwise a later note could adapt to an ideal pitch that was never requested downstream.
 
-The same actual-output stream drives:
+The same emitted-assignment stream drives:
 
 - future adaptive context;
 - the lattice, note roll and other live views;
 - the take recorder;
 - offline replay of that take.
 
-Recording assignments rather than reconstructing them also preserves the result if callback or render-buffer chronology proves observable.
+Recording assignments rather than reconstructing them also preserves the requested result if callback or render-buffer chronology proves observable.
 
 ## Report and snapshot flow
 
@@ -155,7 +185,9 @@ the tuner still forwards pedal and unrelated MIDI without changing their timing.
 
 The first and only output backend is CLAP per-note tuning expression, and the tuner companion is exported only as CLAP initially.
 At note-on the tuner emits a `CLAP_NOTE_EXPRESSION_TUNING` value for the same voice and sample position as the note.
-The adaptive offset composes with incoming per-note tuning expression, and later player expression continues relative to that frozen offset.
+CLAP note expressions state the current value rather than adding a delta.
+The tuner therefore retains the player's current tuning expression per voice and emits `player expression + frozen adaptive offset` at note-on and after every later player-expression change.
+It never forwards a later player value unmodified because that would erase the adaptive offset.
 
 CLAP note expression is a good fit because it is sample-accurate and can address a distinct voice by note ID, port, channel and key.
 The Bitwig spike verifies event ordering and the exact instruments used in practice before the feature is considered viable.
@@ -256,6 +288,27 @@ The following are not launch modes or implied follow-up work:
 They require new evidence and a new issue before implementation.
 An optional development-only shadow measurement may later compare frozen output with a hypothetical complete-state result without changing MIDI.
 That measurement would test whether synchronization or reconciliation has musical value rather than presuming it.
+
+## Evidence and current seams
+
+These sources establish available mechanisms and the constraints that motivated the design:
+
+- [CLAP events](https://github.com/free-audio/clap/blob/main/include/clap/events.h) defines sample-accurate note expressions,
+voice addressing and relative tuning in semitones;
+- [Bitwig plugin hosting modes](https://www.bitwig.com/userguide/latest/vst_plug-in_handling_and_options/) describes **By manufacturer** as useful for plugins from one developer that communicate;
+- [Bitwig Note FX](https://www.bitwig.com/userguide/latest/note_fx/) establishes the pre-instrument note-effect placement;
+- [MTS-ESP](https://github.com/ODDSound/MTS-ESP/blob/main/README.md) documents its single-master note/channel lookup and client-query model.
+
+The implementation starts from these repository seams:
+
+- [`harmonigraph-plugin/src/lib.rs`](../crates/harmonigraph-plugin/src/lib.rs) declares basic MIDI input/output,
+forwards host events and currently drops host voice identity while mapping notes;
+- [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) currently identifies tracked notes by channel and key,
+which is insufficient across sources;
+- [`harmonigraph-core/src/tuning.rs`](../crates/harmonigraph-core/src/tuning.rs) already supplies the exact pitch representation the policy and emitted-assignment state should retain.
+
+The external documents do not prove actual Bitwig behavior in this plugin chain.
+That empirical evidence belongs on #615 as bounded traces and measured verdicts, so an auditor can distinguish specification, design assumption and observed result.
 
 ## Implementation order
 
