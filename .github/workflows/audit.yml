@@ -50,7 +50,9 @@ permissions:
   issues: write
 
 concurrency:
-  group: audit-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A main push may skip the audit when dependencies did not move, so it must
+  # not cancel a scheduled or manually requested run that always performs it.
+  group: audit-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
