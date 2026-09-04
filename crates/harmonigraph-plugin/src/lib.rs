@@ -550,7 +550,8 @@ mod tests {
     use super::*;
 
     /// How long a "the analyzer has done the work" assertion waits before it
-    /// calls the wiring broken.
+    /// gives up — on the analyzer, or on the machine, which is a distinction
+    /// [`columns_once_analyzed`] keeps rather than resolves.
     ///
     /// Two orders of magnitude over the 20 ms poll, because what has to be
     /// bounded is not how fast the analyzer works but how long the scheduler
