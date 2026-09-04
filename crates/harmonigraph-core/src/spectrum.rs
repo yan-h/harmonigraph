@@ -13,8 +13,11 @@
 //! (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a stereo input at 8192
 //! points runs 250 transforms a second — and a DAW keeps that fed with silence
 //! as much as with audio, so the cost is continuous rather than only while
-//! something plays. At ~0.06 ms each that is ~1.6% of a core, which is why
-//! both the packing and `fft_in_place`'s twiddle order are written for the
+//! something plays. At ~0.043 ms each that is ~1.1% of a core — it was ~1.6%
+//! before the transform stopped computing its twiddles, and `fft_bench`'s
+//! `fft_in_place + untangle (a column's)` row is the number to re-read it off
+//! rather than the bare transform's. Which is why
+//! both the packing and `fft_in_place`'s twiddle handling are written for the
 //! call rate this actually sees rather than the one a spectrum analyzer sounds
 //! like it should have.
 
@@ -119,6 +122,9 @@ pub struct SpectrumAnalyzer {
     /// The untangle's twiddles, one per bin of the half transform. Precomputed
     /// with the buffers it is sized against, because computing them live hands
     /// the packing's whole saving back — see [`build_untangle_twiddles`].
+    ///
+    /// [`fft_in_place`] reads it too, at a stride per stage: the transform's
+    /// twiddles are a SUBSET of these, so buying this table bought that one.
     untangle_twiddles: Vec<(f32, f32)>,
     /// Power per bin, SUMMED across the tapers by
     /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) — the one place the
@@ -316,7 +322,7 @@ impl SpectrumAnalyzer {
                 self.re[j] = self.ring[even] * self.tapers[taper + 2 * j];
                 self.im[j] = self.ring[odd] * self.tapers[taper + 2 * j + 1];
             }
-            fft_in_place(&mut self.re, &mut self.im);
+            fft_in_place(&mut self.re, &mut self.im, &self.untangle_twiddles);
             untangle_real_power(
                 &self.re,
                 &self.im,
@@ -712,15 +718,26 @@ fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
 /// The twiddles [`untangle_real_power`] reads: `e^(-i * tau * k / n)` for every
 /// bin `k` of the half transform, where `n` is the REAL window length.
 ///
-/// A TABLE rather than a `sin_cos` per bin, which is the difference between the
-/// packing paying for itself and not paying at all: the untangle visits nearly
-/// as many bins as the half transform makes `sin_cos` calls (`n/2 - 1` of
-/// them), so computing an angle at each one puts the whole of the trig the
-/// packing just saved straight back. What it costs is state — one table per
-/// window length, built where every other buffer sized on `fft_size` is.
+/// [`fft_in_place`] reads the SAME table for its stage twiddles, at a stride
+/// per stage — the transform runs at `n / 2`, and its angles are every second
+/// entry of this one, subsampled again for each earlier stage. So the table is
+/// built for the untangle and the transform gets its own for nothing; the
+/// derivation is on `fft_in_place`.
 ///
-/// `(sin, cos)` in that order, which is `f32::sin_cos`'s own, so the entry
-/// destructures the way the transform's inline twiddles do.
+/// A TABLE rather than a `sin_cos` per bin, which is what makes the packing pay
+/// for itself: the untangle visits `n/2 - 3` bins, so an angle computed at each
+/// one would put back all of the trig the packing had just saved. That was the
+/// whole of the argument when the transform still computed its own angles
+/// beside this; now that it reads these, the table is paid for once and cashed
+/// TWICE — once by the untangle it was built for, and once by a transform that
+/// computes no angles at all. What it costs is state, one table per window
+/// length, built where every other buffer sized on `fft_size` is.
+///
+/// `(sin, cos)` in that order, which is `f32::sin_cos`'s own, so nothing has to
+/// reorder the pair between building an entry here and destructuring one in
+/// [`untangle_real_power`] or [`fft_in_place`] — the two readers of this table
+/// and, since the transform's `sin_cos` went away, the only places the order
+/// is visible at all.
 fn build_untangle_twiddles(n: usize) -> Vec<(f32, f32)> {
     (0..n / 2)
         .map(|k| {
@@ -776,9 +793,26 @@ fn untangle_real_power(
 
 /// Iterative radix-2 Cooley-Tukey, in place. Lengths are compile-time
 /// powers of two here; debug_assert documents the requirement.
-fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
+///
+/// `twiddles` is [`build_untangle_twiddles`]`(2 * re.len())` — the very table
+/// the analyzer already holds for its untangle, passed in rather than rebuilt,
+/// because at the length a column transforms the two are the SAME SET. The
+/// untangle's table is `e^(-i * tau * t / 2n)` for `t` in `0..n`; a stage at
+/// length `len` wants `e^(-i * tau * k / len)` for `k` in `0..len / 2`, and
+/// `k / len` is `(k * n / (len / 2)) / 2n`, so the stage's twiddle is entry
+/// `k * stride` at `stride = n / (len / 2)`. Every stage is a subsampling of
+/// the last one, and the last one is every second entry of the untangle's.
+///
+/// So the transform's twiddles cost no state at all here: the table is built
+/// once in `configure`, where `fft_size` changes, for a pass that needed it
+/// anyway. See [`build_untangle_twiddles`] for the table itself.
+fn fft_in_place(re: &mut [f32], im: &mut [f32], twiddles: &[(f32, f32)]) {
     let n = re.len();
     debug_assert!(n.is_power_of_two() && im.len() == n);
+    debug_assert!(
+        twiddles.len() == n,
+        "one entry per point of the transform: `build_untangle_twiddles(2 * n)`"
+    );
 
     // Bit-reversal permutation.
     let bits = n.trailing_zeros();
@@ -792,38 +826,70 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
 
     let mut len = 2;
     while len <= n {
-        let step = std::f32::consts::TAU / len as f32;
         let half = len / 2;
-        // The twiddle loop sits OUTSIDE the block loop, so a stage computes its
-        // `half` sin_cos values once each instead of once per block. That is
-        // 8191 calls across an n = 8192 transform against 53248 the other way
-        // round, and the difference is most of what the FFT costs: the
-        // butterflies themselves are a handful of multiplies, sin_cos is a
-        // libm call, and this order is 2.1x faster on the transform — about
-        // 1.7x through `pitch_spectrum`, which does the bucketing as well.
+        // The table read replaced a `sin_cos` per (stage, `k`), which was most
+        // of what this cost — the butterflies are a handful of multiplies and
+        // sin_cos is a libm call — and it is 1.26x on the transform at n = 4096
+        // (0.0503 ms to 0.0399 ms, `examples/fft_bench.rs`).
         //
-        // The blocks within a stage are independent, so this is the same
-        // arithmetic on the same values in a different order — equal bit for
-        // bit, not merely within tolerance. Bits are the bar because a
-        // transform that is only CLOSE moves every pixel of a render, so a
-        // take rendered by two builds stops matching itself and one shot of a
-        // multi-shot video no longer cuts against its siblings. The test that
-        // holds this is `reusing_a_stages_twiddles_does_not_move_a_single_bit`
-        // in this module, and it holds it alone: the offline determinism tests
-        // render twice from ONE build and compare the runs, so they catch
+        // **The `k` loop stays OUTSIDE the block loop, and that is measured
+        // rather than left over.** It was put there to amortize the libm call
+        // over a stage's blocks, so the obvious follow-through is to undo the
+        // hoist now that there is no call to amortize and let each block walk
+        // `re`/`im` in order. That is 6% SLOWER (0.0423 ms against 0.0399 ms):
+        // the twiddle stays in a register across the whole inner loop this way,
+        // where block-major reloads it per butterfly, and that beats the
+        // locality it gives up. `fft, table, k inside the blocks` in the bench
+        // is the row, kept so the next reader does not have to re-derive it.
+        //
+        // The result is bit-identical to BOTH spellings it replaced, which is
+        // the bar and not a nicety: a transform that is only CLOSE moves every
+        // pixel of a render, so a take rendered by two builds stops matching
+        // itself and one shot of a multi-shot video no longer cuts against its
+        // siblings. Two things make it exact. The blocks and the `k`s of one
+        // stage touch disjoint pairs, so any order over them is the same
+        // arithmetic on the same values. And the angle rounds once to the same
+        // f32 either way: `TAU / len` is exact for a power-of-two `len`, so the
+        // inline form was `round(TAU * k / len)`, while the table rounds
+        // `TAU * t` and then divides by `2n`, which is exact because it is a
+        // power of two — and `t = k * stride` is chosen to make `t / 2n` the
+        // same real number as `k / len`.
+        //
+        // Equal angles are NOT the whole of it, and the missing half is worth
+        // writing down because it would read as a mystery. Two spellings also
+        // have to be EVALUATED the same way: with a compile-time-constant
+        // operand LLVM folds the call at build time, and that fold is not
+        // obliged to match the libm the same call reaches at runtime. Measured
+        // on the pinned toolchain (1.92, aarch64-apple-darwin, where
+        // `f32::sin_cos` lowers to one `___sincosf_stret`): over the 2048
+        // distinct angles of the `k / 4096` grid, given as literals so they
+        // certainly fold, exactly one comes out 1 ULP apart in `cos` from the
+        // runtime call — `-TAU * 49/512`, at opt-level 2 and 3 alike.
+        //
+        // The transform is immune by construction, and more so than before:
+        // there is now exactly ONE `sin_cos` in this file outside the tests,
+        // in `build_untangle_twiddles`, and `configure` drives it with a
+        // runtime `fft_size`, so its operand is never a constant and the
+        // untangle and the transform can no longer disagree about an angle
+        // they both read from one table.
+        //
+        // Where the exposure sits is the TEST, which deliberately puts a
+        // foldable evaluation next to a called one, and `[profile.dev]
+        // opt-level = 2` means `cargo test` is optimized. It is clean today,
+        // and not by luck: the sweep entries small enough for LLVM to unroll
+        // (`n` = 2, 4, 16, so tables of 4, 8 and 32) hold no divergent angle,
+        // while the first one that diverges needs a table of 512. The two
+        // conditions do not currently overlap. A compiler bump could move
+        // either, so if that test ever goes red by a single ULP, this is what
+        // it is before anything else is suspected.
+        //
+        // `reusing_a_stages_twiddles_does_not_move_a_single_bit` in this module
+        // holds that, and holds it alone: the offline determinism tests render
+        // twice from ONE build and compare the runs, so they catch
         // nondeterminism and are blind to drift.
-        //
-        // A twiddle TABLE is faster again — another ~19% — and is the thing to
-        // reach for if this ever matters more. It is bit-identical too,
-        // measured across n = 2..16384: `TAU / len` is exact for a power-of-two
-        // `len` and dividing by `n` is exact, so both spellings of the angle
-        // round the same real value once. What it costs is state — a table
-        // rebuilt in `configure`, which is the one place `fft_size` changes,
-        // alongside `ring`, `tapers`, `re` and `im`. That price is already
-        // paid there once, for `untangle_twiddles`.
+        let stride = n / half;
         for k in 0..half {
-            let angle = -step * k as f32;
-            let (ws, wc) = angle.sin_cos();
+            let (ws, wc) = twiddles[k * stride];
             for start in (0..n).step_by(len) {
                 let (i, j) = (start + k, start + k + half);
                 let (tr, ti) = (re[j] * wc - im[j] * ws, re[j] * ws + im[j] * wc);
@@ -1291,9 +1357,9 @@ mod tests {
             (0..n).map(|i| (i as f32 * 0.7).sin() + 0.3 * (i as f32 * 2.1).cos()).collect();
         let mut re: Vec<f32> = signal.iter().step_by(2).copied().collect();
         let mut im: Vec<f32> = signal.iter().skip(1).step_by(2).copied().collect();
-        fft_in_place(&mut re, &mut im);
-        let mut power = vec![0.0f32; half];
         let twiddles = build_untangle_twiddles(n);
+        fft_in_place(&mut re, &mut im, &twiddles);
+        let mut power = vec![0.0f32; half];
         untangle_real_power(&re, &im, &twiddles, 1, half - 1, &mut power);
         for (k, &p) in power.iter().enumerate().skip(1) {
             let (mut dr, mut di) = (0.0f64, 0.0f64);
@@ -1310,22 +1376,45 @@ mod tests {
         }
     }
 
-    /// [`fft_in_place`] computes each stage's twiddles once and reuses them
-    /// across that stage's blocks. Sound only if it agrees with the per-block
-    /// order BIT FOR BIT, which is a stricter bar than the tolerance the naive
-    /// DFT test above holds: a transform that is merely *close* moves every
-    /// pixel of a render, so a take rendered by two builds stops matching
-    /// itself and one shot of a multi-shot video no longer cuts against its
-    /// siblings.
+    /// [`fft_in_place`] reuses one twiddle across a stage's blocks, and takes
+    /// it from a strided read of the untangle's table rather than a `sin_cos`.
+    /// Sound only if it agrees with the spellings it replaced BIT FOR BIT,
+    /// which is a stricter bar than the tolerance the naive DFT test above
+    /// holds: a transform that is merely *close* moves every pixel of a
+    /// render, so a take rendered by two builds stops matching itself and one
+    /// shot of a multi-shot video no longer cuts against its siblings.
     ///
     /// Nothing else in the tree pins that. Both offline determinism tests
     /// render twice from ONE build and compare the runs to each other, so they
     /// are invariant to any change in what the FFT computes — they catch
     /// nondeterminism, not drift. This is the test that would fail.
     ///
-    /// The per-block order is kept here as the reference rather than deleted
-    /// with the change, because the claim is *about* the two orders agreeing
-    /// and there is otherwise nothing to compare against.
+    /// Two references, because there are two claims and each needs its own.
+    /// [`per_block_twiddles`] recomputes the angle inside the butterfly loop,
+    /// so against it the table's INDEXING is what is under test — a stride off
+    /// by a factor of two reads a real twiddle from the wrong stage and shows
+    /// here rather than as a rounding difference. [`hoisted_twiddles`] is the
+    /// shape this shipped before the table, with `k` outside the block loop, so
+    /// against it the loop ORDER is what is under test. Both are kept rather
+    /// than deleted with the change, because the claim is about the three
+    /// agreeing and there is otherwise nothing to compare against.
+    ///
+    /// The sweep runs on TRANSFORM lengths, not window lengths — `n` here is
+    /// what `fft_in_place` is handed, which is half the real window, so the
+    /// table each entry builds is `build_untangle_twiddles(2 * n)`.
+    ///
+    /// Its ends are the degenerate stages. At `n = 2` the transform is one
+    /// stage that is a single block AND a single twiddle, and its stride
+    /// (`n / half` = 2) is never multiplied by a nonzero `k`, so that entry
+    /// cannot catch a stride error at all — it checks the table is long enough
+    /// and the indexing does not panic. `n = 4` is the smallest length where a
+    /// stride is actually exercised, at `k = 1` of the last stage.
+    ///
+    /// The middle covers every length the UI can reach: `SpectrumWindow`
+    /// offers 4096, 8192 and 16384 samples, which transform at 2048, 4096 and
+    /// 8192, and all three are here. `16384` is one step past what the enum
+    /// offers (it would be a 32768-sample window), kept as headroom for a
+    /// fourth entry rather than as a claim that something asks for it.
     #[test]
     fn reusing_a_stages_twiddles_does_not_move_a_single_bit() {
         /// Radix-2 with the twiddle recomputed inside the butterfly loop —
@@ -1361,20 +1450,62 @@ mod tests {
             }
         }
 
-        // 2 and 4 are the degenerate stages (one block, or one twiddle); the
-        // rest are every window `SpectrumWindow::samples` can ask for.
-        for n in [2usize, 4, 16, 256, 4096, DEFAULT_FFT_SIZE, 16384] {
+        /// The shape this shipped before the table: one `sin_cos` per (stage,
+        /// `k`), hoisted out of the block loop so a stage paid for its angles
+        /// once rather than once per block.
+        fn hoisted_twiddles(re: &mut [f32], im: &mut [f32]) {
+            let n = re.len();
+            let bits = n.trailing_zeros();
+            for i in 0..n {
+                let j = i.reverse_bits() >> (usize::BITS - bits);
+                if j > i {
+                    re.swap(i, j);
+                    im.swap(i, j);
+                }
+            }
+            let mut len = 2;
+            while len <= n {
+                let step = std::f32::consts::TAU / len as f32;
+                let half = len / 2;
+                for k in 0..half {
+                    let angle = -step * k as f32;
+                    let (ws, wc) = angle.sin_cos();
+                    for start in (0..n).step_by(len) {
+                        let (i, j) = (start + k, start + k + half);
+                        let (tr, ti) = (re[j] * wc - im[j] * ws, re[j] * ws + im[j] * wc);
+                        re[j] = re[i] - tr;
+                        im[j] = im[i] - ti;
+                        re[i] += tr;
+                        im[i] += ti;
+                    }
+                }
+                len *= 2;
+            }
+        }
+
+        for n in [2usize, 4, 16, 256, 2048, 4096, DEFAULT_FFT_SIZE, 16384] {
             let signal: Vec<f32> =
                 (0..n).map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos()).collect();
             let (mut ar, mut ai) = (signal.clone(), vec![0.0f32; n]);
             let (mut br, mut bi) = (signal.clone(), vec![0.0f32; n]);
-            fft_in_place(&mut ar, &mut ai);
+            let (mut cr, mut ci) = (signal.clone(), vec![0.0f32; n]);
+            // The table the analyzer holds for a real window of `2 * n`, which
+            // is the window whose transform runs at `n`.
+            let twiddles = build_untangle_twiddles(2 * n);
+            fft_in_place(&mut ar, &mut ai, &twiddles);
             per_block_twiddles(&mut br, &mut bi);
+            hoisted_twiddles(&mut cr, &mut ci);
             // Compared as bits, not by `==`: the point is that not one ULP
             // moved, and float equality would also call two NaNs unequal.
             let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
             assert_eq!(bits(&ar), bits(&br), "real part differs at n = {n}");
             assert_eq!(bits(&ai), bits(&bi), "imaginary part differs at n = {n}");
+            assert_eq!(bits(&ar), bits(&cr), "real part differs from the hoisted order at n = {n}");
+            assert_eq!(
+                bits(&ai),
+                bits(&ci),
+                "imaginary part differs from the hoisted order at n = {n}"
+            );
         }
     }
 

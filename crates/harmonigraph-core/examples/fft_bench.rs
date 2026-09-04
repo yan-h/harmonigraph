@@ -86,8 +86,11 @@ fn fft_per_stage(re: &mut [f32], im: &mut [f32]) {
     }
 }
 
-/// One twiddle table for the whole transform, built once and indexed per
-/// stage. Same butterfly order as the baseline.
+/// A copy of the shipped `fft_in_place`: no `sin_cos` at all, every stage a
+/// strided read of the UNTANGLE's table — `tw.len() == re.len()`, twice the
+/// length a table built for this transform alone would be, which is the point
+/// (nothing new is allocated) and also the reason to time it rather than a
+/// compact one. Same loop nest as [`fft_per_stage`], `k` outside the blocks.
 fn fft_table(re: &mut [f32], im: &mut [f32], tw: &[(f32, f32)]) {
     let n = re.len();
     let bits = n.trailing_zeros();
@@ -101,7 +104,43 @@ fn fft_table(re: &mut [f32], im: &mut [f32], tw: &[(f32, f32)]) {
     let mut len = 2;
     while len <= n {
         let half = len / 2;
-        let stride = n / len;
+        let stride = n / half;
+        for k in 0..half {
+            let (ws, wc) = tw[k * stride];
+            for start in (0..n).step_by(len) {
+                let (i, j) = (start + k, start + k + half);
+                let (tr, ti) = (re[j] * wc - im[j] * ws, re[j] * ws + im[j] * wc);
+                re[j] = re[i] - tr;
+                im[j] = im[i] - ti;
+                re[i] += tr;
+                im[i] += ti;
+            }
+        }
+        len *= 2;
+    }
+}
+
+/// The same table walked a BLOCK at a time, which is the shape to reach for
+/// once the hoist has nothing left to amortize: the `k` loop was outside the
+/// blocks to spread one libm call over them, and a table read is not a libm
+/// call. It loses anyway, and this row is why that is written down rather than
+/// re-derived — a block-major inner loop reloads the twiddle per butterfly,
+/// where the hoisted one keeps it in a register across the stage, and that
+/// costs more than the locality it buys.
+fn fft_table_block_major(re: &mut [f32], im: &mut [f32], tw: &[(f32, f32)]) {
+    let n = re.len();
+    let bits = n.trailing_zeros();
+    for i in 0..n {
+        let j = i.reverse_bits() >> (usize::BITS - bits);
+        if j > i {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let half = len / 2;
+        let stride = n / half;
         for start in (0..n).step_by(len) {
             for k in 0..half {
                 let (ws, wc) = tw[k * stride];
@@ -134,9 +173,9 @@ fn untangle(re: &[f32], im: &[f32], tw: &[(f32, f32)], power: &mut [f32]) {
     }
 }
 
-/// `e^(-i * tau * k / n)` for `k` in `0..n / 2`. At the transform's own length
-/// that is the stage table `fft_table` subsamples by stride; at the REAL window
-/// length it is the table the untangle indexes by bin.
+/// `e^(-i * tau * k / n)` for `k` in `0..n / 2`. At the REAL window length it
+/// is both tables at once: the one the untangle indexes by bin, and the one
+/// `fft_table` subsamples by stride for the half-length transform's stages.
 fn twiddles(n: usize) -> Vec<(f32, f32)> {
     (0..n / 2)
         .map(|k| {
@@ -229,7 +268,8 @@ fn main() {
             0.5 - 0.5 * phase.cos()
         })
         .collect();
-    let tw = twiddles(m);
+    // ONE table, read two ways: by bin for the untangle, by stride for the
+    // transform's stages. `SpectrumAnalyzer` holds exactly this and no more.
     let untw = twiddles(n);
 
     println!("\nFFT core, n = {m} (half of the {n}-sample window), {iters} iterations each");
@@ -242,21 +282,26 @@ fn main() {
         im.copy_from_slice(&packed_im);
         fft_per_block(black_box(&mut re), black_box(&mut im));
     });
-    let shipped = bench("fft_in_place (current)", iters, || {
+    let hoisted = bench("fft, sin_cos hoisted per stage", iters, || {
         re.copy_from_slice(&packed_re);
         im.copy_from_slice(&packed_im);
         fft_per_stage(black_box(&mut re), black_box(&mut im));
     });
-    let table = bench("fft, precomputed twiddle table", iters, || {
+    let block_major = bench("fft, table, k inside the blocks", iters, || {
         re.copy_from_slice(&packed_re);
         im.copy_from_slice(&packed_im);
-        fft_table(black_box(&mut re), black_box(&mut im), black_box(&tw));
+        fft_table_block_major(black_box(&mut re), black_box(&mut im), black_box(&untw));
+    });
+    let shipped = bench("fft_in_place (current)", iters, || {
+        re.copy_from_slice(&packed_re);
+        im.copy_from_slice(&packed_im);
+        fft_table(black_box(&mut re), black_box(&mut im), black_box(&untw));
     });
     let mut power = vec![0.0f32; m];
     let packing = bench("fft_in_place + untangle (a column's)", iters, || {
         re.copy_from_slice(&packed_re);
         im.copy_from_slice(&packed_im);
-        fft_per_stage(black_box(&mut re), black_box(&mut im));
+        fft_table(black_box(&mut re), black_box(&mut im), black_box(&untw));
         untangle(black_box(&re), black_box(&im), black_box(&untw), black_box(&mut power));
     });
 
@@ -286,23 +331,28 @@ fn main() {
 
     println!("\nSummary");
     let stages = m.trailing_zeros() as usize;
-    // Per stage the shipped order computes `half` twiddles and the per-block
-    // order computes them once per block, i.e. `half` times `m / len`.
-    println!("  sin_cos per FFT, current          {}", m - 1);
+    // The two `sin_cos` counts the transform no longer pays either of: `half`
+    // per stage with `k` hoisted, or once per block, i.e. `half` times `m/len`.
+    println!("  sin_cos per FFT, current          {}", 0);
+    println!("  sin_cos per FFT, hoisted          {}", m - 1);
     println!("  sin_cos per FFT, per butterfly    {}", (m / 2) * stages);
-    // What a shared table would have to hold: one per k of the LAST stage,
-    // every earlier stage's angles being a subsampling of those.
+    // What the transform reads of the table it shares with the untangle: one
+    // per k of its LAST stage, every earlier stage's angles being a
+    // subsampling of those. Half the table; the untangle reads all of it.
     println!("  distinct twiddles in the transform {}", m / 2);
     println!("  current vs per butterfly          {:.2}x faster", per_block / shipped);
-    println!("  a twiddle table would be          {:.2}x faster", per_block / table);
+    println!("  current vs sin_cos hoisted        {:.2}x faster", hoisted / shipped);
+    // The same table walked block-major, which prices the HOIST on its own —
+    // both sides read a table, so the only difference left is the loop nest.
+    println!("  the hoist, table on both sides    {:.2}x faster", block_major / shipped);
     println!("  walk: split vs modulo             {:.2}x faster", modulo / split);
     // The PACKING, not the bare transform: what a column spends on this stage
     // is the half-length FFT and the untangle that unpacks it, and crediting
     // only the first understates the stage it is a share of.
     println!("  transform as a share of a column  {:.0}%", packing / whole * 100.0);
-    // What the loop order actually merged saves. Crediting the table here —
-    // the faster of the two, and the one NOT implemented — overstated it 11%.
-    let saved = per_block - shipped;
+    // Against the transform this crate shipped before the table, which is the
+    // saving to claim: `per_block` was never the shipped order.
+    let saved = hoisted - shipped;
     println!("  saved per FFT                     {saved:.4} ms");
     // A hop is 8 ms (`AudioSpectrum::FFT_INTERVAL`), so 125 columns a second,
     // and one FFT per column PER CHANNEL. A core is 1000 ms of the same second.
