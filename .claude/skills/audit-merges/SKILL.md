@@ -19,7 +19,7 @@ Read the combined diff, not the PRs one at a time.
 ## Choose the range
 
 Use the first ref supplied after the invocation when one is present.
-In Claude that argument is `$1`;
+In Claude that argument is `$0`;
 in Codex it is the text following `$audit-merges`.
 Otherwise use the local git tag `last-merge-audit`.
 If that tag does not exist, inspect the last 12 first-parent merge commits into `main`.

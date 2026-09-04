@@ -26,7 +26,7 @@ Files changed by more than one merge are where integration bugs concentrate:
    ```sh
    git log --first-parent --diff-merges=first-parent --format= \
      --name-only <since>..HEAD \
-     | rg -v '^$' | sort | uniq -c | sort -rn | head
+     | sed '/^$/d' | sort | uniq -c | sort -rn | head
    ```
 
 Use `--first-parent` on every merge listing so branch catch-up merges do not masquerade as work landing on `main`.
