@@ -1,7 +1,0 @@
-interface:
-  display_name: "Delegate with Subagents"
-  short_description: "Delegate suitable work with tuned agents"
-  default_prompt: "Use $delegate-with-subagents for this problem, choosing whether and how to delegate based on its shape."
-
-policy:
-  allow_implicit_invocation: false

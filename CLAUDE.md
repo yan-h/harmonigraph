@@ -7,7 +7,9 @@ the rest of the repo explains itself by being read.
 ## Agent guidance has one source
 
 `AGENTS.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
-Keep shared guidance at those canonical Claude-facing paths rather than copying it per agent;
+Cross-project skills are pinned in the `.shared-skills` submodule and exposed from `.claude/skills` through relative project-internal symlinks;
+project-specific skills stay directly under `.claude/skills`.
+Keep each skill's guidance at that single source rather than copying it per agent;
 copies drift while symlinks make every session read the same contract.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
 except where a Claude path holds procedure rather than settings, which any agent can read directly:
