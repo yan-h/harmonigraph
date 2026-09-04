@@ -50,6 +50,8 @@
 //! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -85,6 +87,10 @@ pub(crate) const POLL: Duration = Duration::from_millis(20);
 /// must not leave a thread behind doing FFTs on a ring nobody fills again.
 pub(crate) struct BackgroundAnalyzer {
     stop: Arc<AtomicBool>,
+    /// Completed loop rounds, exposed only to tests that need an observable
+    /// boundary after changing the editor-open flag.
+    #[cfg(test)]
+    rounds: Arc<AtomicU64>,
     /// `None` when the thread could not be spawned, which costs this feature
     /// and nothing else — an open editor still drains both rings itself.
     thread: Option<JoinHandle<()>>,
@@ -99,9 +105,18 @@ impl BackgroundAnalyzer {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let worker = shared.clone();
+        #[cfg(test)]
+        let rounds = Arc::new(AtomicU64::new(0));
+        #[cfg(test)]
+        let worker_rounds = rounds.clone();
         let thread = std::thread::Builder::new()
             .name("harmonigraph-background-analyzer".to_string())
-            .spawn(move || run(&worker, &editor_state, Restore::of(ui_state), &flag));
+            .spawn(move || {
+                #[cfg(not(test))]
+                run(&worker, &editor_state, Restore::of(ui_state), &flag);
+                #[cfg(test)]
+                run(&worker, &editor_state, Restore::of(ui_state), &flag, &worker_rounds);
+            });
         let thread = match thread {
             Ok(thread) => Some(thread),
             // Audible rather than silent, on the same argument as a refused
@@ -116,7 +131,17 @@ impl BackgroundAnalyzer {
                 None
             }
         };
-        BackgroundAnalyzer { stop, thread }
+        BackgroundAnalyzer {
+            stop,
+            thread,
+            #[cfg(test)]
+            rounds,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_rounds(&self) -> u64 {
+        self.rounds.load(Ordering::Acquire)
     }
 }
 
@@ -265,9 +290,12 @@ fn run(
     editor_state: &EguiState,
     mut restore: Restore,
     stop: &AtomicBool,
+    #[cfg(test)] rounds: &AtomicU64,
 ) {
     while !stop.load(Ordering::Relaxed) {
         tick(shared, editor_state, &mut restore);
+        #[cfg(test)]
+        rounds.fetch_add(1, Ordering::Release);
         std::thread::sleep(POLL);
     }
 }
