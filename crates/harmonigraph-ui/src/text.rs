@@ -761,11 +761,10 @@ impl TextBatch {
             atlas,
             marks,
             sdf,
-            // The default, and here that is a want of an answer rather than
-            // one: an orbiting camera carries a node name across the screen
-            // and up it at once, so there is no axis its motion is along.
-            // See `FILTER_TAP` in the glyph shader.
-            slide: harmonigraph_render::SlideAxis::default(),
+            // An orbiting camera carries a node name across the screen and up
+            // it at once, so the lattice reconstructs both axes. See
+            // `FILTER_TAP` in the glyph shader.
+            slide: harmonigraph_render::SlideAxis::Both,
         }
     }
 }

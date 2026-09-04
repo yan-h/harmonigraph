@@ -22,9 +22,9 @@ struct Locals {
     atlas_size: vec2<f32>,
     /// And the drawn marks' own sheet, the same way.
     mark_atlas_size: vec2<f32>,
-    /// The screen axis this pane's labels TRAVEL along, as a unit vector —
-    /// where `coverage` puts its two taps. See `FILTER_TAP`, which is how far
-    /// along it they sit and why one axis rather than both.
+    /// The screen axes this pane's labels TRAVEL along. A unit cardinal selects
+    /// two taps; two positive components select the lattice's four-tap kernel.
+    /// See `FILTER_TAP` for why those two shapes differ.
     filter_axis: vec2<f32>,
     /// Physical pixels per point: both visible sheets are rasterized at device
     /// scale.
@@ -327,15 +327,11 @@ const PATCH_MARGIN: f32 = 0.5;
 /// apart puts a zero in the filter's response at exactly the frequency that
 /// swing lives at, `cos(PI * f / 2)` at f = 1, and most of it goes.
 ///
-/// Measured on the composite at the size the spectral roll sets its names,
-/// as a share of each symbol's own ink: the flat falls from 12.6% to 4.2%
-/// and the sharp from 6.6% to 1.5%. They are the marks it is for — ink that
-/// is mostly VERTICAL strokes, against a roll that scrolls sideways — and the
-/// bill is a twentieth of their contrast, the flat's darkest pixel going from
-/// 0.87 to 0.86 and the sharp's from 1.00 to 0.95. Type pays nothing
-/// measurable: a letter's strokes are over a pixel, so
-/// every letter, digit and lattice name keeps a peak of 1.00 and improves
-/// besides.
+/// Measured on the visible fill at the size the spectral roll sets its names,
+/// as a share of each symbol's own ink: the current flat and sharp swing 4.1%
+/// and 3.8% along the named axis. They are the marks it is for — ink that is
+/// mostly vertical strokes, against a roll that scrolls sideways. The fixed
+/// SDF shadow is a separate path and does not multiply these texture reads.
 ///
 /// ONE axis, and the caller's rather than x, because which way a label
 /// travels is a property of the pane and not of the filter. The roll's names
@@ -347,17 +343,19 @@ const PATCH_MARGIN: f32 = 0.5;
 /// of the four orientations and does nothing in the other two. `filter_axis`
 /// is that choice, made once per pane in `Locals`.
 ///
-/// Not answered by taking a second pair of taps up and down instead. Isotropic
-/// is worth 0.2 of a point on the reading above and costs the flat 15% of its
-/// contrast and the count digits 14%, so it would buy the second axis by
-/// taxing the first — everywhere, including a 30pt lattice name that swings
-/// 0.6% and has nothing to fix.
+/// The lattice is the one surface that names BOTH axes. Its orbiting camera
+/// moves a node name diagonally, and at the far end of the zoom the current
+/// glyphs' visible fill swings 6.6–12.2% of its ink along a diagonal against
+/// about 4% for a roll mark reconstructed along its travel axis. The separable
+/// 2x2 kernel brings that to 3.2–8.5%; its extra axis costs 1.2–2.0% of the
+/// letters' peak coverage and no measured peak on either drawn accidental.
+/// Four taps are therefore spent only there: every scrolling surface still
+/// takes the two samples its one-dimensional motion needs.
 ///
-/// The lattice takes x for want of an answer rather than as one: an orbiting
-/// camera moves a node name both ways at once, so it has no single travel
-/// axis, and at 30pt there is no measurable swing to spend a choice on. What
-/// that leaves open is the small end of its zoom, where the names are the roll
-/// mark's size and the motion is still diagonal — issue #311 holds it.
+/// The four samples are the CORNERS, not an x pair averaged with a y pair.
+/// The latter filters either dimension alone but its two responses can swing
+/// together on diagonal motion — measured, it made the sharp worse, 12.2% to
+/// 18.6%. The Cartesian product reconstructs both dimensions at once.
 ///
 /// A quarter texel, and no more, because [`PATCH_MARGIN`]'s bound is the
 /// wall — a filter reaching a whole texel out reads the glyph packed next
@@ -440,17 +438,23 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 
 /// The glyph's coverage at `texel`, reconstructed.
 ///
-/// Two taps [`FILTER_TAP`] either side along the axis a label travels, rather
-/// than the one the sampler gives. The visible fill reads through here; the
-/// shadow is derived separately from the scale-free SDF. Measured on the
-/// accidentals at the size the spectral roll sets its names, widening the
-/// fill alone takes the ink's own swing from 15.9% of its weight to 4.0% and
-/// leaves the visible ink at 4.0%. The second tap is the fixed cost of stable
-/// ink; changing the Shadow kernel does not multiply it.
+/// Two taps [`FILTER_TAP`] either side along a scrolling label's axis, or the
+/// four corners of their Cartesian product for lattice labels that can move
+/// along both. The visible fill reads through here; the shadow is derived
+/// separately from the scale-free SDF, so changing the Shadow kernel does not
+/// multiply these taps.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
-    // Along the pane's own travel axis, which the sheets' texels are square
+    // Along the pane's own travel axes, which the sheets' texels are square
     // with: a glyph's quad is axis-aligned and its atlas patch is upright, so
     // a screen direction IS a texel direction and needs no rotating.
+    if all(locals.filter_axis > vec2<f32>(0.0)) {
+        let x = vec2<f32>(FILTER_TAP, 0.0);
+        let y = vec2<f32>(0.0, FILTER_TAP);
+        return 0.25 * (
+            tap(in, texel - x - y) + tap(in, texel + x - y) +
+            tap(in, texel - x + y) + tap(in, texel + x + y)
+        );
+    }
     let off = FILTER_TAP * locals.filter_axis;
     return 0.5 * (tap(in, texel - off) + tap(in, texel + off));
 }

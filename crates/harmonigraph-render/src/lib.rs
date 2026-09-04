@@ -119,9 +119,9 @@ pub struct LatticeLabels {
     /// Published with a non-empty batch; unlike the coverage sheets it never
     /// changes after startup.
     pub sdf: Option<GlyphSdfAtlas>,
-    /// The axis these names travel along, for the reconstruction filter — see
-    /// [`SlideAxis`]. `Across` here is the default for want of an answer: an
-    /// orbiting camera moves a node name both ways at once.
+    /// The axes these names travel along, for the reconstruction filter — see
+    /// [`SlideAxis`]. An orbiting camera moves a node name both ways at once,
+    /// so the UI hands lattice labels [`SlideAxis::Both`].
     pub slide: SlideAxis,
 }
 
