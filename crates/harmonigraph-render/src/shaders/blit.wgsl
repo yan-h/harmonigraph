@@ -62,11 +62,12 @@ fn interleaved_gradient_noise(pixel: vec2<f32>) -> f32 {
 }
 
 // Stochastic rounding for the one eight-bit boundary the lattice still has:
-// its final write into the host surface. The 0.95 leaves exact byte values
-// inside their own rounding cell, so a flat colour already representable by
-// the target stays flat rather than acquiring grain.
+// its final write into the host surface. An exact UNORM8 value can arrive here
+// up to about 0.062 of an output code away after storage as f16; a half-range
+// of 0.425 leaves that error inside the same rounding cell. Thus flat colours
+// already representable by the target stay flat rather than acquiring grain.
 fn dither_to_unorm8(rgb: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
-    let noise = (interleaved_gradient_noise(pixel) - 0.5) * 0.95;
+    let noise = (interleaved_gradient_noise(pixel) - 0.5) * 0.85;
     return rgb + vec3<f32>(noise / 255.0);
 }
 

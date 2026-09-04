@@ -1963,6 +1963,9 @@ struct PaneBuffers {
 /// fractions of the pane's NATIVE screen size, so the halo's on-screen
 /// width doesn't change with the render-scale setting.
 struct Offscreen {
+    /// The descriptor format shared by both scene attachments.
+    #[cfg(test)]
+    format: wgpu::TextureFormat,
     color_view: wgpu::TextureView,
     /// The same picture with the node LABELS left out, written beside
     /// `color_view` by the scene pass's second attachment.
@@ -2036,6 +2039,9 @@ struct Offscreen {
 /// each other, and a target left allocated at reach 0 is a scene-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
+    /// The descriptor format of `view`.
+    #[cfg(test)]
+    format: wgpu::TextureFormat,
     view: wgpu::TextureView,
     /// The texture + the shared sampler, as
     /// [`LatticeResources::filter_layout`] takes them.
@@ -2133,6 +2139,9 @@ struct OffscreenShared<'a> {
 /// the threshold runs at a half, which is what makes it measure the picture
 /// rather than a smear of it.
 struct BloomChain {
+    /// The descriptor format shared by all three bloom targets.
+    #[cfg(test)]
+    format: wgpu::TextureFormat,
     /// The thresholded picture at half the screen size.
     half_view: wgpu::TextureView,
     /// The blur's ping-pong pair, and A is where the chain ENDS — whatever
@@ -2214,6 +2223,8 @@ impl BloomChain {
             })
         };
         BloomChain {
+            #[cfg(test)]
+            format,
             bright_bind_group: filter_bg(format!("{label}_bright_bind_group"), source),
             downsample_bind_group: filter_bg(format!("{label}_downsample_bind_group"), &half_view),
             blur_h_bind_group: filter_bg(format!("{label}_blur_h_bind_group"), &quarter_a_view),
@@ -2332,6 +2343,8 @@ impl Offscreen {
         });
 
         Offscreen {
+            #[cfg(test)]
+            format,
             bloom,
             glow: None,
             shadow: None,
@@ -2473,7 +2486,13 @@ impl GlowTarget {
                 },
             ],
         });
-        GlowTarget { view, bind_group, strip: InkStrip::new(device, strip_layout, rows) }
+        GlowTarget {
+            #[cfg(test)]
+            format,
+            view,
+            bind_group,
+            strip: InkStrip::new(device, strip_layout, rows),
+        }
     }
 }
 
