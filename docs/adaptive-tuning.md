@@ -16,7 +16,8 @@ Correct musical state, an inspectable failure mode and one small execution path 
 Add another format, transport, mode or control only when it serves a concrete project and is cheap enough to carry in every later change.
 
 Host behavior is evidence rather than architecture.
-Where the design depends on Bitwig process grouping, callback order, voice identity or CLAP event delivery, issue [#615](https://github.com/yan-h/harmonigraph/issues/615) measures the premise and either records the supported constraint or stops the downstream work.
+Where the design depends on callback order, voice identity or CLAP event delivery, issue [#615](https://github.com/yan-h/harmonigraph/issues/615) measures the premise and either records the supported constraint or stops the downstream work;
+where it depends on Bitwig process grouping and what a build swap then costs, issue [#623](https://github.com/yan-h/harmonigraph/issues/623) does.
 
 ## Decision record
 
@@ -31,6 +32,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | Snapshot sealing | The hub seals one snapshot per processing region and tuners read only sealed snapshots | Tuners read one another's live state directly | Whether track B sees track A's same-region note is then fixed by the region boundary rather than by which callback thread ran first; the region is the unit of simultaneity and scheduling is invisible | The hub cannot run after every tuner within a region in the supported graph |
 | Snapshot storage | Fixed-capacity slots under a seqlock, copied into tuner-local storage at region start | Shared reference-counted immutable snapshots | The last holder of a shared reference frees it on the audio thread; copying a few hundred bytes with bounded retries keeps the callback allocation-free | A snapshot outgrows the fixed capacity |
 | Report clock | The hub stamps each report on its own clock at the report's in-region offset as it drains the queues | Per-source absolute sample clocks and watermarks inside the protocol | The framework exposes no host-shared steady clock, the hub runs after the tuners, and same region plus same offset is already the ordering; a per-source region counter is the only liveness the protocol needs | #615 shows the hub does not run after every tuner within a region |
+| Arena layout | Pointer-free session arena: fixed capacities, indices rather than references, `repr(C)` with atomics | Rust-native structures holding references | Real-time safety wants fixed capacities anyway, and one layout serves both a static in one process and a file-backed mapping, so a cross-process transport would later be a backend change rather than a rewrite | Never; it costs nothing the callback did not already need |
 | Voice identity | Source, channel and key, with the host note id passed through untouched | Host voice id as identity with a multiplicity fallback for its absence | The tuner advertises no overlapping-note support, so the host must not overlap one key and channel; a retrigger replaces, which is the rule the tracker already applies | #615 observes Bitwig delivering overlapping same-key notes to a note effect that does not advertise them |
 | State authority | Assignment emitted downstream for each voice | Ideal assignment recomputed later by the hub | Future notes and recorded takes must use the pitch Harmonigraph actually requested rather than a hypothetical result | A real downstream pitch-feedback mechanism exists and is worth integrating |
 | Pitch output | CLAP per-note tuning expression only | MTS-ESP, MPE or VST3 note output | Matches sample-timed per-voice frozen assignments and the actual personal host while adding no external tuning service; Bitwig converts a note effect's per-note pitch to MPE or VST3 note expression for the instrument downstream, so the instrument's format is not restricted | A required instrument cannot consume it or #615 disproves reliable delivery |
@@ -236,10 +238,18 @@ Two open project copies carrying the same saved UUID are ambiguous rather than o
 
 The first backend is an in-process registry with one bounded single-producer/single-consumer report queue per tuner and the seqlocked snapshot slots above.
 Bitwig's **By manufacturer** hosting mode is the expected initial requirement because it groups plugins from one developer for communication.
-Issue #615 verifies the exact process layout and the visible failure behavior of other hosting modes.
+Issue [#623](https://github.com/yan-h/harmonigraph/issues/623) measures the exact process layout and the visible failure behavior of other hosting modes.
+
+The hosting mode also decides what a build swap costs.
+A sandbox process re-reads the plugin binary only when it starts, and a grouped process lives as long as any instance in its group is loaded, so a project with a tuner on every track holds the old image until every one of them is unloaded.
+Which gesture short of a Bitwig restart does that is measured on #623, and the loader's own tripwire for the case is issue [#624](https://github.com/yan-h/harmonigraph/issues/624).
+Bitwig's plug-in settings also carry a per-plug-in list that runs a named plug-in Individually under any global mode, which is how another plug-in of the same vendor is kept out of the session's process without renaming anything.
 
 Cross-process shared memory is not part of the initial design.
 It adds process discovery, stale participants, crash recovery and system-level synchronization without improving the intended personal Bitwig workflow.
+The session arena is nevertheless written pointer-free from the start:
+fixed capacities, indices rather than references, `repr(C)` with atomics, so that a static in one process and a file-backed mapping are the same layout.
+Real-time safety wants those properties anyway, and they make a cross-process backend a later transport change rather than a rewrite.
 
 The hub normally sits on Master because it is downstream of the participating audio and can analyze their combined signal.
 Master placement is not an attack-time barrier;
@@ -249,7 +259,7 @@ The session belongs to the plugin process rather than the editor, so closing the
 ## Real-time constraints
 
 Registration, naming and allocation happen away from the audio callback.
-The callback only touches bounded preallocated queues, seqlocked snapshot slots and local fixed-capacity state.
+The callback only touches bounded preallocated queues, seqlocked snapshot slots and local fixed-capacity state, all of it in the pointer-free arena.
 It never:
 
 - waits for another plugin instance;
@@ -328,7 +338,7 @@ These sources establish available mechanisms and the constraints that motivated 
 
 - [CLAP events](https://github.com/free-audio/clap/blob/main/include/clap/events.h) defines sample-accurate note expressions,
 voice addressing and relative tuning in semitones;
-- [Bitwig plugin hosting modes](https://www.bitwig.com/userguide/latest/vst_plug-in_handling_and_options/) describes **By manufacturer** as useful for plugins from one developer that communicate;
+- [Bitwig plugin hosting modes](https://www.bitwig.com/userguide/latest/vst_plug-in_handling_and_options/) describes **By manufacturer** as useful for plugins from one developer that communicate, and a per-plug-in list that runs a named plug-in Individually under any global mode;
 - [Bitwig Note FX](https://www.bitwig.com/userguide/latest/note_fx/) establishes the pre-instrument note-effect placement;
 - [MTS-ESP](https://github.com/ODDSound/MTS-ESP/blob/main/README.md) documents its single-master note/channel lookup and client-query model.
 
@@ -346,9 +356,10 @@ That empirical evidence belongs on #615 as bounded traces and measured verdicts,
 
 ## Implementation order
 
+0. [#623](https://github.com/yan-h/harmonigraph/issues/623) measures which sandbox mode carries two classes from one bundle and which reload gesture works, in the same session as the spike below, since its process-grouping table uses the spike's probe bundle.
 1. [#615](https://github.com/yan-h/harmonigraph/issues/615) is one afternoon rather than a project:
 a second class in the same bundle, a process-wide counter the hub bumps each region, a fixed +50 cent tuning expression after every note-on, and one log line per region from a background thread.
-It answers process grouping, hub-after-tuners ordering, whether the tuning expression takes on the instruments in use, and whether the note id arrives.
+It answers hub-after-tuners ordering, whether the tuning expression takes on the instruments in use, and whether the note id arrives.
 Everything else on the spike's original list falls out of the implementation's tests.
 2. [#617](https://github.com/yan-h/harmonigraph/issues/617) implements the companion, the session module, aggregation, the source byte and the sealed snapshots.
 This alone replaces Note Receiver routing, a win before any note is retuned.

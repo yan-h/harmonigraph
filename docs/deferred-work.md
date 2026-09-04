@@ -27,6 +27,7 @@ and adds another backend only for a concrete instrument that needs it.
 
 **Process and product variants.** A headless conductor, cross-process shared-memory transport, one full-plugin class that switches between tuner and hub roles, and a central MIDI rack all add lifecycle or routing surface without improving the intended workflow.
 The Bitwig spike may reopen only the packaging or process boundary if separate companion instances cannot share an in-process session reliably.
+The session arena is written pointer-free so that a cross-process transport would be a backend change rather than a rewrite.
 
 **Value / effort.** All are medium-to-high maintenance multipliers rather than cheap compatibility switches.
 Keep them parked until a measured musical or hosting failure identifies which specific cost would buy something useful.
