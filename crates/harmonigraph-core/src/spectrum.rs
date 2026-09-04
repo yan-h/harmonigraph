@@ -13,7 +13,10 @@
 //! (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a stereo input at 8192
 //! points runs 250 transforms a second — and a DAW keeps that fed with silence
 //! as much as with audio, so the cost is continuous rather than only while
-//! something plays. At ~0.06 ms each that is ~1.6% of a core, which is why
+//! something plays. At ~0.043 ms each that is ~1.1% of a core — it was ~1.6%
+//! before the transform stopped computing its twiddles, and `fft_bench`'s
+//! `fft_in_place + untangle (a column's)` row is the number to re-read it off
+//! rather than the bare transform's. Which is why
 //! both the packing and `fft_in_place`'s twiddle handling are written for the
 //! call rate this actually sees rather than the one a spectrum analyzer sounds
 //! like it should have.
@@ -721,15 +724,20 @@ fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
 /// built for the untangle and the transform gets its own for nothing; the
 /// derivation is on `fft_in_place`.
 ///
-/// A TABLE rather than a `sin_cos` per bin, which is the difference between the
-/// packing paying for itself and not paying at all: the untangle visits nearly
-/// as many bins as the half transform makes `sin_cos` calls (`n/2 - 1` of
-/// them), so computing an angle at each one puts the whole of the trig the
-/// packing just saved straight back. What it costs is state — one table per
-/// window length, built where every other buffer sized on `fft_size` is.
+/// A TABLE rather than a `sin_cos` per bin, which is what makes the packing pay
+/// for itself: the untangle visits `n/2 - 3` bins, so an angle computed at each
+/// one would put back all of the trig the packing had just saved. That was the
+/// whole of the argument when the transform still computed its own angles
+/// beside this; now that it reads these, the table is paid for once and cashed
+/// TWICE — once by the untangle it was built for, and once by a transform that
+/// computes no angles at all. What it costs is state, one table per window
+/// length, built where every other buffer sized on `fft_size` is.
 ///
-/// `(sin, cos)` in that order, which is `f32::sin_cos`'s own, so the entry
-/// destructures the way the transform's inline twiddles do.
+/// `(sin, cos)` in that order, which is `f32::sin_cos`'s own, so nothing has to
+/// reorder the pair between building an entry here and destructuring one in
+/// [`untangle_real_power`] or [`fft_in_place`] — the two readers of this table
+/// and, since the transform's `sin_cos` went away, the only places the order
+/// is visible at all.
 fn build_untangle_twiddles(n: usize) -> Vec<(f32, f32)> {
     (0..n / 2)
         .map(|k| {
@@ -846,6 +854,34 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32], twiddles: &[(f32, f32)]) {
         // `TAU * t` and then divides by `2n`, which is exact because it is a
         // power of two — and `t = k * stride` is chosen to make `t / 2n` the
         // same real number as `k / len`.
+        //
+        // Equal angles are NOT the whole of it, and the missing half is worth
+        // writing down because it would read as a mystery. Two spellings also
+        // have to be EVALUATED the same way: with a compile-time-constant
+        // operand LLVM folds the call at build time, and that fold is not
+        // obliged to match the libm the same call reaches at runtime. Measured
+        // on the pinned toolchain (1.92, aarch64-apple-darwin, where
+        // `f32::sin_cos` lowers to one `___sincosf_stret`): over the 2048
+        // distinct angles of the `k / 4096` grid, given as literals so they
+        // certainly fold, exactly one comes out 1 ULP apart in `cos` from the
+        // runtime call — `-TAU * 49/512`, at opt-level 2 and 3 alike.
+        //
+        // The transform is immune by construction, and more so than before:
+        // there is now exactly ONE `sin_cos` in this file outside the tests,
+        // in `build_untangle_twiddles`, and `configure` drives it with a
+        // runtime `fft_size`, so its operand is never a constant and the
+        // untangle and the transform can no longer disagree about an angle
+        // they both read from one table.
+        //
+        // Where the exposure sits is the TEST, which deliberately puts a
+        // foldable evaluation next to a called one, and `[profile.dev]
+        // opt-level = 2` means `cargo test` is optimized. It is clean today,
+        // and not by luck: the sweep entries small enough for LLVM to unroll
+        // (`n` = 2, 4, 16, so tables of 4, 8 and 32) hold no divergent angle,
+        // while the first one that diverges needs a table of 512. The two
+        // conditions do not currently overlap. A compiler bump could move
+        // either, so if that test ever goes red by a single ULP, this is what
+        // it is before anything else is suspected.
         //
         // `reusing_a_stages_twiddles_does_not_move_a_single_bit` in this module
         // holds that, and holds it alone: the offline determinism tests render
@@ -1363,12 +1399,22 @@ mod tests {
     /// than deleted with the change, because the claim is about the three
     /// agreeing and there is otherwise nothing to compare against.
     ///
-    /// The sweep's ends are the degenerate stages. At `n = 2` the transform is
-    /// one stage that is a single block AND a single twiddle, and its stride
-    /// (`n / half` = 2) is never multiplied by a nonzero `k`; `n = 4` is the
-    /// smallest length where a stride is actually exercised, at `k = 1` of the
-    /// last stage. Every larger `n` is a window `SpectrumWindow::samples` can
-    /// ask for.
+    /// The sweep runs on TRANSFORM lengths, not window lengths — `n` here is
+    /// what `fft_in_place` is handed, which is half the real window, so the
+    /// table each entry builds is `build_untangle_twiddles(2 * n)`.
+    ///
+    /// Its ends are the degenerate stages. At `n = 2` the transform is one
+    /// stage that is a single block AND a single twiddle, and its stride
+    /// (`n / half` = 2) is never multiplied by a nonzero `k`, so that entry
+    /// cannot catch a stride error at all — it checks the table is long enough
+    /// and the indexing does not panic. `n = 4` is the smallest length where a
+    /// stride is actually exercised, at `k = 1` of the last stage.
+    ///
+    /// The middle covers every length the UI can reach: `SpectrumWindow`
+    /// offers 4096, 8192 and 16384 samples, which transform at 2048, 4096 and
+    /// 8192, and all three are here. `16384` is one step past what the enum
+    /// offers (it would be a 32768-sample window), kept as headroom for a
+    /// fourth entry rather than as a claim that something asks for it.
     #[test]
     fn reusing_a_stages_twiddles_does_not_move_a_single_bit() {
         /// Radix-2 with the twiddle recomputed inside the butterfly loop —
@@ -1437,7 +1483,7 @@ mod tests {
             }
         }
 
-        for n in [2usize, 4, 16, 256, 4096, DEFAULT_FFT_SIZE, 16384] {
+        for n in [2usize, 4, 16, 256, 2048, 4096, DEFAULT_FFT_SIZE, 16384] {
             let signal: Vec<f32> =
                 (0..n).map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos()).collect();
             let (mut ar, mut ai) = (signal.clone(), vec![0.0f32; n]);
