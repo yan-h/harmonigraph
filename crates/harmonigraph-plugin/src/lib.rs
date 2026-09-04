@@ -561,22 +561,41 @@ mod tests {
     /// lands — so it costs the suite only when it is about to fail anyway.
     const ANALYSIS_DEADLINE: Duration = Duration::from_secs(5);
 
-    /// Columns the background analyzer has produced, waiting up to
-    /// [`ANALYSIS_DEADLINE`] for the first one.
+    /// Columns the background analyzer has produced, or `None` if
+    /// [`ANALYSIS_DEADLINE`] passed without one.
+    ///
+    /// **`None` does not mean the wiring is broken, and a caller must not word
+    /// it that way.** An expired deadline says only that no column arrived in
+    /// five seconds, which a flag nobody watches and a runner that never
+    /// scheduled the thread produce alike; telling those two apart is exactly
+    /// what a deadline gives up in exchange for not being a fixed sleep. The
+    /// distinction is worth the `Option`, because #598 cost a session partly
+    /// by asserting a cause in its failure message that its evidence did not
+    /// support.
     ///
     /// Sound only for asserting that work HAS happened. The reverse claim —
     /// that the analyzer left a ring alone — is not waitable at all, because
     /// every wait ends in "not yet", and a thread the scheduler forgot looks
     /// exactly like a thread correctly holding off. Those assertions keep a
     /// fixed settle and are commented where they stand.
-    fn columns_once_analyzed(plugin: &Harmonigraph) -> usize {
+    fn columns_once_analyzed(plugin: &Harmonigraph) -> Option<usize> {
         let started = Instant::now();
         loop {
             let columns = plugin.editor_shared.lock().ui.spectrum.history().len();
-            if columns > 0 || started.elapsed() >= ANALYSIS_DEADLINE {
-                return columns;
+            if columns > 0 {
+                return Some(columns);
             }
-            std::thread::sleep(background::POLL);
+            if started.elapsed() >= ANALYSIS_DEADLINE {
+                return None;
+            }
+            // Deliberately NOT `POLL`. This samples under the BLOCKING lock
+            // while `tick` takes the same one with `try_lock`, so a sample
+            // landing inside the analyzer's own hold costs it that whole
+            // round — and a test written to stop being flaky should not
+            // sample in lockstep with the thread it is watching. Half the
+            // period leaves the two with no phase relationship to get wrong,
+            // and costs nothing.
+            std::thread::sleep(background::POLL / 2);
         }
     }
 
@@ -639,9 +658,10 @@ mod tests {
         // not of the wiring.
         plugin.params.editor_state.set_open(false);
         assert!(
-            columns_once_analyzed(&plugin) > 0,
-            "the analyzer noticed no window close in {ANALYSIS_DEADLINE:?}: it is not \
-             watching the EguiState the editor sets",
+            columns_once_analyzed(&plugin).is_some(),
+            "no column in {ANALYSIS_DEADLINE:?} after the editor announced itself shut: \
+             either the analyzer is not watching the EguiState the editor sets, or this \
+             runner never scheduled it",
         );
     }
 
@@ -685,8 +705,10 @@ mod tests {
                 .expect("the ring is sized for this");
         }
         assert!(
-            columns_once_analyzed(&plugin) > 0,
-            "nothing was analyzed at all in {ANALYSIS_DEADLINE:?}",
+            columns_once_analyzed(&plugin).is_some(),
+            "nothing was analyzed in {ANALYSIS_DEADLINE:?}: either the restored blob \
+             reaches nothing without an editor, or this runner never scheduled the \
+             analyzer",
         );
 
         let shared = plugin.editor_shared.lock();
