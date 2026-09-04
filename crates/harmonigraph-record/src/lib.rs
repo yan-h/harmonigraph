@@ -92,11 +92,11 @@ const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 /// put a silent hole in the finished video.
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
-/// A take's WAV is always stereo, whatever the host's input bus carries. The
-/// spec handed to the writer, the reservation in [`Recorder::audio`] and the
-/// interleaving in `process` all read this one number: if any of them
-/// disagrees, the header describes frames the data does not have, and nothing
-/// downstream checks.
+/// A take's WAV is always stereo, whatever selected audio stream the host
+/// carries. The spec handed to the writer, the reservation in
+/// [`Recorder::audio`] and the interleaving in `process` all read this one
+/// number: if any of them disagrees, the header describes frames the data does
+/// not have, and nothing downstream checks.
 pub const TAKE_CHANNELS: usize = 2;
 
 /// How much of a block fits in an interleaved audio ring, in SAMPLES, rounded
@@ -601,7 +601,7 @@ impl Control {
 
     /// Begin a take. `ui_state` is the persist blob that decides how the
     /// replay will look; `sample_rate` stamps the header. `audio`
-    /// records the input bus alongside the notes.
+    /// records the selected audio stream alongside the notes.
     pub fn start(&self, sample_rate: f32, ui_state: String, audio: bool) {
         if self.is_recording() {
             return;
@@ -2769,13 +2769,13 @@ mod tests {
         ctrl.with_audio.store(true, Ordering::Relaxed);
         ctrl.stop(None);
         assert!(ctrl.armed.load(Ordering::Relaxed), "not recording, so there is nothing to stop");
-        assert!(rec.wants_audio(), "and nothing to stop reading the input bus for");
+        assert!(rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
         ctrl.recording.store(true, Ordering::Relaxed);
         ctrl.stop(None);
         assert!(!ctrl.armed.load(Ordering::Relaxed), "a running take disarms");
         assert!(!ctrl.is_recording());
-        assert!(!rec.wants_audio(), "and the audio thread stops reading the input bus");
+        assert!(!rec.wants_audio(), "and the audio thread stops reading the selected audio");
     }
 
     /// The rings the plugin ships with have room in them.

@@ -121,7 +121,7 @@ fn level_label_into(joined: bool) -> f32 {
 }
 
 /// Three views of the same music over one shared MIDI-pitch axis: the
-/// audio spectrum as a curve (FFT of the input bus, every partial at its
+/// audio spectrum as a curve (FFT of the selected input, every partial at its
 /// actual pitch), the sounding MIDI voices as bars, and the piano roll of
 /// what has been played. All are optional; the settings live in
 /// [`spectrum_settings_pane`].

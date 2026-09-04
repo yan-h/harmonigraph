@@ -194,9 +194,9 @@ impl EditorShared {
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
             // `audio: true` unconditionally, rather than from a setting: the
-            // render uses the plugin's input as the spectrogram, aligned to the
-            // picture by construction (no bounce, no offset). Silent-but-harmless
-            // if the plugin sits where no audio reaches it.
+            // render uses the selected analysis input as the spectrogram,
+            // aligned to the picture by construction (no bounce, no offset).
+            // Silent-but-harmless if no audio reaches that input.
             self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take.recording && recording {
             self.take

@@ -11,8 +11,8 @@ pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BI
 
 /// Audio-derived pitch spectrum shown in the Spectral pane. The shell
 /// feeds mono samples every frame from wherever its audio comes from
-/// (plugin: input bus via a ring buffer; standalone: the mock synth); the
-/// pane asks for a display refresh when it draws. Runtime-only.
+/// (plugin: selected main/sidechain input via a ring buffer; standalone: the
+/// mock synth); the pane asks for a display refresh when it draws. Runtime-only.
 pub struct AudioSpectrum {
     /// One analyzer per input channel, combined in the power domain — see
     /// [`ChannelBank`](harmonigraph_core::spectrum::ChannelBank).
@@ -42,7 +42,7 @@ pub struct AudioSpectrum {
     /// the shell clock.
     pub(crate) anchor: Option<f64>,
     /// When samples last arrived; the curve hides once the source stops
-    /// (closed input bus, switched-off synth) rather than freezing.
+    /// (silent/unrouted input, switched-off synth) rather than freezing.
     pub(crate) last_samples: Option<f64>,
     /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
@@ -69,7 +69,7 @@ pub struct AudioSpectrum {
 /// frame.
 ///
 /// What stays SHARED is the analyzer and the column ring it fills
-/// ([`AudioSpectrum::history`]): there is one input bus and one stream of
+/// ([`AudioSpectrum::history`]): there is one selected input and one stream of
 /// columns, and a surface holds only what it folded out of them.
 #[derive(Default)]
 pub(crate) struct SpectrogramSurfaces(Vec<SpectrogramSurface>);

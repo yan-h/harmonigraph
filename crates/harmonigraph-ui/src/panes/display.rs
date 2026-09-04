@@ -98,7 +98,7 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
     match page {
         DisplayPage::Colors => color_pane(ui, state, params),
         DisplayPage::Lattice => lattice_page(ui, state, params),
-        DisplayPage::Analyzer => spectrum_settings_pane(ui, state),
+        DisplayPage::Analyzer => spectrum_settings_pane(ui, state, params),
         DisplayPage::System => system_pane(ui, state),
     }
 }
