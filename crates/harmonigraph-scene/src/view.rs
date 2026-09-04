@@ -1180,12 +1180,11 @@ pub struct ViewConfig {
     /// screen. Half the resolved width is σ (`shadow::sigma_points` in
     /// harmonigraph-render).
     ///
-    /// FOUR groups and not one bar, because a name is the only ink in the
-    /// picture whose SHAPE is meant to be read: a ring and a cross want a
-    /// shadow that says how thick they are, and a letterform wants one that
-    /// does not fill its counters. Geometry and text repeat for the spectral
-    /// pictures because their compositors use different colours and paint
-    /// order; the renderer and the three settings stay the same.
+    /// FOUR groups and not one bar because node geometry and the notation that
+    /// names its positions want independent shadows. Geometry and text repeat
+    /// for the spectral pictures because their compositors use different
+    /// colours and paint order; the renderer and the three settings stay the
+    /// same.
     ///
     /// Each item multiplies whatever is already in the frame under it in the
     /// painter's order the pass already walks — so what it casts is read off

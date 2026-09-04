@@ -679,16 +679,16 @@ impl ShadowStyle {
 /// renderers read one geometric field per caster and one profile, and a frame
 /// whose groups disagree schedules two paths rather than four. What a group
 /// buys is the pair of numbers, because the ink in it is a different KIND of
-/// ink — a ring and a cross want a shadow that says how thick they are, and a
-/// letterform wants one that does not fill its counters, and the width that
-/// does the first may not be the width that does the second.
+/// ink. A node's layered geometry and the notation that names its positions
+/// want independent shadows, and the width that preserves a ring need not be
+/// the width that keeps a letterform or resting marker legible.
 ///
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowSettings {
-    /// The lattice's nodes and the resting markers between them.
+    /// The lattice's node geometry: audio rings, octave bands and marks.
     pub lattice_geometry: ShadowStyle,
-    /// The lattice's note names, letters and drawn marks alike.
+    /// The lattice's notation: note names, drawn marks and resting markers.
     pub lattice_text: ShadowStyle,
     /// The spectral roll's ribbons and the spiral's sounding-note dots.
     pub spectral_geometry: ShadowStyle,

@@ -652,18 +652,19 @@ struct Uniforms {
     /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
     /// strength is off.
     glow_curve: [f32; 4],
-    /// The LATTICE GEOMETRY group's shadow — the nodes' and the markers', which
-    /// are the casters this module's draws own. x: how wide it is, as a share
-    /// of a node's radius (`ShadowStyle::width`); y: how far its renderer
-    /// reaches past a caster's ink in the picture's own σ
-    /// (`ShadowKernel::reach_sigmas`), which every quad here is grown by; w:
-    /// how dark it lands (`ShadowStyle::depth`), 1 taking the frame under a
+    /// The LATTICE GEOMETRY group's shadow — the nodes this module draws. x:
+    /// how wide it is, as a share of a node's radius (`ShadowStyle::width`);
+    /// y: how far its renderer reaches past a caster's ink in the picture's
+    /// own σ (`ShadowKernel::reach_sigmas`), which every node quad is grown by;
+    /// w: how dark it lands (`ShadowStyle::depth`), 1 taking the frame under a
     /// solid caster to the shader's own floor. z unused.
     ///
-    /// The TEXT group's pair is not here: a name's box is drawn by the text
+    /// The TEXT group's names are not here: a name's box is drawn by the text
     /// pipeline and reads its depth out of that pipeline's own uniform
-    /// (`TextUniforms::shadow_depth`). What the two groups share is σ, and σ
-    /// rides on the caster (`shadow::Caster::sigma_points`).
+    /// (`TextUniforms::shadow_depth`). Its markers are drawn by this module and
+    /// take that group's settings from `plus_shadow` below. What all casters
+    /// share is σ's unit, and σ rides on the caster
+    /// (`shadow::Caster::sigma_points`).
     ///
     /// A REACH in y and not a σ ratio, because the two renderers do not end at
     /// the same multiple of their own width: the ratio times a constant answers
@@ -681,6 +682,15 @@ struct Uniforms {
     /// off switch (`glow_shadow()` in lattice.wgsl), and the depth is a second
     /// one — a group at either bar's bottom packs no cell.
     misc11: [f32; 4],
+    /// The resting markers' shadow, inherited from the LATTICE TEXT group. The
+    /// same four terms and layout as `misc11`: width, the renderer's reach in
+    /// σ, unused, and depth.
+    ///
+    /// A row of its own because markers are drawn by the lattice pipeline while
+    /// the rest of their group is drawn by the text pipeline. Sharing the row
+    /// above would make their style follow the nodes again; scattering these
+    /// terms through spare slots would hide that this is one inherited style.
+    plus_shadow: [f32; 4],
     /// The node glow's plumbing row, which is not a dial. x: how many rows this
     /// frame's ink strip has (`Scene::glow_rows`) — the one thing
     /// `vs_ink_strip` cannot work out for itself, since it is writing that
@@ -1361,8 +1371,7 @@ impl LatticeCallback {
         };
         let (geometry_sigma, text_sigma) = (sigma_of(geometry), sigma_of(text));
         // How far the GEOMETRY group's shadow reaches past its own ink, in
-        // points — what a node's box is clipped to the pane by, the marker and
-        // the node being the two casters in it.
+        // points — what a node's box is clipped to the pane by.
         let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas();
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
@@ -1435,17 +1444,18 @@ impl LatticeCallback {
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
-        // The marker field's caster, ahead of everything the walk pushes. A
-        // Gaussian gives it one shared cell centred on a crossing; a distance
-        // keeps only the profile metadata and evaluates the exact field in
-        // `plus_paint`.
+        // The marker field's caster, ahead of everything the walk pushes. Its
+        // style is the TEXT group's, which is what a marker turns into and out
+        // of as a name appears. A Gaussian gives it one shared cell centred on
+        // a crossing; a distance keeps only the profile metadata and evaluates
+        // the exact field in `plus_paint`.
         if marker_arm_points > 0.0 {
             let a = marker_arm_points;
             casters.push(shadow::Caster {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
-                sigma_points: geometry_sigma,
-                kernel: geometry.kernel,
+                sigma_points: text_sigma,
+                kernel: text.kernel,
                 direct_distance: true,
             });
         }
@@ -1562,6 +1572,10 @@ impl LatticeCallback {
                 // frame with no light in it still casts every shadow the
                 // lattice has. z unused.
                 misc11: [geometry.width, geometry.kernel.reach_sigmas(), 0.0, geometry.depth],
+                // Markers are notation which hands each position to and from
+                // its name, so their whole shadow style follows the text
+                // group even though the lattice pipeline draws them.
+                plus_shadow: [text.width, text.kernel.reach_sigmas(), 0.0, text.depth],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {

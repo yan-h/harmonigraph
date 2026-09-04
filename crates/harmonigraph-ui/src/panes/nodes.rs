@@ -767,11 +767,15 @@ fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
     shadow_group(
         ui,
         "Lattice geometry",
-        "a node's audio ring, octave band and marks, and the cross standing at \
-         each resting position",
+        "a node's audio ring, octave band and marks",
         &mut shadow.lattice_geometry,
     );
-    shadow_group(ui, "Lattice text", "every note name and its marks", &mut shadow.lattice_text);
+    shadow_group(
+        ui,
+        "Lattice text",
+        "every note name and its drawn marks, and the cross at each resting position",
+        &mut shadow.lattice_text,
+    );
     shadow_group(
         ui,
         "Spectral geometry",

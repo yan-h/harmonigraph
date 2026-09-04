@@ -100,10 +100,9 @@ pub(crate) struct Caster {
     /// This caster's own σ in the pane's points ([`sigma_points`]) — half its
     /// group's Shadow width over a node's radius.
     ///
-    /// Per caster because the GROUPS are: a ring and a cross want a shadow that
-    /// says how thick they are, and a letterform wants one that does not fill
-    /// its counters (`ShadowStyle`). Zero is a caster that darkens nothing —
-    /// either of its group's bars at the bottom — and takes no cell at all.
+    /// Per caster because node geometry and lattice notation are separate
+    /// groups (`ShadowStyle`). Zero is a caster that darkens nothing — either
+    /// of its group's bars at the bottom — and takes no cell at all.
     ///
     /// The cell's scale, pad and σ in texels all come off this, so a caster at
     /// three times the width is a cell drawn a third the size rather than a

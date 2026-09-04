@@ -705,8 +705,8 @@ fn vs_shadow_box(
 ///
 /// `T` is `shadow_transmittance` over the blur standing at this fragment, and
 /// it is the same function a ring and a cross spend over their own cells
-/// (`shadow_through` in lattice.wgsl) — one Shadow bar, one darkness, whatever
-/// the caster. The name's LEVEL is spent there as a share, which is what a name
+/// (`shadow_through` in lattice.wgsl), with each caller handing it its group's
+/// own depth. The name's LEVEL is spent there as a share, which is what a name
 /// easing in as its marker eases out casts.
 ///
 /// One bilinear tap PER TERM of the kernel, each in its own cell at its own
