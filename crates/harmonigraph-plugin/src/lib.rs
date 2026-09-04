@@ -627,11 +627,15 @@ mod tests {
         // tick already in flight from construction meets an empty ring rather
         // than racing the fill below.
         //
-        // This is the one wait here that can fail a healthy build: a round
-        // descheduled between reading the flag and taking the lock drains the
-        // fill below despite an open editor. The window for that is the gap
-        // between those two lines rather than a whole poll, which is why the
-        // failure #598 reports is the other one.
+        // This is the one wait here that can fail a healthy build, and it
+        // fails in the OPPOSITE direction from #598: a round descheduled
+        // between `tick`'s `is_open()` check and its `try_lock` drains the
+        // fill below despite an open editor, and the assertion it trips
+        // blames the wiring. The window is the gap between those two lines
+        // rather than a whole poll, which is why it has not been seen.
+        // Measured and left in #602, which holds the three shapes that would
+        // close it and what each costs — all of them change what the
+        // assertion below claims, so none belongs in a flakiness fix.
         plugin.params.editor_state.set_open(true);
         std::thread::sleep(settle);
 
