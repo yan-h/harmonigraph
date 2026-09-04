@@ -759,33 +759,41 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// whatever ink stands behind it, so a Reach at 0 has nothing to say about
 /// these (#572).
 ///
-/// The bars are the same two under each heading and mean the same thing, which
-/// is the point of the arrangement: what differs between groups is the ink, not
-/// the question.
+/// The bars ask the same two questions under each heading. Width follows the
+/// renderer the group belongs to: lattice ink scales from a node radius, while
+/// spectral ink uses the fixed four-point reference its flat picture has.
 fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
     ui.label(egui::RichText::new("Shadow").strong());
     shadow_group(
         ui,
         "Lattice geometry",
         "a node's audio ring, octave band and marks",
+        "a share of the node's radius",
+        "one node radius",
         &mut shadow.lattice_geometry,
     );
     shadow_group(
         ui,
         "Lattice text",
         "every note name and its drawn marks, and the cross at each resting position",
+        "a share of the node's radius",
+        "one node radius",
         &mut shadow.lattice_text,
     );
     shadow_group(
         ui,
         "Spectral geometry",
         "the piano roll's note ribbons and the spiral's sounding-note dots",
+        "a share of a fixed four-point reference",
+        "four screen points",
         &mut shadow.spectral_geometry,
     );
     shadow_group(
         ui,
         "Spectral text",
         "the analyzer's note names and axis labels, and the spiral's names",
+        "a share of a fixed four-point reference",
+        "four screen points",
         &mut shadow.spectral_text,
     );
 }
@@ -800,7 +808,14 @@ fn shadow_groups(ui: &mut egui::Ui, shadow: &mut ShadowSettings) {
 /// under the bars it shapes: here it says what the two bars under it mean — how
 /// far a Gaussian is blurred, or how far a distance's decay is measured — so
 /// reading down the block is reading the question before the answers.
-fn shadow_group(ui: &mut egui::Ui, name: &str, casters: &str, style: &mut ShadowStyle) {
+fn shadow_group(
+    ui: &mut egui::Ui,
+    name: &str,
+    casters: &str,
+    width_reference: &str,
+    full_width: &str,
+    style: &mut ShadowStyle,
+) {
     ui.label(name);
     choice_row(
         ui,
@@ -828,18 +843,16 @@ fn shadow_group(ui: &mut egui::Ui, name: &str, casters: &str, style: &mut Shadow
             ),
         ],
     );
-    // A share of the node's radius, read out like the two gaps and the
-    // Clearance in Note, so a person comparing them is comparing one unit. A
-    // tenth of a percent, as the gaps are.
+    // A tenth of a percent, as the lattice gaps beside these groups are.
     ValueBar::new(&mut style.width, 0.0..=GLOW_SHADOW_MAX, "Shadow")
         .display(|v| format!("{:.1}%", v * 100.0))
         .show(ui)
         .on_hover_text(format!(
-            "How wide a shadow {casters} casts, as a share of the node's \
-             radius. Each item's shadow is read off its own ink and laid over \
+            "How wide a shadow {casters} casts, as {width_reference}. Each \
+             item's shadow is read off its own ink and laid over \
              whatever is already behind it, so a nearer item darkens a farther \
              one wherever the two overlap. Nothing darkens itself. 0% is this \
-             group with no shadow at all and 100% is one node radius. \
+             group with no shadow at all and 100% is {full_width}. \
              Double-click to restore."
         ));
     ValueBar::new(&mut style.depth, 0.0..=1.0, "Shadow depth")

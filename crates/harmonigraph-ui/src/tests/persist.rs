@@ -1418,9 +1418,12 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
     use harmonigraph_core::Comma;
     let mut state = fresh();
     // A blob from before the septimal comma existed: its keys are stripped,
-    // so `marvel` defaults off and `marvel_auto` on.
-    let saved = state.save_persist().replace("marvel:false,", "").replace("marvel_auto:true,", "");
-    assert_ne!(saved, state.save_persist(), "removal must have hit");
+    // so both `marvel` and `marvel_auto` take their engaged fresh defaults.
+    let full = state.save_persist();
+    let without_mode = full.replace("marvel:true,", "");
+    assert_ne!(without_mode, full, "mode removal must have hit");
+    let saved = without_mode.replace("marvel_auto:true,", "");
+    assert_ne!(saved, without_mode, "detect removal must have hit");
 
     // This session has already judged the tuning it is sitting at.
     state.temper_judged = [Some((0, 0, 0)); Comma::COUNT];

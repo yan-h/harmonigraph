@@ -158,6 +158,7 @@ pub struct GlyphSdfAtlas {
 ///
 /// `slide` is the axis this pane's text scrolls along, which the reconstruction
 /// filter follows — see [`SlideAxis`].
+/// `pass_nr` is the painter context's cumulative pass number.
 #[allow(clippy::too_many_arguments)]
 pub fn text_paint_callback(
     rect: egui::Rect,
@@ -170,6 +171,7 @@ pub fn text_paint_callback(
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: Option<u64>,
+    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
@@ -183,6 +185,7 @@ pub fn text_paint_callback(
             target_format,
             pane_id,
             shadow_surface_id,
+            pass_nr,
         },
     )
 }
@@ -197,6 +200,7 @@ struct TextCallback {
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: Option<u64>,
+    pass_nr: u64,
 }
 
 /// What a glyph pipeline is told about the surface it is drawing on.
@@ -312,8 +316,6 @@ struct TextResources {
     /// The text callback does not cast lattice shadows, but shares this bind
     /// group layout with the lattice and therefore binds a typed stand-in.
     panes: HashMap<u64, TextPane>,
-    /// Prepare-call clock used to release targets belonging to closed panes.
-    prepares: u64,
 }
 
 /// One glyph sheet bound by a renderer: either egui's shared GPU texture or a
@@ -504,12 +506,12 @@ struct TextPane {
     instance_buffer: wgpu::Buffer,
     capacity: usize,
     count: u32,
-    last_seen: u64,
+    last_seen_pass: u64,
 }
 
-/// A live text pane prepares once per frame. This leaves enough slack for a
+/// A live text pane prepares once per egui pass. This leaves enough slack for a
 /// transiently hidden tab without retaining a closed pane's shadow atlas.
-const PANE_TTL_PREPARES: u64 = 120;
+const PANE_TTL_PASSES: u64 = 120;
 
 /// Starting size of a pane's glyph buffer. A lattice full of labels is a few
 /// thousand glyphs; it grows by `next_power_of_two` when a frame overflows.
@@ -943,7 +945,6 @@ impl TextResources {
             blank: blank_atlas(device, queue),
             blank_sdf: blank_sdf_atlas(device, queue),
             panes: HashMap::new(),
-            prepares: 0,
         }
     }
 
@@ -1232,11 +1233,9 @@ impl CallbackTrait for TextCallback {
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        resources.prepares = resources.prepares.wrapping_add(1);
-        let prepares = resources.prepares;
         resources
             .panes
-            .retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
+            .retain(|_, pane| self.pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
 
         resources.bind_sheets(
             device,
@@ -1302,9 +1301,9 @@ impl CallbackTrait for TextCallback {
             ),
             capacity: INITIAL_GLYPH_CAPACITY,
             count: 0,
-            last_seen: prepares,
+            last_seen_pass: self.pass_nr,
         });
-        pane.last_seen = prepares;
+        pane.last_seen_pass = self.pass_nr;
         if pane.bind_group.is_none() {
             pane.bind_group = Some(bind_group(
                 device,
@@ -1343,7 +1342,13 @@ impl CallbackTrait for TextCallback {
                 atlas_uniform: pane.uniform_buffer.clone(),
                 atlas_size_offset: std::mem::offset_of!(TextUniforms, shadow_atlas_size) as u64,
             };
-            crate::spectral_shadow::register(device, callback_resources, surface_id, submission);
+            crate::spectral_shadow::register_for_pass(
+                device,
+                callback_resources,
+                surface_id,
+                submission,
+                self.pass_nr,
+            );
         }
 
         Vec::new()
@@ -1488,6 +1493,7 @@ pub(crate) mod tests {
                 target_format: FORMAT,
                 pane_id: 0,
                 shadow_surface_id: Some(0),
+                pass_nr: 0,
             };
             let mut resources = CallbackResources::default();
             let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1635,6 +1641,7 @@ pub(crate) mod tests {
             target_format: FORMAT,
             pane_id: 0,
             shadow_surface_id: None,
+            pass_nr: 0,
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
@@ -1785,6 +1792,7 @@ pub(crate) mod tests {
             target_format: FORMAT,
             pane_id: 0,
             shadow_surface_id: shadow.map(|_| 0),
+            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
@@ -1909,6 +1917,7 @@ pub(crate) mod tests {
             target_format: FORMAT,
             pane_id: 0,
             shadow_surface_id: None,
+            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1996,6 +2005,7 @@ pub(crate) mod tests {
             target_format: FORMAT,
             pane_id: 0,
             shadow_surface_id: None,
+            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -2101,6 +2111,7 @@ pub(crate) mod tests {
             target_format: FORMAT,
             pane_id,
             shadow_surface_id: None,
+            pass_nr: 0,
         };
 
         let mut resources = CallbackResources::default();
@@ -2181,6 +2192,7 @@ pub(crate) mod tests {
                     target_format: FORMAT,
                     pane_id: 0,
                     shadow_surface_id: None,
+                    pass_nr: 1,
                 },
                 at(40.0, 1, Some(atlas_of(64, 3))),
             ],

@@ -12,14 +12,15 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const SRC: &str = include_str!("shaders/dot_shadow.wgsl");
 const INITIAL_CAPACITY: usize = 16;
-const PANE_TTL_PREPARES: u64 = 120;
+const PANE_TTL_PASSES: u64 = 120;
 
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const ENTRY_POINTS: &[&str] =
     &["vs_dot_shadow", "vs_dot_shadow_cell", "fs_dot_shadow_coverage", "fs_dot_shadow"];
 
 /// Draw the dark backing for the spiral's `dots` through the spectral geometry
-/// style. The callback belongs immediately before the colored egui discs.
+/// style. The callback belongs immediately before the colored egui discs;
+/// `pass_nr` is the painter context's cumulative pass number.
 pub fn dot_shadow_paint_callback(
     rect: egui::Rect,
     dots: Vec<crate::GlowDot>,
@@ -27,10 +28,11 @@ pub fn dot_shadow_paint_callback(
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: u64,
+    pass_nr: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        DotShadowCallback { dots, shadow, target_format, pane_id, shadow_surface_id },
+        DotShadowCallback { dots, shadow, target_format, pane_id, shadow_surface_id, pass_nr },
     )
 }
 
@@ -40,6 +42,7 @@ struct DotShadowCallback {
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     shadow_surface_id: u64,
+    pass_nr: u64,
 }
 
 #[repr(C)]
@@ -58,7 +61,6 @@ struct Resources {
     #[cfg(feature = "hot-reload")]
     generation: u64,
     panes: HashMap<u64, Pane>,
-    prepares: u64,
 }
 
 struct Pane {
@@ -67,7 +69,7 @@ struct Pane {
     dots: wgpu::Buffer,
     dot_capacity: usize,
     count: u32,
-    last_seen: u64,
+    last_seen_pass: u64,
 }
 
 fn locals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -181,11 +183,10 @@ impl Resources {
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
             panes: HashMap::new(),
-            prepares: 0,
         }
     }
 
-    fn pane(&mut self, device: &wgpu::Device, pane_id: u64, prepares: u64) -> &mut Pane {
+    fn pane(&mut self, device: &wgpu::Device, pane_id: u64, pass_nr: u64) -> &mut Pane {
         let locals_layout = &self.locals_layout;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
             let locals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -212,10 +213,10 @@ impl Resources {
                 ),
                 dot_capacity: INITIAL_CAPACITY,
                 count: 0,
-                last_seen: prepares,
+                last_seen_pass: pass_nr,
             }
         });
-        pane.last_seen = prepares;
+        pane.last_seen_pass = pass_nr;
         pane
     }
 }
@@ -237,11 +238,9 @@ impl CallbackTrait for DotShadowCallback {
             callback_resources.insert(Resources::new(device, self.target_format, &shadow_layouts));
         }
         let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-        resources.prepares = resources.prepares.wrapping_add(1);
-        let prepares = resources.prepares;
         resources
             .panes
-            .retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
+            .retain(|_, pane| self.pass_nr.saturating_sub(pane.last_seen_pass) < PANE_TTL_PASSES);
         let style = self.shadow.clamped();
         let ppp = screen.pixels_per_point.max(f32::EPSILON);
         let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
@@ -275,7 +274,7 @@ impl CallbackTrait for DotShadowCallback {
             ],
         };
         let coverage = resources.coverage.clone();
-        let pane = resources.pane(device, self.pane_id, prepares);
+        let pane = resources.pane(device, self.pane_id, self.pass_nr);
         if self.dots.len() > pane.dot_capacity {
             pane.dot_capacity = self.dots.len().next_power_of_two();
             pane.dots = create_vertex_buffer::<crate::GlowDot>(
@@ -301,11 +300,12 @@ impl CallbackTrait for DotShadowCallback {
             atlas_uniform: pane.locals.clone(),
             atlas_size_offset: std::mem::offset_of!(Locals, shadow_atlas_size) as u64,
         };
-        crate::spectral_shadow::register(
+        crate::spectral_shadow::register_for_pass(
             device,
             callback_resources,
             self.shadow_surface_id,
             submission,
+            self.pass_nr,
         );
         Vec::new()
     }
@@ -387,6 +387,7 @@ mod tests {
                 target_format: wgpu::TextureFormat::Rgba8Unorm,
                 pane_id: 0,
                 shadow_surface_id: 0,
+                pass_nr: 0,
             };
             let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
             let mut resources = CallbackResources::default();
@@ -429,6 +430,7 @@ mod tests {
                     target_format: wgpu::TextureFormat::Rgba8Unorm,
                     pane_id: 0,
                     shadow_surface_id: 0,
+                    pass_nr: 0,
                 };
                 let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
                 let mut resources = CallbackResources::default();
