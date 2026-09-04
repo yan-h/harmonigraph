@@ -855,24 +855,31 @@ mod tests {
     /// is the pitch span in semitones — the pane is 100 points across the
     /// pitch axis, so a wide range makes a thin ribbon, which is where the
     /// outline geometry is under the most pressure.
-    fn ribbon_with_range(outline: f32, range: f32) -> Vec<RollInstance> {
+    fn ribbon_with_style(style: harmonigraph_scene::ShadowStyle, range: f32) -> Vec<RollInstance> {
         let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
-        state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
-            width: outline
-                / harmonigraph_render::spectral_shadow_reach(harmonigraph_scene::ShadowStyle {
-                    width: 1.0,
-                    depth: 1.0,
-                    kernel: harmonigraph_scene::ShadowKernel::Distance,
-                }),
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-        };
+        state.view.shadow.spectral_geometry = style;
         state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         instances(&state, 0.05)
+    }
+
+    fn ribbon_with_range(outline: f32, range: f32) -> Vec<RollInstance> {
+        ribbon_with_style(
+            harmonigraph_scene::ShadowStyle {
+                width: outline
+                    / harmonigraph_render::spectral_shadow_reach(harmonigraph_scene::ShadowStyle {
+                        width: 1.0,
+                        depth: 1.0,
+                        kernel: harmonigraph_scene::ShadowKernel::Distance,
+                    }),
+                depth: 1.0,
+                kernel: harmonigraph_scene::ShadowKernel::Distance,
+            },
+            range,
+        )
     }
 
     /// The note is 12 semitones across a 100-point axis (a thick ribbon), so
@@ -1000,6 +1007,43 @@ mod tests {
         let note = one(&off);
         assert_eq!(note.outline_reach, 0.0, "an outline of no reach still made room for one");
         assert_eq!(note.outline[3], 0, "an outline of no reach left a color behind");
+    }
+
+    /// A zero-depth shadow is off everywhere upstream of the atlas too: the
+    /// instance carries no reach or color, and the roll's far-edge cull keeps
+    /// it only for the ribbon's own pixel feather rather than for a transparent
+    /// width-sized surround.
+    #[test]
+    fn zero_shadow_depth_adds_no_roll_instance_or_culling_reach() {
+        let style = |depth| harmonigraph_scene::ShadowStyle {
+            width: 1.0,
+            depth,
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+        };
+        let shut = ribbon_with_style(style(0.0), 12.0);
+        assert_eq!(one(&shut).outline_reach, 0.0, "the instance kept transparent reach");
+        assert_eq!(one(&shut).outline[3], 0, "the instance kept transparent outline ink");
+
+        let last_visible = |depth| {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = 10.0;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.view.shadow.spectral_geometry = style(depth);
+            state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(1.5, 0, 60));
+            (11_500..12_000)
+                .map(|millis| millis as f64 / 1_000.0)
+                .take_while(|&now| !instances(&state, now).is_empty())
+                .last()
+                .expect("the released note reaches its own box edge")
+        };
+        let (bare, casting) = (last_visible(0.0), last_visible(1.0));
+        assert!(
+            casting > bare + 0.05,
+            "a transparent shadow kept the enabled culling reach: shut {bare}, live {casting}",
+        );
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a

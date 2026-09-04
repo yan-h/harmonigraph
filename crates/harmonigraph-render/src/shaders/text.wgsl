@@ -180,8 +180,7 @@ fn vs_glyph_distance_cell(
     let coarse_span = sdf_coarse.zw - sdf_coarse.xy;
     let valid = near_span.x > 0.0 && near_span.y > 0.0
         && coarse_span.x > 0.0 && coarse_span.y > 0.0
-        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0
-        && box_who.y >= 0.5;
+        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0;
 
     var out: SdfOut;
     let texel = cell_texel(point, box_rect, box_cell, box_meta.x);

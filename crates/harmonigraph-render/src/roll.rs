@@ -265,6 +265,17 @@ struct RollUniforms {
     _shadow_pad: [f32; 2],
 }
 
+fn shadow_uniform(style: harmonigraph_scene::ShadowStyle) -> [f32; 4] {
+    let style = style.clamped();
+    let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
+    [
+        sigma,
+        style.depth,
+        if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
+        crate::shadow::spectral_shadow_reach(style),
+    ]
+}
+
 /// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -777,7 +788,8 @@ impl CallbackTrait for RollCallback {
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.clamped();
-        let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
+        let shadow = shadow_uniform(style);
+        let sigma = shadow[0];
         let casters: Vec<crate::shadow::Caster> = self
             .instances
             .iter()
@@ -821,12 +833,7 @@ impl CallbackTrait for RollCallback {
             pitch_dir: self.axes.pitch_dir,
             depth_dir: self.axes.depth_dir,
             _axis_pad: [0.0; 2],
-            shadow: [
-                sigma,
-                style.depth,
-                if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
-                crate::shadow::spectral_shadow_reach(style),
-            ],
+            shadow,
             // Patched with the shared target's actual retained allocation by
             // the surface finalizer after every spectral group has arrived.
             shadow_atlas_size: [1.0; 2],
@@ -1421,6 +1428,9 @@ mod tests {
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             },
         ] {
+            let uniform = shadow_uniform(shadow);
+            assert_eq!(uniform[0], 0.0, "{shadow:?} uploaded a nonzero sigma");
+            assert_eq!(uniform[3], 0.0, "{shadow:?} uploaded a nonzero reach");
             let cb = RollCallback {
                 rect,
                 instances: vec![centered_note()],

@@ -2225,9 +2225,11 @@ pub(crate) mod tests {
                     [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
                 };
                 assert_eq!(at(28.0, 28.0), [255, 255, 255, 255], "{kernel:?} fill at {ppp}");
+                let outer = at(22.0, 28.0);
                 assert!(
-                    at(23.9, 28.0)[3] > 0,
-                    "{kernel:?} never reached outside the glyph at {ppp} ppp",
+                    outer[3] > 0 && outer[0] > outer[1] && outer[0] > outer[2],
+                    "{kernel:?} never drew the red shadow two points outside the glyph at {ppp} \
+                     ppp: {outer:?}",
                 );
                 assert_eq!(
                     at(4.0, 4.0),

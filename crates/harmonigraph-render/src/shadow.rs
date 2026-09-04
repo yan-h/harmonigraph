@@ -54,7 +54,12 @@ pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f
 
 /// How far a spectral style's selected renderer can paint past its caster.
 pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
-    spectral_sigma_points(style) * style.kernel.reach_sigmas()
+    let style = style.clamped();
+    if style.casts() {
+        spectral_sigma_points(style) * style.kernel.reach_sigmas()
+    } else {
+        0.0
+    }
 }
 
 /// σ of a caster's shadow in the pane's POINTS, for a group whose Shadow is
@@ -1216,6 +1221,23 @@ pub(crate) mod tests {
         assert_eq!(sigma_points(0.2, 0.0), 0.0);
         assert_eq!(sigma_points(f32::NAN, 30.0), 0.0);
         assert_eq!(sigma_points(-1.0, 30.0), 0.0);
+    }
+
+    /// Reach is paint reach, not merely the selected kernel's mathematical
+    /// support. Either shut bar leaves no pixels for the caller to cull or
+    /// enlarge geometry around.
+    #[test]
+    fn a_spectral_style_that_cannot_cast_has_no_reach() {
+        for kernel in
+            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+        {
+            let style = |width, depth| harmonigraph_scene::ShadowStyle { width, depth, kernel };
+            assert!(spectral_shadow_reach(style(1.0, 1.0)) > 0.0, "the live fixture is shut");
+            assert_eq!(spectral_shadow_reach(style(0.0, 1.0)), 0.0, "width endpoint");
+            assert_eq!(spectral_shadow_reach(style(1.0, 0.0)), 0.0, "depth endpoint");
+            assert_eq!(spectral_shadow_reach(style(f32::NAN, 1.0)), 0.0, "repaired width");
+            assert_eq!(spectral_shadow_reach(style(1.0, f32::NAN)), 0.0, "repaired depth");
+        }
     }
 
     /// The blur of one cell's ink stays inside that cell and keeps its mass:

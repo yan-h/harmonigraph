@@ -1619,6 +1619,223 @@ mod tests {
         }
     }
 
+    /// The `k` appended by the spectral frequency formatter reaches the fixed
+    /// field and both shipping renderer paths. The batch is reduced to the
+    /// formatter's `k` glyph before it is flushed, so no shadow from the
+    /// preceding digit can make a missing suffix pass.
+    #[test]
+    fn a_spectral_k_label_casts_both_kinds_of_shadow_on_the_gpu() {
+        use egui_wgpu::wgpu;
+
+        const SIZE: [u32; 2] = [128, 64];
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available; skipping");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("headless device");
+        let mut renderer = egui_wgpu::Renderer::new(
+            &device,
+            FORMAT,
+            egui_wgpu::RendererOptions {
+                predictable_texture_filtering: true,
+                ..Default::default()
+            },
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("spectral k shadow target"),
+            size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let context = crate::tests::probe::themed_at(1.0);
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        // epaint resolves a newly requested glyph into its atlas on the next
+        // pass. Settle the exact run first so this is a shadow test, not the
+        // font atlas's one-frame publication latency.
+        for _ in 0..2 {
+            let warm = context.run_ui(
+                egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                |ui| {
+                    let _ = ui.painter().layout_no_wrap(
+                        crate::panes::spectral::frequency_label(1_000.0),
+                        egui::FontId::monospace(24.0),
+                        egui::Color32::WHITE,
+                    );
+                },
+            );
+            for (id, delta) in &warm.textures_delta.set {
+                renderer.update_texture(&device, &queue, *id, delta);
+            }
+        }
+        use_renderer_font_texture(&context);
+
+        for (slot, kernel) in
+            [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+                .into_iter()
+                .enumerate()
+        {
+            let surface = spectral_shadow_surface(slot);
+            let mut state = crate::SharedState::new(FORMAT);
+            state.view.shadow.spectral_text =
+                harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, kernel };
+            let mut k_rect = None;
+            let mut batch_sdf_near = [0.0; 4];
+            let mut batch_sdf_coarse = [0.0; 4];
+            let output = context.run_ui(
+                egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                |ui| {
+                    let painter = ui.painter_at(rect);
+                    let mut batch = TextBatch::default();
+                    batch.text(
+                        &painter,
+                        egui::pos2(48.0, 32.0),
+                        egui::Align2::LEFT_CENTER,
+                        crate::panes::spectral::frequency_label(1_000.0),
+                        egui::FontId::monospace(24.0),
+                        egui::Color32::GREEN,
+                        egui::Color32::RED,
+                    );
+                    let k = batch
+                        .drawn
+                        .iter()
+                        .position(|(_, ch, _)| *ch == 'k')
+                        .expect("the shipping formatter appends k");
+                    let glyph = batch.glyphs[k];
+                    assert_ne!(glyph.sdf_near, [0.0; 4], "k has no near field");
+                    assert_ne!(glyph.sdf_coarse, [0.0; 4], "k has no coarse field");
+                    batch_sdf_near = glyph.sdf_near;
+                    batch_sdf_coarse = glyph.sdf_coarse;
+                    batch.glyphs = vec![glyph];
+                    batch.drawn.retain(|(_, ch, _)| *ch == 'k');
+                    k_rect = Some(egui::Rect::from_min_size(
+                        egui::pos2(glyph.rect[0], glyph.rect[1]),
+                        egui::vec2(glyph.rect[2], glyph.rect[3]),
+                    ));
+                    batch.flush(
+                        &painter,
+                        rect,
+                        &state,
+                        spectral_labels(slot),
+                        harmonigraph_render::SlideAxis::default(),
+                        Some(state.view.shadow.spectral_text),
+                        Some(surface),
+                    );
+                    painter
+                        .add(harmonigraph_render::spectral_shadow_prepare_callback(rect, surface));
+                },
+            );
+            for (id, delta) in &output.textures_delta.set {
+                renderer.update_texture(&device, &queue, *id, delta);
+            }
+            if let Some(texture) = renderer
+                .texture(&egui::TextureId::default())
+                .and_then(|entry| entry.texture.clone())
+            {
+                renderer.callback_resources.insert(texture);
+            }
+            let primitives = context.tessellate(output.shapes, 1.0);
+            let descriptor =
+                egui_wgpu::ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let callback_commands =
+                renderer.update_buffers(&device, &queue, &mut encoder, &primitives, &descriptor);
+            {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral k shadow pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                renderer.render(&mut pass, &primitives, &descriptor);
+            }
+            let bytes_per_row = SIZE[0] * 4;
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("spectral k shadow readback"),
+                size: u64::from(bytes_per_row * SIZE[1]),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            );
+            queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
+            let slice = readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |result| result.expect("map readback"));
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            let frame = slice.get_mapped_range();
+            let k = k_rect.expect("the k glyph was laid out");
+            let x0 = (k.min.x - 7.0).floor().max(0.0) as u32;
+            let x1 = (k.max.x + 7.0).ceil().min(SIZE[0] as f32) as u32;
+            let y0 = (k.min.y - 7.0).floor().max(0.0) as u32;
+            let y1 = (k.max.y + 7.0).ceil().min(SIZE[1] as f32) as u32;
+            let mut pixels = Vec::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let at = ((y * SIZE[0] + x) * 4) as usize;
+                    pixels.push(<[u8; 4]>::try_from(&frame[at..at + 4]).expect("one pixel"));
+                }
+            }
+            assert!(
+                pixels.iter().any(|&[r, g, b, a]| a > 0 && g > r && g > b),
+                "{kernel:?} did not draw the isolated k's visible ink",
+            );
+            let red_shadow = pixels.iter().any(|&[r, g, b, a]| a > 0 && r > g && r > b);
+            let max_red = pixels.iter().map(|pixel| pixel[0]).max().unwrap_or(0);
+            let max_red_dominance = pixels
+                .iter()
+                .map(|pixel| i16::from(pixel[0]) - i16::from(pixel[1].max(pixel[2])))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                red_shadow,
+                "{kernel:?} drew no k-colored shadow around the isolated k glyph {k:?}; \
+                 max red {max_red}, dominance {max_red_dominance}; SDF near {:?}, coarse {:?}, sheet {:?}",
+                batch_sdf_near,
+                batch_sdf_coarse,
+                crate::text_sdf::sheet().atlas.size,
+            );
+            drop(frame);
+            readback.unmap();
+            for id in &output.textures_delta.free {
+                renderer.free_texture(id);
+            }
+        }
+    }
+
     /// Every batch drawn in one frame keeps its own instance buffer, keyed on
     /// its id, so two batches sharing one id draw each other's glyphs — the
     /// second flush overwrites the first's buffer and the first pane's text
