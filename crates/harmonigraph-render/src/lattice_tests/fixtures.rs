@@ -1071,7 +1071,10 @@ pub(super) fn names(runs: Vec<(u32, Vec<GlyphInstance>)>) -> LatticeLabels {
         atlas: Some(crate::text::tests::atlas()),
         marks: Some(crate::text::tests::mark_sheet()),
         sdf: Some(crate::text::tests::sdf_atlas()),
-        slide: SlideAxis::default(),
+        // The UI hands every lattice label the two-axis reconstruction its
+        // orbiting camera needs. A name fixture using the default `Across`
+        // path would leave every label golden blind to that shipping branch.
+        slide: SlideAxis::Both,
     }
 }
 

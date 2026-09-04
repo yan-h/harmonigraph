@@ -219,8 +219,8 @@ pub(crate) struct TextUniforms {
     /// sit together rather than each beside what it belongs to.
     pub(crate) atlas_size: [f32; 2],
     pub(crate) mark_atlas_size: [f32; 2],
-    /// The axis this surface's labels slide along — see [`SlideAxis`], and
-    /// `FILTER_TAP` in the shader for what is done with it.
+    /// The axes this surface's labels slide along — see [`SlideAxis`], and
+    /// `FILTER_TAP` in the shader for what is done with them.
     pub(crate) filter_axis: [f32; 2],
     pub(crate) pixels_per_point: f32,
     /// This text group's Shadow depth, 0..=1 — what a name's shadow takes of
@@ -237,28 +237,30 @@ pub(crate) struct TextUniforms {
     pub(crate) _pad: [f32; 4],
 }
 
-/// Which screen axis a surface's labels TRAVEL along, for the two taps
-/// `coverage` reconstructs a glyph through.
+/// Which screen axes a surface's labels TRAVEL along, for the taps `coverage`
+/// reconstructs a glyph through.
 ///
-/// A closed pair rather than a bare vector, and it is the `Default` that earns
-/// it: the filter's two taps sit at `±FILTER_TAP` ALONG this, so a zero here
-/// is not a neutral value but both taps in the same place — the single tap the
-/// pair exists to replace, restored silently and measurable only on a GPU
+/// A closed enum rather than a bare vector, and it is the `Default` that earns
+/// it: a zero vector is not neutral but all taps in the same place — the single
+/// tap this exists to replace, restored silently and measurable only on a GPU
 /// probe. Nothing that derives `Default` can reach that.
 ///
-/// Only the two axes, because only the two exist: type runs across the screen
-/// and its sheets' texels are square with it, so a label travels along one or
-/// the other. A diagonal would be the lattice's orbiting camera, and it wants
-/// a decision about cost rather than a value here (see `FILTER_TAP`).
+/// A scrolling surface names one axis and pays two taps. The lattice's camera
+/// can carry a label along both at once, so it names both and pays four taps;
+/// keeping that choice here prevents every other text surface from paying for
+/// motion it cannot make (see `FILTER_TAP`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SlideAxis {
-    /// Across the screen — the default, and what every surface takes whose
-    /// text does not scroll.
+    /// Across the screen — the default, and what every surface takes unless
+    /// it names vertical or two-axis motion explicitly.
     #[default]
     Across,
     /// Up and down it: the analyzer with its now-line at the top or bottom,
     /// where time runs down the pane and the names ride it.
     Down,
+    /// Along either axis: the lattice, whose orbiting camera moves labels in
+    /// both at once and has no single travel direction.
+    Both,
 }
 
 impl SlideAxis {
@@ -281,6 +283,7 @@ impl SlideAxis {
         match self {
             Self::Across => [1.0, 0.0],
             Self::Down => [0.0, 1.0],
+            Self::Both => [std::f32::consts::FRAC_1_SQRT_2; 2],
         }
     }
 }
@@ -2482,6 +2485,66 @@ pub(crate) mod tests {
                 swing <= 0.40,
                 "a hairline's partial coverage swings {:.1}% of itself across one pixel of \
                  travel ({lo:.2}..{hi:.2}) on {slide:?}: the stroke changes weight as it slides",
+                100.0 * swing,
+            );
+        }
+    }
+
+    /// The lattice's four-tap mode reaches both axes, rather than quietly
+    /// degenerating to either one of the two scrolling-pane filters.
+    ///
+    /// A fixture per axis is what makes this reach both pairs of taps. Each is
+    /// deliberately moved along the axis an `Across`/`Down` filter pointed the
+    /// other way would leave completely unfiltered; a one-axis implementation
+    /// therefore reads the single tap's full swing on one of the two cases.
+    #[test]
+    fn the_two_axis_filter_reconstructs_motion_in_either_direction() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let ink = |rect: [f32; 4], uv: [f32; 4]| GlyphInstance {
+            rect,
+            uv,
+            sdf_rect: rect,
+            sdf_near: [0.0; 4],
+            sdf_coarse: [0.0; 4],
+            fill: [255, 255, 255, 255],
+            rim: [0, 0, 0, 0],
+            atlas: GlyphInstance::TYPE,
+        };
+        const STEPS: u32 = 16;
+        let cases = [
+            (ink([24.0, 24.0, 1.0, 8.0], [8.0, 8.0, 9.0, 16.0]), hairline_sheet(), 0),
+            (ink([24.0, 24.0, 8.0, 1.0], [8.0, 8.0, 16.0, 9.0]), hairline_sheet_across(), 1),
+        ];
+        for (hairline, sheet, axis) in cases {
+            let smear: Vec<f32> = (0..STEPS)
+                .map(|step| {
+                    let mut sliding = hairline;
+                    sliding.rect[axis] += step as f32 / STEPS as f32;
+                    draw_from(
+                        &device,
+                        &queue,
+                        sliding,
+                        None,
+                        FontAtlas { image: sheet.image.clone(), key: sheet.key },
+                        SlideAxis::Both,
+                    )
+                    .chunks(4)
+                    .map(|px| {
+                        let a = px[3] as f32 / 255.0;
+                        a * (1.0 - a)
+                    })
+                    .sum()
+                })
+                .collect();
+            let hi = smear.iter().copied().fold(0.0f32, f32::max);
+            let lo = smear.iter().copied().fold(f32::INFINITY, f32::min);
+            assert!(hi > 0.0, "the two-axis hairline on axis {axis} drew nothing at any phase");
+            let swing = (hi - lo) / hi;
+            assert!(
+                swing <= 0.40,
+                "the two-axis filter left axis {axis}'s hairline at {:.1}% swing ({lo:.2}..{hi:.2})",
                 100.0 * swing,
             );
         }

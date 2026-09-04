@@ -1178,3 +1178,35 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
     }
     assert_eq!(cursor, labels.glyphs.len(), "every glyph handed over belongs to some run");
 }
+
+/// A lattice name reconstructs both axes its orbiting camera can move it
+/// along, rather than inheriting the one-axis default used by stationary
+/// chrome and a horizontally scrolling roll.
+///
+/// A real held name has to reach the callback: checking the batch metadata on
+/// an empty scene would not prove that a label travelled through the live
+/// typesetting path with that choice.
+#[test]
+fn lattice_names_reconstruct_both_axes_the_camera_moves() {
+    let mut state = fresh();
+    state.view.show_labels = true;
+    state.frame_params.fade_time = 0.0;
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 61, 1.0));
+    let scene = harmonigraph_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.view.reach(),
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
+    );
+    let labels = lattice_labels_in(PANE, &scene, &state);
+    assert!(!labels.glyphs.is_empty(), "the held C sharp must reach the lattice callback");
+    assert_eq!(
+        labels.slide,
+        harmonigraph_render::SlideAxis::Both,
+        "lattice names must reconstruct both axes an orbiting camera moves them along",
+    );
+}
