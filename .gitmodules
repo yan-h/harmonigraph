@@ -1,0 +1,3 @@
+[submodule "agent-skills"]
+	path = .shared-skills
+	url = https://github.com/yan-h/agent-skills.git
