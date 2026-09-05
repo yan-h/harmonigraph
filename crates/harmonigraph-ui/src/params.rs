@@ -34,6 +34,16 @@ pub enum AnalysisInput {
 /// one-shot changes (preset buttons, typed values) — backends wrap those in
 /// an implicit gesture.
 pub trait ParamBackend {
+    /// Coherent audio-owned CLAP configuration, when the shell provides one.
+    fn configuration(&self) -> Option<ConfigurationView> {
+        None
+    }
+    /// Some(result) means the shell owns semantic transactions; None selects
+    /// the synchronous standalone/legacy adapter.
+    fn submit_tuning(&self, _edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
+        None
+    }
+
     fn get(&self, key: ParamKey) -> f32;
     fn set(&self, key: ParamKey, value: f32);
     /// Which live audio input the shell is analyzing, or `None` when the shell
@@ -67,4 +77,11 @@ pub fn tuning_from_params(params: &dyn ParamBackend) -> harmonigraph_core::Tunin
         params.get(ParamKey::Seven),
         params.get(ParamKey::Tolerance),
     )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ConfigurationView {
+    pub resolved: harmonigraph_core::configuration::ResolvedConfig,
+    pub status: u32,
+    pub pending: bool,
 }

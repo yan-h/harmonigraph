@@ -44,7 +44,7 @@ use clap_sys::ext::render::{
     CLAP_EXT_RENDER, CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME, clap_plugin_render,
     clap_plugin_render_mode,
 };
-use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state};
+use clap_sys::ext::state::{CLAP_EXT_STATE, clap_host_state, clap_plugin_state};
 use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail};
 use clap_sys::ext::thread_check::{CLAP_EXT_THREAD_CHECK, clap_host_thread_check};
 use clap_sys::ext::voice_info::{
@@ -73,6 +73,9 @@ use nice_plug_core::params::internals::ParamPtr;
 use nice_plug_core::params::{ParamFlags, Params};
 use nice_plug_core::plugin::{Plugin, PluginState, ProcessStatus, TaskExecutor};
 use parking_lot::Mutex;
+
+#[path = "configuration_adapter.rs"]
+mod configuration_adapter;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -126,6 +129,9 @@ use crate::wrapper::util::{
 const OUTPUT_EVENT_QUEUE_CAPACITY: usize = 2048;
 
 pub struct Wrapper<P: ClapPlugin> {
+    configuration: Mutex<Option<configuration_adapter::Runtime>>,
+    configuration_mailbox: std::sync::OnceLock<Arc<super::configuration::ConfigurationMailbox>>,
+    host_state: AtomicRefCell<Option<ClapPtr<clap_host_state>>>,
     /// A reference to this object, upgraded to an `Arc<Self>` for the GUI context.
     this: AtomicRefCell<Weak<Self>>,
 
@@ -582,6 +588,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         );
 
         let wrapper = Self {
+            configuration: Mutex::new(None),
+            configuration_mailbox: std::sync::OnceLock::new(),
+            host_state: AtomicRefCell::new(None),
             this: AtomicRefCell::new(Weak::new()),
 
             plugin: Mutex::new(plugin),
@@ -743,6 +752,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         // when opening plugin editors
         let wrapper = Arc::new(wrapper);
         *wrapper.this.borrow_mut() = Arc::downgrade(&wrapper);
+        if P::CLAP_CONFIGURATION { wrapper.install_configuration(); }
 
         // The `clap_plugin::plugin_data` field needs to point to this wrapper so we can access it
         // from the vtable functions
@@ -1062,6 +1072,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) {
         // We'll always write these events to the first sample, so even when we add note output we
         // shouldn't have to think about interleaving events here
+        if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, current_sample_idx as u32); } }
         let sample_rate = self.current_buffer_config.load().map(|c| c.sample_rate);
         while let Some(change) = self.output_parameter_events.pop() {
             let push_successful = match change {
@@ -1142,6 +1153,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 total_buffer_len as u32,
             );
 
+            if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, time); } }
             let push_successful = match event {
                 NoteEvent::NoteOn {
                     timing: _,
@@ -1515,6 +1527,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         match (raw_event.space_id, raw_event.type_) {
             (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE) => {
                 let event = unsafe { &*(event as *const clap_event_param_value) };
+                if self.configuration_owns(event.param_id) { return; }
                 self.update_plain_value_by_hash(
                     event.param_id,
                     ClapParamUpdate::PlainValueSet(event.value),
@@ -1541,6 +1554,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
             (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_MOD) => {
                 let event = unsafe { &*(event as *const clap_event_param_mod) };
+                if self.configuration_owns(event.param_id) { return; }
 
                 if event.note_id != -1 && P::MIDI_INPUT >= MidiConfig::Basic {
                     match self.poly_mod_ids_by_hash.get(&event.param_id) {
@@ -1786,18 +1800,26 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// management. The wrapper doesn't use these functions and serializes and deserializes directly
     /// the JSON in the relevant plugin API methods instead.
     pub fn get_state_object(&self) -> PluginState {
-        unsafe {
+        let mut state = unsafe {
             state::serialize_object::<P>(
                 self.params.clone(),
                 state::make_params_iter(&self.param_by_hash, &self.param_id_to_hash),
             )
-        }
+        };
+        self.overlay_configuration_state(&mut state);
+        state
     }
 
     /// Update the plugin's internal state, called by the plugin itself from the GUI thread. To
     /// prevent corrupting data and changing parameters during processing the actual state is only
     /// updated at the end of the audio processing cycle.
     pub fn set_state_object_from_gui(&self, mut state: PluginState) {
+        if P::CLAP_CONFIGURATION {
+            if !self.restore_configuration(&mut state) {
+                crate::nice_error!("Prepared configuration restore refused: invalid or full");
+            }
+            return;
+        }
         // Use a loop and timeouts to handle the super rare edge case when this function gets called
         // between a process call and the host disabling the plugin
         loop {
@@ -1959,6 +1981,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                 query_host_extension::<clap_host_latency>(&wrapper.host_callback, CLAP_EXT_LATENCY);
             *wrapper.host_params.borrow_mut() =
                 query_host_extension::<clap_host_params>(&wrapper.host_callback, CLAP_EXT_PARAMS);
+            if P::CLAP_CONFIGURATION {
+                *wrapper.host_state.borrow_mut() = query_host_extension::<clap_host_state>(&wrapper.host_callback, CLAP_EXT_STATE);
+            }
             *wrapper.host_voice_info.borrow_mut() = query_host_extension::<clap_host_voice_info>(
                 &wrapper.host_callback,
                 CLAP_EXT_VOICE_INFO,
@@ -2124,6 +2149,21 @@ impl<P: ClapPlugin> Wrapper<P> {
             // we'll process every incoming event.
             let process = &observed_process;
             let total_buffer_len = process.frames_count as usize;
+            if P::CLAP_CONFIGURATION {
+                if !unsafe { wrapper.capture_configuration(process.in_events, Some((process.steady_time, process.frames_count))) } {
+                    return CLAP_PROCESS_ERROR;
+                }
+                let transport = unsafe { process.transport.as_ref() };
+                wrapper.process_configuration(super::configuration::ConfigurationBoundary {
+                    steady_time: process.steady_time, frames: process.frames_count,
+                    sample_rate: wrapper.current_buffer_config.load().map_or(44100.0, |c| c.sample_rate),
+                    transport_seconds: transport.filter(|t| t.flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0)
+                        .map(|t| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
+                    playing: transport.is_some_and(|t| t.flags & CLAP_TRANSPORT_IS_PLAYING != 0),
+                });
+                wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
+                wrapper.configuration_request_main();
+            }
 
             let current_audio_io_layout = wrapper.current_audio_io_layout.load();
             let has_main_input = current_audio_io_layout.main_input_channels.is_some();
@@ -2409,6 +2449,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                         outputs: buffers.aux_outputs,
                     };
                     let mut context = wrapper.make_process_context(transport);
+                    if P::CLAP_CONFIGURATION { plugin.clap_configuration_segment(block_start as u32, block_len as u32); }
                     if P::CLAP_PROCESS_TRACE {
                         plugin.clap_process_trace(ProcessTrace::SubBlockEnter {
                             start: block_start as u32, length: block_len as u32,
@@ -2447,7 +2488,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                             total_buffer_len,
                         )
                     };
+                    if P::CLAP_CONFIGURATION { unsafe { wrapper.notify_configuration(&*process.out_events, block_end.saturating_sub(1) as u32); } }
                 }
+                if P::CLAP_CONFIGURATION { wrapper.configuration_request_main(); }
 
                 // If our block ends at the end of the buffer then that means there are no more
                 // unprocessed (parameter) events. If there are more events, we'll just keep going
@@ -2535,6 +2578,8 @@ impl<P: ClapPlugin> Wrapper<P> {
     unsafe extern "C" fn on_main_thread(plugin: *const clap_plugin) {
         check_null_ptr!((), plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+
+        if P::CLAP_CONFIGURATION { wrapper.configuration_main_thread(); }
 
         // [Self::schedule_gui] posts a task to the queue and asks the host to call this function
         // on the main thread, so once that's done we can just handle all requests here
@@ -3204,6 +3249,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, value);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
+        if let Some(current) = wrapper.configuration_value(param_id) {
+            unsafe { *value = current; }
+            return true;
+        }
         match wrapper.param_by_hash.get(&param_id) {
             Some(param_ptr) => {
                 unsafe {
@@ -3293,6 +3342,17 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!((), plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
+        if P::CLAP_CONFIGURATION {
+            process_wrapper(|| {
+                // Untimed even if the host puts a time in the event header.
+                // Owner adoption waits for the next explicit process boundary.
+                if !unsafe { wrapper.capture_configuration(in_, None) } { return; }
+                if !in_.is_null() { unsafe { wrapper.handle_in_events(&*in_, 0, 0); } }
+                if !out.is_null() { unsafe { wrapper.handle_out_events(&*out, 0, 0); } }
+                wrapper.configuration_request_main();
+            });
+            return;
+        }
         if !in_.is_null() {
             unsafe {
                 wrapper.handle_in_events(&*in_, 0, 0);
@@ -3385,12 +3445,14 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, stream);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let serialized = unsafe {
+        let serialized = if P::CLAP_CONFIGURATION {
+            state::serialize_state_json(&wrapper.get_state_object())
+        } else { unsafe {
             state::serialize_json::<P>(
                 wrapper.params.clone(),
                 state::make_params_iter(&wrapper.param_by_hash, &wrapper.param_id_to_hash),
             )
-        };
+        }};
         match serialized {
             Ok(serialized) => {
                 // CLAP does not provide a way to tell how much data there is left in a stream, so
@@ -3451,7 +3513,8 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         match unsafe { state::deserialize_json(&read_buffer) } {
             Some(mut state) => {
-                let success = wrapper.set_state_inner(&mut state);
+                let success = if P::CLAP_CONFIGURATION { wrapper.restore_configuration(&mut state) }
+                    else { wrapper.set_state_inner(&mut state) };
                 if success {
                     crate::nice_trace!("Loaded state ({} bytes)", read_buffer.len());
                 }

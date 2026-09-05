@@ -64,11 +64,18 @@ pub struct Replay {
     next_note: usize,
     /// Index of the first parameter change not yet applied.
     next_param: usize,
+    next_configuration: usize,
 }
 
 impl Replay {
     pub fn new(take: Take) -> Replay {
-        Replay { take, params: ReplayParams::default(), next_note: 0, next_param: 0 }
+        Replay {
+            take,
+            params: ReplayParams::default(),
+            next_note: 0,
+            next_param: 0,
+            next_configuration: 0,
+        }
     }
 
     pub fn take(&self) -> &Take {
@@ -79,6 +86,14 @@ impl Replay {
     /// been delivered yet. Call once per frame with a strictly increasing
     /// `now`; seeking backwards is not supported (use [`Replay::new`]).
     pub fn advance_to(&mut self, state: &mut SharedState, now: f64) {
+        while let Some(record) = self.take.configurations.get(self.next_configuration) {
+            if record.t > now {
+                break;
+            }
+            state.replayed_configuration = Some(record.resolved());
+            self.next_configuration += 1;
+        }
+
         while let Some(record) = self.take.notes.get(self.next_note) {
             if record.t > now {
                 break;
@@ -115,7 +130,9 @@ impl Replay {
 
     /// Whether every recorded event has been delivered.
     pub fn is_spent(&self) -> bool {
-        self.next_note == self.take.notes.len() && self.next_param == self.take.params.len()
+        self.next_note == self.take.notes.len()
+            && self.next_param == self.take.params.len()
+            && self.next_configuration == self.take.configurations.len()
     }
 }
 
@@ -126,7 +143,13 @@ mod tests {
     use harmonigraph_take::{Header, NoteKind, NoteRecord, ParamRecord};
 
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
-        Take { header: Header::default(), notes, params, truncated: false }
+        Take {
+            header: Header::default(),
+            notes,
+            params,
+            configurations: Vec::new(),
+            truncated: false,
+        }
     }
 
     fn on(t: f64, note: u8) -> NoteRecord {
@@ -135,6 +158,55 @@ mod tests {
 
     fn off(t: f64, note: u8) -> NoteRecord {
         NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::Off }
+    }
+
+    #[test]
+    fn resolved_configuration_round_trip_is_independent_of_replay_cadence() {
+        use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer};
+        use harmonigraph_take::{ConfigurationRecord, Record};
+        let mut reducer = ConfigReducer::default();
+        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let mut expected = Vec::new();
+        for (t, edit) in [
+            (0.0, ConfigEdit { learning: Some(true), ..Default::default() }),
+            (0.013, ConfigEdit::unlock(harmonigraph_core::Comma::Syntonic, 390_000_000)),
+            (0.031, ConfigEdit::axis(1, 696_000_000)),
+        ] {
+            reducer.apply(ConfigMutation::Edit(edit));
+            let config = reducer.resolved();
+            expected.push((t, config));
+            encoded.push('\n');
+            encoded.push_str(
+                &ron::to_string(&Record::Configuration(ConfigurationRecord::new(t, config)))
+                    .unwrap(),
+            );
+        }
+        // A held chord and contradictory raw lane would trigger GUI learning or
+        // detection if replay accidentally treated these exact records as hints.
+        for record in [
+            Record::Note(on(0.0, 60)),
+            Record::Note(on(0.0, 64)),
+            Record::Param(ParamRecord { t: 0.0, id: ParamKey::Three.id().into(), value: 710.0 }),
+        ] {
+            encoded.push('\n');
+            encoded.push_str(&ron::to_string(&record).unwrap());
+        }
+        for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
+            let take = Take::parse(std::io::Cursor::new(&encoded)).unwrap();
+            assert!(!take.truncated);
+            let mut replay = Replay::new(take);
+            let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+            for frame in 0..=100 {
+                let now = f64::from(frame) * cadence;
+                replay.advance_to(&mut state, now);
+                harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
+                let config = expected.iter().rev().find(|(t, _)| *t <= now).unwrap().1;
+                assert_eq!(state.tuning, config.tuning);
+                assert_eq!(state.view.meantone, config.modes.tempered.syntonic);
+                assert_eq!(state.learn_active, config.modes.learning);
+                assert_eq!(state.replayed_configuration, Some(config));
+            }
+        }
     }
 
     #[test]

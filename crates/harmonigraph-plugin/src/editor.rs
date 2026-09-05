@@ -452,8 +452,12 @@ fn frame(
     let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
-    let backend =
-        PluginParamBackend { params: &state.params, setter: &setter, gesture: &shared.gesture };
+    let backend = PluginParamBackend {
+        params: &state.params,
+        setter: &setter,
+        gesture: &shared.gesture,
+        configuration: state.params.configuration.get().map(|mailbox| mailbox.visible()),
+    };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //

@@ -124,6 +124,7 @@ struct Recorder {
     writer: harmonigraph_take::Writer,
     /// Last value seen for each parameter, so only changes are written.
     last: [f32; ParamKey::ALL.len()],
+    configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
 }
 
 impl Recorder {
@@ -138,7 +139,11 @@ impl Recorder {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 eprintln!("recording take: {path}");
-                Some(Recorder { writer, last: [f32::NAN; ParamKey::ALL.len()] })
+                Some(Recorder {
+                    writer,
+                    last: [f32::NAN; ParamKey::ALL.len()],
+                    configuration: None,
+                })
             }
             Err(err) => {
                 eprintln!("could not record take to {path}: {err}");
@@ -152,7 +157,15 @@ impl Recorder {
     }
 
     /// Write any parameter that moved since the last frame.
-    fn params(&mut self, params: &StandaloneParams, now: f64) {
+    fn params(&mut self, params: &StandaloneParams, state: &mut SharedState, now: f64) {
+        harmonigraph_ui::resolve_tuning(state, params);
+        let configuration = state.resolved_configuration();
+        if self.configuration != Some(configuration) {
+            let _ = self
+                .writer
+                .configuration(harmonigraph_take::ConfigurationRecord::new(now, configuration));
+            self.configuration = Some(configuration);
+        }
         for (i, key) in ParamKey::ALL.into_iter().enumerate() {
             let value = params.get(key);
             if self.last[i] != value {
@@ -565,9 +578,6 @@ impl eframe::App for App {
 
         let source = self.source_picker(ui.ctx());
         let now = self.input_frame(source, now);
-        if let Some(recorder) = &mut self.recorder {
-            recorder.params(&self.params, now);
-        }
 
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
@@ -586,6 +596,9 @@ impl eframe::App for App {
             window_width: window.x,
         }
         .draw();
+        if let Some(recorder) = &mut self.recorder {
+            recorder.params(&self.params, &mut self.state, now);
+        }
 
         // A pane folded sideways (or came back) leaves every other pane its
         // width and asks the window for the difference. The plugin has to
@@ -767,6 +780,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn recorded_frame_uses_current_just_defaults_edits_and_learning() {
+        let mut app = App::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        let path = std::env::temp_dir()
+            .join(format!("harmonigraph-config-frame-{}.take", std::process::id()));
+        let mut recorder = Recorder {
+            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
+                .unwrap(),
+            last: [f32::NAN; ParamKey::ALL.len()],
+            configuration: None,
+        };
+        recorder.params(&app.params, &mut app.state, 0.0);
+        let first = app.state.tuning;
+        assert_eq!(
+            first.three,
+            harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST)
+        );
+        assert_eq!(first.five, (4 * i64::from(first.three) - 2_400_000_000) as i32);
+        app.params.set(ParamKey::Three, 690.0);
+        app.params.set(ParamKey::Five, 390.0);
+        recorder.params(&app.params, &mut app.state, 1.0);
+        let edited = app.state.tuning;
+        app.state.learn_active = true;
+        for note in [60, 64, 67] {
+            app.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, note, 0.8));
+        }
+        recorder.params(&app.params, &mut app.state, 2.0);
+        let learned = app.state.tuning;
+        assert_eq!(learned.three, 700_000_000);
+        assert_eq!(learned.five, 400_000_000);
+        drop(recorder);
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            take.configurations.iter().map(|r| (r.t, r.resolved().tuning)).collect::<Vec<_>>(),
+            [(0.0, first), (1.0, edited), (2.0, learned)]
+        );
+    }
+
+    #[test]
     fn source_switch_after_newer_queued_input_replays_the_live_mock_chord() {
         use harmonigraph_core::{NoteTracker, VoiceState};
         let mut app = App::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
@@ -777,6 +829,7 @@ mod tests {
             writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
                 .unwrap(),
             last: [f32::NAN; ParamKey::ALL.len()],
+            configuration: None,
         });
         // The callback raced the frame's clock read. Mock's first chord is
         // sounding at both times, so the replacement really emits attacks.

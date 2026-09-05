@@ -299,7 +299,13 @@ mod tests {
                 });
             }
         }
-        Take { header: Header::default(), notes, params: Vec::new(), truncated: false }
+        Take {
+            header: Header::default(),
+            notes,
+            params: Vec::new(),
+            configurations: Vec::new(),
+            truncated: false,
+        }
     }
 
     fn settings() -> Settings {
