@@ -329,7 +329,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         // `fs_glow`'s own early-out is reachable here and nowhere else — the
         // scene pass never runs it — so without this it would be compiled and
         // never once compared.
-        let Some(glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) else {
+        let Some(strip) = pane.ink_history.as_ref() else {
             continue;
         };
         let glow_draw = |src: &str| {
@@ -371,7 +371,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 });
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
+                pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             }

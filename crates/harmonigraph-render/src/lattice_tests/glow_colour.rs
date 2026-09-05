@@ -839,14 +839,7 @@ fn the_ink_strip_has_a_row_for_every_node() {
             .panes
             .get(&9)
             .expect("...and this pane's buffers");
-        let strip = &pane
-            .offscreen
-            .as_ref()
-            .expect("the pane drew something")
-            .glow
-            .as_ref()
-            .expect("the view asks for a glow")
-            .strip;
+        let strip = pane.ink_history.as_ref().expect("the view asks for a glow");
         (pane.instance_count, strip.rows)
     };
     // Up and back down: a strip that only ever grew would pass a rising
