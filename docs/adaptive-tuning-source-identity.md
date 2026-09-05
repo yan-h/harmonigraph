@@ -99,3 +99,15 @@ Companion/session/configuration/emitter wiring remains separate work.
 No source-incarnation rejection, real-time capacity, callback-cost, host timing or live multi-track acceptance claim is made by this subset.
 The original implementer validates and fixes independent review findings against the committed head.
 Before pausing, commit first and release-build both `harmonigraph-plugin` and `harmonigraph-offline`, read the actual tag with `./load-plugin.sh --tag`, and leave the shared Bitwig plugin/renderer slots untouched.
+
+## Independent review cycle 1
+
+The coordinator's independent read-only review of `860994fcd0e04923909eaebaf579cf5b6989ba5d` cleared core/display identity, fixture reach and pitch-only cache keys.
+The take/replay/standalone reviewer found one P2, confirmed by the original implementer with a failing focused fixture:
+frame time 1.000, queued old hardware attack at 1.001, source reset at 1.001, then replacement mock attacks still stamped 1.000. Live state held four mock notes, while the serialized take's time sort moved those attacks before the reset and reconstructed no held notes.
+
+`switch_source` now returns its reset boundary, and the shared input-frame path uses that value for replacement input and the rest of the UI frame.
+`source_switch_after_newer_queued_input_replays_the_live_mock_chord` actually queues the newer `RawMidi`, switches to Mock during its sounding phase, records through the standalone writer, parses the file and compares replayed source/key/pitch/onset with the live held chord.
+The fixture failed before the repair and passed after it.
+No other actionable findings were returned in cycle 1, and no broad Cargo suite was repeated for this fix.
+The corrected committed head is returned to the coordinator for bounded cycle 2 review on the same draft PR #636.

@@ -498,7 +498,7 @@ impl App {
         self.state.tracker.handle_event(event);
     }
 
-    fn switch_source(&mut self, source: MidiSource, now: f64) {
+    fn switch_source(&mut self, source: MidiSource, now: f64) -> f64 {
         // Stop the producer, then publish its queued input BEFORE the reset.
         // Otherwise an old queued attack can resurrect this source after the
         // switch, and the live view and take disagree about what was cleared.
@@ -524,6 +524,7 @@ impl App {
             }
             MidiSource::Port(name) => self.connect(&name),
         }
+        reset_at
     }
 
     /// Gather this frame's events from the active source: the mock
@@ -539,6 +540,19 @@ impl App {
         }
         events
     }
+
+    /// Apply a source-picker result and this frame's input together. Old
+    /// queued input can advance the reset past the original frame clock;
+    /// replacement attacks and the rest of the frame must follow that cut.
+    fn input_frame(&mut self, switch_to: Option<MidiSource>, mut now: f64) -> f64 {
+        if let Some(source) = switch_to {
+            now = self.switch_source(source, now);
+        }
+        for event in self.collect_events(now) {
+            self.handle_event(event);
+        }
+        now
+    }
 }
 
 impl eframe::App for App {
@@ -549,13 +563,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = self.start.elapsed().as_secs_f64();
 
-        if let Some(source) = self.source_picker(ui.ctx()) {
-            self.switch_source(source, now);
-        }
-
-        for event in self.collect_events(now) {
-            self.handle_event(event);
-        }
+        let source = self.source_picker(ui.ctx());
+        let now = self.input_frame(source, now);
         if let Some(recorder) = &mut self.recorder {
             recorder.params(&self.params, now);
         }
@@ -756,6 +765,48 @@ impl MockSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_switch_after_newer_queued_input_replays_the_live_mock_chord() {
+        use harmonigraph_core::{NoteTracker, VoiceState};
+        let mut app = App::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        app.source = MidiSource::Port("queued fixture".into());
+        let path =
+            std::env::temp_dir().join(format!("harmonigraph-switch-{}.take", std::process::id()));
+        app.recorder = Some(Recorder {
+            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
+                .unwrap(),
+            last: [f32::NAN; ParamKey::ALL.len()],
+        });
+        // The callback raced the frame's clock read. Mock's first chord is
+        // sounding at both times, so the replacement really emits attacks.
+        app.midi_tx.send(RawMidi { time: 1.001, data: [0x90, 72, 100] }).unwrap();
+        let now = app.input_frame(Some(MidiSource::Mock), 1.0);
+        drop(app.recorder.take());
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!take.truncated);
+        assert_eq!(
+            take.notes.len(),
+            CHORDS[0].0.len() + 2,
+            "old attack, reset, and real mock attacks"
+        );
+        let held = |tracker: &NoteTracker| {
+            tracker
+                .voices()
+                .filter(|voice| voice.state == VoiceState::Held)
+                .map(|voice| (voice.key(), voice.pitch, voice.on_time))
+                .collect::<Vec<_>>()
+        };
+        let live = held(&app.state.tracker);
+        assert_eq!(live.len(), CHORDS[0].0.len(), "the replacement chord is held live");
+        let mut replay = NoteTracker::new();
+        for record in take.notes {
+            replay.handle_event(record.into());
+        }
+        assert_eq!(held(&replay), live, "time-sorted take replay must keep the replacement chord");
+        assert_eq!(now, 1.001, "the rest of the frame also observes the switch boundary");
+    }
 
     /// Decode a sequence of raw messages at time 0.
     fn decode_all(decoder: &mut MidiDecoder, messages: &[[u8; 3]]) -> Vec<NoteEvent> {
