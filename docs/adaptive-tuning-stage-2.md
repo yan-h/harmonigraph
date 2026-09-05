@@ -17,13 +17,14 @@ Its description and final handoff carry the exact pushed stage head, avoiding a 
 
 - bounded SPSC transfer windows with retained source backlog, explicit admission and per-enclosing-callback work budgets;
 - saved pairing versus runtime identity, source/incarnation scope and hub direct-input reservation;
-- owned mailbox publication, acquire/release ordering, off-thread lease reclamation and bounded registry retirement;
+- owned mailbox publication, active callback-boundary lease adoption, acquire/release ordering, off-thread lease reclamation and bounded registry retirement;
 - continuous input/output coverage, immutable per-pass membership, configuration revisions and canonical lifecycle ordering;
 - wrapper-level bounded output admission, per-attempt actual acceptance, partial-onset fault containment and independent release completion;
 - source emission gates and generation/cut acknowledgements that preserve racing accepted output;
 - prospective suffix revocation, retained unsounded requests, translation waves and responsive established-voice events;
-- channel-controller dependency/replay rules, Stop edge/cut propagation, new stopped input, loop handling and Off's pre-transition obligations;
-- complete held baseline plus output cut/ack and a separately complete chunked pending-request manifest;
+- channel drain/neutral gates between different translations, Stop edge/cut propagation, new stopped input, loop handling and Off's pre-transition obligations;
+- complete held baseline, separate retained-output acknowledgement/canonical history publication, and a separately complete chunked pending-request manifest;
+- a fixed retained configuration timeline ahead of the input frontier, with explicit marker retirement/exhaustion;
 - conservative byte calculations and production fixtures/measurements still owed.
 
 [`adaptive-tuning.md`](adaptive-tuning.md) links the engineering decisions and updates the implementation order without claiming production behavior.
@@ -71,19 +72,38 @@ The exact boundary and production-host fixtures remain in #616's specification.
 ## Validation and measurements
 
 The selected pool layout was calculated with Python integer arithmetic:
-127,243,776 bytes, approximately 121.35 MiB before the 16 MiB overhead allowance, within the selected 144 MiB per-session ceiling.
+127,800,832 bytes, approximately 121.88 MiB before the 16 MiB overhead allowance, within the selected 144 MiB per-session ceiling.
+The review fixes add a 4,096-record canonical publication ring and a separate 128-marker retained configuration timeline;
+the fixed registry attachment slots fit the existing overhead allowance.
 These are **calculated budgets**, not compiled `size_of` values, allocation measurements, callback benchmarks or evidence of supported event throughput.
 Production must assert and measure the actual types, allocated arenas, high-water marks and complete callback cost, including maximum #621 policy work.
 
 Focused documentation validation consists of Rust formatting, Markdown semantic-break checks, local Markdown target/anchor resolution, pool-table arithmetic and diff whitespace checks.
 Executed `cargo fmt --all` and `cargo fmt --all --check`, with `CARGO_BUILD_JOBS=2` and `RUST_TEST_THREADS=2`, successfully.
 The repository-wide semantic-break check and explicit checks of both new files passed.
-All 26 local Markdown targets/anchors in the four changed documents resolved, all 15 byte-budget rows recomputed exactly, and `git diff --check` passed.
+All 26 local Markdown targets/anchors in the four changed documents resolved, all 17 byte-budget rows recomputed exactly, and `git diff --check` passed.
 The formatter's unrelated indentation-only rewrite of `docs/settings.md` was restored to the exact base before validation and is absent from this stage.
 The draft PR records the executed commands/results and the exact-head Actions snapshot.
 Full CI runs in Actions;
 no local Cargo build/test workload or new musical regression fixture is needed for this documentation-only stage.
 No release build is required, no new binary tag is claimed, and the shared Bitwig slot was not touched.
+
+## Independent review cycle 1
+
+The coordinator's Max and Xhigh reviewers inspected committed head `c0d372c8e13d24e954947dc64bd8aee405384019` and returned four findings.
+All four were confirmed against the written contract and corrected;
+none was waived.
+These are specification fixes and production fixtures still owed, not executed new musical tests:
+
+- **Future shared-channel gestures:** the earlier gate considered only queued controller conflicts, then allowed one later CC at the earliest wave's time. A zero-shift and +1,000-shift held voice could therefore receive a pedal-up before the younger translated release. Every different-shift wave now waits for old channel lifetimes/obligations to drain and pedals to become neutral, even when no controller was queued at admission. Older releases remain responsive. New Off notes retain zero correction but can wait under the same failure schedule; Off does not restore D prematurely.
+- **Retained history across a baseline:** an empty held baseline previously authorized journal retirement, erasing an undrained completed on/tuning/off lifetime. Baseline acknowledgement now replaces current state only. A separate output-retention acknowledgement transfers full records to the hub's audio owner for exactly-once ordered canonical publication. Source retirement, musical recovery and credit release never wait for GUI/background/disk acknowledgement. Actual downstream publication failure has its own gap/incomplete-take diagnostic; a baseline cannot manufacture such loss.
+- **Active discovery and pairing:** endpoints were previously handed only to inactive instances, leaving tuner-before-hub activation without an adoption path. Fixed instance-owned offer/return slots now transfer preallocated leases at enclosing callback boundaries, with healthy audio progress, coverage and baseline admission separate from registry acknowledgement. Active re-pairing finishes old obligations and detaches both audio owners before new adoption or off-thread reclamation.
+- **Unbound configuration timeline:** copying configurations into bound requests did not cap markers accumulating beyond a blocked frontier. The hub now retains at most 128 timeline markers separately from the command queue and restore slots, charges each until finalized/cohort binding completes, and reports actual required-storage exhaustion without dropping intermediate automation revisions.
+
+Each correction names a production fixture that reaches the reported shape:
+future CC after attempted late-wave admission, a complete undrained lifetime plus empty baseline, an already-active tuner before its hub, and 129 required markers against the actual 128-marker timeline.
+The revised head is committed/pushed to the same [draft PR #635](https://github.com/yan-h/harmonigraph/pull/635) for bounded cycle 2 review;
+its exact hash and CI snapshot are recorded in that PR and the coordinator handoff.
 
 ## Independent review and remaining production work
 

@@ -76,9 +76,10 @@ never let `Vec::capacity()` or a ring's internal capacity accidentally define ad
 | `INTENT_RING` | 1,024 per tuner | Source to hub transfer window; unsent data stays in source-owned storage |
 | `REPLY_RING` | 1,024 per tuner | Hub to source transfer window; unsent answers stay in the hub ledger |
 | `OUTPUT_RING` | 2,048 per tuner | Accepted output deltas to the hub |
-| `OUTCOME_JOURNAL` | 4,096 per tuner | Local ordinary accepted-output records, retained through hub acknowledgement |
+| `OUTCOME_JOURNAL` | 4,096 per tuner | Local ordinary accepted-output records, retained through the hub's explicit output-retention acknowledgement, never retired by a held baseline alone |
 | `INGRESS_WINDOW` | 1,024 per source row | Hub-owned collected intents, including complete-cohort assembly |
 | `OUTPUT_WINDOW` | 2,048 per source row | Hub-owned collected actual output awaiting a complete merge frontier |
+| `PUBLICATION_RING` | 4,096 per session | Ordered canonical output/control publication to the non-RT display/take drainer; consumer loss is separate from musical state |
 | `PLAN_LEDGER` | 131,072 session-wide | At most `16 * LIFETIMES` unretired tuner assignment plans; direct input needs no assignment plan |
 | `COHORT_EVENTS` / `COHORT_ONSETS` | 1,024 / 256 | One same-sample dependency graph / onsets in that graph, across all source rows |
 | `HISTORY_KEYS` | `17 * 16 * 128 = 34,816` | Direct-index source/channel/key history; confirmed and prospective copies |
@@ -87,7 +88,9 @@ never let `Vec::capacity()` or a ring's internal capacity accidentally define ad
 | `EMERGENCY_VOICES` | 64 per source | Dedicated release/completion cells, outside ordinary journals and queues |
 | `EMERGENCY_CHANNELS` | 16 per source | Pedal/controller reset obligation and acceptance cells |
 | `CONFIG_COMMANDS` / `CONFIG_SLOTS` | 128 / 2 | Bounded ordered configuration commands / owned restore snapshots |
+| `CONFIG_TIMELINE` | 128 per session | Retained sample-timed configuration markers ahead of the finalized input frontier, separate from command/restore handoff storage |
 | `CONTROL_SLOTS` | 2 per direction per source | Owned progress/recovery/control frames; repeated fault bits use atomic latches |
+| `ATTACHMENT_SLOTS` | 2 per direction per instance | Registry offer/return and callback acknowledgement slots, available before any session is paired |
 
 Each pending input event owns exactly one event slot until its output is accepted or its cancellation is authorized and acknowledged.
 A request record is separate because its note-on event can leave the pending pool while the voice, reply rejection or revocation acknowledgement still needs its identity.
@@ -161,14 +164,54 @@ Relaxed counters are permitted for diagnostic totals that publish no payload and
 [Rust's atomic ordering rules](https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html) do not make racing non-atomic payload copies safe.
 
 The off-thread registry owns every session arena and all endpoint allocations through the entire callback lifetime.
-Registration takes the registry mutex only off audio, creates a runtime lease and hands endpoints to inactive instances.
+Registration takes the registry mutex only off audio and creates the runtime lease and endpoint allocations.
 Audio code never looks up a hub through a registry mutex or clones/drops the last arena reference.
-Unregister publishes lease withdrawal, stops new use, and returns endpoints only after host deactivation has joined that instance's callbacks and the hub has acknowledged detaching the old lease.
+Each instance constructs its attachment mailboxes and local performance/lifetime storage off audio, before pairing, and retains them while active and disconnected.
+Hub registration, tuner registration and pairing edits run the same off-thread registry match:
+exactly one compatible candidate produces a provisional offer;
+missing/ambiguous matches remain visible and pending.
+Adoption is not musical enrollment:
+the audio owners still require that hub's healthy progress and validated mapping before opening membership.
+An offer can therefore be prepared before the hub's first callback, without requiring a background worker to notice that callback later.
+Thus a tuner activated before its hub can receive an offer later without reopening its editor or relying on another activation call.
+
+An offer moves a preallocated endpoint bundle and immutable lease identity into a typed owned attachment slot using the ownership states above.
+This ownership-transfer control is separate from the ordinary `Copy` musical messages:
+endpoints may be moved, but never cloned, allocated, replaced by dropping, or destroyed on audio.
+The registry pins the underlying arena before publishing Ready and cannot reclaim it on a timeout.
+At most one outstanding offer per instance may be accepted;
+the second slot does not authorize overlapping endpoint consumers.
+Stale, canceled or now-ambiguous offers return through the same owned return path without being opened for musical work;
+a full return slot keeps the offer pinned rather than dropping its endpoint bundle on audio.
+At an enclosing callback boundary with no old lease, the instance acquires one Ready offer once, validates its offer generation/identity, moves the endpoints into its callback owner, and publishes `AdoptAck` through its dedicated return slot for registry ownership bookkeeping.
+The source separately sends its matching adoption/coverage frame to the hub through the source-owned control lane;
+the hub does not wait for the registry to consume `AdoptAck`.
+It begins new continuous coverage and the baseline/pending-manifest protocol;
+musical membership opens only after the hub acknowledges that boundary.
+Pre-join buffered attacks retain their original input metadata and are admitted through this fresh boundary, never represented as complete historical coverage.
+No background acknowledgement is needed on the subsequent musical decision path.
+
+For an already-paired active tuner, a new pairing first establishes a local input cut:
+buffer new attacks for the proposed lease while finishing old requests, held releases/expression, and outcome obligations on the old lease.
+Do not send an old reply or completion to the proposed hub, cancel old requests merely to switch, or move live voice credits between sessions.
+After the old lease reaches safe idle and its audio-owned output-retention and plan cuts settle, the hub fences/detaches it.
+The source returns its endpoint bundle through an owned return slot at an enclosing completion boundary and acknowledges that it will never access it again.
+Only then may the source adopt the new offer;
+a full return/ack slot retains old ownership and postpones adoption.
+If an old obligation cannot finish, the transition remains visibly pending until valid recovery or explicit Reset/termination, while required storage fits.
+Local Stop/emergency inhibition survives adoption.
+This path changes membership without changing the instance's serialized callback ownership or freeing any endpoint on audio.
+
+Unregister publishes lease withdrawal and stops new use.
+Endpoints return only after either this callback-boundary detach acknowledgement or host deactivation joining that instance's callbacks, and the hub's own detach acknowledgement.
 The registry destroys the arena only after both sides quiesce, outside audio.
 If a callback or acknowledgement never arrives, keep a bounded retired arena pinned and visibly refuse additional registration when registry storage is full;
 do not guess quiescence from elapsed time.
 Use `REGISTRY_SESSIONS = 4` and `REGISTRY_TUNER_LEASES = 64` per process, counting active and retired entries together.
 This is an initial implementation ceiling, not cross-process discovery or an additional hosting mode.
+Active, unpaired instances also occupy these registry entries;
+their preallocated local storage is counted once in the same bounded storage budget, not duplicated on adoption.
+Attachment slots remain instance-owned until host callback quiescence, even after the last session lease retires.
 
 The following are maximum work slices per **enclosing CLAP callback**, shared by all Rust sub-blocks:
 
@@ -183,6 +226,7 @@ The following are maximum work slices per **enclosing CLAP callback**, shared by
 | `EMERGENCY_OUTPUT_ATTEMPTS` | 128 CLAP events | Reserved in addition to normal attempts; retry unfinished cells next callback |
 | `RECOVERY_WORK` | 256 ledger/manifest/history entries | Continue cancellation/rebuild with a stored cursor |
 | `CONTROL_WORK` | 2 frames per direction per source; 16 config commands | Leave frames/commands owned and pending |
+| `ATTACHMENT_WORK` | 1 offer or detach attempt per instance | Keep ownership and retry at a later enclosing boundary; no polling loop or audio-thread registry lookup |
 
 At most 17 queue heads participate in each chronological merge.
 Collect into per-source windows, then a fixed cohort scratch array;
@@ -279,7 +323,18 @@ Decode saved data off audio, publish complete fixed musical settings in an owned
 Host automation enters through the hub's enclosing/sub-block boundary with sample and order metadata.
 Do not assemble a coherent setting by loading unrelated parameter atomics during a policy call.
 The audio owner consumes a complete command/automation batch and resolves it into one value containing origin/axes, tempered flags, policy version, domain/radii and weights.
-The entire `ResolvedConfig` is limited to 128 bytes and copied into each bound request, allowing arbitrary revision changes without an unbounded pinned-revision list.
+The entire `ResolvedConfig` is limited to 128 bytes and copied into each bound request, so a bound request needs no pinned-revision list.
+Unbound requests still require the intervening configuration timeline;
+copying bound configurations does not bound that timeline.
+
+The hub owns `CONFIG_TIMELINE = 128` fixed 256-byte marker slots, separate from `CONFIG_COMMANDS` and the restore slots.
+Each marker retains its sample, command order, revision and complete resolved configuration until retired.
+Reserve a timeline slot before acknowledging/moving a command or restore snapshot out of its handoff storage, or before accepting a sample-timed automation batch as represented.
+One retained marker is charged for each distinct configuration command, including ordered changes at the same sample;
+do not silently merge intermediate automation values.
+If the pool is full, a producer that still owns its command can wait in its bounded command/restore slot.
+If a required host automation marker cannot be retained, latch session configuration-storage exhaustion and enter the explicit emergency/reset path;
+neither overwrite the oldest marker nor advance input completeness past the unrepresented change.
 
 Insert a configuration marker into the input timeline at a sample not yet finalized:
 `effective_at = max(observed_mapped_sample, finalized_input_exclusive)`.
@@ -290,6 +345,14 @@ Record the actual effective boundary in the UI/take control stream.
 Restoration uses the same protocol, including with the editor never opened.
 Excess config commands retain/backpressure at the producer where possible;
 if required sample-timed automation cannot be represented, latch the configuration/protocol fault instead of silently coalescing semantically distinct edits.
+
+The audio owner keeps one fixed current resolved configuration plus the bounded ordered future-marker pool.
+Retire a marker only after its entire sample/cohort is finalized, the current configuration incorporates that marker in command order, and every request evaluated under it has received its own configuration copy.
+A blocked input frontier keeps later markers charged even after the incoming command queue was drained.
+Requests arriving behind a finalized frontier use the explicit recovery/resubmission boundary;
+they cannot demand an already-retired historical configuration as though their old interval were complete.
+Timeline insertion, application and retirement share the 16-command `CONTROL_WORK` allowance;
+exhaustion of that work slice retains slots/cursors and does not discard an intermediate revision.
 
 Initial request binding occurs at canonical evaluation, not at tuner callback arrival.
 Rescheduling that request retains its bound revision and configuration copy, including across Off or later edits.
@@ -348,9 +411,23 @@ A release additionally has its independent emergency cell available before its o
 One accepted event creates one immutable actual record with exact mapped time, host address and value;
 one rejected attempt changes no accepted value.
 Returned attempt tokens distinguish retries from duplicate delivery.
-The local journal is retained through hub output acknowledgement, so transfer-ring fullness cannot lose output truth.
+The local journal is retained through `OutputRetainedAck(lease, H)`, which proves the hub's audio owner has copied every actual record through H into its bounded output window or already completed its canonical publication attempt.
+That acknowledgement transfers retention responsibility for full records;
+a held-state baseline alone never authorizes it.
+Track current-state application and canonical-history publication with separate source sequence cursors, so applying a baseline cannot skip the historical on/tuning/off stream.
+Transfer-ring fullness leaves source ownership intact;
+duplicate retransmission is suppressed by the hub's received/published sequence cuts.
 No credits means backpressure while retention fits, then explicit exhaustion;
 never submit first and hope the reporting path has space later.
+
+The hub retains each record in its `OUTPUT_WINDOW` until its ordered canonical publication attempt into `PUBLICATION_RING`, even when a baseline has superseded its current-state effect.
+A successful publication hands that exact event/time to the non-RT history/take drainer once, which then fans out to display and recording.
+Neither receipt acknowledgement, baseline acceptance, musical recovery nor voice-credit release waits for GUI rendering, background consumption or disk serialization.
+If the publication ring is full, latch a reporting-loss diagnostic with the affected sequence range, mark an active take incomplete/failed, and later publish the explicit gap/control boundary before claiming subsequent continuity.
+That actual downstream publication failure permits bounded retirement after the failed attempt;
+it does not cancel notes, invalidate correct audio-owned context or masquerade as a successful take.
+Slow or closed displays can be restored by a current-state baseline independently.
+Baseline recovery itself is never a reason to skip an available actual record or manufacture a history gap.
 
 [CLAP's output list](https://github.com/free-audio/clap/blob/main/include/clap/events.h) accepts one event per `try_push` and has no capacity reservation or atomic note-on/tuning transaction.
 The exact consequences are:
@@ -430,7 +507,7 @@ Use this cancellation acknowledgement sequence:
 1. The hub stops issuing affected plans, closes the emission gate, and publishes a command frame describing the fenced emission generation, affected decision-serial suffix, reason and desired disposition. All new staging observes the fence. Repeated invalidations widen the pending suffix monotonically while the first immutable transaction settles.
 2. A source observes the fence with Acquire, inhibits staging in that suffix, and asks the emitter to suppress every unclaimed affected command. An already-claimed onset group finishes its permitted host calls; their results are irrevocable truth. A bundle already InFlight may have a partially accepted prefix if the host rejects its tuning.
 3. At an enclosing output-completion boundary, the source has no affected InFlight commands. It publishes `RevokeAck(recovery_id, generation, input_cut, output_cut, settled_attempt_cut)` and a bounded request-disposition manifest. Accepted output through `output_cut` is retained in the ordinary journal or emergency ledger. The acknowledgement never means the host undid output.
-4. The hub collects actual output through that cut or a complete authoritative baseline covering the cut, and the complete request-disposition manifest. It classifies each request as accepted/partially accepted, retained unsounded or explicitly canceled. Only then may it reclaim the old plan, rebuild context or issue a replacement generation for an unsounded request.
+4. The hub collects actual output through that cut, or a complete authoritative baseline for current state plus the complete request-disposition manifest for request outcomes. It classifies each request as accepted/partially accepted, retained unsounded or explicitly canceled. Only then may it reclaim the old plan, rebuild context or issue a replacement generation for an unsounded request. A baseline does not replace retained actual-history records: they still transfer to the hub and receive ordered canonical publication under the separate retention acknowledgement in section 6.
 
 There is no cross-instance atomic instant that can recall a note already accepted by the host.
 The cut and handshake bound what will no longer be emitted, while preserving racing acceptance as fact.
@@ -500,9 +577,13 @@ Choose this conservative dependency rule:
 
 - Deliver a channel event needed by the established wave at that wave's existing shift. In particular, a pedal-up or channel release/choke must not wait for an unrelated pending attack.
 - Keep its chronological value/history for the unsounded wave as well, charging the retained event and any replay reference to `PENDING_EVENTS`. Do not send that history a second time while an established voice on that channel could be affected by the replay.
-- When retained shared-controller history or current held-pedal state would change an established voice if replayed, wait before starting that differently shifted wave on the channel: drain older held lifetimes and their due channel events and reach neutral sustain/sostenuto/hold state. Then emit the retained channel setup/history in translated order for the new wave. No such gate applies when there is no actual shared-controller dependency. Other channels' established voices may continue.
+- Before EVERY differently shifted wave starts on a channel, drain older held lifetimes, in-flight output and channel obligations and reach accepted neutral sustain/sostenuto/hold state. This gate applies even when no controller event is currently queued: a future channel event could otherwise affect two sounding waves that require different times. Then emit the retained channel setup/history in translated order for the new wave. Other channels' established voices may continue.
 - A same-key retrigger additionally waits for accepted termination of the previous addressed lifetime. Wildcard release/choke is resolved to the input-time target set and may use per-lifetime output releases to avoid killing a later wave.
 
+At most one established translation is allowed per channel at a time.
+Admission to a channel with that same translation remains possible under the ordinary lifecycle/credit rules.
+A successor wave must not overlap its older wave merely because their keys differ or the current controller queue is empty.
+Choose or increase the unsounded wave's shift only when its channel gate opens, and keep its retained note durations and controller relationships intact.
 This makes the channel's drain/neutral boundary an explicit dependency gate.
 A long held pedal or old voice can make a ready late attack wait longer;
 that is preferable to changing its captured gestures or postponing old releases.
@@ -513,14 +594,17 @@ Unrelated non-channel short MIDI retains source order in the unsounded stream.
 These are the documented exceptions to original source order during failure;
 healthy operation introduces none of them.
 
-If differently shifted established lifetimes already coexist on a channel and a new channel-wide control arrives, it is one physical event affecting all of them.
-Send it once at the earliest established-wave due time, after any same-sample onset dependency, and record its actual time for every affected lifetime.
-Do not replay it at each voice's shift:
-that would change the other still-sounding voices again.
-The old voice remains responsive;
-the younger voice shares that channel gesture's actual timing.
-This explicit failure-ordering exception applies to shared-address channel events, not to queued per-note expression or note duration, which retain their lifetime translation.
-An event already queued before the new wave starts must instead obey the replay dependency gate above.
+For example, shifts zero and +1,000 cannot coexist on one channel and share a subsequently received pedal-up without changing one wave's gesture.
+Sending the pedal-up once at the older wave's due time would advance it relative to the younger wave's translated note-off;
+sending it twice would affect the older wave again.
+The admission gate prevents that state rather than inventing a shared-controller timing exception after both attacks have sounded.
+If recovery discovers conflicting established translations, it cannot declare the channel recovered or retime a sounding voice;
+require explicit termination/reset of the conflicting state.
+
+Off changes only the adaptive requirement for newly received attacks;
+it does not bypass this scheduling gate.
+New Off notes retain zero correction but can inherit the fault's extra delay and wait behind older adaptive channel obligations, including pre-Off pending attacks that must still finish tuned.
+Normal D while Off remains the healthy timing contract and resumes at the specified idle/recovery boundary, not at the moment Off is selected.
 
 Return the source's stream shift to zero only with no retained performance events, no locally held or in-flight voices, neutral channel pedals, no unacknowledged output/revocation obligations, and an accepted fresh sequencing boundary.
 Continuous playing may never reach that boundary.
@@ -581,7 +665,7 @@ instrument tails are not evidence of failed protocol termination.
 
 Rejection leaves the emergency cell pending and retries on subsequent callbacks at the earliest legal offset.
 The source publishes a cumulative emergency frame with generation, outstanding bitmap, accepted termination records/times and output cut;
-retain each completed cell until hub acknowledgement or a complete recovery baseline accounts for it.
+retain each completed cell until the hub acknowledges retaining its full actual result for canonical publication, separately from baseline current-state acceptance.
 New emergencies cannot overwrite unacknowledged cells.
 During an emergency the source remains latched, so it does not reuse their voice credits for new attacks.
 Once a source is stopped by capacity or output failure, selecting Off cannot bypass the latch.
@@ -602,12 +686,15 @@ it does not erase actual held state.
 
 1. **Quiesce plans.** Publish recovery generation, settle/suppress InFlight work using section 7, and choose an actual output cut `C` at an enclosing completion boundary. Continue responsive held releases/expression, recording later deltas as `> C`. Reserve their journal capacity before output.
 2. **Publish the complete held baseline.** The source fills one owned slot with count, identity tuple, coverage boundary, `C`, current channel state and every held voice (up to 64): original input onset, actual accepted onset, current accepted pitch/player expression, frozen offset, attack node/configuration, host address and release status. A partial-tuning voice carries its fault status rather than an invented pitch. Never overwrite the slot before acknowledgement.
-3. **Admit and replace.** The hub validates the full frame, counts every global/local reservation, and atomically replaces only this source's confirmed set in its own callback. Already-known deltas `<= C` are superseded by that baseline; missing deltas produce an explicit discontinuity at this cut, never invented history. Do not count old and replacement copies as extra voices, publish a partial set or return credits for unconfirmed downstream releases. Record the baseline/recovery control to display and take replay without re-emitting attacks.
-4. **Acknowledge the cut.** Publish `BaselineAck(recovery_id, lease, C, membership_revision)`. Only this matching acknowledgement allows source retirement of ordinary journal entries through C and release of the owned baseline slot. The second slot is spare for ownership overlap, not permission to supersede an unacknowledged transaction.
+3. **Admit and replace current state.** The hub validates the full frame, counts every global/local reservation, and atomically replaces only this source's confirmed set in its own callback. The baseline supersedes current-state application of deltas `<= C`, never their retained history. Keep/transfer all available actual records through C and attempt their ordered canonical publication exactly once before publishing this source's baseline control and later deltas. Only already-unrecoverable event loss or an actual downstream publication failure warrants a diagnostic gap; an undrained journal does not. Do not count old and replacement copies as extra voices, publish a partial set or return credits for unconfirmed downstream releases. The baseline/recovery control updates display/take state without re-emitting attacks.
+4. **Acknowledge distinct cuts.** Publish `BaselineAck(recovery_id, lease, C, membership_revision)` for current-state replacement and release of the owned baseline slot. It does not retire journal records. Only `OutputRetainedAck(lease, H)` retires source actual records through H after full-record transfer to the hub's audio-owned retention or canonical publication attempt. Neither acknowledgement waits on a GUI/background/disk consumer; retained records remain the responsible audio owner's obligation. The second baseline slot is spare for ownership overlap, not permission to supersede an unacknowledged transaction.
 5. **Dispose of pending requests separately.** At quiescence the source fixes a pending-manifest input cut and enumerates every pre-cut request in 64-entry chunks, with total count and monotonic chunk sequence. Each record states retained-unsounded, accepted/partial, or authorized-canceled, plus request/plan/configuration identity. Source events and request slots remain owned while chunking; new post-cut input uses remaining storage and waits behind the recovery boundary. The hub acknowledges the complete manifest, never just the last chunk or the held baseline.
 6. **Resume.** The hub discards old unplayed plans only after disposition and output cuts settle. Retained unsounded requests are resubmitted with original input/dependency metadata, preserved bound configurations and new plan generations into the new continuous-coverage boundary. Later ordered deltas `> C` are merged exactly once before new context is used. Publish `RecoveryComplete` only after baseline, manifest, output and membership boundaries agree.
 
 An empty held baseline cannot acknowledge an unsounded attack.
+It also cannot erase a completed accepted lifetime:
+note-on, tuning and note-off still retained in a source journal must reach the hub and ordered canonical publication with their original actual times, even when all three precede the empty baseline's cut.
+Replayed copies are deduplicated by source incarnation and output sequence, not by whether their voice is currently held.
 A source disappearing during recovery leaves its old transaction unresolved until a validated termination/cancellation boundary or the same retained owner returns.
 A new incarnation cannot answer for it.
 If current state is trustworthy but old output deltas were lost, a baseline repairs current context with an explicit recorded gap;
@@ -643,6 +730,7 @@ do not truncate identifiers, exact pitch or timestamps to make a guessed size pa
 | Source outcome journals | `16 * 4096 * 128` | 8,388,608 |
 | Hub plan ledger | `131072 * 256` | 33,554,432 |
 | Hub input and output windows | `17 * (1024 + 2048) * 128` | 6,684,672 |
+| Canonical publication ring | `4096 * 128` | 524,288 |
 | Confirmed/prospective history | `2 * 34816 * 64` | 4,456,448 |
 | Local voice, emergency and two baseline sets | `17 * 4 * 64 * 256` | 1,114,112 |
 | Hub confirmed/prospective voices | `2 * 256 * 256` | 131,072 |
@@ -650,11 +738,14 @@ do not truncate identifiers, exact pitch or timestamps to make a guessed size pa
 | Wrapper input and output arrays | `17 * (2048*128 + 640*256)` | 7,241,728 |
 | Cohort scratch | `1024 * 256` | 262,144 |
 | Configuration commands and restore slots | `128*256 + 2*256` | 33,280 |
+| Retained configuration timeline | `128 * 256` | 32,768 |
 | Control/channel frames | `17 * (4*256 + 16*256)` | 87,040 |
 | Policy scratch reservation | `4 * 1024 * 1024` | 4,194,304 |
 
-The calculated subtotal is 127,243,776 bytes (about 121.35 MiB).
+The calculated subtotal is 127,800,832 bytes (about 121.88 MiB).
 Reserve another **16 MiB** for ring headers/endpoint owners, alignment, arena allocator overhead, free lists, dependency/ready indices, cohort edges and diagnostic counters.
+That allowance also covers the fixed registry attachment slots:
+at most `(64 tuner + 4 hub instances) * 4 slots * 256 bytes = 69,632 bytes` process-wide, charged once rather than duplicated on each adoption.
 The selected **session ceiling is 144 MiB** of additional adaptive-engine storage, excluding the full plugin's existing analyzer/UI/take/audio storage and non-RT disk history.
 Four active/retired session arenas reserve at most 576 MiB under the registry ceiling.
 The implementation must measure those excluded integration increments too, not call this the plugin's whole resident memory.
@@ -679,13 +770,16 @@ This documentation change does not claim they ran:
 | Revocation interleavings | Fence before claim and claim before fence, inside `try_push`, between onset/tuning and after acceptance before reporting. Race stale/duplicate fences and a new Stop against reopen; ack cuts include accepted prefixes, including old-generation output after Reset. Test A revoked after B accepts but before C claims: B remains frozen, C survives rescheduling. |
 | Saturation | Fill each selected owner pool to its real limit, separately from filling only a transfer window. Keep preexisting voices and pedals active, force ordinary output/journal saturation, then show the independent latch, release and completion route still functions. |
 | Admission | Reach 16 tuners, 64 per source and 256 session reservations, including Off and direct input; contend reservations, release/retrigger at one sample, and reject the actual excess without evicting another source or inventing termination. |
+| Active lease adoption | Activate a tuner with the editor closed before creating/activating its hub, then adopt at a callback boundary and establish coverage/baseline without another tuner activation. Also change pairing while active: buffer post-cut attacks, finish old obligations, fill return slots, and prove no old endpoint is read or freed after the two audio owners detach. |
 | Completeness | Same local offsets in different sub-blocks; future reports; absent silent participant; returning coverage after an older foreign request; deactivation during collection; output progress before and after wrapper completion. |
 | Canonical order | Permute cross-source callbacks and reply drains with same-sample independent attacks, off/on/tuning/off, wildcard release/retrigger, pedals and zero-duration notes. Artificial policy result must depend on its preceding assignment. |
-| Late waves | Retain a positive-duration note's expression/release before its late reply; inject another blocked attack while an older voice sounds; verify old release timing, no burst, immutable shifts and safe idle return. Include a held shared pedal/channel bend and the channel drain/replay gate. |
+| Late waves | Retain a positive-duration note's expression/release before its late reply; inject another blocked attack while an older voice sounds; verify old release timing, no burst, immutable shifts and safe idle return. With no controller queued at admission, request a +1,000-shift wave on a channel held at shift zero, then deliver pedal-up/channel bend only after the second attack would have sounded without the gate. Prove the second attack stayed pending, old events remain responsive and translated younger gestures are preserved. Include new zero-correction Off notes on that faulty channel. |
 | Prospective divergence | A predecessor emits late or is canceled while successors are planned, including one accepted during revocation. Rebuild unplayed suffix from actual state; accepted offsets never change. |
 | Stop and Off | Stop before reply and after late onset, independently delayed hub/source Stop observations, new stopped live input before global acknowledgement, pedals and loop wrap. Turn Off with held, bound-pending and unbound-pending adaptive requests; new Off attacks are the only intentional zero assignments. Also stop callbacks with release debt: no timeout may synthesize completion. |
-| Baseline recovery | 64 held entries, including zero-offset Off voices, later `> C` expression/releases, more than 64 pending requests to force manifest chunking, occupied alternate slot, and disappearance before ack. No duplicate attacks, partial replacement or unsounded acknowledgement. |
+| Baseline recovery | 64 held entries, including zero-offset Off voices, later `> C` expression/releases, more than 64 pending requests to force manifest chunking, occupied alternate slot, and disappearance before ack. Retain an entire accepted on/tuning/off lifetime in an undrained journal, then recover an empty held baseline: canonical replay receives all three exact events/times once, including under duplicate retransmission, and baseline ack alone frees no journal record. No partial replacement or unsounded acknowledgement. |
+| Reporting independence | Stall the display/take drainer and actually fill `PUBLICATION_RING`; prove output-retention acknowledgement, baseline state recovery, voice-credit release and policy progress require no non-RT acknowledgement. Publication failure reports its sequence gap and incomplete take without changing correct audio-owned musical state. |
 | Configuration without editor | Restore and automation with editor never opened; explicit unlock followed by stale raw parameter values; changes while a cohort is partly evaluated and old replies are pending; unrelated UI state never invalidates musical cache. |
+| Retained configuration timeline | Block the input frontier while 128 distinct sample-timed markers occupy `CONFIG_TIMELINE`, even after the command queue drains. The 129th required automation marker takes the actual exhaustion path without overwriting an intermediate revision or advancing coverage. Separately release the frontier below capacity and verify each between-marker onset binds the correct revision before marker retirement. |
 | Budget and real-time safety | Executed size/alignment/allocation totals, maximum depth/high-water counters, allocation/final-free guards through processing, publication, overflow and unregister, plus measured complete hub and source work at selected limits. |
 | Delay and destinations | Section 4's exact D512 equal/calibrated boundary schedule, live/offline host validation and maximum central policy workload; exact accepted output and destination pitch behavior in the supported Bitwig configuration. |
 
