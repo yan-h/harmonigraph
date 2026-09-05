@@ -200,3 +200,25 @@ The isolated disarmed recording-prefix path averaged 5,909 ns over 4,096 calls i
 this is neither an armed-path measurement nor a host timing bound.
 The full fixed recording map is visited even while disarmed;
 no unbounded search or growing allocation is used on audio.
+
+## Focused correction after the second review
+
+The second review cleared the original ten findings and identified three interactions requiring a targeted correction, rather than reopening the architecture or waiving a defect.
+Recording completion now uses the exact disarmed intent captured by the enclosing callback;
+a newer live GUI stop is not proof that the callback's later segments cannot record.
+The factory regression pauses after the actual intent capture, stops from the main thread, then resumes a parked segment followed by playing at offset 32 and nine changes at offset 40.
+On the next callback it pauses after the actual `ProducerClosed` ring push and drains the real file writer before the ninth change is published.
+The old code finalized prematurely at that point;
+the corrected code waits, then writes the ninth value at its original time and preserves the 32-frame WAV tail.
+These atomic test pauses exist only under the dependent crate's `test-support` feature.
+
+A gesture-closing retry now uses the earliest ready notification time before the next performance output.
+The factory intersection preloads C/G, enables learning with a Three edit, and rejects only that gesture's first end.
+A parameter group learns at offset 20 but forwards no performance event;
+the next note at offset 31 exposes the old decreasing sequence of a closing end at 31 followed by learning at 20.
+The corrected sequence closes first at 20 and preserves nondecreasing accepted output times.
+The normal GUI tick also reads the latched recording failure before choosing waiting, recording, or paused text.
+Its consumer fixture triggers a real recorder failure with zero dropped records and verifies that each tick keeps the incomplete warning visible.
+All three fixtures failed before the correction;
+the guarded factory suite now has 21 passing tests, and the recording suite has 56.
+The final handoff records focused independent verification of this corrected head, exact-head Actions, and the fresh release pair.

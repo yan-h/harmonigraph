@@ -19,14 +19,32 @@ pub(crate) struct RecordFence {
     pub finishing: AtomicBool,
     pub failed: AtomicBool,
     pub configuration_closed: AtomicU64,
+    #[cfg(feature = "test-support")]
+    pub boundary_pause: TestPause,
+    #[cfg(feature = "test-support")]
+    pub producer_close_pause: TestPause,
+}
+
+#[cfg(feature = "test-support")]
+#[derive(Default)]
+pub(crate) struct TestPause {
+    pub enabled: AtomicBool,
+    pub entered: AtomicBool,
+}
+#[cfg(feature = "test-support")]
+impl TestPause {
+    pub fn reach(&self) {
+        if self.enabled.load(Ordering::Acquire) {
+            self.entered.store(true, Ordering::Release);
+            while self.enabled.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+        }
+    }
 }
 impl RecordFence {
     pub fn epoch(&self) -> u64 {
         self.intent.load(Ordering::Acquire) >> 1
-    }
-    pub fn capture(&self) -> Option<u64> {
-        let intent = self.intent.load(Ordering::Acquire);
-        (intent & 1 != 0).then_some(intent >> 1)
     }
     pub fn fail(&self) {
         self.failed.store(true, Ordering::Release);

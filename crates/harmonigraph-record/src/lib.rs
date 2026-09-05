@@ -87,6 +87,8 @@ const TAKE_RING_CAPACITY: usize = 1 << 16;
 
 /// How long the writer thread sleeps when it finds the ring empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
+const CONFIGURATION_FAILURE: &str =
+    "recording incomplete: configuration/audio ownership failed; no render started";
 
 /// Capacity of the audio ring, in interleaved samples. Generous on
 /// purpose: during an offline export audio arrives many times faster than
@@ -339,6 +341,8 @@ impl Recorder {
         }
         if !armed && epoch > self.closed_epoch {
             self.push(Entry::ProducerClosed(epoch));
+            #[cfg(feature = "test-support")]
+            self.fence.producer_close_pause.reach();
             self.closed_epoch = epoch;
         }
         self.update_armed(armed)
@@ -556,10 +560,10 @@ impl Recorder {
         self.fence.enabled.store(true, Ordering::Release);
     }
     pub fn capture_recording_intent(&self) -> u64 {
-        self.fence.intent.load(Ordering::Acquire)
-    }
-    pub fn capture_recording_epoch(&self) -> Option<u64> {
-        self.fence.capture()
+        let intent = self.fence.intent.load(Ordering::Acquire);
+        #[cfg(feature = "test-support")]
+        self.fence.boundary_pause.reach();
+        intent
     }
     pub fn recording_epoch(&self) -> u64 {
         self.fence.epoch()
@@ -818,7 +822,9 @@ impl Control {
             return;
         }
         let dropped = self.dropped.load(Ordering::Relaxed);
-        *self.status.lock() = if dropped > 0 {
+        *self.status.lock() = if self.fence.failed.load(Ordering::Acquire) {
+            CONFIGURATION_FAILURE.into()
+        } else if dropped > 0 {
             format!("RECORDS DROPPED ({dropped}) — the take is incomplete")
         } else if rolling {
             format!("recording — {events} events")
@@ -1027,9 +1033,7 @@ pub fn channel() -> (Recorder, Control) {
                 open = None;
                 pending_stop = None;
                 thread_fence.finishing.store(false, Ordering::Release);
-                *thread_status.lock() =
-                    "recording incomplete: configuration/audio ownership failed; no render started"
-                        .into();
+                *thread_status.lock() = CONFIGURATION_FAILURE.into();
             } else if pending_stop
                 .as_ref()
                 .is_some_and(|(epoch, _)| open.as_ref().is_some_and(|o| o.ready(*epoch)))
@@ -1115,6 +1119,18 @@ pub mod testing {
     }
 
     impl Capture {
+        pub fn pause_boundary(&self, enabled: bool) {
+            self.fence.boundary_pause.enabled.store(enabled, Ordering::Release);
+        }
+        pub fn boundary_entered(&self) -> bool {
+            self.fence.boundary_pause.entered.load(Ordering::Acquire)
+        }
+        pub fn pause_producer_close(&self, enabled: bool) {
+            self.fence.producer_close_pause.enabled.store(enabled, Ordering::Release);
+        }
+        pub fn producer_close_entered(&self) -> bool {
+            self.fence.producer_close_pause.entered.load(Ordering::Acquire)
+        }
         pub fn arm(&self) {
             if self.fence.enabled.load(Ordering::Acquire) {
                 self.fence.intent.store((self.fence.epoch() + 1) << 1 | 1, Ordering::Release);
@@ -3446,6 +3462,22 @@ mod tests {
         // the same as never having started.
         ctrl.tick(false, 12);
         assert_eq!(ctrl.status(), "paused (12 events) — transport stopped");
+    }
+
+    #[test]
+    fn gui_ticks_cannot_hide_a_nondrop_recording_ownership_failure() {
+        let (recorder, mut control) = channel();
+        // Isolate the GUI's status cell from worker scheduling: the actual
+        // shared recorder failure flag must make tick itself publish the error.
+        control.status = Arc::new(Mutex::new(String::new()));
+        control.recording.store(true, Ordering::Relaxed);
+        recorder.enable_configuration();
+        recorder.fail_configuration();
+        assert_eq!(control.dropped.load(Ordering::Relaxed), 0);
+        for (rolling, events) in [(false, 0), (true, 12), (false, 12)] {
+            control.tick(rolling, events);
+            assert!(control.status().contains("recording incomplete"), "{}", control.status());
+        }
     }
 
     /// `stop` is only for a take that is running, and it stops the audio

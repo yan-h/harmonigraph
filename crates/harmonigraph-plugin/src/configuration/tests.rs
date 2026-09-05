@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Default)]
 struct Host {
+    reject_one_end: AtomicBool,
     dirty: AtomicUsize,
     callbacks: AtomicUsize,
     plugin: AtomicUsize,
@@ -120,7 +121,10 @@ unsafe extern "C" fn output_push(
         },
         _ => 0,
     };
-    let accepted = !sink.reject && sink.reject_kind != Some(header.type_);
+    let reject_end = header.type_ == CLAP_EVENT_PARAM_GESTURE_END
+        && sink.host != 0
+        && unsafe { &*(sink.host as *const Host) }.reject_one_end.swap(false, Ordering::AcqRel);
+    let accepted = !sink.reject && sink.reject_kind != Some(header.type_) && !reject_end;
     assert!(sink.attempts.len() < sink.attempts.capacity());
     sink.attempts.push((header.type_, header.time, id, accepted));
     if !accepted {
@@ -1032,4 +1036,124 @@ fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     assert_eq!(configs.len(), 1, "only the new pass's initial value is recorded");
     assert_eq!(configs[0].axes[1], 698_000_000);
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
+}
+
+#[test]
+fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm_audio();
+    let dir = std::env::temp_dir()
+        .join(format!("harmonigraph-config-stop-segment-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(
+        &capture,
+        path.clone(),
+        Some(harmonigraph_record::AudioSpec { sample_rate: 48000.0, channels: 2 }),
+    );
+    let mut parked = transport(0.0, 0);
+    parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];
+    events.extend((0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 40)));
+    events.push(note(10, 60, 40, CLAP_EVENT_NOTE_ON));
+    capture.pause_boundary(true);
+    std::thread::scope(|scope| {
+        let callback = scope.spawn(|| device.run_transport(0, events, false, None, Some(parked)).0);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !capture.boundary_entered()
+            && !callback.is_finished()
+            && std::time::Instant::now() < until
+        {
+            std::thread::yield_now();
+        }
+        let entered = capture.boundary_entered();
+        capture.stop();
+        writer.stop();
+        capture.pause_boundary(false);
+        assert_ne!(callback.join().unwrap(), CLAP_PROCESS_ERROR);
+        assert!(entered, "fixture must stop after the actual callback captures armed intent");
+    });
+    writer.drain(&mut capture);
+    assert!(writer.finished.is_none());
+    capture.pause_producer_close(true);
+    let premature = std::thread::scope(|scope| {
+        let callback = scope.spawn(|| {
+            device.run_transport(64, vec![], false, None, Some(transport(32.0 / 48000.0, 0))).0
+        });
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !capture.producer_close_entered()
+            && !callback.is_finished()
+            && std::time::Instant::now() < until
+        {
+            std::thread::yield_now();
+        }
+        let entered = capture.producer_close_entered();
+        // Consume the ACTUAL producer closure before owner.record can route the
+        // ninth, earlier configuration change. Stop must still remain pending.
+        writer.drain(&mut capture);
+        let premature = writer.finished.is_some();
+        capture.pause_producer_close(false);
+        assert_ne!(callback.join().unwrap(), CLAP_PROCESS_ERROR);
+        assert!(entered, "fixture must stop after the actual ProducerClosed ring push");
+        premature
+    });
+    assert!(
+        !premature,
+        "a live disarm cannot close configuration for a callback that captured armed intent"
+    );
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    assert!(writer.finished.is_some());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let late = take.configurations.iter().find(|c| c.axes[1] == 698_000_000).unwrap();
+    assert!((late.t - 8.0 / 48000.0).abs() < 1e-9);
+    assert_eq!(std::fs::read(path.with_extension("wav")).unwrap().len(), 44 + 32 * 2 * 4);
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn retried_gesture_closure_merges_before_earlier_timed_learning() {
+    let mut device = Device::new();
+    device.activate();
+    device.run(
+        0,
+        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
+        false,
+    );
+    let mut edit = ConfigEdit::axis(1, 690_000_000);
+    edit.learning = Some(true);
+    device.mailbox().submit(packet(edit)).unwrap();
+    device.stats.reject_one_end.store(true, Ordering::Release);
+    // The parameter group learns at20 but forwards no performance event. The
+    // next merge is at31, so a retry stamped through=31 overtakes learning20.
+    let sink = device.run(
+        64,
+        vec![device.param(ParamKey::Three, 691.0, 20), note(30, 72, 31, CLAP_EVENT_NOTE_ON)],
+        false,
+    );
+    let accepted: Vec<_> = sink.attempts.iter().filter(|event| event.3).collect();
+    assert!(
+        accepted.iter().any(|e| e.0 == CLAP_EVENT_PARAM_VALUE
+            && e.1 == 20
+            && e.2 == device.id(ParamKey::Three)),
+        "fixture must actually reach timed learning at20"
+    );
+    assert!(accepted.windows(2).all(|events| events[0].1 <= events[1].1), "{accepted:?}");
+    let at20: Vec<_> = accepted
+        .iter()
+        .filter(|event| event.1 == 20 && event.2 == device.id(ParamKey::Three))
+        .map(|event| event.0)
+        .collect();
+    assert_eq!(
+        at20,
+        [
+            CLAP_EVENT_PARAM_GESTURE_END,
+            CLAP_EVENT_PARAM_GESTURE_BEGIN,
+            CLAP_EVENT_PARAM_VALUE,
+            CLAP_EVENT_PARAM_GESTURE_END
+        ]
+    );
 }

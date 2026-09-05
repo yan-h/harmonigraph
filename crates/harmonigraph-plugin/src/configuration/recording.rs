@@ -211,8 +211,10 @@ impl Recording {
                 *cell = None;
             }
         }
-        let epoch = recorder.recording_epoch();
-        if recorder.capture_recording_epoch().is_none()
+        // A concurrent GUI stop cannot close an epoch whose armed callback
+        // may still begin another recording segment later in this same block.
+        let epoch = self.captured_intent >> 1;
+        if self.captured_intent & 1 == 0
             && self.current.is_none()
             && !self.passes.iter().flatten().any(|p| p.address.epoch == epoch)
         {

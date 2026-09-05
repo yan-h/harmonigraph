@@ -596,9 +596,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         };
         // A rejected end owns one bounded debt per parameter. No later begin
         // may cross it; a failed begin creates no value/end transaction at all.
+        // `through` may be later than a queued learning notification. Close at
+        // the earliest ready output before emitting that notification's begin.
+        let closing_time =
+            notifications.iter().flatten().map(|(_, time)| *time).min().unwrap_or(through);
         for (i, debt) in ends.iter_mut().enumerate() {
             if *debt {
-                let end = gesture(hashes[i].unwrap(), CLAP_EVENT_PARAM_GESTURE_END, through);
+                let end = gesture(hashes[i].unwrap(), CLAP_EVENT_PARAM_GESTURE_END, closing_time);
                 *debt = !unsafe {
                     clap_call! { output=>try_push(output, &end.header) }
                 };
