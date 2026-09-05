@@ -60,8 +60,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                         "Uniform scale at every depth; parallel lines stay parallel"
                     }
                     Projection::Cabinet => {
-                        "Face-on fifths/thirds sheet, undistorted; sevenths shear \
-                         to a fixed screen arrow (drag pans; orbit is disabled)"
+                        "Fifths and thirds stay face-on; seventh layers are offset diagonally. Drag to pan; orbit is disabled."
                     }
                 },
             );
@@ -72,21 +71,22 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // screen, and how long a seventh-step draws relative to a
         // front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
         let mut degrees = state.camera.cabinet_angle.to_degrees();
-        if ValueBar::new(&mut degrees, 0.0..=90.0, "Sevenths angle")
+        if ValueBar::new(&mut degrees, 0.0..=90.0, "Depth angle")
+            .unit(1.0, "°")
+            .decimals(1)
             .show(ui)
-            .on_hover_text(
-                "Which way the sevenths axis points on screen, in degrees from \
-                 horizontal.",
-            )
+            .on_hover_text("Direction of the depth axis, in degrees above horizontal.")
             .changed()
         {
             state.camera.cabinet_angle = degrees.to_radians();
         }
-        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length")
+        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Depth step scale")
+            .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "How long a sevenths step draws, as a share of a front-plane \
-                 step. 0.5 is classic cabinet, 1 cavalier.",
+                "Length of a depth step relative to a step in the front layer. \
+                 0.5× gives classic cabinet projection; \
+                 1× gives equal step lengths.",
             );
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
@@ -96,11 +96,12 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // the orbit of the other projections) — the same state orbit
         // drags edit, exposed numerically so a view is reproducible.
         let mut yaw_deg = normalize_deg(state.camera.yaw.to_degrees());
-        if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Camera yaw")
+        if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Horizontal angle")
+            .unit(1.0, "°")
+            .decimals(1)
             .show(ui)
             .on_hover_text(
-                "Turn around the lattice, in degrees. 0 faces the fifths/thirds \
-                 sheet head-on.",
+                "Rotate left or right around the lattice. 0° faces the fifths/thirds layer.",
             )
             .changed()
         {
@@ -108,9 +109,11 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         }
         let pitch_limit_deg = Camera::PITCH_LIMIT.to_degrees();
         let mut pitch_deg = state.camera.pitch.to_degrees();
-        if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Camera pitch")
+        if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Vertical angle")
+            .unit(1.0, "°")
+            .decimals(1)
             .show(ui)
-            .on_hover_text("Look down on the lattice or up at it, in degrees.")
+            .on_hover_text("Tilt the view up or down. 0° looks straight at the lattice.")
             .changed()
         {
             state.camera.pitch = pitch_deg.to_radians();
@@ -121,7 +124,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             let d = (state.camera.target - state.camera.eye()).normalize_or_zero();
             let f = |c: f32| (1.0 - c * c).max(0.0).sqrt();
             ui.weak(format!(
-                "Axis lengths — thirds {:.2} · fifths {:.2} · sevenths {:.2}",
+                "Axis scale: thirds {:.2}× · fifths {:.2}× · sevenths {:.2}×",
                 f(d.x),
                 f(d.y),
                 f(d.z),
@@ -231,23 +234,22 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// every sounding node on every sheet, so it is a property of the node rather
 /// than of this layer, whatever its field names say.
 fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
-    section(ui, "Sevenths");
+    section(ui, "Seventh layers");
     for (extent, range, label, hover) in [
         // Ranges must contain the ViewConfig defaults or the bar could never
         // drag back to them.
         (
             &mut state.view.extent_sevens,
             0.0..=4.0,
-            "Sheets",
-            "How many sheets draw beyond the home one, each a sevenths step \
-             away. 0 keeps the lattice flat.",
+            "Layers each side",
+            "Number of seventh layers on each side of the center. 0 shows only the center layer; 1 shows three layers total.",
         ),
         // Which sheet is home, in lattice steps from C (v1's Grid Z).
         (
             &mut state.view.center_sevens,
             -20.0..=20.0,
-            "Home sheet",
-            "Which sheet is home — in sevenths steps from C's.",
+            "Center layer",
+            "Center layer, counted in seventh steps from the layer containing C.",
         ),
     ] {
         let mut value = *extent as f32;
@@ -258,31 +260,28 @@ fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
     }
     let has_depth = state.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
-        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sheet size")
+        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Size per layer")
+        .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "How much smaller a node draws for each sheet away from home — \
-                 both directions, so the home sheet stays largest. 1 draws \
-                 every sheet alike.",
+                "Node size multiplier for each step away from the center layer, in either direction. 1× keeps every layer the same size.",
             );
         choice_row(
             ui,
-            "Sheet labels",
+            "Outer layer labels",
             &mut state.view.sevens_label,
             &[
                 (
                     SevensLabel::Name,
                     "Name",
-                    "The note name, carrying the septimal mark that tells it \
-                     from the node two fifths down that shares its letter",
+                    "Note names with septimal marks to distinguish seventh layers.",
                 ),
                 (
                     SevensLabel::Cents,
                     "Cents",
-                    "The pitch class alone, in cents. Says what the node is \
-                     and nothing it isn't",
+                    "Pitch class in cents on layers away from the center.",
                 ),
-                (SevensLabel::None, "None", "No text off the home sheet"),
+                (SevensLabel::None, "None", "Hide labels on layers away from the center."),
             ],
         );
     });

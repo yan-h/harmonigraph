@@ -26,23 +26,32 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
-    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale").show(ui).on_hover_text(
-        "How many pixels the lattice renders at: 1.0 native, 0.5 a quarter \
-             as many. A cost dial, not a look dial — turn it down if the plugin \
-             works the machine hard.",
-    );
+    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render resolution")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Lattice render dimensions relative to native resolution. \
+                 100% is native; \
+                 50% uses a quarter of the pixels; \
+                 200% uses four times as many. \
+                 Lower values reduce GPU load and detail.",
+        );
     // The other half of the cost dial: render scale sets what each frame
     // costs, this sets how many of them there are. Presented as a ceiling
     // rather than a target — the shell decides the actual cadence, and a
     // ceiling above what it can offer simply doesn't bind.
     choice_row(
         ui,
-        "Frame rate",
+        "Frame limit (fps)",
         &mut state.fps_cap,
         &[
             (None, "Uncapped", "Repaint as often as the host window allows."),
-            (Some(30.0), "30", "Halves the GUI's frame cost. The lattice and the roll still move smoothly; fast transients in the spectrum get chunkier."),
-            (Some(60.0), "60", "A middle setting for a loaded project."),
+            (
+                Some(30.0),
+                "30",
+                "Limit redraws to 30 frames per second to reduce display processing cost.",
+            ),
+            (Some(60.0), "60", "Limit redraws to 60 frames per second."),
             (Some(120.0), "120", "For a high-refresh display."),
             (Some(144.0), "144", "For a high-refresh display."),
         ],
@@ -67,16 +76,14 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // where the settings column costs more of the screen than the picture can
     // spare. A render is unaffected for the same reason, and deliberately: the
     // offline renderer draws the picture panes and never this.
-    ValueBar::new(&mut state.ui_scale, crate::theme::UI_SCALE_RANGE, "UI scale")
-        .display(|v| format!("{:.0}%", v * 100.0))
+    ValueBar::new(&mut state.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
+        .percent()
         .show(ui)
         .on_hover_text(
-            "Size of the panel's own text and controls. The pictures are drawn \
-             from their panes' space and don't change — neither does a render.",
+            "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
         );
-    ui.checkbox(&mut state.view.frameless, "Frameless (Tab)").on_hover_text(
-        "Hide the tab bars, so adjacent panes record as one seamless surface. \
-         Tab toggles it from anywhere except a text field.",
+    ui.checkbox(&mut state.view.frameless, "Hide tab bars (Tab)").on_hover_text(
+        "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
     );
     button_row(ui, |ui| {
         // Escape hatch for the persisted dock arrangement (it survives

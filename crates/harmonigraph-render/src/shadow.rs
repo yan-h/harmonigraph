@@ -45,7 +45,7 @@ pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 /// Screen-point reference behind the spectral groups' dimensionless Shadow
 /// width. At the top of the bar a spectral edge is four points wide; changing
 /// pane size or pitch zoom does not change it.
-pub(crate) const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
+pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 
 /// A spectral style's σ in screen points.
 pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f32 {

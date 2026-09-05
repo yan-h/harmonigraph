@@ -16,6 +16,8 @@ The Analyzer page can read either the main input or a host-routed sidechain;
 Main is the default, and an unrouted Sidechain is silence rather than an automatic fallback.
 The same choice drives the spectrum, spectrogram, Spiral, lattice audio rings, and the audio recorded with a video take.
 
+See the [settings guide](docs/settings.md) for the control layout and units.
+
 Demonstration:
 [slipstream (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).
 
@@ -157,8 +159,8 @@ harmonigraph-perf        the performance overlay's instrumentation, with no
                          The overlay that DRAWS it is harmonigraph-ui.
 harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Display /
                          Console / Spectral / Spiral / Notes / Video tabs
-                         under src/panes/, where Display carries the Colors,
-                         Lattice, Analyzer and System settings as four pages
+                         under src/panes/, where Display carries the Lattice, Analyzer,
+                         Colors, Lighting and System settings as five pages
                          behind a picker row rather than as tabs of their own.
                          SharedState (the lattice's hovered node),
                          ParamBackend trait abstracting "where params live".

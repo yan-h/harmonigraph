@@ -24,19 +24,19 @@ use harmonigraph_scene::{NoteNames, ViewConfig};
 /// What a label says, which nodes carry one, how big it draws and how bright
 /// it is while its note sounds.
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    section(ui, "Labels");
-    ui.checkbox(&mut state.view.show_labels, "Note names")
-        .on_hover_text("Text on the lattice. The rest of this section rides on it.");
+    section(ui, "Note labels");
+    ui.checkbox(&mut state.view.show_labels, "Show note names")
+        .on_hover_text("Show note names on lattice nodes.");
     ui.add_enabled_ui(state.view.show_labels, |ui| {
         names_row(ui, &mut state.view);
         // Cents ride on the labels, so the toggle grays out with them.
-        ui.checkbox(&mut state.view.show_cents, "Cents")
+        ui.checkbox(&mut state.view.show_cents, "Show pitch in cents")
             .on_hover_text("Each node's pitch class in cents, under its name.");
-        ValueBar::new(&mut state.view.label_scale, crate::SCALE_BAR_RANGE, "Name size")
+        ValueBar::new(&mut state.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
+        .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "Label size on the node. Labels already zoom with the lattice; \
-                 this sets how big a name is on its node.",
+                "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
             );
         // Last of the bars, because it is the only one here whose other end is
         // somewhere else: what it sets is one end of a pair, and the pair reads
@@ -46,7 +46,8 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         // No off position and none to want. Equal to the Marker ink under the
         // At rest heading IS the off position — every label in the resting
         // field's one grey, and the type answering to the music by nothing.
-        ValueBar::new(&mut state.view.sounding_ink, 0.0..=100.0, "Sounding ink")
+        ValueBar::new(&mut state.view.sounding_ink, 0.0..=100.0, "Active brightness")
+        .unit(1.0, "%")
             // Whole points on the L* axis the Ground and Marker ink bars are
             // counted in, which is the point of the units here: this number is
             // only readable against the resting end's, and the two sit in
@@ -54,13 +55,8 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .integer()
             .show(ui)
             .on_hover_text(
-                "How bright a name and its cents are drawn while their note is \
-                 sounding. The same L* the At rest section's Marker ink is in, \
-                 which is what that text falls back to once nothing is sounding \
-                 under it -- so equal numbers put every label in the resting \
-                 field's grey, and the gap between the two is how far a played \
-                 name is lifted out of it. The crossing runs on the note Fade, \
-                 on the way in and on the release alike.",
+                "Brightness of note labels while sounding: 0% is black, 100% is white. \
+                 Released labels return to Idle label brightness over the Note fade time.",
             );
         clear_button(ui, &state.view, &mut state.tracker);
     });
@@ -75,17 +71,16 @@ pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 fn names_row(ui: &mut egui::Ui, view: &mut ViewConfig) {
     choice_row(
         ui,
-        "Show",
+        "Label visibility",
         &mut view.note_names,
         &[
             (NoteNames::All, "All", "Every node on screen carries its name, played or not"),
             (
                 NoteNames::Past,
-                "Past",
-                "A visited node keeps its name and cents for good, so the piece's \
-                 territory stays readable",
+                "History",
+                "Keep labels on nodes that have been played, as well as nodes sounding now.",
             ),
-            (NoteNames::Played, "Played", "Only the nodes sounding now"),
+            (NoteNames::Played, "Sounding", "Only the nodes sounding now"),
         ],
     );
 }

@@ -54,7 +54,7 @@ The status line under the toggle tells you where the file is going and how many 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
 so the render gets its spectrum and its soundtrack with no separate bounce and nothing to point at.
-It records whichever **Input** is selected on Display → Analyzer:
+It records whichever **Audio input** is selected on Display → Analyzer:
 Main, or the host-routed Sidechain.
 An unrouted Sidechain records silence and never falls back to Main.
 The catch is placement:
@@ -76,10 +76,8 @@ moment.
 the trap `read-plugin-state.py` documents.
 You can also override it at render time with `--ui-state`.)
 - **The device has to receive both the notes and the selected audio input.**
-The notes drive the lattice,
-and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
-A manual render can replace that recording with `--audio`,
-but a device on a pure note track records silence unless the wanted audio is routed to its sidechain.
+The notes drive the lattice, and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
+A manual render can replace that recording with `--audio`, but a device on a pure note track records silence unless the wanted audio is routed to its sidechain.
 
 > **Why a button and not automatic.** The first version armed itself when
 > nice-plug reported `ProcessMode::Offline`, on the theory that exporting
@@ -108,7 +106,7 @@ And the take ends where the host puts the playhead BACK, not merely where the tr
 Bitwig restores it the moment an export finishes, which lands in the plugin as one backward block;
 a take still armed at that point goes on to record whatever plays next into a fresh pass, and it is the last pass that renders.
 That is how an 82-second export came out as a 63 KB video of a 0.1-second fragment.
-Under *On stop* and *At loop end* the backward block ends the take instead, so the pass holding the piece is the one that renders.
+Under *Transport stop* and *Loop end* the backward block ends the take instead, so the pass holding the piece is the one that renders.
 
 #### Rendering automatically when the take ends
 
@@ -116,23 +114,23 @@ A finished take always renders:
 the plugin runs `harmonigraph-offline` itself and writes the video next to the take.
 There is nothing to enable, and no field for the renderer's path —
 it uses the copy `update-plugin.sh` installs, and the audio it muxes and analyzes is the take's own recording.
-What you do choose is **when** a take counts as finished, in the **Finish** row below.
+What you do choose is **when** a take counts as finished, in the **Render when** row below.
 
-The video's size comes from **Aspect** and **Resolution** in the Frame section, which the plugin passes as `--size`.
+The video's size comes from **Aspect ratio** and **Short edge (px)** in the Frame section, which the plugin passes as `--size`.
 There is no field for raw renderer flags:
 there was one, defaulting to `--size 1920x1080`, and since the renderer reads `--size` *after* resolving the take's frame it outranked every Aspect but 16:9 —
 a 9:16 frame previewed tall and rendered wide.
 The flags it could reach are all reachable by running the renderer on the take by hand, which has completion, `--help`, and real error messages.
 
-**Finish** has three settings:
+**Render when** has three settings:
 
 | setting | what ends the take |
 |---|---|
-| On disarm | you switch Record take off — predictable, and it works however the transport behaves |
-| On stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
-| At loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
+| Record off | you switch Record take off — predictable, and it works however the transport behaves |
+| Transport stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
+| Loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
 
-*On stop* is what makes **exporting audio produce a video with nothing further to click**:
+*Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
 
 ffmpeg is found automatically —

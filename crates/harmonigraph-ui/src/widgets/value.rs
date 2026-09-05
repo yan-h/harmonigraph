@@ -88,6 +88,10 @@ pub struct ValueBar<'a> {
     /// How the value READS OUT, when plain decimals won't say it (see
     /// [`ValueBar::display`]). Never how it is typed in.
     display: Option<fn(f32) -> String>,
+    /// Display and entry units per stored unit. Dragging and curve previews
+    /// continue to use the stored range.
+    unit_scale: f32,
+    unit_suffix: &'a str,
     /// A picture of what the value MEANS, drawn across the track (see
     /// [`ValueBar::curve`]).
     curve: Option<fn(f32, f32) -> f32>,
@@ -105,6 +109,8 @@ impl<'a> ValueBar<'a> {
             badge: None,
             magnet: None,
             display: None,
+            unit_scale: 1.0,
+            unit_suffix: "",
             curve: None,
         }
     }
@@ -163,12 +169,26 @@ impl<'a> ValueBar<'a> {
     /// value whose UNIT changes with its size, which a fixed suffix in the
     /// label can't say (seconds that become minutes and seconds).
     ///
-    /// Display only. Typing still takes a bare number in the bar's own
-    /// units, and double-click seeds the box with one, so whatever a
-    /// formatter does to the readout the value stays typeable.
+    /// Display only; use [`Self::unit`] for numeric conversion and entry.
+    /// The formatter receives stored units, including when `unit` is set.
     pub fn display(mut self, display: fn(f32) -> String) -> Self {
         self.display = Some(display);
         self
+    }
+
+    /// Use the same units for the readout and numeric entry. For example,
+    /// `unit(1000.0, " ms")` edits stored seconds as milliseconds. The suffix
+    /// is optional when typing; the range and magnet remain in stored units.
+    pub fn unit(mut self, scale: f32, suffix: &'a str) -> Self {
+        assert!(scale.is_finite() && scale > 0.0);
+        self.unit_scale = scale;
+        self.unit_suffix = suffix;
+        self
+    }
+
+    /// A proportion, displayed and entered as a percentage.
+    pub fn percent(self) -> Self {
+        self.unit(100.0, "%").decimals(1)
     }
 
     /// Draw what the value DOES across the track: `curve(value, p)` for `p`
@@ -234,10 +254,17 @@ impl<'a> ValueBar<'a> {
         }
     }
 
-    /// The value as text to TYPE: always a bare number, so the text-entry
-    /// box round-trips through `parse::<f32>` whatever the readout says.
+    /// Numeric entry carries its unit so a double-click never exposes the
+    /// internal fraction or seconds behind a percentage or millisecond value.
     fn format(&self, v: f32) -> String {
-        format!("{:.*}", self.decimals, v)
+        format!("{:.*}{}", self.decimals, v * self.unit_scale, self.unit_suffix)
+    }
+
+    fn parse(&self, text: &str) -> Option<f32> {
+        let text = text.trim();
+        let number = text.strip_suffix(self.unit_suffix.trim()).unwrap_or(text).trim();
+        let value = number.parse::<f32>().ok()? / self.unit_scale;
+        value.is_finite().then_some(value)
     }
 
     /// The value as text to READ.
@@ -281,16 +308,10 @@ impl<'a> ValueBar<'a> {
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
             if cancelled || output.lost_focus() {
                 if !cancelled {
-                    if let Ok(v) = text.trim().parse::<f32>() {
-                        // Reject NaN/inf: NaN survives clamp() and would
-                        // poison the param (and the host's automation lane
-                        // in the plugin) in a state the bar can't display
-                        // or drag back out of.
-                        if v.is_finite() {
-                            let v = self.snapped(v.clamp(self.min(), self.max()));
-                            *self.value = if self.integer { v.round() } else { v };
-                            response.mark_changed();
-                        }
+                    if let Some(v) = self.parse(&text) {
+                        let v = self.snapped(v.clamp(self.min(), self.max()));
+                        *self.value = if self.integer { v.round() } else { v };
+                        response.mark_changed();
                     }
                 }
                 ui.data_mut(|d| d.remove_temp::<String>(edit_id));
@@ -714,6 +735,69 @@ mod tests {
     use crate::widgets::probe::{
         filled_polys, filled_rects, painted, painted_text, shapes, shapes_at,
     };
+
+    /// Enter the units the bar actually paints, through its double-click and
+    /// focus-loss path. Fractions, time and screen lengths all share this seam.
+    #[test]
+    fn numeric_entry_uses_the_displayed_unit() {
+        use crate::tests::probe::{events_into, press, themed};
+        for (scale, suffix, start, shown, typed, expected) in [
+            (100.0, "%", 0.5, "50.0%", "25%", 0.25),
+            (1000.0, " ms", 0.1, "100.0 ms", "250", 0.25),
+            (4.0, " pt", 0.5, "2.0 pt", "3 pt", 0.75),
+            (1.0, "×", 0.5, "0.5×", "9×", 1.0),
+            (100.0, "%", 0.5, "50.0%", "NaN%", 0.5),
+            (1000.0, " ms", 0.1, "100.0 ms", "inf ms", 0.1),
+        ] {
+            let ctx = themed();
+            let size = egui::vec2(300.0, 100.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut value = start;
+            let mut response = None;
+            let mut draw = |events| {
+                events_into(&ctx, size, rect, events, |ui| {
+                    response = Some(
+                        ValueBar::new(&mut value, 0.0..=1.0, "Amount")
+                            .unit(scale, suffix)
+                            .decimals(1)
+                            .show(ui),
+                    );
+                })
+            };
+            let out = draw(vec![]);
+            let target = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == shown => Some(t.pos),
+                    _ => None,
+                })
+                .expect("the bar must paint the unit we intend to type");
+            draw(vec![egui::Event::PointerMoved(target)]);
+            for _ in 0..2 {
+                draw(vec![press(target, true)]);
+                draw(vec![press(target, false)]);
+            }
+            draw(vec![]);
+            let edit_id = response.unwrap().id.with("edit");
+            assert_eq!(ctx.data(|d| d.get_temp::<String>(edit_id)).as_deref(), Some(shown));
+            ctx.data_mut(|d| d.insert_temp(edit_id, typed.to_owned()));
+            let enter = egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            events_into(&ctx, size, rect, vec![enter], |ui| {
+                ValueBar::new(&mut value, 0.0..=1.0, "Amount")
+                    .unit(scale, suffix)
+                    .decimals(1)
+                    .show(ui);
+            });
+            assert!((value - expected).abs() < 1e-6, "typing {typed:?} stored {value}");
+        }
+    }
 
     /// Paint one value bar across a `width`-point row and return what it
     /// emitted, with or without a preview curve.

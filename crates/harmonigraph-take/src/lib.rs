@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn the_fade_bar_reads_like_the_note_times_beside_it() {
         assert!(!ParamKey::Fade.logarithmic(), "a linear second, like the Delay");
-        assert_eq!(ParamKey::Fade.label(), "Fade", "the unit is not in the name");
+        assert_eq!(ParamKey::Fade.label(), "Note fade", "the unit is not in the name");
         // The SCALE the other two answers are premised on, and the one thing
         // here with a reach past the bar: this range is what the host exposes
         // to an automation lane, so moving it re-reads every lane recorded
@@ -384,13 +384,9 @@ mod tests {
             1.0,
             "one second, the same as the Delay bar above it",
         );
-        let display = ParamKey::Fade.display().expect("the Fade reads out in seconds");
-        assert_eq!(display(0.1), "0.10 s");
-        assert_eq!(display(1.0), "1.00 s");
-        // The Tolerance is the one key that still wants its low end stretched,
-        // and it carries no unit suffix — the two answers are independent.
+        assert_eq!(ParamKey::Fade.unit(), (1000.0, " ms", 0));
         assert!(ParamKey::Tolerance.logarithmic());
-        assert!(ParamKey::Tolerance.display().is_none());
+        assert_eq!(ParamKey::Tolerance.unit(), (1.0, "¢", 3));
     }
 
     /// Where the render starts is anchored to this, so it has to answer for a

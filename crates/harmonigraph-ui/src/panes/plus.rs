@@ -57,7 +57,7 @@ use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 /// The resting picture, last on the page: the lattice's own structure, under
 /// everything drawn on top of it.
 pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    section(ui, "At rest");
+    section(ui, "Idle lattice");
     // First, because it is the one setting here that reaches past this
     // section: the rings it moves belong to the note, and every other bar
     // under this heading is the marker field's.
@@ -67,7 +67,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // rather than nothing, which against the panel reads as holes punched
     // through the lattice: a picture worth being able to reach, and worth
     // reaching by dragging rather than by falling off the end.
-    ValueBar::new(&mut state.view.lattice_ground, 0.0..=100.0, "Ground")
+    ValueBar::new(&mut state.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
+        .unit(1.0, "%")
         // L*, the units the gradients' own Brightness is authored in, so a
         // ground and a gradient can be compared by their numbers. Whole
         // points: the axis is 100 wide and a tenth of one is under a
@@ -75,13 +76,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .integer()
         .show(ui)
         .on_hover_text(
-            "How bright a node is where nothing is sounding: the audio ring \
-             where it reads silence, and the octave band where an octave is \
-             not. One grey for the two. Around 9 a quiet node sinks into the \
-             background and only played ones draw; 20 is the fresh raised \
-             grey. The markers standing between the nodes are on their own \
-             bar below, so this can go as dark as the glow behind the notes \
-             wants without taking the lattice's structure with it.",
+            "Brightness of silent audio and MIDI rings: 0% is black, 100% is white. \
+                 Lower values let active notes and their glow stand out.",
         );
     // Second, and on the same axis, so the pair is dialled by comparing two
     // numbers. Together they are the whole resting picture; apart they are the
@@ -90,21 +86,16 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     //
     // No off position, for the bar above's reason: Arm length at 0 is the
     // marker field's own switch, and every setting of this one draws.
-    ValueBar::new(&mut state.view.marker_ink, 0.0..=100.0, "Marker ink")
+    ValueBar::new(&mut state.view.marker_ink, 0.0..=100.0, "Idle label brightness")
+        .unit(1.0, "%")
         // Whole points on the same L* axis as Ground, and that IS the point of
         // the units: two bars a person is meant to read against each other
         // have to be counted in the same thing.
         .integer()
         .show(ui)
         .on_hover_text(
-            "How bright the crosses standing at the lattice's resting \
-             positions are drawn, and the text on a node nothing is sounding \
-             under with them. The same L* the Ground above is in, so equal \
-             numbers put the whole resting lattice in one grey and any \
-             difference is read straight off the pair. Hold it above the \
-             Ground to keep the structure legible while a node's empty rings \
-             sink away — which is what a strong glow wants, the light behind \
-             the notes reading best over a dark node.",
+            "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
+                 Raise above Idle ring brightness to keep the lattice easy to navigate.",
         );
     // Length first, then thickness, in the order the shape is built: an arm
     // reaches, and then it has a width. Both are in the same quad UV a node's
@@ -115,21 +106,18 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         ui,
         (&mut state.view.plus_arm, &mut state.view.plus_taper),
         PLUS_SIZE_MAX,
-        "Arm length",
+        "Cross length",
         {
             let fresh = ViewConfig::default();
             (fresh.plus_arm, fresh.plus_taper)
         },
-        |v| format!("{v:.2}"),
+        |v| format!("{:.1}%", v * 100.0),
     )
     .on_hover_text(
-        "How far a marker's arms reach from the crossing, and how much of that \
-         end fades out, in the same units a node's ring radii are dialled in. \
-         Solid to the inner handle, gone by the outer -- the way a line drawn \
-         into a node arrives at nothing rather than stopping. Close the pair \
-         for square ends; open it fully and an arm fades the whole way from \
-         the crossing. 0 takes the markers away, and with them everything a \
-         resting lattice draws but the node rings",
+        "Cross-arm length from the center, as a percentage of the node radius. \
+                 Solid to the inner handle, faded out by the outer handle. \
+                 0% hides crosses. \
+                 Double-click resets.",
     );
     // A length of its own rather than a share of the arm above it. Tied to the
     // arm the marker would have one proportion at every size, and this bar is
@@ -140,14 +128,13 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // with the screen-constant band every edge here carries, so the bottom of
     // this bar is the thinnest cross the screen can draw. What takes the field
     // away is the bar above.
-    ValueBar::new(&mut state.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Arm width")
+    ValueBar::new(&mut state.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
+        .percent()
         .show(ui)
         .on_hover_text(
-            "How thick a marker's arms are, all the way across, in the same \
-             units a node's ring radii are dialled in. Independent of their \
-             length, so a long crossing can stay a hairline and a short one \
-             can be a block. At the bottom of the bar an arm is as thin as the \
-             screen can draw it rather than absent; past twice the arm length \
-             the cross has filled its own square",
+            "Full width of each cross arm, as a percentage of the node radius. \
+                 0% is a hairline; \
+                 Cross length at 0% hides crosses. \
+                 Named nodes do not draw crosses.",
         );
 }
