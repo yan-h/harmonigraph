@@ -1,8 +1,9 @@
 # #615 Bitwig timing apparatus
 
 Status:
-[Bitwig measurements are in progress](tuning-probe-bitwig.md);
-no final timing verdict yet.
+[Bitwig measurements support a constrained configuration](tuning-probe-bitwig.md):
+fixed 128/512/1,024-sample buffers at 44.1 kHz, calibrated fixed routing and continuous callbacks, with D = 2,048 samples.
+Production late-stream and transport-stop behavior remains an explicit #616 contract question, recorded in [#632](https://github.com/yan-h/harmonigraph/issues/632).
 The selected design lives in [adaptive-tuning.md](adaptive-tuning.md).
 This document describes a disposable experiment, not an implementation of #616 or #617.
 
@@ -132,10 +133,11 @@ The exported-CLAP fixture checks the apparatus against split callbacks, silence 
 Those are hostless correctness checks;
 they are not Bitwig observations.
 
-## Host evidence still required
+## Repeating or extending the host evidence
 
 Record Bitwig version, sample rate, buffer setting, negotiated maximum interval, hosting mode and per-plugin overrides for every trial.
-Then fill #615's matrix with shared-clock mapping and resets, complete source intervals, callback-order permutations, round-trip opportunities, candidate D and margin, compensation, stopped input/playback/loop/seek/offline, silence/mute/sleep/bypass/removal, and initial/later pitch behavior.
+The [completed measurement matrix](tuning-probe-bitwig.md) records shared-clock mapping and resets, complete source intervals, callback-order permutations, round-trip opportunities, candidate D and margin, compensation, processing modes, lifecycle and pitch behavior, with explicit exclusions.
+Extending that supported configuration requires fresh host evidence for the changed assumption.
 Include editor-never-opened playback and export.
 Match actual accepted output to downstream recorded audio and link #623's distinct-class process and reload evidence.
-Only these observations can produce the issue's viable, constrained or rejected verdict.
+Hostless correctness checks do not expand the measured supported configuration.
