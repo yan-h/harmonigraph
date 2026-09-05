@@ -48,6 +48,8 @@ Do not leave it applied in an implementation branch or treat these ignored probe
 The first invocation was refused by the sandbox because sccache could not start;
 the recorded successful runs used the app's approved command execution.
 Build duration is not part of the printed CPU timings.
+Raw transcripts and the unified patch retain original whitespace;
+diff-whitespace validation applies to Markdown documentation, while the archived patch is checked by applying it against the unchanged source.
 
 ## CPU boundary and fixture reach
 

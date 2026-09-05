@@ -63,6 +63,8 @@ After the initial packet, the coordinator ran the existing renderer spectrogram 
 The earlier UI spectrogram suite passed 48 tests with one ignored, and both existing performance probes plus the temporary scratch probes completed.
 These checks validate the baseline and evidence apparatus;
 they cannot validate unimplemented repairs.
-Final documentation checks cover Rust formatting, semantic Markdown layout, diff whitespace, local links, initial-commit checksums, clean applicability of the archived probe, and absence of runtime changes.
+Final documentation checks cover Rust formatting, semantic Markdown layout, Markdown diff whitespace, local links, initial-commit checksums, clean applicability of the archived probe, and absence of runtime changes.
+Raw tool transcripts and the unified probe patch retain their original whitespace, including blank context lines;
+they are excluded from the Markdown whitespace check.
 The source and probe patch are unchanged by the review revisions.
 No release build is owed for this documentation-only change, and no shared DAW slot was touched.
