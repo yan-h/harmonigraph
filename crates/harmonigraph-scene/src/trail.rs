@@ -37,7 +37,8 @@ use crate::NodeInstance;
 /// The frame's memories, reduced to what a node needs: which pitch classes
 /// the music has been to.
 pub(crate) struct TrailField {
-    marks: Vec<PitchClass>,
+    marks: [PitchClass; NoteHistory::MAX_VISITS],
+    len: usize,
 }
 
 impl TrailField {
@@ -57,8 +58,16 @@ impl TrailField {
         // A memory never fades: the point of the feature is a whole piece's
         // territory rather than a rolling window, so every visit counts the
         // same however long ago it sounded.
-        let marks: Vec<_> = history.visits().map(|visit| visit.pitch_class).collect();
-        (!marks.is_empty()).then_some(TrailField { marks })
+        // History bounds this frame-local scratch at 384 pitch classes (1.5 KiB).
+        // Avoid a per-frame heap allocation while keeping the current
+        // contiguous, visit-ordered scan for each home node.
+        let mut field =
+            TrailField { marks: [PitchClass::from_midi_note(0); NoteHistory::MAX_VISITS], len: 0 };
+        for visit in history.visits() {
+            field.marks[field.len] = visit.pitch_class;
+            field.len += 1;
+        }
+        Some(field)
     }
 
     /// Mark the nodes the music has been to. `node_pcs` is each node's pitch
@@ -83,7 +92,7 @@ impl TrailField {
             if !node.on_home {
                 continue;
             }
-            for &pitch_class in &self.marks {
+            for &pitch_class in &self.marks[..self.len] {
                 // Full strength or nothing: a memory has no level of its own
                 // to carry, and two remembered pitches matching one node
                 // under a wide tolerance are the same node visited twice
