@@ -391,6 +391,9 @@ pub enum InputValue {
         data: [u8; 3],
         flags: u32,
     },
+    /// Full raw transport payload, including flags and fixed-point timelines.
+    Transport(super::performance::Transport),
+    /// Unsupported header: never a claim that its payload was retained.
     Other,
 }
 
@@ -399,6 +402,10 @@ pub struct OwnedInput {
     /// None only for untimed params.flush. Bound once at the next process boundary.
     pub sample: Option<i64>,
     pub event_index: u32,
+    /// Original enclosing offset; never rewritten when retained or bound.
+    pub offset: u32,
+    pub enclosing_start: Option<i64>,
+    pub enclosing_frames: u32,
     pub flush: bool,
     pub command_cut: u64,
     pub command_sample: Option<i64>,
@@ -415,7 +422,7 @@ pub(crate) struct InputStorage {
 }
 impl Default for InputStorage {
     fn default() -> Self {
-        Self { cells: Box::new([None; INPUT_SCAN]), head: 0, len: 0 }
+        Self { cells: vec![None; INPUT_SCAN].into_boxed_slice().try_into().unwrap(), head: 0, len: 0 }
     }
 }
 impl InputStorage {
@@ -448,6 +455,12 @@ impl InputStorage {
         self.len -= 1;
         value
     }
+    pub fn truncate(&mut self, len: usize) {
+        while self.len > len {
+            self.len -= 1;
+            self.cells[(self.head + self.len) % INPUT_SCAN] = None;
+        }
+    }
     pub fn reset_timed(&mut self) {
         let count = self.len;
         for _ in 0..count {
@@ -472,5 +485,5 @@ impl InputStorage {
 }
 
 const _: () = assert!(std::mem::size_of::<ConfigurationCommand>() <= 256);
-const _: () = assert!(std::mem::size_of::<OwnedInput>() <= 128);
+const _: () = assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
 const _: () = assert!(std::mem::align_of::<OwnedInput>() <= 8);

@@ -123,7 +123,9 @@ impl<P: ClapPlugin> ProcessContext<P> for WrapperProcessContext<'_, P> {
     }
 
     fn send_event(&mut self, event: PluginNoteEvent<P>) {
-        self.output_events_guard.push_back(event);
+        if P::CLAP_PERFORMANCE {
+            self.wrapper.legacy_send_misuse.store(true, std::sync::atomic::Ordering::Release);
+        } else { self.output_events_guard.push_back(event); }
     }
 
     fn set_latency_samples(&self, samples: u32) {

@@ -80,6 +80,9 @@ run cargo test -p harmonigraph-render
 #
 # Each crate is its own workspace root, so keep both of their targets under
 # `target/debug`: the idle-worktree reclaimer owns that whole subtree.
+# Production opt-in CLAP performance boundary, independent of the optional probe.
+run cargo test --manifest-path vendor/nice-plug/Cargo.toml \
+  --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests --test clap_boundary
 run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/debug/vendor-baseview
 run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
   --no-default-features --features wgpu,tracing \
