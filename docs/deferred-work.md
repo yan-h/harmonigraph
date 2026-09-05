@@ -47,9 +47,8 @@ revisit another alternative only when a concrete musical or hosting requirement 
 ## Depth-buffer sorting
 
 **State.** The lattice renders through an offscreen color + `Depth32Float` pass (`crates/harmonigraph-render/src/lib.rs`).
-Depth is *written*, but the node pipeline is created with `depth_compare: Always` (~`lib.rs:575`), so the buffer is never used to reject fragments.
-Occlusion is still done the old way:
-nodes are sorted **back-to-front on the CPU** and painted in that order (painter's algorithm, ~`lib.rs:276`).
+Depth is *written*, but `create_pipeline` uses `depth_compare: Always`, so the buffer is never used to reject fragments.
+Occlusion follows the sheet and per-node painter order materialized by `LatticeCallback::from_scene`.
 The depth attachment exists purely as infrastructure —
 the header comment flags it as "written but not yet read."
 
@@ -72,8 +71,9 @@ That's a real pipeline + shader change, not a toggle.
 Payoff is *situational*:
 the CPU sort already handles separated billboards well;
 per-pixel depth mainly helps when billboards actually intersect or crowd at steep camera angles, and the glow-based aesthetic doesn't obviously benefit.
-**Do it only if a specific overlap artifact shows up in practice** —
-otherwise the infrastructure can keep sitting there unused at zero cost.
+**Do it only if a specific overlap artifact shows up in practice.** Retaining the unused attachment still costs allocation, clears and writes.
+Removing it while preserving painter order is [#644](https://github.com/yan-h/harmonigraph/issues/644), part of the [lattice rendering plan](lattice-rendering-plan.md);
+that cleanup does not require adopting per-pixel depth sorting.
 
 ## Not deferred — closed
 
