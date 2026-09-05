@@ -10,6 +10,7 @@ The independent CPU trail PR #661 is not part of this stack.
 Its local declaration macro emits the Rust structs and test metadata from those same field types and `offset_of!` values.
 There is no separately maintained expected-field schema.
 The metadata walker starts at the actual Naga uniform binding, then checks every nested field name and offset, scalar kind/width, vector and matrix dimensions, size and alignment, array count and stride, struct span and total binding size.
+The alignment comparison uses uniform-address-space requirements (at least 16 bytes for structs and arrays), because Naga retains explicit `@align` in offsets/span while its Layouter reports the member types' natural maximum.
 The shader's explicit group alignment matches Rust's `repr(C, align(16))`;
 the Pod derive also rejects implicit Rust padding.
 

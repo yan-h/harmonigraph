@@ -41,10 +41,19 @@ impl Layout {
         use naga::TypeInner as T;
         let layout = resolved[ty];
         assert_eq!(self.size, layout.size as usize, "{path}: size");
+        // Naga retains @align's offsets/span but its Layouter reports the
+        // member types' natural maximum. Uniform structs/arrays instead
+        // require at least 16-byte alignment (valid/type.rs applies this too).
+        let required_alignment = match module.types[ty].inner {
+            T::Struct { .. } | T::Array { .. } => {
+                layout.alignment.max(naga::proc::Alignment::MIN_UNIFORM)
+            }
+            _ => layout.alignment,
+        };
         assert_eq!(
             naga::proc::Alignment::new(self.alignment as u32).unwrap(),
-            layout.alignment,
-            "{path}: alignment"
+            required_alignment,
+            "{path}: required uniform alignment"
         );
         match (&self.kind, &module.types[ty].inner) {
             (Kind::Scalar(expected), T::Scalar(actual)) => {
