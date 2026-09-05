@@ -140,6 +140,8 @@ pub struct Wrapper<P: ClapPlugin> {
     pub(super) legacy_send_misuse: AtomicBool,
     performance_audio: AtomicBool,
     deferred_host_callback: AtomicBool,
+    #[cfg(feature = "clap-boundary-tests")]
+    deferred_gui_observation: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
     pending_parameter: Mutex<Option<OutputParamEvent>>,
     configuration_mailbox: std::sync::OnceLock<Arc<super::configuration::ConfigurationMailbox>>,
     host_state: AtomicRefCell<Option<ClapPtr<clap_host_state>>>,
@@ -370,8 +372,21 @@ impl<P: ClapPlugin> EventLoop<Task<P>, Wrapper<P>> for Wrapper<P> {
 
     fn schedule_gui(&self, task: Task<P>) -> bool {
         if P::CLAP_PERFORMANCE && self.performance_audio.load(Ordering::Acquire) {
+            #[cfg(feature = "clap-boundary-tests")]
+            if let Some(observe) = self.deferred_gui_observation.get() { observe(); }
             let success = self.tasks.push(task).is_ok();
-            if success { self.deferred_host_callback.store(true, Ordering::Release); }
+            if success {
+                // If publication precedes the audio thread's final swap, that
+                // thread requests the wakeup. Otherwise this RMW acquires its
+                // release and the phase recheck sees the completed callback.
+                // An audio-thread caller cannot finish its own callback here,
+                // so it never calls the host while its plugin lock is held.
+                self.deferred_host_callback.swap(true, Ordering::AcqRel);
+                if !self.performance_audio.load(Ordering::Acquire) {
+                    let host = &self.host_callback;
+                    unsafe_clap_call! { host=>request_callback(&**host) };
+                }
+            }
             return success;
         }
         if self.is_main_thread() {
@@ -495,6 +510,12 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
 }
 
 impl<P: ClapPlugin> Wrapper<P> {
+    #[cfg(feature = "clap-boundary-tests")]
+    #[doc(hidden)]
+    pub fn test_on_deferred_gui_observation(&self, observe: impl Fn() + Send + Sync + 'static) {
+        assert!(self.deferred_gui_observation.set(Box::new(observe)).is_ok());
+    }
+
     /// # Safety
     ///
     /// `host_callback` needs to outlive the returned object.
@@ -614,6 +635,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             legacy_send_misuse: AtomicBool::new(false),
             performance_audio: AtomicBool::new(false),
             deferred_host_callback: AtomicBool::new(false),
+            #[cfg(feature = "clap-boundary-tests")]
+            deferred_gui_observation: std::sync::OnceLock::new(),
             pending_parameter: Mutex::new(None),
             configuration_mailbox: std::sync::OnceLock::new(),
             host_state: AtomicRefCell::new(None),
@@ -2202,21 +2225,22 @@ impl<P: ClapPlugin> Wrapper<P> {
             // we'll process every incoming event.
             let process = &observed_process;
             let total_buffer_len = process.frames_count as usize;
-            let input_status = if P::CLAP_PERFORMANCE && wrapper.current_buffer_config.load().is_none_or(|c| process.frames_count > c.max_buffer_size) {
-                performance::InputStatus::Invalid
-            } else if P::CLAP_CONFIGURATION || P::CLAP_PERFORMANCE {
-                unsafe { wrapper.capture_input(process.in_events, Some((process.steady_time, process.frames_count)), process.transport.as_ref().copied()) }
+            let boundary_valid = process.steady_time >= 0 && process.frames_count > 0
+                && process.steady_time.checked_add(i64::from(process.frames_count)).is_some()
+                && (!P::CLAP_PERFORMANCE || wrapper.current_buffer_config.load().is_some_and(|c| process.frames_count <= c.max_buffer_size));
+            let input_status = if P::CLAP_CONFIGURATION || P::CLAP_PERFORMANCE {
+                if boundary_valid {
+                    unsafe { wrapper.capture_input(process.in_events, Some((process.steady_time, process.frames_count)), process.transport.as_ref().copied()); }
+                } else {
+                    wrapper.latch_input_status(performance::InputStatus::Invalid);
+                }
+                wrapper.take_input_status()
             } else { performance::InputStatus::Complete };
             let callback = performance::Callback { steady_time: process.steady_time, frames: process.frames_count,
                 transport: unsafe { process.transport.as_ref().copied() }, input_status,
                 output_available: unsafe { process.out_events.as_ref() }.is_some_and(|o| o.try_push.is_some()) };
             if P::CLAP_PERFORMANCE { wrapper.begin_performance(callback); }
-            if input_status != performance::InputStatus::Complete {
-                if P::CLAP_CONFIGURATION { wrapper.plugin.lock().clap_configuration_fault(); }
-                if P::CLAP_PERFORMANCE { unsafe { wrapper.finish_performance(callback, process.out_events, CLAP_PROCESS_ERROR); } }
-                return CLAP_PROCESS_ERROR;
-            }
-            if P::CLAP_CONFIGURATION {
+            if P::CLAP_CONFIGURATION && boundary_valid {
                 let transport = unsafe { process.transport.as_ref() };
                 wrapper.process_configuration(super::configuration::ConfigurationBoundary {
                     steady_time: process.steady_time, frames: process.frames_count,
@@ -2225,11 +2249,26 @@ impl<P: ClapPlugin> Wrapper<P> {
                         .map(|t| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
                     playing: transport.is_some_and(|t| t.flags & CLAP_TRANSPORT_IS_PLAYING != 0),
                 });
-                wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
+                if input_status == performance::InputStatus::Complete {
+                    wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
+                }
                 wrapper.configuration_request_main();
             }
 
-            if P::CLAP_PERFORMANCE { wrapper.deliver_performance_input(); }
+            if P::CLAP_PERFORMANCE && boundary_valid {
+                // A rejected new batch must not prevent bounded progress on the
+                // retained batch, including a full pool plus callback transport.
+                wrapper.bind_performance_input(process.steady_time);
+                wrapper.deliver_performance_input();
+            }
+            if input_status != performance::InputStatus::Complete {
+                if P::CLAP_CONFIGURATION { wrapper.plugin.lock().clap_configuration_fault(); }
+                if P::CLAP_PERFORMANCE {
+                    if boundary_valid { wrapper.finish_owned_walk(); }
+                    unsafe { wrapper.finish_performance(callback, process.out_events, CLAP_PROCESS_ERROR); }
+                }
+                return CLAP_PROCESS_ERROR;
+            }
             let current_audio_io_layout = wrapper.current_audio_io_layout.load();
             let has_main_input = current_audio_io_layout.main_input_channels.is_some();
             let has_main_output = current_audio_io_layout.main_output_channels.is_some();

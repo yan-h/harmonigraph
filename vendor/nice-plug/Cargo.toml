@@ -41,6 +41,8 @@ repository = "https://codeberg.org/RustAudio/nice-plug"
 all-features = true
 
 [features]
+# Enables deterministic scheduling observations only in the boundary fixtures.
+clap-boundary-tests = []
 assert_process_allocs = [
     "dep:nice-assert-no-alloc",
     "nice-plug-core/assert_process_allocs",
@@ -78,7 +80,7 @@ path = "tests/derive_persist.rs"
 [[test]]
 name = "clap_boundary"
 path = "tests/clap_boundary.rs"
-required-features = ["assert_process_allocs"]
+required-features = ["assert_process_allocs", "clap-boundary-tests"]
 
 [dependencies.anyhow]
 version = "1.0"

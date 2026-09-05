@@ -32,6 +32,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         unsafe {
             self.drain_performance(output, u32::MAX, status == CLAP_PROCESS_ERROR);
         }
+        // A restore can service its rescan while an older host value attempt is
+        // in flight. Completion relatches dirty; every exit must wake that work.
+        self.configuration_request_main();
         let summary = {
             let mut scheduler = self.performance.lock();
             let scheduler = scheduler.as_mut().unwrap();

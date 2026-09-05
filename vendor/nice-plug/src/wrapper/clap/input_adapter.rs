@@ -9,7 +9,7 @@ pub(super) struct Runtime {
     performed: usize,
     walked: usize,
     batch: u64,
-    pub status: InputStatus,
+    pending_status: InputStatus,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -19,7 +19,7 @@ impl Default for Runtime {
             performed: 0,
             walked: 0,
             batch: 0,
-            status: InputStatus::Complete,
+            pending_status: InputStatus::Complete,
         }
     }
 }
@@ -61,26 +61,42 @@ impl<P: ClapPlugin> Wrapper<P> {
         boundary: Option<(i64, u32)>,
         transport: Option<clap_event_transport>,
     ) -> InputStatus {
-        // Host callbacks run with no plugin/runtime/event storage lock held.
-        let count = if host.is_null() {
-            0
-        } else {
-            let host = unsafe { &*host };
-            let (Some(size), Some(_)) = (host.size, host.get) else {
-                return InputStatus::Invalid;
-            };
-            (unsafe { size(host) }) as usize
-        };
+        let status = unsafe { self.capture_input_batch(host, boundary, transport) };
+        self.latch_input_status(status);
+        if boundary.is_none() && status != InputStatus::Complete && P::CLAP_CONFIGURATION {
+            self.plugin.lock().clap_configuration_fault();
+        }
+        status
+    }
+
+    pub(super) fn latch_input_status(&self, status: InputStatus) {
+        let mut guard = self.owned_input.lock();
+        let input = guard.as_mut().unwrap();
+        if input.pending_status == InputStatus::Complete {
+            input.pending_status = status;
+        }
+    }
+
+    /// Flush has no performance callback. Keep its first loss, including early
+    /// capacity/validation failures, until a process boundary reports it. A
+    /// successful capture or state reset cannot erase that unreported loss.
+    pub(super) fn take_input_status(&self) -> InputStatus {
+        let mut guard = self.owned_input.lock();
+        std::mem::replace(&mut guard.as_mut().unwrap().pending_status, InputStatus::Complete)
+    }
+
+    unsafe fn capture_input_batch(
+        &self,
+        host: *const clap_input_events,
+        boundary: Option<(i64, u32)>,
+        transport: Option<clap_event_transport>,
+    ) -> InputStatus {
         let (cut, batch, original_len) = {
             let mut guard = self.owned_input.lock();
             let input = guard.as_mut().unwrap();
             let Some(cut) = self.prepare_configuration_capture(input, boundary) else {
                 return InputStatus::Invalid;
             };
-            let marker = usize::from(P::CLAP_PERFORMANCE && transport.is_some());
-            if count > INPUT_SCAN || count + marker > input.storage.available() {
-                return InputStatus::Full;
-            }
             let Some(batch) = input.batch.checked_add(1) else {
                 return InputStatus::Invalid;
             };
@@ -91,6 +107,22 @@ impl<P: ClapPlugin> Wrapper<P> {
             start < 0 || frames == 0 || start.checked_add(i64::from(frames)).is_none()
         }) {
             return InputStatus::Invalid;
+        }
+        // Host callbacks run with no plugin/runtime/event storage lock held.
+        let count = if host.is_null() {
+            0
+        } else {
+            let host = unsafe { &*host };
+            let (Some(size), Some(_)) = (host.size, host.get) else {
+                return InputStatus::Invalid;
+            };
+            (unsafe { size(host) }) as usize
+        };
+        let marker = usize::from(P::CLAP_PERFORMANCE && transport.is_some());
+        if count > INPUT_SCAN
+            || count + marker > self.owned_input.lock().as_ref().unwrap().storage.available()
+        {
+            return InputStatus::Full;
         }
         let make = |value, index, offset| OwnedInput {
             sample: boundary.and_then(|(start, _)| start.checked_add(i64::from(offset))),
@@ -150,18 +182,18 @@ impl<P: ClapPlugin> Wrapper<P> {
             let input = guard.as_mut().unwrap();
             if status != InputStatus::Complete {
                 input.storage.truncate(original_len);
-            } else if !P::CLAP_CONFIGURATION {
-                if let Some((start, _)) = boundary {
-                    input.storage.bind_untimed(start);
-                }
-                input.configured = input.storage.len();
             }
-            input.status = status;
-        }
-        if status != InputStatus::Complete && P::CLAP_CONFIGURATION {
-            self.plugin.lock().clap_configuration_fault();
         }
         status
+    }
+
+    pub(super) fn bind_performance_input(&self, start: i64) {
+        if !P::CLAP_CONFIGURATION {
+            let mut guard = self.owned_input.lock();
+            let input = guard.as_mut().unwrap();
+            input.storage.bind_untimed(start);
+            input.configured = input.storage.len();
+        }
     }
 
     pub(super) fn deliver_performance_input(&self) {
