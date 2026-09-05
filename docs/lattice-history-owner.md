@@ -51,9 +51,23 @@ Only history accessors change in the existing glow-color and direct-reference fi
 
 ## Validation status
 
-Initial source is formatted;
-local compilation and GPU checks await the coordinator's explicit machine lease.
-This is a provisional implementation, not yet a validated or loadable handoff.
-Exactly one authorized Claude Opus/xhigh review will use `--base codex/lattice-uniforms` after initial validation.
-Local actual-adapter validation and fresh post-final-commit plugin plus offline release artifacts remain required.
-No DAW slot is swapped.
+Exact source head `33b942d6e2343f9d05e1f7a30c07bbe4636ae538` passed [Full CI](https://github.com/yan-h/harmonigraph/actions/runs/33994125485) and Security.
+Initial CI exposed two fixture assumptions,
+corrected without changing production behavior:
+restored inkless nodes at glow-off were still culled,
+and Gaussian shadow atlas repacking changed 12 blue pixels by one channel step during the row-order comparison.
+The corrected fixture supplies visible marker geometry for maintenance and disables unrelated shadows before seeding for the byte-exact row-order check.
+The latest source also preserves the parent's release-before-allocation ordering for large viewport images.
+
+Exactly one authorized Claude Opus/xhigh review ran against `codex/lattice-uniforms`,
+verified at `70743e4d37872ecb6be9113cca44588e30c7e6c3`.
+The read-only wrapper exited successfully and performed no compilation or GPU commands.
+It found one minor documentation defect:
+the rendering plan still described the removed strip transfer/adoption as current.
+Those references now distinguish the pre-B mechanism from `PaneBuffers::ink_history`.
+No other defects were found;
+there are no declined or unresolved findings and no second review.
+
+Local actual-adapter renderer/offline validation and fresh post-final-commit plugin plus offline release artifacts still await explicit machine leases.
+This is not yet a loadable handoff.
+No golden is blessed and no DAW slot is swapped.
