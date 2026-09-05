@@ -20,10 +20,6 @@ mod probe;
 #[cfg(feature = "tuning-probe")]
 use probe::HarmonigraphTune;
 
-/// Capacity of the audio→GUI note event ring buffer. Events are dropped
-/// (silently) if the GUI stalls long enough to fill it.
-pub(crate) const EVENT_RING_CAPACITY: usize = 4096;
-
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
 /// meter would rather skip than stall the audio thread.
@@ -60,7 +56,6 @@ pub struct Harmonigraph {
     /// and it cost a crash; ordering the field is cheaper than being sure.
     _background: background::BackgroundAnalyzer,
     params: Arc<HarmonigraphParams>,
-    note_producer: rtrb::Producer<CoreNoteEvent>,
     /// The selected analysis input, interleaved, for the GUI's spectrum analyzer.
     audio_producer: rtrb::Producer<f32>,
     /// Current sample rate as f32 bits, so the GUI folds FFT bins under
@@ -75,6 +70,9 @@ pub struct Harmonigraph {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
+    /// Continuous presentation seconds across raw sample-clock resets/rate changes.
+    /// Historical queued records must not be reinterpreted in the new epoch.
+    presentation_seconds: f64,
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: harmonigraph_record::Recorder,
@@ -343,10 +341,10 @@ fn origin_source(
     }
 }
 
-/// When an event happened on the RING's clock: the plugin's own sample counter,
-/// which is what the editor's `ClockMapper` reads.
-fn ring_time(block_start: u64, timing: u32, sample_rate: f64) -> f64 {
-    (block_start + u64::from(timing)) as f64 / sample_rate
+/// Continuous presentation time for the display. The current block contributes
+/// sample offsets at its own rate; raw clock resets cannot retime queued history.
+fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
+    block_start + f64::from(timing) / sample_rate
 }
 
 /// When the same event happened on the TAKE's clock, which hangs off the
@@ -429,7 +427,6 @@ fn selected_analysis_input<'a, T>(
 
 impl Default for Harmonigraph {
     fn default() -> Self {
-        let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
         // Mono until a block says otherwise: the safe guess, since reading a
@@ -437,6 +434,7 @@ impl Default for Harmonigraph {
         // block, while reading mono as stereo would de-interleave silence.
         let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
+        let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
         let take = configuration::injected_recorder().unwrap_or(take);
         let take_events = Arc::new(AtomicU64::new(0));
@@ -468,13 +466,13 @@ impl Default for Harmonigraph {
             #[cfg(feature = "tuning-probe")]
             probe: probe::Hub::default(),
             params,
-            note_producer: producer,
             audio_producer,
             sample_rate_bits,
             audio_channels,
             editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
+            presentation_seconds: 0.0,
             take,
             take_events,
             _background,
@@ -554,9 +552,14 @@ impl Plugin for Harmonigraph {
         self.samples_processed = 0;
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
-        // Time 0.0 is the restarted sample clock's epoch (ClockMapper snaps
-        // its offset on a jump this large).
-        let _ = self.note_producer.push(CoreNoteEvent::source_reset(0.0, SourceId::DIRECT));
+        // Presentation time stays continuous when exact raw clock provenance
+        // starts a new epoch, including queued history before this reset.
+        self.take.publish_clock(self.presentation_seconds);
+        let _ = self.take.publish_note(
+            CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
+            self.presentation_seconds,
+            Default::default(),
+        );
     }
 
     fn process(
@@ -593,26 +596,41 @@ impl Plugin for Harmonigraph {
                 OriginSource::LocalClock(seconds) => Some(seconds),
             };
 
+        if let Some(owner) = self.configuration.as_mut() {
+            owner.record(&mut self.take, take_origin, self.presentation_seconds);
+        }
         while let Some(event) = context.next_event() {
             if let Some(MappedNote { timing, channel, note, kind }) = mapped_note(event) {
-                let time = ring_time(block_start, timing, self.sample_rate);
-                // Full ring = GUI stalled; dropping visualization events is
-                // the right failure mode for the audio thread.
-                let _ = self.note_producer.push(CoreNoteEvent {
-                    source: SourceId::DIRECT,
-                    time,
-                    channel,
-                    note,
-                    kind,
-                });
+                let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
+                let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
+                let mut delta: harmonigraph_core::canonical::NoteDelta = event.into();
+                let route = if let Some(owner) = self.configuration.as_ref() {
+                    delta.timing = owner.direct_timing(timing);
+                    match delta.timing.and_then(|timing| owner.recording_route(timing, time).ok()) {
+                        Some(route) => route,
+                        None => {
+                            self.take.fail_configuration();
+                            Default::default()
+                        }
+                    }
+                } else {
+                    Default::default()
+                };
+                let _ = self.take.publish_note(
+                    delta,
+                    ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
+                    route,
+                );
                 if let Some(origin) = take_origin {
-                    self.take.note(
-                        take_time(origin, timing, self.sample_rate),
-                        SourceId::DIRECT,
-                        channel,
-                        note,
-                        kind,
-                    );
+                    if self.configuration.is_none() {
+                        self.take.note(
+                            take_time(origin, timing, self.sample_rate),
+                            SourceId::DIRECT,
+                            channel,
+                            note,
+                            kind,
+                        );
+                    }
                     self.take_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -661,7 +679,11 @@ impl Plugin for Harmonigraph {
         }
 
         if let Some(owner) = self.configuration.as_mut() {
-            owner.record(&mut self.take, take_origin);
+            owner.direct_publication_complete(&self.take);
+            owner.finish_recording_publication(
+                &mut self.take,
+                ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
+            );
         }
         if let Some(origin) = take_origin {
             self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
@@ -682,6 +704,8 @@ impl Plugin for Harmonigraph {
         }
 
         self.samples_processed += block_samples as u64;
+        self.presentation_seconds += block_samples as f64 / self.sample_rate;
+        self.take.publish_clock(self.presentation_seconds);
         #[cfg(feature = "tuning-probe")]
         if self.probe.keep_alive() {
             return ProcessStatus::KeepAlive;
@@ -705,6 +729,7 @@ impl ClapPlugin for Harmonigraph {
         handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
     ) {
         self.take.enable_configuration();
+        self.take.enable_canonical();
         let owner = Box::new(configuration::Owner::new(&self.params));
         handle.published.publish(owner.snapshot);
         self.params
@@ -1319,8 +1344,8 @@ mod tests {
         assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
     }
 
-    /// One event, two clocks. The ring is stamped on the plugin's own sample
-    /// counter, which is what the editor's ClockMapper reads; the take is
+    /// One event, two clocks. The ring uses continuous presentation seconds,
+    /// which is what the editor's ClockMapper reads; the take is
     /// stamped on the transport, which is what lets it be lined up against a
     /// bounce later. Collapsing them into one would look right on screen and
     /// put every recorded take at the wrong song position.
@@ -1330,15 +1355,52 @@ mod tests {
     /// 512-sample block, an odd offset at 44.1 kHz — lands off a representable
     /// value and fails on the last bit with the implementation still correct.
     #[test]
+    fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
+        let mut plugin = Harmonigraph::default();
+        let shared = plugin.editor_shared.clone();
+        let mut shared = shared.lock();
+        plugin.presentation_seconds = 11.0;
+        plugin.samples_processed = 48_000;
+        plugin
+            .take
+            .publish_note(
+                CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                11.0,
+                Default::default(),
+            )
+            .unwrap();
+        plugin.reset();
+        assert_eq!(plugin.samples_processed, 0);
+        plugin.sample_rate = 96_000.0;
+        let next = ring_time(plugin.presentation_seconds, 48_000, plugin.sample_rate);
+        plugin
+            .take
+            .publish_note(
+                CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into(),
+                12.0,
+                Default::default(),
+            )
+            .unwrap();
+        plugin.take.publish_clock(12.0);
+        let deadline = Instant::now() + ANALYSIS_DEADLINE;
+        while shared.ui.tracker.roll().notes().count() < 2 && Instant::now() < deadline {
+            shared.catch_up(22.0);
+            std::thread::yield_now();
+        }
+        let notes: Vec<_> = shared.ui.tracker.roll().notes().map(|n| (n.start, n.end)).collect();
+        assert_eq!(notes, [(20.0, Some(21.0)), (21.5, None)]);
+    }
+
+    #[test]
     fn an_event_is_stamped_on_two_independent_clocks() {
         let rate = 48_000.0;
 
         // Both clocks advance by the event's offset within the block...
-        assert_eq!(ring_time(0, 24_000, rate) - ring_time(0, 0, rate), 0.5);
+        assert_eq!(ring_time(0.0, 24_000, rate) - ring_time(0.0, 0, rate), 0.5);
         assert_eq!(take_time(90.0, 24_000, rate) - take_time(90.0, 0, rate), 0.5);
 
         // ...but only the ring's counts the plugin's own blocks,
-        assert_eq!(ring_time(48_000, 0, rate), 1.0);
+        assert_eq!(ring_time(1.0, 0, rate), 1.0);
         // and only the take's counts the song position it hangs off.
         assert_eq!(take_time(90.0, 0, rate), 90.0);
     }

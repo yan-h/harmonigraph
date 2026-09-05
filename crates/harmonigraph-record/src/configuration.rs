@@ -14,11 +14,13 @@ pub struct RecordAddress {
 #[derive(Default)]
 pub(crate) struct RecordFence {
     pub enabled: AtomicBool,
+    pub canonical_enabled: AtomicBool,
     /// One coherent off-thread intent: epoch in the high bits, armed in bit zero.
     pub intent: AtomicU64,
     pub finishing: AtomicBool,
     pub failed: AtomicBool,
     pub configuration_closed: AtomicU64,
+    pub source_closed: AtomicU64,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
     #[cfg(feature = "test-support")]

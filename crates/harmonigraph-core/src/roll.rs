@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::canonical::VoiceBaseline;
 use crate::notes::{SourceId, Time, VoiceKey};
 
 /// One press of one key: when it started, when it stopped, and the pitch
@@ -35,12 +36,18 @@ pub struct RollNote {
     pub start: Time,
     /// When it was released, or `None` while it is still sounding.
     pub end: Option<Time>,
+    /// Observation stopped without proof of termination. This is not a release.
+    pub observed_until: Option<Time>,
+    pub lifetime: Option<u64>,
+    /// False when a baseline supplied current state without the earlier bends.
+    pub history_complete: bool,
     /// Sounding pitch (MIDI note units, per-note tuning included) over
     /// time, oldest first. Never empty: note-on seeds it with the key's
     /// own pitch. Between breakpoints the pitch is read as a straight
     /// line — MPE bends arrive densely enough that interpolating looks
     /// like the glide it is, where holding each value would draw stairs.
     bends: Vec<(Time, f32)>,
+    breaks: Vec<Time>,
     /// The pitch reached by the end of the onset — see
     /// [`settled_pitch`](Self::settled_pitch).
     ///
@@ -111,13 +118,13 @@ impl RollNote {
 
     /// True while the note is still held.
     pub fn is_live(&self) -> bool {
-        self.end.is_none()
+        self.end.is_none() && self.observed_until.is_none()
     }
 
     /// When this note stops: its release, or `now` while it is still
     /// sounding (a held note's segment reaches the present moment).
     pub fn stop(&self, now: Time) -> Time {
-        self.end.unwrap_or(now).max(self.start)
+        self.end.or(self.observed_until).unwrap_or(now).max(self.start)
     }
 
     /// The note as straight-line segments `((t0, pitch0), (t1, pitch1))`,
@@ -129,6 +136,9 @@ impl RollNote {
         (0..=last).filter_map(move |i| {
             let (t0, p0) = self.bends[i];
             let (t1, p1) = if i == last { (stop, p0) } else { self.bends[i + 1] };
+            if i != last && self.breaks.contains(&t1) {
+                return None;
+            }
             // A breakpoint recorded after `stop` (only reachable if the
             // shell hands out non-monotonic times) collapses to nothing.
             let t1 = t1.clamp(t0, stop.max(t0));
@@ -171,6 +181,7 @@ pub struct NoteRoll {
     /// which press is forgotten. Bounded by the number of keys, so never
     /// trimmed.
     live: BTreeMap<VoiceKey, RollNote>,
+    hidden_sources: std::collections::BTreeSet<SourceId>,
 }
 
 impl NoteRoll {
@@ -197,7 +208,11 @@ impl NoteRoll {
                 velocity,
                 start: at,
                 end: None,
+                observed_until: None,
+                lifetime: None,
+                history_complete: true,
                 bends: vec![(at, pitch)],
+                breaks: Vec::new(),
                 settled: pitch,
             },
         );
@@ -205,6 +220,117 @@ impl NoteRoll {
 
     pub fn note_off(&mut self, key: VoiceKey, at: Time) {
         self.close(key, at);
+    }
+
+    pub(crate) fn set_lifetime(&mut self, key: VoiceKey, lifetime: Option<u64>) {
+        if let Some(note) = self.live.get_mut(&key) {
+            note.lifetime = lifetime;
+        }
+    }
+
+    pub(crate) fn gap(&mut self, source: Option<SourceId>, at: Time) {
+        let keys: Vec<_> = self
+            .live
+            .keys()
+            .filter(|key| source.is_none_or(|source| key.source == source))
+            .copied()
+            .collect();
+        for key in keys {
+            let mut note = self.live.remove(&key).unwrap();
+            note.observed_until = Some(at.max(note.start));
+            note.history_complete = false;
+            self.past.push_back(note);
+        }
+        self.enforce_cap();
+    }
+
+    pub(crate) fn set_participating(&mut self, source: SourceId, participating: bool) {
+        if participating {
+            self.hidden_sources.remove(&source);
+        } else {
+            self.hidden_sources.insert(source);
+        }
+    }
+
+    pub(crate) fn replace_source(&mut self, source: SourceId, voices: &[VoiceBaseline], at: Time) {
+        let matches = |row: &VoiceBaseline, note: &RollNote| {
+            row.key(source) == note.key()
+                && if row.lifetime == 0 {
+                    note.lifetime.is_none() && row.actual_onset == note.start
+                } else {
+                    note.lifetime == Some(row.lifetime)
+                }
+        };
+        let removed: Vec<_> = self
+            .live
+            .iter()
+            .filter(|(key, note)| {
+                key.source == source && !voices.iter().any(|row| matches(row, note))
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        for key in removed {
+            let mut note = self.live.remove(&key).unwrap();
+            note.observed_until = Some(at.max(note.start));
+            self.past.push_back(note);
+        }
+        for row in voices {
+            if !self.live.contains_key(&row.key(source)) {
+                // Resume the same observed lifetime across a gap. Two roll
+                // rows with one source/onset would alias downstream caches.
+                if let Some(index) = self.past.iter().position(|note| {
+                    note.end.is_none() && note.observed_until.is_some() && matches(row, note)
+                }) {
+                    let mut note = self.past.remove(index).unwrap();
+                    let until = note.observed_until.take().unwrap();
+                    let pitch = note.end_pitch();
+                    if note.bends.len() > RollNote::MAX_BENDS - 2 {
+                        note.bends.truncate(RollNote::MAX_BENDS - 2);
+                    }
+                    note.bends.push((until, pitch));
+                    if note.breaks.len() >= RollNote::MAX_BENDS {
+                        note.breaks.remove(0);
+                    }
+                    note.breaks.push(at);
+                    note.bends.push((at, row.pitch()));
+                    self.live.insert(row.key(source), note);
+                }
+            }
+            if let Some(note) = self.live.get_mut(&row.key(source)) {
+                if note.end_pitch() != row.pitch() {
+                    // A baseline is a state observation, not an expression
+                    // path connecting the previous sample to the recovered one.
+                    note.history_complete = false;
+                    if note.breaks.len() >= RollNote::MAX_BENDS {
+                        note.breaks.remove(0);
+                    }
+                    note.breaks.push(at);
+                    if note.bends.len() >= RollNote::MAX_BENDS {
+                        note.bends.pop();
+                    }
+                    note.bends.push((at, row.pitch()));
+                }
+                continue;
+            }
+            self.live.insert(
+                row.key(source),
+                RollNote {
+                    source,
+                    channel: row.channel,
+                    note: row.note,
+                    velocity: row.velocity,
+                    start: row.actual_onset,
+                    end: None,
+                    observed_until: None,
+                    lifetime: (row.lifetime != 0).then_some(row.lifetime),
+                    history_complete: false,
+                    bends: vec![(at, row.pitch())],
+                    breaks: Vec::new(),
+                    settled: row.pitch(),
+                },
+            );
+        }
+        self.enforce_cap();
     }
 
     /// Record a per-note tuning change on a sounding note. Unknown keys
@@ -281,7 +407,11 @@ impl NoteRoll {
     /// Cheap: `past` is release-ordered, so this stops at the first keeper.
     pub fn trim(&mut self, now: Time) {
         let cutoff = now - Self::MAX_AGE;
-        while self.past.front().is_some_and(|n| n.end.is_some_and(|e| e < cutoff)) {
+        while self
+            .past
+            .front()
+            .is_some_and(|n| n.end.or(n.observed_until).is_some_and(|e| e < cutoff))
+        {
             self.past.pop_front();
         }
     }
@@ -291,7 +421,10 @@ impl NoteRoll {
     /// overlapping notes draw as overlapping ribbons either way, and the
     /// pane sorts for itself when the paint order matters.
     pub fn notes(&self) -> impl Iterator<Item = &RollNote> {
-        self.past.iter().chain(self.live.values())
+        self.past
+            .iter()
+            .chain(self.live.values())
+            .filter(|n| !self.hidden_sources.contains(&n.source))
     }
 
     /// The most recent moment any remembered note was sounding — `now`
@@ -302,10 +435,14 @@ impl NoteRoll {
     /// which outlasts the last voice's release fade. O(1): `past` is
     /// release-ordered, so the latest release is the one on the end.
     pub fn latest_activity(&self, now: Time) -> Option<Time> {
-        if !self.live.is_empty() {
+        if self.live.values().any(|n| !self.hidden_sources.contains(&n.source)) {
             return Some(now);
         }
-        self.past.back().and_then(|note| note.end)
+        self.past
+            .iter()
+            .rev()
+            .find(|n| !self.hidden_sources.contains(&n.source))
+            .and_then(|note| note.end.or(note.observed_until))
     }
 
     pub fn len(&self) -> usize {

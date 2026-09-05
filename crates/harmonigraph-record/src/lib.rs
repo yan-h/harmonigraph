@@ -77,7 +77,10 @@ use harmonigraph_core::notes::{NoteEvent, NoteEventKind, SourceId};
 use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
+#[cfg(all(test, feature = "test-support"))]
+mod canonical_tests;
 pub mod configuration;
+pub mod publication;
 use configuration::{RecordAddress, RecordFence, RECORD_PASSES};
 
 /// Ring capacity. Sized for a fast offline render rather than for a
@@ -274,6 +277,7 @@ pub fn default_renderer_path() -> std::path::PathBuf {
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
     fence: Arc<RecordFence>,
+    publication: publication::Publisher,
     record_epoch: u64,
     record_pass: u32,
     closed_epoch: u64,
@@ -323,6 +327,67 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    pub fn publish_clock(&self, time: f64) {
+        self.publication.observe_clock(time);
+    }
+    pub fn enable_canonical(&self) {
+        self.fence.canonical_enabled.store(true, Ordering::Release);
+    }
+
+    pub fn publish_note(
+        &mut self,
+        note: harmonigraph_core::canonical::NoteDelta,
+        observation_time: f64,
+        route: publication::Route,
+    ) -> Result<(), publication::PublishError> {
+        let result = self.publication.note(note, observation_time, route);
+        self.publication_result(result, route);
+        result
+    }
+
+    pub fn publish_baseline(
+        &mut self,
+        row: usize,
+        baseline: &harmonigraph_core::canonical::SourceBaseline,
+        observation_time: f64,
+        route: publication::Route,
+    ) -> Result<(), publication::PublishError> {
+        let result = self.publication.baseline(row, baseline, observation_time, route);
+        self.publication_result(result, route);
+        result
+    }
+
+    fn publication_result(
+        &self,
+        result: Result<(), publication::PublishError>,
+        route: publication::Route,
+    ) {
+        if matches!(
+            result,
+            Err(publication::PublishError::Lost | publication::PublishError::Invalid)
+        ) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            if route.address.is_some() || self.fence.finishing.load(Ordering::Acquire) {
+                self.fence.fail();
+            }
+        }
+    }
+
+    /// A complete audio-owned publication frontier, not a configuration, GUI,
+    /// source-retention or disk acknowledgement, authorizes these closures.
+    pub fn source_pass_complete(&mut self, address: RecordAddress, observation_time: f64) {
+        if self.publication.pass_complete(address, observation_time).is_err() {
+            self.fence.fail();
+        }
+    }
+    pub fn source_epoch_complete(&mut self, epoch: u64, observation_time: f64) {
+        if epoch != 0 && epoch > self.fence.source_closed.load(Ordering::Acquire) {
+            if self.publication.epoch_complete(epoch, observation_time).is_err() {
+                self.fence.fail();
+            }
+            self.fence.source_closed.store(epoch, Ordering::Release);
+        }
+    }
     pub fn is_armed(&mut self) -> bool {
         if self.fence.enabled.load(Ordering::Acquire) {
             return self.is_armed_at(self.capture_recording_intent());
@@ -626,7 +691,9 @@ impl Drop for Recorder {
         if self.fence.enabled.load(Ordering::Acquire)
             && self.record_epoch != 0
             && (self.closed_epoch < self.record_epoch
-                || self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch)
+                || self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch
+                || (self.fence.canonical_enabled.load(Ordering::Acquire)
+                    && self.fence.source_closed.load(Ordering::Acquire) < self.record_epoch))
         {
             self.fence.fail();
         }
@@ -637,6 +704,7 @@ impl Drop for Recorder {
 /// happened. Cloneable so the editor can hold it.
 #[derive(Clone)]
 pub struct Control {
+    display: Arc<Mutex<Option<publication::Consumer>>>,
     fence: Arc<RecordFence>,
     commands: mpsc::Sender<Command>,
     armed: Arc<AtomicBool>,
@@ -664,6 +732,9 @@ pub struct Control {
 }
 
 impl Control {
+    pub fn take_display(&self) -> Option<publication::Consumer> {
+        self.display.lock().take()
+    }
     pub fn is_recording(&self) -> bool {
         self.recording.load(Ordering::Relaxed)
     }
@@ -937,6 +1008,8 @@ fn take_dir() -> std::path::PathBuf {
 /// the audio thread's producer.
 pub fn channel() -> (Recorder, Control) {
     let (producer, mut consumer) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+    let (publication, mut publications) = publication::channel();
+    let (mut display, display_consumer) = publication::channel();
     let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
     let armed = Arc::new(AtomicBool::new(false));
@@ -960,6 +1033,7 @@ pub fn channel() -> (Recorder, Control) {
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut open: Option<Open> = None;
         let mut pending_stop = None;
+        let mut fanout = CanonicalFanout::default();
         loop {
             match orders.try_recv() {
                 Ok(Command::Start(epoch, header, path, spec)) => {
@@ -969,6 +1043,8 @@ pub fn channel() -> (Recorder, Control) {
                         open =
                             Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
                                 open.epoch = epoch;
+                                open.source_enabled =
+                                    thread_fence.canonical_enabled.load(Ordering::Acquire);
                                 open
                             });
                         if epoch != 0
@@ -1011,25 +1087,43 @@ pub fn channel() -> (Recorder, Control) {
                         &thread_status,
                         Some(&thread_fence),
                     );
+                    fanout.drain(&mut publications, Some(&mut display), &mut open, &thread_fence);
                     if thread_fence.enabled.load(Ordering::Acquire) && open.is_some() {
                         thread_fence.fail();
                         *thread_status.lock() =
                             "recording incomplete: producer disconnected before finalization"
                                 .into();
                     }
+                    if let Some(current) = open.as_mut() {
+                        current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                            ..Default::default()
+                        });
+                    }
                     return;
                 }
             }
-            let had_records = drain_with_audio(
+            let had_records = drain_with_boundaries(
                 &mut consumer,
                 Some(&mut audio_consumer),
                 &mut open,
                 &thread_status,
                 Some(&thread_fence),
+                |open| {
+                    fanout.drain(&mut publications, Some(&mut display), open, &thread_fence);
+                },
             );
             let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
                 && drain_audio(&mut audio_consumer, &mut open);
+            let had_publications =
+                fanout.drain(&mut publications, Some(&mut display), &mut open, &thread_fence) != 0;
             if thread_fence.failed.load(Ordering::Acquire) {
+                if let Some(current) = open.as_mut() {
+                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                        ..Default::default()
+                    });
+                }
                 open = None;
                 pending_stop = None;
                 thread_fence.finishing.store(false, Ordering::Release);
@@ -1055,7 +1149,7 @@ pub fn channel() -> (Recorder, Control) {
                     );
                 }
             }
-            if !had_records && !had_audio {
+            if !had_records && !had_audio && !had_publications {
                 std::thread::sleep(DRAIN_IDLE);
             }
         }
@@ -1063,6 +1157,7 @@ pub fn channel() -> (Recorder, Control) {
 
     (
         Recorder {
+            publication,
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1085,6 +1180,7 @@ pub fn channel() -> (Recorder, Control) {
             pending_split: false,
         },
         Control {
+            display: Arc::new(Mutex::new(Some(display_consumer))),
             fence,
             commands,
             armed,
@@ -1111,6 +1207,7 @@ pub mod testing {
     use super::*;
 
     pub struct Capture {
+        publications: publication::Consumer,
         fence: Arc<RecordFence>,
         _records: rtrb::Consumer<Entry>,
         audio: rtrb::Consumer<f32>,
@@ -1168,33 +1265,52 @@ pub mod testing {
         status: Mutex<String>,
         stopping: bool,
         pub finished: Option<std::path::PathBuf>,
+        fanout: CanonicalFanout,
     }
     impl FileWriter {
+        pub fn retained_passes(&self) -> usize {
+            self.open.as_ref().map_or(0, |o| o.retained.len())
+        }
+        pub fn current_pass(&self) -> Option<u32> {
+            self.open.as_ref().map(|o| o.pass)
+        }
         pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
             let status = Mutex::new(String::new());
             let mut open =
                 Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
             open.epoch = capture.fence.epoch();
+            open.source_enabled = capture.fence.canonical_enabled.load(Ordering::Acquire);
             Self {
                 open: Some(open),
                 fence: capture.fence.clone(),
                 status,
                 stopping: false,
                 finished: None,
+                fanout: CanonicalFanout::default(),
             }
         }
         pub fn stop(&mut self) {
             self.stopping = true;
         }
         pub fn drain(&mut self, capture: &mut Capture) {
-            drain_with_audio(
+            drain_with_boundaries(
                 &mut capture._records,
                 Some(&mut capture.audio),
                 &mut self.open,
                 &self.status,
                 Some(&self.fence),
+                |open| {
+                    self.fanout.drain(&mut capture.publications, None, open, &self.fence);
+                },
             );
+            self.fanout.drain(&mut capture.publications, None, &mut self.open, &self.fence);
             if self.fence.failed.load(Ordering::Acquire) {
+                if let Some(current) = self.open.as_mut() {
+                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                        ..Default::default()
+                    });
+                }
                 self.open = None;
             } else if self.stopping {
                 self.finished = finish_ready(&mut self.open, self.fence.epoch(), &self.fence)
@@ -1208,6 +1324,7 @@ pub mod testing {
 
     pub fn channel() -> (Recorder, Capture) {
         let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+        let (publication, publications) = publication::channel();
         let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let armed = Arc::new(AtomicBool::new(false));
         let with_audio = Arc::new(AtomicBool::new(false));
@@ -1217,6 +1334,7 @@ pub mod testing {
         let hit_rewind = Arc::new(AtomicBool::new(false));
         let fence = Arc::new(RecordFence::default());
         let recorder = Recorder {
+            publication,
             fence: fence.clone(),
             record_epoch: 0,
             record_pass: 1,
@@ -1238,9 +1356,171 @@ pub mod testing {
             advanced: false,
             pending_split: false,
         };
-        let capture =
-            Capture { fence, _records: records, audio: audio_consumer, armed, with_audio };
+        let capture = Capture {
+            fence,
+            publications,
+            _records: records,
+            audio: audio_consumer,
+            armed,
+            with_audio,
+        };
         (recorder, capture)
+    }
+}
+
+#[derive(Default)]
+struct CanonicalFanout {
+    /// Non-RT deduplication only. These cuts authorize no musical reclamation.
+    cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
+}
+
+impl CanonicalFanout {
+    fn drain(
+        &mut self,
+        publications: &mut publication::Consumer,
+        mut display: Option<&mut publication::Publisher>,
+        open: &mut Option<Open>,
+        fence: &RecordFence,
+    ) -> usize {
+        use harmonigraph_core::canonical::CanonicalEvent;
+        if let (Some(clock), Some(display)) = (publications.clock(), display.as_deref_mut()) {
+            display.observe_clock(clock);
+        }
+        publications.drain(|delivery, observation_time, route| {
+            // A record can reach this lane before its independently queued
+            // Start/NewPass control has drained. Retain its whole payload.
+            let address = match delivery {
+                publication::Delivery::PassComplete(a) => Some(a),
+                publication::Delivery::EpochComplete(epoch) => {
+                    Some(RecordAddress { epoch, pass: 0 })
+                }
+                publication::Delivery::Event(_) => route.address,
+            };
+            if let Some(address) = address {
+                if !fence.failed.load(Ordering::Acquire)
+                    && open.as_ref().is_none_or(|o| {
+                        o.epoch < address.epoch
+                            || (o.epoch == address.epoch && o.pass < address.pass)
+                    })
+                {
+                    return false;
+                }
+            }
+            match delivery {
+                publication::Delivery::PassComplete(address) => {
+                    if let Some(current) = open.as_mut() {
+                        if let Some(pass) = current.addressed(address) {
+                            pass.source_complete = true;
+                            if current.finish_completed_passes().is_err() {
+                                fence.fail();
+                            }
+                        } else {
+                            fence.fail();
+                        }
+                    } else {
+                        fence.fail();
+                    }
+                }
+                publication::Delivery::EpochComplete(epoch) => {
+                    if let Some(current) = open.as_mut().filter(|o| o.epoch == epoch) {
+                        current.source_closed = true;
+                    } else {
+                        fence.fail();
+                    }
+                }
+                publication::Delivery::Event(event) => {
+                    match event {
+                        CanonicalEvent::Note(delta) if delta.sequence != 0 => {
+                            let cursor = self.cursors.entry(delta.event.source).or_default();
+                            if delta.sequence <= cursor.0 {
+                                return true;
+                            }
+                            if delta.sequence <= cursor.2 {
+                                fence.fail();
+                                return true;
+                            }
+                            cursor.0 = delta.sequence;
+                        }
+                        CanonicalEvent::Baseline(frame) => {
+                            let cursor = self.cursors.entry(frame.source).or_default();
+                            if frame.id <= cursor.1 {
+                                return true;
+                            }
+                            if cursor.0 > frame.output_cut {
+                                fence.fail();
+                                return true;
+                            }
+                            cursor.1 = frame.id;
+                            cursor.2 = frame.output_cut;
+                        }
+                        _ => {}
+                    }
+                    // Disk serialization happens while the primary payload is
+                    // Reading. The display gets its OWN complete payload copy.
+                    let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
+                    if let Some(address) = route.address {
+                        record.translate(route.time_offset);
+                        if let Some(pass) = open.as_mut().and_then(|o| o.addressed(address)) {
+                            if pass.source_complete {
+                                fence.fail();
+                            } else {
+                                pass.voiced |= record.voiced();
+                                if pass.writer.canonical(record).is_err() {
+                                    fence.fail();
+                                }
+                            }
+                        } else {
+                            fence.fail();
+                        }
+                    }
+                    if let CanonicalEvent::Gap(gap) = event {
+                        if route.address.is_some() || fence.failed.load(Ordering::Acquire) {
+                            if let Some(current) = open.as_mut() {
+                                current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                                    first_publication: gap.first,
+                                    last_publication: gap.last,
+                                    reason: harmonigraph_take::canonical::GapRecord::from(gap)
+                                        .reason,
+                                });
+                            }
+                            fence.fail();
+                        }
+                    }
+                    if let Some(display) = display.as_deref_mut() {
+                        let result = match event {
+                            CanonicalEvent::Note(delta) => {
+                                display.note(delta, observation_time, publication::Route::default())
+                            }
+                            CanonicalEvent::Baseline(baseline) => {
+                                // Fanout has one serialized producer. Any free
+                                // publication pair can carry a complete frame;
+                                // these slots are not source musical leases.
+                                let mut result = Err(publication::PublishError::BaselineBusy);
+                                for row in 0..publication::SOURCE_ROWS {
+                                    result = display.baseline(
+                                        row,
+                                        baseline,
+                                        observation_time,
+                                        publication::Route::default(),
+                                    );
+                                    if result != Err(publication::PublishError::BaselineBusy) {
+                                        break;
+                                    }
+                                }
+                                result
+                            }
+                            CanonicalEvent::Gap(gap) => {
+                                display.gap(gap, observation_time, publication::Route::default())
+                            }
+                        };
+                        if result == Err(publication::PublishError::BaselineBusy) {
+                            display.discarded(event.time(), publication::Route::default());
+                        }
+                    }
+                }
+            }
+            true
+        })
     }
 }
 
@@ -1270,6 +1550,11 @@ struct Open {
     producer_closed: bool,
     configuration_closed: bool,
     configuration_complete: bool,
+    source_enabled: bool,
+    source_closed: bool,
+    source_complete: bool,
+    last_voiced_number: u32,
+    incomplete: bool,
     writer: harmonigraph_take::Writer,
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
@@ -1325,6 +1610,11 @@ impl Open {
                     producer_closed: false,
                     configuration_closed: false,
                     configuration_complete: false,
+                    source_enabled: false,
+                    source_closed: false,
+                    source_complete: false,
+                    last_voiced_number: 0,
+                    incomplete: false,
                     writer,
                     header,
                     base,
@@ -1390,6 +1680,10 @@ impl Open {
     fn next_pass(mut self, status: &Mutex<String>) -> Option<Open> {
         if self.epoch != 0 {
             if self.retained.len() + 1 >= RECORD_PASSES {
+                self.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                    reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
+                    ..Default::default()
+                });
                 return None;
             }
             let mut header = self.header.clone();
@@ -1405,6 +1699,8 @@ impl Open {
                 return None;
             }
             next.epoch = self.epoch;
+            next.source_enabled = self.source_enabled;
+            next.last_voiced_number = if self.voiced { self.pass } else { self.last_voiced_number };
             next.last_voiced = self.voiced_so_far();
             next.retained = std::mem::take(&mut self.retained);
             next.retained.push(self);
@@ -1437,7 +1733,37 @@ impl Open {
         self.epoch == epoch
             && self.producer_closed
             && self.configuration_closed
+            && (!self.source_enabled || self.source_closed)
             && self.retained.is_empty()
+    }
+
+    fn finish_completed_passes(&mut self) -> std::io::Result<()> {
+        let mut index = 0;
+        while index < self.retained.len() {
+            if self.retained[index].configuration_complete
+                && (!self.source_enabled || self.retained[index].source_complete)
+            {
+                let old = self.retained.remove(index);
+                if old.voiced && old.pass > self.last_voiced_number {
+                    self.last_voiced = Some(old.path());
+                    self.last_voiced_number = old.pass;
+                }
+                old.finish_configuration()?;
+            } else {
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_incomplete(&mut self, record: harmonigraph_take::IncompleteRecord) {
+        if !self.incomplete {
+            let _ = self.writer.incomplete(record);
+            self.incomplete = true;
+        }
+        for pass in &mut self.retained {
+            pass.mark_incomplete(record);
+        }
     }
     fn addressed(&mut self, address: RecordAddress) -> Option<&mut Open> {
         if self.epoch != address.epoch {
@@ -1489,10 +1815,21 @@ fn drain(
 
 fn drain_with_audio(
     consumer: &mut rtrb::Consumer<Entry>,
+    audio: Option<&mut rtrb::Consumer<f32>>,
+    open: &mut Option<Open>,
+    status: &Mutex<String>,
+    fence: Option<&RecordFence>,
+) -> bool {
+    drain_with_boundaries(consumer, audio, open, status, fence, |_| {})
+}
+
+fn drain_with_boundaries(
+    consumer: &mut rtrb::Consumer<Entry>,
     mut audio: Option<&mut rtrb::Consumer<f32>>,
     open: &mut Option<Open>,
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
+    mut before_new_pass: impl FnMut(&mut Option<Open>),
 ) -> bool {
     // Start is a separate off-thread message, published before arming. Retain
     // records if this iteration observed the ring before that command.
@@ -1512,6 +1849,9 @@ fn drain_with_audio(
     while let Ok(entry) = consumer.pop() {
         any = true;
         if matches!(entry, Entry::NewPass) {
+            // A completed source cut in the other lane can release a pass
+            // before this allocation. Queue ordering alone is not exhaustion.
+            before_new_pass(open);
             if let Some(current) = open.take() {
                 *open = current.next_pass(status);
                 if open.is_none() {
@@ -1536,13 +1876,14 @@ fn drain_with_audio(
                 if let Some(current) = open.as_mut().filter(|o| o.epoch == address.epoch) {
                     if current.pass == address.pass {
                         current.configuration_complete = true;
-                    } else if let Some(index) =
-                        current.retained.iter().position(|p| p.pass == address.pass)
+                    } else if let Some(pass) =
+                        current.retained.iter_mut().find(|p| p.pass == address.pass)
                     {
-                        if current.retained.remove(index).finish_configuration().is_err() {
-                            fail();
-                        }
+                        pass.configuration_complete = true;
                     } else {
+                        fail();
+                    }
+                    if current.finish_completed_passes().is_err() {
                         fail();
                     }
                 } else {
@@ -2169,6 +2510,7 @@ mod tests {
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
+                    publication: publication::channel().0,
                     fence: Arc::new(RecordFence::default()),
                     record_epoch: 0,
                     record_pass: 1,
@@ -3213,7 +3555,7 @@ mod tests {
         drop(open);
         let take = harmonigraph_take::Take::read(&path).unwrap();
         assert!(!take.truncated);
-        assert_eq!(take.notes.into_iter().map(NoteEvent::from).collect::<Vec<_>>(), events);
+        assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

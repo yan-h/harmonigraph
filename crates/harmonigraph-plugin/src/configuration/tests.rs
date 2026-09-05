@@ -1157,3 +1157,69 @@ fn retried_gesture_closure_merges_before_earlier_timed_learning() {
         ]
     );
 }
+
+#[test]
+fn canonical_publication_slots_and_loss_are_allocation_free() {
+    use harmonigraph_core::canonical::*;
+    use harmonigraph_record::publication::*;
+    let (mut publisher, mut consumer) = channel();
+    let voices: [_; 64] = std::array::from_fn(|note| VoiceBaseline {
+        note: note as u8,
+        pitch_microcents: note as i64 * 100_000_000,
+        velocity: 0.8,
+        ..Default::default()
+    });
+    let baseline = SourceBaseline::new(
+        SourceId::DIRECT,
+        1,
+        1.0,
+        0.0,
+        0,
+        true,
+        &voices,
+        [ChannelBaseline::default(); 16],
+    )
+    .unwrap();
+    let mut confirmed = ConfirmedPitches::default();
+    for row in &voices {
+        confirmed.on(row.confirmed(SourceId::DIRECT)).unwrap();
+    }
+    let before: Vec<_> = confirmed.rows().copied().collect();
+    let start = std::time::Instant::now();
+    nice_assert_no_alloc::assert_no_alloc(|| {
+        publisher.baseline(0, &baseline, 1.0, Route::default()).unwrap();
+        publisher.baseline(0, &baseline, 1.0, Route::default()).unwrap();
+        assert_eq!(
+            publisher.baseline(0, &baseline, 1.0, Route::default()),
+            Err(PublishError::BaselineBusy)
+        );
+        for _ in 2..PUBLICATION_RING {
+            publisher
+                .note(
+                    harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                    1.0,
+                    Route::default(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            publisher.note(
+                harmonigraph_core::NoteEvent::off(2.0, SourceId::DIRECT, 0, 60).into(),
+                2.0,
+                Route::default()
+            ),
+            Err(PublishError::Lost)
+        );
+        // Reporting ownership and failure have no access to musical state.
+        assert!(confirmed.is_complete());
+        assert!(confirmed.rows().copied().eq(before.iter().copied()));
+    });
+    let duration = start.elapsed();
+    // Consume outside the audio guard, then exercise payload reuse under it.
+    consumer.drain(|_, _, _| true);
+    nice_assert_no_alloc::assert_no_alloc(|| {
+        publisher.baseline(0, &baseline, 3.0, Route::default()).unwrap()
+    });
+    consumer.drain(|_, _, _| true);
+    eprintln!("canonical guarded fill: 2 complete 64-voice payloads + 4094 notes + Busy/Lost = {duration:?}; no allocation/deallocation");
+}

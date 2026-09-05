@@ -508,7 +508,10 @@ impl App {
         if let Some(recorder) = &mut self.recorder {
             recorder.note(&event);
         }
-        self.state.tracker.handle_event(event);
+        self.state
+            .tracker
+            .handle_canonical(harmonigraph_core::canonical::CanonicalEvent::Note(event.into()))
+            .expect("validated direct observation");
     }
 
     fn switch_source(&mut self, source: MidiSource, now: f64) -> f64 {
@@ -840,7 +843,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         assert!(!take.truncated);
         assert_eq!(
-            take.notes.len(),
+            take.notes().count(),
             CHORDS[0].0.len() + 2,
             "old attack, reset, and real mock attacks"
         );
@@ -854,8 +857,8 @@ mod tests {
         let live = held(&app.state.tracker);
         assert_eq!(live.len(), CHORDS[0].0.len(), "the replacement chord is held live");
         let mut replay = NoteTracker::new();
-        for record in take.notes {
-            replay.handle_event(record.into());
+        for record in &take.events {
+            record.apply(&mut replay).unwrap();
         }
         assert_eq!(held(&replay), live, "time-sorted take replay must keep the replacement chord");
         assert_eq!(now, 1.001, "the rest of the frame also observes the switch boundary");

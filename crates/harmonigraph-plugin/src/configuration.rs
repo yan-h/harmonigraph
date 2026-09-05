@@ -340,7 +340,52 @@ impl Owner {
     pub fn recording_intent(&self) -> u64 {
         self.recording.captured_intent
     }
-    pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
+    pub fn direct_timing(&self, offset: u32) -> Option<harmonigraph_core::canonical::EventTiming> {
+        let sample = self.recording.block_start.checked_add(i64::from(offset))?;
+        Some(harmonigraph_core::canonical::EventTiming {
+            clock: self.recording.clock,
+            input: sample,
+            planned: None,
+            sample,
+            sample_rate: f64::from(self.boundary.sample_rate),
+        })
+    }
+
+    /// Current direct observations are all published by this sub-block's end.
+    /// The later session producer must replace this call with its complete
+    /// merged OUTPUT publication frontier, in the adopted mapped clock.
+    pub fn direct_publication_complete(&mut self, recorder: &harmonigraph_record::Recorder) {
+        let end = self.recording.block_start.checked_add(i64::from(self.recording.block_frames));
+        if end
+            .and_then(|end| end.checked_add(self.recording.hub_offset))
+            .is_none_or(|end| self.recording.source_frontier(self.recording.clock, end).is_err())
+        {
+            recorder.fail_configuration();
+        }
+    }
+    pub fn recording_route(
+        &self,
+        timing: harmonigraph_core::canonical::EventTiming,
+        presentation_time: f64,
+    ) -> Result<harmonigraph_record::publication::Route, ()> {
+        self.recording.route(timing.clock, timing.sample, presentation_time)
+    }
+
+    pub fn finish_recording_publication(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        observation_time: f64,
+    ) {
+        self.recording.observation_time = observation_time;
+        self.recording.finish(recorder, &self.timeline);
+    }
+    pub fn record(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        origin: Option<f64>,
+        observation_time: f64,
+    ) {
+        self.recording.observation_time = observation_time;
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }

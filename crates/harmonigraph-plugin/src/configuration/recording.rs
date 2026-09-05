@@ -1,5 +1,6 @@
 //! Original sample-to-pass ownership for deferred configuration. This is a take
 //! publication fence, independent of the later session's timeline retirement.
+use harmonigraph_core::canonical::ClockId;
 use harmonigraph_core::configuration::{timeline::ConfigTimeline, ResolvedConfig};
 use harmonigraph_record::{
     configuration::{RecordAddress, RECORD_PASSES},
@@ -13,6 +14,7 @@ const CHANGES: usize = 128;
 
 #[derive(Clone, Copy)]
 struct Segment {
+    clock: ClockId,
     start: i64,
     end: i64,
     address: Option<RecordAddress>,
@@ -26,8 +28,15 @@ struct Pass {
     end: Option<i64>,
     seeded: bool,
     last: Option<(i64, ResolvedConfig)>,
+    configuration_complete: bool,
+    source_complete: bool,
 }
 pub(super) struct Recording {
+    pub clock: ClockId,
+    pub hub_offset: i64,
+    /// Continuous presentation clock for publication controls and loss markers.
+    pub observation_time: f64,
+    source_prefix: Option<i64>,
     segments: [Option<Segment>; SEGMENTS],
     changes: [Option<(i64, ResolvedConfig)>; CHANGES],
     passes: [Option<Pass>; RECORD_PASSES],
@@ -40,6 +49,10 @@ pub(super) struct Recording {
 impl Default for Recording {
     fn default() -> Self {
         Self {
+            clock: ClockId::default(),
+            hub_offset: 0,
+            observation_time: 0.0,
+            source_prefix: None,
             segments: [None; SEGMENTS],
             changes: [None; CHANGES],
             passes: [None; RECORD_PASSES],
@@ -53,12 +66,58 @@ impl Default for Recording {
 }
 impl Recording {
     pub fn reset(&mut self, recorder: &Recorder) {
-        if self.segments.iter().flatten().any(|s| s.address.is_some() && s.end > self.prefix)
-            || self.changes.iter().any(Option::is_some)
+        if self.segments.iter().flatten().any(|s| {
+            s.address.is_some()
+                && (s.end > self.prefix || self.source_prefix.is_none_or(|through| s.end > through))
+        }) || self.changes.iter().any(Option::is_some)
         {
             recorder.fail_configuration();
         }
-        *self = Self::default();
+        let Some(epoch) = self.clock.epoch.checked_add(1) else {
+            recorder.fail_configuration();
+            return;
+        };
+        let clock = ClockId { epoch, ..self.clock };
+        *self = Self { clock, ..Self::default() };
+    }
+
+    /// ONLY the canonical audio owner may supply this proof: every actual
+    /// output strictly before mapped_through has acquired an immutable recording
+    /// route or an explicit publication-failure disposition. Source receipt,
+    /// held baseline and configuration progress are insufficient.
+    pub fn source_frontier(&mut self, clock: ClockId, mapped_through: i64) -> Result<(), ()> {
+        if clock != self.clock {
+            return Err(());
+        }
+        let raw = mapped_through.checked_sub(self.hub_offset).ok_or(())?;
+        if self.source_prefix.is_some_and(|old| raw < old) {
+            return Err(());
+        }
+        self.source_prefix = Some(raw);
+        Ok(())
+    }
+
+    pub fn route(
+        &self,
+        clock: ClockId,
+        mapped_actual: i64,
+        presentation_time: f64,
+    ) -> Result<harmonigraph_record::publication::Route, ()> {
+        if clock != self.clock || !presentation_time.is_finite() {
+            return Err(());
+        }
+        let sample = mapped_actual.checked_sub(self.hub_offset).ok_or(())?;
+        let segment = self
+            .segments
+            .iter()
+            .flatten()
+            .find(|s| s.clock == clock && s.start <= sample && sample < s.end)
+            .ok_or(())?;
+        let t = segment.origin + (sample - segment.start) as f64 / segment.rate;
+        Ok(harmonigraph_record::publication::Route {
+            address: segment.address,
+            time_offset: t - presentation_time,
+        })
     }
     pub fn change(&mut self, sample: i64, config: ResolvedConfig, recorder: &Recorder) {
         if let Some(cell) = self.changes.iter_mut().find(|c| c.is_none()) {
@@ -93,7 +152,14 @@ impl Recording {
             }
             if let Some(address) = next_current {
                 if let Some(cell) = self.passes.iter_mut().find(|p| p.is_none()) {
-                    *cell = Some(Pass { address, end: None, seeded: false, last: None });
+                    *cell = Some(Pass {
+                        address,
+                        end: None,
+                        seeded: false,
+                        last: None,
+                        configuration_complete: false,
+                        source_complete: false,
+                    });
                 } else {
                     recorder.fail_configuration();
                 }
@@ -105,6 +171,7 @@ impl Recording {
         let recorded_address = address
             .filter(|a| a.epoch == self.captured_intent >> 1 && self.captured_intent & 1 != 0);
         let segment = Segment {
+            clock: self.clock,
             start,
             end,
             address: recorded_address,
@@ -113,7 +180,8 @@ impl Recording {
             seeded: false,
         };
         if let Some(previous) = self.segments.iter_mut().flatten().find(|s| {
-            s.end == start
+            s.clock == segment.clock
+                && s.end == start
                 && s.address == segment.address
                 && s.rate == rate
                 && (s.address.is_none()
@@ -126,6 +194,10 @@ impl Recording {
             recorder.fail_configuration();
         }
 
+        self.finish(recorder, timeline);
+    }
+
+    pub fn finish(&mut self, recorder: &mut Recorder, timeline: &ConfigTimeline) {
         // Seed the first segment and any resumed recording from the value at
         // its actual start. Stable continuous callbacks write no repeated state.
         for segment in self.segments.iter_mut().flatten() {
@@ -195,18 +267,31 @@ impl Recording {
                     .iter()
                     .flatten()
                     .any(|s| s.address == Some(pass.address) && !s.seeded)
+                && !pass.configuration_complete
             {
                 recorder.configuration_pass_complete(pass.address);
+                pass.configuration_complete = true;
+            }
+            if pass.end.is_some_and(|end| self.source_prefix.is_some_and(|prefix| prefix >= end))
+                && !pass.source_complete
+            {
+                recorder.source_pass_complete(pass.address, self.observation_time);
+                pass.source_complete = true;
+            }
+            if pass.configuration_complete && pass.source_complete {
                 *cell = None;
             }
         }
         for cell in &mut self.segments {
-            if cell.is_some_and(|s| s.end <= self.prefix && (s.address.is_none() || s.seeded))
-                && !self
-                    .changes
-                    .iter()
-                    .flatten()
-                    .any(|(sample, _)| cell.is_some_and(|s| s.start <= *sample && *sample < s.end))
+            if cell.is_some_and(|s| {
+                s.end <= self.prefix
+                    && self.source_prefix.is_some_and(|through| s.end <= through)
+                    && (s.address.is_none() || s.seeded)
+            }) && !self
+                .changes
+                .iter()
+                .flatten()
+                .any(|(sample, _)| cell.is_some_and(|s| s.start <= *sample && *sample < s.end))
             {
                 *cell = None;
             }
@@ -219,6 +304,75 @@ impl Recording {
             && !self.passes.iter().flatten().any(|p| p.address.epoch == epoch)
         {
             recorder.configuration_epoch_complete(epoch);
+            recorder.source_epoch_complete(epoch, self.observation_time);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harmonigraph_core::configuration::ConfigReducer;
+
+    #[test]
+    fn mapped_output_frontier_and_recording_routes_use_the_adopted_hub_clock_once() {
+        let (mut recorder, capture) = harmonigraph_record::testing::channel();
+        recorder.enable_configuration();
+        recorder.enable_canonical();
+        capture.arm();
+        recorder.is_armed();
+        recorder.observe_transport(20.0, true);
+        let clock = ClockId { runtime_session: 7, epoch: 3 };
+        let mut recording = Recording {
+            clock,
+            hub_offset: 32,
+            captured_intent: 3,
+            prefix: 1040,
+            block_start: 1000,
+            block_frames: 40,
+            ..Default::default()
+        };
+        let timeline = ConfigTimeline::new(ConfigReducer::default());
+        recording.segment(&mut recorder, &timeline, Some(20.0), 48000.0);
+        recording.source_frontier(clock, 1056).unwrap();
+        recording.finish(&mut recorder, &timeline);
+        assert_eq!(recording.source_prefix, Some(1024));
+        assert_eq!(
+            recording.segments.iter().flatten().count(),
+            1,
+            "configuration prefix1040 cannot retire source prefix1024"
+        );
+        // source raw1000 +source offset64 = mapped1064; subtract HUB offset32
+        // once to find raw1032 in the original hub recording segment.
+        let route = recording.route(clock, 1064, 1064.0 / 48000.0).unwrap();
+        assert_eq!(route.address, Some(RecordAddress { epoch: 1, pass: 1 }));
+        assert!((1064.0 / 48000.0 + route.time_offset - (20.0 + 32.0 / 48000.0)).abs() < 1e-12);
+        assert!(recording.route(clock, 1071, 0.0).unwrap().address.is_some());
+        // Explicit disarmed span stays distinct from a later recording segment.
+        capture.stop();
+        recorder.is_armed();
+        recording.captured_intent = 2;
+        recording.block_start = 1040;
+        recording.block_frames = 40;
+        recording.segment(&mut recorder, &timeline, None, 48000.0);
+        assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
+        capture.arm();
+        recorder.is_armed();
+        recording.captured_intent = recorder.capture_recording_intent();
+        recording.block_start = 1080;
+        recording.segment(&mut recorder, &timeline, Some(5.0), 48000.0);
+        assert_eq!(recording.route(clock, 1072, 0.0).unwrap().address, None);
+        let new_clock = ClockId { epoch: 4, ..clock };
+        assert!(recording.route(new_clock, 1064, 0.0).is_err());
+        assert!(recording.source_frontier(new_clock, 2000).is_err());
+        assert_eq!(recording.source_prefix, Some(1024));
+        recording.reset(&recorder);
+        recording.block_start = 0;
+        recording.block_frames = 64;
+        recording.segment(&mut recorder, &timeline, None, 48000.0);
+        assert!(
+            recording.route(clock, 32, 0.0).is_err(),
+            "old epoch raw32 must not match new epoch [0,64)"
+        );
     }
 }

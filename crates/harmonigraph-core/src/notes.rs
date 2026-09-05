@@ -7,6 +7,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::canonical::{
+    CanonicalEvent, InvalidCanonical, PublicationGap, SourceBaseline, VoiceBaseline,
+};
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
@@ -368,6 +371,8 @@ pub struct Voice {
     /// MIDI octave (C4 = middle C = note 60 → octave 4).
     pub octave: i8,
     pub on_time: Time,
+    /// Canonical accepted lifetime, absent for ordinary direct observations.
+    pub lifetime: Option<u64>,
     pub state: VoiceState,
     /// The moment this voice took the highest end, stamped as it LEFT the
     /// held set, and `None` if it was not wearing that end then (or is still
@@ -402,6 +407,7 @@ impl Voice {
             pitch_class: PitchClass::from_cents(0.0),
             octave: 0,
             on_time,
+            lifetime: None,
             state: VoiceState::Held,
             wore_high: None,
             wore_low: None,
@@ -580,11 +586,162 @@ pub struct NoteTracker {
     /// (see [`HeldEnd`] for why they are remembered rather than derived).
     high_end: Option<HeldEnd>,
     low_end: Option<HeldEnd>,
+    canonical: BTreeMap<SourceId, CanonicalCursor>,
+    hidden_sources: std::collections::BTreeSet<SourceId>,
+    baselines: BTreeMap<SourceId, SourceBaseline>,
+    gaps: Vec<PublicationGap>,
+    all_uncertain: bool,
+    uncertain_sources: std::collections::BTreeSet<SourceId>,
+    restored_sources: std::collections::BTreeSet<SourceId>,
+}
+
+fn baseline_matches(row: &VoiceBaseline, voice: &Voice) -> bool {
+    row.channel == voice.channel
+        && row.note == voice.note
+        && if row.lifetime == 0 {
+            voice.lifetime.is_none() && row.actual_onset == voice.on_time
+        } else {
+            voice.lifetime == Some(row.lifetime)
+        }
+}
+
+#[derive(Default)]
+struct CanonicalCursor {
+    output: u64,
+    baseline: u64,
+    state_cut: u64,
 }
 
 impl NoteTracker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Consume one canonical item. False identifies a duplicate, not a new
+    /// musical event. This non-RT consumer cannot acknowledge source journals.
+    pub fn handle_canonical(
+        &mut self,
+        event: CanonicalEvent<'_>,
+    ) -> Result<bool, InvalidCanonical> {
+        match event {
+            CanonicalEvent::Note(delta) => {
+                delta.validate()?;
+                if delta.sequence != 0 {
+                    let cursor = self.canonical.entry(delta.event.source).or_default();
+                    if delta.sequence <= cursor.output {
+                        return Ok(false);
+                    }
+                    // Available history must precede its baseline. A baseline
+                    // is not permission to silently discard late history.
+                    if delta.sequence <= cursor.state_cut {
+                        return Err(InvalidCanonical);
+                    }
+                    cursor.output = delta.sequence;
+                }
+                let key = delta.event.key();
+                if !matches!(
+                    delta.event.kind,
+                    NoteEventKind::On { .. }
+                        | NoteEventKind::SourceReset
+                        | NoteEventKind::SessionReset
+                ) && delta.lifetime != 0
+                    && self
+                        .held
+                        .get(&key)
+                        .is_some_and(|voice| voice.lifetime != Some(delta.lifetime))
+                {
+                    return Ok(true);
+                }
+                self.handle_event(delta.display_event());
+                if matches!(delta.event.kind, NoteEventKind::On { .. }) {
+                    if let Some(voice) = self.held.get_mut(&key) {
+                        voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
+                        if let Some(pitch) = delta.pitch_microcents {
+                            voice.set_pitch((pitch as f64 / 100_000_000.0) as f32);
+                            self.roll.bend(key, delta.event.time, voice.pitch);
+                        }
+                    }
+                    self.roll.set_lifetime(key, (delta.lifetime != 0).then_some(delta.lifetime));
+                    self.restamp_ends(delta.event.time);
+                }
+            }
+            CanonicalEvent::Baseline(frame) => return self.replace_source(frame),
+            CanonicalEvent::Gap(gap) => {
+                gap.validate()?;
+                if let Some(source) = gap.source {
+                    self.uncertain_sources.insert(source);
+                    self.restored_sources.remove(&source);
+                } else {
+                    self.all_uncertain = true;
+                    self.restored_sources.clear();
+                }
+                self.roll.gap(gap.source, gap.time);
+                self.held.retain(|key, _| gap.source.is_some_and(|source| key.source != source));
+                self.gaps.push(gap);
+                if self.gaps.len() > NoteRoll::MAX_NOTES {
+                    self.gaps.remove(0);
+                }
+                self.restamp_ends(gap.time);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Validate the entire held set before mutation. Matching lifetimes keep
+    /// their onset, bend history and held-end identity. Missing observations
+    /// are closed as history gaps, never fictional downstream releases.
+    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
+        frame.validate()?;
+        if self.canonical.get(&frame.source).is_some_and(|cursor| frame.id <= cursor.baseline) {
+            return Ok(false);
+        }
+        if self.canonical.get(&frame.source).is_some_and(|cursor| cursor.output > frame.output_cut)
+        {
+            return Err(InvalidCanonical);
+        }
+        let voices = frame.voices();
+        if frame.participating {
+            self.hidden_sources.remove(&frame.source);
+        } else {
+            self.hidden_sources.insert(frame.source);
+        }
+        self.roll.set_participating(frame.source, frame.participating);
+        self.roll.replace_source(frame.source, voices, frame.time);
+        self.held.retain(|key, voice| {
+            key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
+        });
+        for row in voices {
+            let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
+                let mut voice =
+                    Voice::new(frame.source, row.channel, row.note, row.velocity, row.actual_onset);
+                voice.lifetime = (row.lifetime != 0).then_some(row.lifetime);
+                voice
+            });
+            voice.set_pitch(row.pitch());
+        }
+        let cursor = self.canonical.entry(frame.source).or_default();
+        cursor.baseline = frame.id;
+        cursor.state_cut = frame.output_cut;
+        self.baselines.insert(frame.source, *frame);
+        self.uncertain_sources.remove(&frame.source);
+        self.restored_sources.insert(frame.source);
+        self.restamp_ends(frame.time);
+        Ok(true)
+    }
+
+    pub fn source_baseline(&self, source: SourceId) -> Option<&SourceBaseline> {
+        self.baselines.get(&source)
+    }
+
+    /// New note deltas establish individual lifetimes, never completeness of
+    /// a source after reporting loss. Only its complete baseline/reset does.
+    pub fn source_current_certain(&self, source: SourceId) -> bool {
+        !self.uncertain_sources.contains(&source)
+            && (!self.all_uncertain || self.restored_sources.contains(&source))
+    }
+
+    pub fn publication_gaps(&self) -> &[PublicationGap] {
+        &self.gaps
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
@@ -656,8 +813,22 @@ impl NoteTracker {
         // per-note tuning can bend a voice past its neighbour — the same
         // reason the notes pane sorts on pitch.
         let by_pitch = |a: &&Voice, b: &&Voice| a.pitch.total_cmp(&b.pitch);
-        self.high_end = took(self.high_end, self.held.values().max_by(by_pitch), now);
-        self.low_end = took(self.low_end, self.held.values().min_by(by_pitch), now);
+        self.high_end = took(
+            self.high_end,
+            self.held
+                .values()
+                .filter(|v| !self.hidden_sources.contains(&v.source))
+                .max_by(by_pitch),
+            now,
+        );
+        self.low_end = took(
+            self.low_end,
+            self.held
+                .values()
+                .filter(|v| !self.hidden_sources.contains(&v.source))
+                .min_by(by_pitch),
+            now,
+        );
     }
 
     /// Drop released voices whose fade has fully completed, folding each
@@ -682,7 +853,9 @@ impl NoteTracker {
             if voice.release_level(now, env) > 0.0 {
                 return true;
             }
-            history.record(voice, now);
+            if !self.hidden_sources.contains(&voice.source) {
+                history.record(voice, now);
+            }
             false
         });
     }
@@ -718,11 +891,14 @@ impl NoteTracker {
     /// envelope, and every held voice shares one — so an unspecified order
     /// is an unspecified picture.
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
-        self.held.values().chain(self.released.iter())
+        self.held
+            .values()
+            .chain(self.released.iter())
+            .filter(|v| !self.hidden_sources.contains(&v.source))
     }
 
     pub fn held_count(&self) -> usize {
-        self.held.len()
+        self.held.values().filter(|v| !self.hidden_sources.contains(&v.source)).count()
     }
 
     /// The highest held voice and when it took that end — the chord's top
@@ -738,6 +914,9 @@ impl NoteTracker {
     }
 
     pub fn session_notes_off(&mut self, now: Time) {
+        self.all_uncertain = false;
+        self.uncertain_sources.clear();
+        self.restored_sources.clear();
         self.roll.all_off(now);
         // Key order into `released`, which keeps its own order stable too —
         // a Vec built by draining a map inherits whatever order the map
@@ -753,6 +932,8 @@ impl NoteTracker {
     /// A source leaving/resetting cannot release another source's held set.
     /// Keep the same release fade and held-end stamps as a session reset.
     pub fn source_notes_off(&mut self, source: SourceId, now: Time) {
+        self.uncertain_sources.remove(&source);
+        self.restored_sources.insert(source);
         self.roll.source_off(source, now);
         let high = self.high_end;
         let low = self.low_end;

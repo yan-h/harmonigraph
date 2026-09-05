@@ -971,7 +971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1398,6 +1398,7 @@ dependencies = [
  "harmonigraph-take",
  "harmonigraph-ui",
  "libc",
+ "nice-assert-no-alloc",
  "nice-plug",
  "parking_lot",
  "raw-window-handle 0.5.2",
@@ -2079,6 +2080,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nice-assert-no-alloc"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a565fc41dece610aa5f63d5e03c34fc9997a69006c9bcfcb575fdca5c2c5e56"
+
+[[package]]
 name = "nice-log"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2115,7 +2122,7 @@ dependencies = [
  "serde_json",
  "vst3",
  "widestring",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2984,7 +2991,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4044,7 +4051,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

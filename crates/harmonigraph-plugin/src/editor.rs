@@ -12,7 +12,6 @@ use baseview::{Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::Context;
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, Queue, SizeSource};
-use harmonigraph_core::notes::NoteEvent as CoreNoteEvent;
 use harmonigraph_ui::SharedState;
 use nice_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle, ResizeHint};
 use parking_lot::Mutex;
@@ -50,6 +49,7 @@ pub(crate) struct ClockMapper {
     /// Estimated `gui_time - audio_time` (includes average delivery
     /// latency, which is fine: it's constant-ish, so spacing survives).
     offset: Option<f64>,
+    observed_audio: Option<f64>,
 }
 
 impl ClockMapper {
@@ -59,12 +59,16 @@ impl ClockMapper {
     const SMOOTHING: f64 = 0.05;
 
     pub fn new() -> Self {
-        ClockMapper { offset: None }
+        ClockMapper { offset: None, observed_audio: None }
     }
 
-    /// Feed one observation per drained batch: the newest audio timestamp
-    /// in the batch against the current GUI time.
+    /// Observe a fresh audio heartbeat, independently of historical delivery.
+    /// An idle polling pass must not re-anchor the last callback clock.
     pub fn observe(&mut self, newest_audio_time: f64, gui_now: f64) {
+        if self.observed_audio == Some(newest_audio_time) {
+            return;
+        }
+        self.observed_audio = Some(newest_audio_time);
         let candidate = gui_now - newest_audio_time;
         self.offset = Some(match self.offset {
             None => candidate,
@@ -74,6 +78,7 @@ impl ClockMapper {
     }
 
     /// Map an audio timestamp to GUI time (clamped: never in the future).
+    #[cfg(test)]
     pub fn map(&self, audio_time: f64, gui_now: f64) -> f64 {
         match self.offset {
             Some(offset) => (audio_time + offset).min(gui_now),
@@ -86,7 +91,7 @@ impl ClockMapper {
 /// and the GUI thread. Lives for the whole plugin lifetime; the editor
 /// window may open and close many times around it.
 pub struct EditorShared {
-    consumer: rtrb::Consumer<CoreNoteEvent>,
+    consumer: harmonigraph_record::publication::Consumer,
     /// Interleaved input frames from the audio thread (Spectral pane analyzer);
     /// `audio_channels` samples each.
     audio_consumer: rtrb::Consumer<f32>,
@@ -110,7 +115,6 @@ pub struct EditorShared {
     clock: ClockMapper,
     /// Reused per-frame drain scratch (events are batched so the clock
     /// observation can use the newest timestamp before mapping).
-    drain_buf: Vec<CoreNoteEvent>,
     /// Reused per-frame audio drain scratch.
     audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
@@ -135,7 +139,7 @@ pub struct EditorShared {
 
 impl EditorShared {
     pub fn new(
-        consumer: rtrb::Consumer<CoreNoteEvent>,
+        consumer: harmonigraph_record::publication::Consumer,
         audio_consumer: rtrb::Consumer<f32>,
         sample_rate_bits: Arc<AtomicU32>,
         audio_channels: Arc<AtomicU32>,
@@ -150,7 +154,6 @@ impl EditorShared {
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
             clock: ClockMapper::new(),
-            drain_buf: Vec::new(),
             audio_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
@@ -299,27 +302,40 @@ impl EditorShared {
     }
 
     /// Drain note events from the audio thread into the tracker, mapping
-    /// their sample-clock timestamps onto the GUI clock. The batch is
-    /// collected FIRST so the mapper can observe the newest timestamp
-    /// before mapping any event — that ordering is what preserves
-    /// intra-batch spacing (a fast run of notes must not quantize to GUI
-    /// frames). Returns true when events arrived, in which case the
+    /// their sample-clock timestamps onto the GUI clock. A fresh audio
+    /// heartbeat anchors the whole stream before historical records are
+    /// mapped; delayed batches never reset that anchor. Returns true when
+    /// events arrived, in which case the
     /// caller should repaint this tick rather than at the idle poll.
     fn drain_into_tracker(&mut self, now: f64) -> bool {
-        self.drain_buf.clear();
-        while let Ok(event) = self.consumer.pop() {
-            self.drain_buf.push(event);
+        if let Some(observation) = self.consumer.clock() {
+            self.clock.observe(observation, now);
         }
-        let Some(newest) = self.drain_buf.last() else {
-            return false;
-        };
-        self.clock.observe(newest.time, now);
-        for event in &self.drain_buf {
-            let mut event = *event;
-            event.time = self.clock.map(event.time, now);
-            self.ui.tracker.handle_event(event);
-        }
-        true
+        let Some(offset) = self.clock.offset else { return false };
+        let tracker = &mut self.ui.tracker;
+        self.consumer.drain(|delivery, _, _| {
+            use harmonigraph_core::canonical::CanonicalEvent;
+            if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
+                let result = match event {
+                    CanonicalEvent::Note(mut delta) => {
+                        delta.event.time += offset;
+                        tracker.handle_canonical(CanonicalEvent::Note(delta))
+                    }
+                    CanonicalEvent::Baseline(baseline) => {
+                        let mut mapped = *baseline;
+                        mapped.translate(offset);
+                        tracker.replace_source(&mapped)
+                    }
+                    CanonicalEvent::Gap(mut gap) => {
+                        gap.time += offset;
+                        gap.through += offset;
+                        tracker.handle_canonical(CanonicalEvent::Gap(gap))
+                    }
+                };
+                debug_assert!(result.is_ok(), "validated canonical publication");
+            }
+            true
+        }) != 0
     }
 
     /// Drain the audio sample ring into the spectrum analyzer.
@@ -1054,7 +1070,7 @@ mod tests {
         // drained voices must land on the GUI clock with their intra-batch
         // spacing intact. (This is the integration the ClockMapper unit
         // tests below can't cover: observe-newest-THEN-map ordering.)
-        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (mut producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
@@ -1066,9 +1082,30 @@ mod tests {
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         for (source, time) in [(1, 99.950), (2, 99.995)] {
-            producer.push(NoteEvent::on(time, SourceId(source), 0, 60, 1.0)).unwrap();
+            let event = NoteEvent::on(time, SourceId(source), 0, 60, 1.0);
+            producer
+                .note(
+                    harmonigraph_core::canonical::NoteDelta {
+                        event,
+                        sequence: 1,
+                        lifetime: 1,
+                        provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
+                        timing: Some(harmonigraph_core::canonical::EventTiming {
+                            clock: Default::default(),
+                            input: 0,
+                            planned: None,
+                            sample: 0,
+                            sample_rate: 48000.0,
+                        }),
+                        pitch_microcents: None,
+                    },
+                    99.995,
+                    Default::default(),
+                )
+                .unwrap();
         }
 
+        producer.observe_clock(99.995);
         assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
         let mut on_times: Vec<f64> = shared.ui.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
@@ -1079,6 +1116,42 @@ mod tests {
 
         // Empty ring: no work, no repaint request.
         assert!(!shared.drain_into_tracker(7.1));
+        producer.observe_clock(11.0);
+        // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
+        // at GUI=12; neither its batch nor a later idle poll is a new clock.
+        let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
+        producer.note(event.into(), 11.0, Default::default()).unwrap();
+        assert!(shared.drain_into_tracker(21.0));
+        assert_eq!(
+            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            12.0
+        );
+        assert!(!shared.drain_into_tracker(22.0));
+        use harmonigraph_core::canonical::{ChannelBaseline, SourceBaseline, VoiceBaseline};
+        let baseline = SourceBaseline::new(
+            SourceId::DIRECT,
+            1,
+            3.0,
+            0.0,
+            0,
+            true,
+            &[VoiceBaseline {
+                note: 72,
+                actual_onset: 2.0,
+                input_onset: 2.0,
+                velocity: 0.8,
+                pitch_microcents: 7_200_000_000,
+                ..Default::default()
+            }],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        producer.baseline(0, &baseline, 11.0, Default::default()).unwrap();
+        shared.drain_into_tracker(22.1);
+        let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
+        assert_eq!(note.start, 12.0);
+        assert!(note.history_complete, "baseline retains the matching observed lifetime");
+        assert_eq!(shared.ui.tracker.source_baseline(SourceId::DIRECT).unwrap().time, 13.0);
     }
 
     /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on
@@ -1090,7 +1163,7 @@ mod tests {
     /// them while costing every note played the latency of the idle poll.
     #[test]
     fn catch_up_answers_whether_notes_arrived() {
-        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (mut producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
@@ -1105,7 +1178,10 @@ mod tests {
         // An empty ring is not a repaint.
         assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
 
-        producer.push(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0)).unwrap();
+        producer.observe_clock(1.0);
+        producer
+            .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), 1.0, Default::default())
+            .unwrap();
         assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
 
         // And the ring is empty again, so the next tick asks for nothing.
@@ -1204,7 +1280,7 @@ mod tests {
     /// nor the params — so this exists only to satisfy the constructor, in one
     /// place rather than once per test.
     fn a_window() -> WindowState {
-        let (_producer, consumer) = rtrb::RingBuffer::new(1);
+        let (_producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(1);
         let (_recorder, take_control) = harmonigraph_record::channel();
         WindowState::new(

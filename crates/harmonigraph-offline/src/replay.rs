@@ -94,11 +94,11 @@ impl Replay {
             self.next_configuration += 1;
         }
 
-        while let Some(record) = self.take.notes.get(self.next_note) {
-            if record.t > now {
+        while let Some(record) = self.take.events.get(self.next_note) {
+            if record.time() > now {
                 break;
             }
-            state.tracker.handle_event((*record).into());
+            record.apply(&mut state.tracker).expect("validated canonical take");
             self.next_note += 1;
         }
 
@@ -122,15 +122,15 @@ impl Replay {
     /// the notes and their bends, exactly as the live tracker builds it.
     pub fn full_roll(&self) -> harmonigraph_core::NoteRoll {
         let mut tracker = harmonigraph_core::NoteTracker::new();
-        for record in &self.take.notes {
-            tracker.handle_event((*record).into());
+        for record in &self.take.events {
+            record.apply(&mut tracker).expect("validated canonical take");
         }
         tracker.roll().clone()
     }
 
     /// Whether every recorded event has been delivered.
     pub fn is_spent(&self) -> bool {
-        self.next_note == self.take.notes.len()
+        self.next_note == self.take.events.len()
             && self.next_param == self.take.params.len()
             && self.next_configuration == self.take.configurations.len()
     }
@@ -145,10 +145,11 @@ mod tests {
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
             header: Header::default(),
-            notes,
+            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
             params,
             configurations: Vec::new(),
             truncated: false,
+            incomplete: None,
         }
     }
 
@@ -158,6 +159,175 @@ mod tests {
 
     fn off(t: f64, note: u8) -> NoteRecord {
         NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::Off }
+    }
+
+    #[test]
+    fn canonical_serialization_has_one_history_at_every_replay_cadence() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::confirmed::PitchProvenance;
+        use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
+        use harmonigraph_take::{CanonicalRecord, Record};
+        let source = SourceId(1);
+        let delta = |event: NoteEvent, sequence| {
+            CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
+                event,
+                sequence,
+                lifetime: 61,
+                provenance: PitchProvenance::AcceptedOutput,
+                timing: Some(EventTiming {
+                    clock: ClockId { runtime_session: 7, epoch: 3 },
+                    input: (event.time * 48000.0) as i64 - 32,
+                    planned: None,
+                    sample: (event.time * 48000.0) as i64,
+                    sample_rate: 48000.0,
+                }),
+                pitch_microcents: None,
+            }))
+        };
+        let first = delta(NoteEvent::on(0.01, source, 0, 60, 0.8), 1);
+        let empty = SourceBaseline::new(
+            source,
+            1,
+            0.08,
+            0.0,
+            3,
+            true,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let row = VoiceBaseline {
+            note: 60,
+            lifetime: 61,
+            input_onset: 0.09,
+            actual_onset: 0.1,
+            onset: Some(EventTiming {
+                clock: ClockId { runtime_session: 7, epoch: 3 },
+                input: 4320,
+                planned: None,
+                sample: 4800,
+                sample_rate: 48000.0,
+            }),
+            pitch_microcents: 6_025_000_000,
+            velocity: 0.8,
+            provenance: PitchProvenance::AcceptedOutput,
+            ..Default::default()
+        };
+        let held = SourceBaseline::new(
+            source,
+            2,
+            0.15,
+            0.08,
+            5,
+            true,
+            &[row],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let recovered = SourceBaseline::new(
+            source,
+            3,
+            0.3,
+            0.3,
+            8,
+            true,
+            &[row],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let events = [
+            first.clone(),
+            first,
+            delta(
+                NoteEvent {
+                    time: 0.02,
+                    source,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Tuning { semitones: 0.25 },
+                },
+                2,
+            ),
+            delta(NoteEvent::off(0.07, source, 0, 60), 3),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
+            delta(NoteEvent::on(0.1, source, 0, 60, 0.8), 4),
+            delta(
+                NoteEvent {
+                    time: 0.11,
+                    source,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Tuning { semitones: 0.25 },
+                },
+                5,
+            ),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&held)),
+            CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
+                source: Some(source),
+                time: 0.2,
+                through: 0.29,
+                first: 6,
+                last: 8,
+                reason: GapReason::PublicationFull,
+            })),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&recovered)),
+            delta(NoteEvent::off(0.4, source, 0, 60), 9),
+        ];
+        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for event in events {
+            encoded.push('\n');
+            encoded.push_str(&ron::to_string(&Record::Canonical(event)).unwrap());
+        }
+        let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
+        assert!(take.incomplete.is_some());
+        let roll_snapshot = |roll: &harmonigraph_core::NoteRoll| {
+            roll.notes()
+                .map(|n| {
+                    (
+                        n.source,
+                        n.lifetime,
+                        n.start,
+                        n.end,
+                        n.observed_until,
+                        n.history_complete,
+                        n.settled_pitch(),
+                        n.segments(0.5).collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut expected = None;
+        for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
+            let mut replay = Replay::new(take.clone());
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut now = 0.0;
+            while now < 0.5 {
+                replay.advance_to(&mut state, now);
+                now += cadence;
+            }
+            replay.advance_to(&mut state, 0.5);
+            assert!(replay.is_spent());
+            let snapshot = roll_snapshot(state.tracker.roll());
+            assert_eq!(snapshot, roll_snapshot(&replay.full_roll()));
+            assert_eq!(snapshot.len(), 2);
+            assert_eq!((snapshot[0].2, snapshot[0].3, snapshot[0].6), (0.01, Some(0.07), 60.25));
+            assert_eq!(
+                (snapshot[1].2, snapshot[1].3, snapshot[1].4, snapshot[1].5),
+                (0.1, Some(0.4), None, false)
+            );
+            assert!(snapshot[1].7.iter().any(|segment| segment.0 .0 == 0.3));
+            assert!(
+                !snapshot[1].7.iter().any(|segment| segment.0 .0 < 0.3 && segment.1 .0 > 0.2),
+                "one recovered lifetime preserves the gap without a duplicate cache identity"
+            );
+            assert_eq!(state.tracker.publication_gaps().len(), 1);
+            assert_eq!(state.tracker.source_baseline(source).unwrap(), &recovered);
+            if let Some(ref expected) = expected {
+                assert_eq!(&snapshot, expected);
+            } else {
+                expected = Some(snapshot);
+            }
+        }
     }
 
     #[test]
@@ -275,7 +445,7 @@ mod tests {
         }
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
         assert!(!take.truncated);
-        assert_eq!(take.notes.iter().copied().map(NoteEvent::from).collect::<Vec<_>>(), events);
+        assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
         let mut replay = Replay::new(take);
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
         replay.advance_to(&mut state, 0.5);
