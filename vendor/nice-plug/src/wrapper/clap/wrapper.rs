@@ -434,6 +434,13 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
                     // following the specification is probably a good idea regardless :)
                     if self.is_activated.load(Ordering::SeqCst) {
                         self.latency_changed.store(true, Ordering::SeqCst);
+                        if P::CLAP_PROCESS_TRACE {
+                            eprintln!(
+                                "[clap-probe lifecycle] pid={} class={} instance={:p} request_restart reason=latency_changed processing={}",
+                                std::process::id(), P::CLAP_ID, self,
+                                self.is_processing.load(Ordering::SeqCst),
+                            );
+                        }
                         unsafe_clap_call! { &*self.host_callback=>request_restart(&*self.host_callback) };
                     } else {
                         unsafe_clap_call! { host_latency=>changed(&*self.host_callback) };
@@ -3347,9 +3354,17 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
         };
 
-        if wrapper.current_process_mode.swap(mode) != mode
-            && wrapper.is_activated.load(Ordering::SeqCst)
-        {
+        let previous_mode = wrapper.current_process_mode.swap(mode);
+        let activated = wrapper.is_activated.load(Ordering::SeqCst);
+        if P::CLAP_PROCESS_TRACE {
+            // This CLAP main-thread call must not share the audio producer's trace ring.
+            eprintln!(
+                "[clap-probe lifecycle] pid={} class={} instance={:p} render_set previous={:?} mode={:?} activated={} processing={} request_restart={}",
+                std::process::id(), P::CLAP_ID, wrapper, previous_mode, mode, activated,
+                wrapper.is_processing.load(Ordering::SeqCst), previous_mode != mode && activated,
+            );
+        }
+        if previous_mode != mode && activated {
             // We may change process mode while activated. In that case, restart the audio processor
             // so the plugin can react to the process mode change in `Plugin::initialize`.
             unsafe_clap_call! { &*wrapper.host_callback=>request_restart(&*wrapper.host_callback) };
