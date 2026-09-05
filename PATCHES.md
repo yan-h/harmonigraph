@@ -11,7 +11,11 @@ An atomic counter records actual latency queries without calling the plugin unde
 Ordinary plugins keep the flag false, compiling out processing observations.
 - **Why**: #615 cannot infer a shared clock or callback boundaries from Rust `Plugin::process()` counters.
 The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifies the actual CLAP wrapper through an exported-factory fixture.
-- **Upgrade**: replace the vendored upstream files, retain the standalone `[workspace]` table, and reapply the hook sites.
+- **Patch 2** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
+The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
+This fixes the Bitwig offline-export stall measured by #615;
+the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
+- **Upgrade**: replace the vendored upstream files, retain the standalone `[workspace]` table, and reapply the hook sites and activation notification ordering.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
