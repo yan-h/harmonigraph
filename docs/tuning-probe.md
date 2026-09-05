@@ -5,7 +5,12 @@ Status:
 fixed 128/512/1,024-sample buffers at 44.1 kHz, calibrated fixed routing and continuous callbacks, with D = 2,048 samples.
 Production late-stream and transport-stop behavior remains an explicit #616 contract question, recorded in [#632](https://github.com/yan-h/harmonigraph/issues/632).
 The selected design lives in [adaptive-tuning.md](adaptive-tuning.md).
-This document describes a disposable experiment, not an implementation of #616 or #617.
+This document describes a disposable experiment, not an implementation of #616 or #617. The [frozen evidence archive](evidence/615/README.md) preserves the measured sources, captures and reproduction fixtures independently of this probe's future lifetime.
+
+Keep the optional apparatus while it is needed for lower-delay measurements or #632's retiming and stop experiments.
+When production tests cover its useful timing, lifecycle and host-boundary cases, remove the duplicate probe implementation, analysis command, feature wiring and unused trace hooks.
+Retain the measured findings and the CLAP activation-ordering fix with a focused regression test that does not require the retired apparatus.
+The archived source bundle preserves the original experiments after that removal.
 
 ## Build and configure
 

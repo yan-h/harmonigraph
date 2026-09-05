@@ -54,8 +54,9 @@ Note IDs are present and the source keys are 60, 64 and 67. The initial accident
 
 The candidate delay was fixed at 2,048 samples per activation, or 46.440 ms. Unless noted otherwise, every source requested continuous callbacks and published silence progress.
 All clock offsets initially equalled zero.
-The raw evidence and disposable projects are locally archived under `/tmp/harmonigraph-615-evidence`;
-the directory numbers below identify separate closed trace sets.
+The [evidence archive](evidence/615/README.md) preserves the raw traces, disposable projects, analyses and measured source history with checksums and a run index.
+The original capture directory was `/tmp/harmonigraph-615-evidence`;
+the directory numbers below identify separate closed trace sets in the archive.
 
 ## Completed scheduling trials
 
