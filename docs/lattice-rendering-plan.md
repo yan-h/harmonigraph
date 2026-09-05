@@ -6,7 +6,7 @@ Tracking issue:
 [#643](https://github.com/yan-h/harmonigraph/issues/643).
 This records the audit and prioritization at `8d1ce70b` on 2026-09-05;
 the component issues hold implementation scope, reproduction details and acceptance criteria.
-The sequencing and constraints incorporate the supported findings from the requested Claude Opus/xhigh review on the same date.
+The sequencing and constraints incorporate the supported findings from the requested Claude Opus/xhigh and independent Astra reviews on the same date.
 The documentation does not implement the renderer changes or approve a different look.
 
 Preserve the core → scene → render boundaries and the shared live/offline picture.
@@ -21,12 +21,13 @@ The order favors bounded changes with direct evidence before new caches or GPU a
 | Order / gate | Component slice | Effort | Expected return | Visual acceptance |
 |---|---|---|---|---|
 | 1 | [#642 A: complete the total GPU bracket](https://github.com/yan-h/harmonigraph/issues/642) | Small | Measure all lattice preparation before pricing changes | Unchanged |
-| 2 | [Cull glow-free blur instances](https://github.com/yan-h/harmonigraph/issues/641) | Very small | Remove confirmed redundant work with one consistent eligibility rule; timing gain remains uncertain | Unchanged; two scratch fixtures compared byte-exact |
+| 2 | [Cull glow-free blur instances](https://github.com/yan-h/harmonigraph/issues/641) | Very small | Reuse the strip stage's glow predicate to remove confirmed redundant work; timing gain remains uncertain | Unchanged; two scratch fixtures compared byte-exact |
 | 3 | [#644 A: discard the unused depth store](https://github.com/yan-h/harmonigraph/issues/644) | Very small | Remove the requirement to preserve an unread attachment after the pass | Unchanged painter order |
 | 4 | [#645 A: allocate/write bloom attachments only when needed](https://github.com/yan-h/harmonigraph/issues/645) | Small–medium | Avoid the nodes-only attachment and bloom chain while off, including redundant color writes/stores | Unchanged labels, node illumination and bloom on/off/on |
 | 5 | [#644 B: remove the depth attachment and pipeline state](https://github.com/yan-h/harmonigraph/issues/644) | Small–medium | Certain allocation reduction and simpler pipeline state | Unchanged across production, reference and hot-reload pipelines |
 | Early, independent | [#648 A: reuse CPU scratch buffers](https://github.com/yan-h/harmonigraph/issues/648) | Small–medium | Reduce allocation churn where measured; no retained musical answers | Unchanged scenes and frame payloads |
-| After #617 | [#645 B: separate history ownership, then C: retire hidden targets](https://github.com/yan-h/harmonigraph/issues/645) | Medium–large | Main ownership investment; retire large resources without losing small temporal history | Unchanged through resize, row growth/reuse, eviction/reappearance and releases |
+| After the first GPU batch; renderer-only scope can precede #617 | [#645 B: separate history ownership](https://github.com/yan-h/harmonigraph/issues/645) | Medium | Remove viewport-driven history transfer while preserving existing scene inputs and CPU row allocation | Preserve same-capacity resize carry and the current growth/reseed baseline |
+| After B and coordinated with integrated #617 | [#645 C: retire hidden targets](https://github.com/yan-h/harmonigraph/issues/645) | Medium | Retire large resources while retaining small temporal history | Preserve release color and elapsed-time behavior through hiding/reappearance |
 | After the first GPU batch | [Name uniform groups and validate layouts](https://github.com/yan-h/harmonigraph/issues/646) | Medium | Safer shader changes; essentially neutral runtime cost; needs component-level coverage as well as layout checks | Unchanged, including blit prefix layout |
 | After #617, measured | [#648 B: consider musical caching/indexing](https://github.com/yan-h/harmonigraph/issues/648) | Medium–large | Only retain optimizations that repay their maintenance cost at actual aggregated workloads | Unchanged matching, ties, configuration and lifecycle behavior |
 | As measurements need it | [#642 B: detailed stage timing and counters](https://github.com/yan-h/harmonigraph/issues/642) | Medium | Attribute residual cost with query allocation for the passes that execute | Unchanged; asynchronous timing remains isolated per owner |
@@ -63,9 +64,17 @@ Discarding history at unchanged capacity gets no automatic reseed signal and can
 Retain that fading color deliberately;
 a new empty strip cannot reconstruct it from current ink alone.
 
+Capacity growth has a different baseline from same-capacity resize:
+the current implementation creates a new strip and reseeds every row from current ink, so a release with no current ink can lose its color on growth.
+This follows from the source;
+the review did not run a dedicated growth reproduction.
+The ownership refactor in #645 B preserves this existing growth/reseed behavior.
+Preserving old colors across growth would be a separately scoped visual change, with a fixture that crosses a capacity boundary during a glow-only release and explicit acceptance of changed output.
+
 Target eviction must also define what happens when the last lattice view disappears;
 an age counter advanced only by another lattice callback cannot observe that case.
 Settle history ownership before adding eviction, including coordinated CPU/GPU retirement if history itself is ever discarded.
+Preserve how `GlowFade::step` uses elapsed time on reappearance rather than implicitly freezing hidden time or restarting the fade.
 The current surface identities bound the pane map;
 the problem is retained large allocations rather than an established unbounded leak.
 
@@ -106,7 +115,8 @@ Recheck the current heads and active write set before beginning an implementatio
 | Total timing, blur cull, depth discard/removal and optional bloom | Now, after the overlap check; preserve the current scene/event/configuration inputs |
 | CPU scratch-buffer reuse | Now if confined to storage reuse with unchanged semantics; check `scene/derive.rs` and frame-builder overlap rather than assuming different crate names make work disjoint |
 | Uniform cleanup and detailed timing | Independent of auto-tuning; sequence behind the first GPU batch or when a measurement needs more detail |
-| Combined history/view lifecycle refactor and broad frame/shared-state extraction | Start from integrated #617, including canonical recovery, to avoid concurrent interface changes; separately preserve the renderer's row/history handshake, which #617 does not solve |
+| Renderer-only history ownership (#645 B) | Can precede #617 after an overlap check if `Scene::glow_rows`, instance inputs, the CPU row allocator and `SharedState` stay unchanged; serialize with other renderer work |
+| Hidden-view retirement (#645 C), UI/shared-state history changes and broad frame/shared-state extraction | Use integrated #617, including canonical recovery, as the coordination boundary; C also follows B, and #617 does not solve the renderer's row/history handshake |
 | CPU caches and indexed musical matching | Start from integrated #617 inputs and remeasure the aggregated workload; no need to wait for #621's scoring constants |
 | Convolution or resolution experiments | When their performance/resource prerequisites justify them; completion of auto-tuning is not their gate |
 
@@ -167,9 +177,12 @@ Use sufficiently large windows and actual source/configuration/recovery transiti
 Held voices do not bound glowing nodes:
 `derive_scene` lights every matching lattice position, and `GlowFade` retains releasing nodes after their current ink disappears.
 The current glow row allocator caps rows at 4096, so measure actual lit-row counts after the cull rather than using 256 voices as a convolution-work ceiling.
+That allocator bound is not evidence that ordinary scenes reach it.
 
 The angular kernel has 64 distinct relative weights in exact arithmetic;
 its normalization is shared by the 64 circular output columns, with a separate flat mean column.
+Only the kernel normalization `lobes` is shared this way;
+the ink-dependent `wsum` still varies with each row and output column.
 Evaluate reuse of those weights and their normalization together before a compute rewrite.
 Hoisting a normalization shared between fragments still needs a concrete precomputation/storage path, and floating-point reordering needs numerical verification.
 Retain #651 as a last, measured option rather than dropping it on an invalid voice-count bound.
@@ -182,9 +195,10 @@ Convolution arithmetic changes require numerical comparison, and lower-resolutio
 
 Static frames alone cannot verify resource or cache lifetime changes.
 Exercise a fading glow with no current ink, row growth/reuse, resize and render-scale changes, feature toggles, hidden-view reappearance, simultaneous dock/preview views and offline replay.
+Keep same-capacity resize, bloom toggles during a release, and capacity growth as distinct fixtures so preservation of the existing growth baseline is not mistaken for preserving color through growth.
 Source/configuration work also needs independent same-channel/key sources, expression changes, source removal/recovery and coherent effective tuning.
 Select focused fixtures for the behavior each component changes rather than adding a copy of every test to every PR.
 
 Each implementation records its actual CPU/GPU/allocation effects and the limits of the measurement.
-Keep painter order, each label's shadow/ink position, label exclusion from bloom and per-surface history intact.
+Keep painter order, each label's shadow/ink position, label exclusion from bloom and per-surface history behavior intact.
 Plugin-visible changes retain the repository's normal two-package release build, loadable handoff and draft-PR requirements.
