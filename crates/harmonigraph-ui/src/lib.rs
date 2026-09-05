@@ -227,6 +227,12 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
+    if !state.tracker.publication_gaps().is_empty() {
+        ui.colored_label(
+            egui::Color32::from_rgb(240, 180, 70),
+            "Some note history is missing. Current notes may be incomplete until their source recovers.",
+        );
+    }
     if let Some(stranded) = end_stranded_drag(ui.ctx()) {
         state.console.log(stranded);
     }

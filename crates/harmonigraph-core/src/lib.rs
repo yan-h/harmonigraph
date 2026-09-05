@@ -19,6 +19,7 @@
 //! functions and constants are reached through their module
 //! (`harmonigraph_core::tuning::microcents`, `harmonigraph_core::coords::positions_within`).
 
+pub mod canonical;
 pub mod configuration;
 pub mod confirmed;
 pub mod coords;

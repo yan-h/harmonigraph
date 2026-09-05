@@ -301,10 +301,11 @@ mod tests {
         }
         Take {
             header: Header::default(),
-            notes,
+            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
+            incomplete: None,
         }
     }
 

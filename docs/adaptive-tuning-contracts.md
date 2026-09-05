@@ -730,7 +730,8 @@ do not truncate identifiers, exact pitch or timestamps to make a guessed size pa
 | Source outcome journals | `16 * 4096 * 128` | 8,388,608 |
 | Hub plan ledger | `131072 * 256` | 33,554,432 |
 | Hub input and output windows | `17 * (1024 + 2048) * 128` | 6,684,672 |
-| Canonical publication ring | `4096 * 128` | 524,288 |
+| Canonical publication and display fanout rings | `2 * 4096 * 256` | 2,097,152 |
+| Separate publication baseline banks | `2 * 17 * 2 * 16384` | 1,114,112 |
 | Confirmed/prospective history | `2 * 34816 * 64` | 4,456,448 |
 | Local voice, emergency and two baseline sets | `17 * 4 * 64 * 256` | 1,114,112 |
 | Hub confirmed/prospective voices | `2 * 256 * 256` | 131,072 |
@@ -742,9 +743,11 @@ do not truncate identifiers, exact pitch or timestamps to make a guessed size pa
 | Control/channel frames | `17 * (4*256 + 16*256)` | 87,040 |
 | Policy scratch reservation | `4 * 1024 * 1024` | 4,194,304 |
 
-The calculated subtotal is 130,029,056 bytes (about 124.01 MiB).
+The calculated subtotal is 132,716,032 bytes (about 126.57 MiB).
 The [production CLAP boundary](adaptive-tuning-clap-performance.md) raises only the wrapper input-cell ceiling to 192 bytes to retain full transport and original provenance in its single input pool;
 other event/intent/output record ceilings remain 128 bytes.
+The [canonical consumer boundary](adaptive-tuning-canonical-recovery.md) budgets two separate 256-byte publication/fanout rings and two complete owned baseline banks, independent of musical recovery storage.
+Its measured cells are 176 bytes and complete payload slots 15,304 bytes, below the 256-byte and 16-KiB ceilings.
 Reserve another **16 MiB** for ring headers/endpoint owners, alignment, arena allocator overhead, free lists, dependency/ready indices, cohort edges and diagnostic counters.
 That allowance also covers the fixed registry attachment slots:
 at most `(64 tuner + 4 hub instances) * 4 slots * 256 bytes = 69,632 bytes` process-wide, charged once rather than duplicated on each adoption.

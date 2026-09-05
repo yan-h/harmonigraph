@@ -266,10 +266,11 @@ impl Shot {
         (cfg.low_midi, cfg.high_midi) = self.range;
         Take {
             header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-            notes: Vec::new(),
+            events: Vec::new(),
             params: Vec::new(),
             configurations: Vec::new(),
             truncated: false,
+            incomplete: None,
         }
     }
 
@@ -377,7 +378,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         width: 0.75,
         depth: 0.85,
     };
-    let notes = [60u8, 64, 67, 72]
+    let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
         .map(|note| NoteRecord {
             source: 0,
@@ -389,10 +390,11 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes,
+        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
         configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     check_take("spectrogram-spectral-shadows-mixed", shot, take);
 }
@@ -453,10 +455,11 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     (cfg.low_midi, cfg.high_midi) = whole_axis();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes: Vec::new(),
+        events: Vec::new(),
         params: Vec::new(),
         configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
     if drawn == Drawn::Sliver {
@@ -535,7 +538,7 @@ fn spectral_shadow_frame_ms(
         harmonigraph_scene::ShadowStyle { kernel: geometry, width: 0.75, depth: 0.85 };
     state.view.shadow.spectral_text =
         harmonigraph_scene::ShadowStyle { kernel: text, width: 0.75, depth: 0.85 };
-    let notes = [60u8, 64, 67, 72]
+    let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
         .map(|note| NoteRecord {
             source: 0,
@@ -547,10 +550,11 @@ fn spectral_shadow_frame_ms(
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes,
+        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
         configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     let settings = Settings {
         layout: Layout::preset("spectral").expect("the spectral preset exists"),

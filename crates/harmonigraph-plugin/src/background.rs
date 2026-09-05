@@ -298,6 +298,11 @@ fn run(
         rounds.fetch_add(1, Ordering::Release);
         std::thread::sleep(POLL);
     }
+    // Destruction follows host callback quiescence. Consume the final owned
+    // display payloads before the editor's bank is reclaimed off thread.
+    let mut shared = shared.lock();
+    let now = shared.now();
+    shared.catch_up(now);
 }
 
 #[cfg(test)]
@@ -314,7 +319,7 @@ mod tests {
     /// host restores a project's settings into.
     struct Harness {
         shared: Arc<Mutex<EditorShared>>,
-        notes: rtrb::Producer<CoreNoteEvent>,
+        notes: harmonigraph_record::publication::Publisher,
         audio: rtrb::Producer<f32>,
         editor_state: Arc<EguiState>,
         /// The host's end of `params.ui_state`.
@@ -325,7 +330,7 @@ mod tests {
     }
 
     fn harness() -> Harness {
-        let (notes, note_consumer) = rtrb::RingBuffer::new(crate::EVENT_RING_CAPACITY);
+        let (notes, note_consumer) = harmonigraph_record::publication::channel();
         let (audio, audio_consumer) = rtrb::RingBuffer::new(crate::AUDIO_RING_CAPACITY);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let shared = EditorShared::new(
@@ -398,8 +403,13 @@ mod tests {
         }
 
         fn push_kind(&mut self, time: f64, note: u8, kind: NoteEventKind) {
+            self.notes.observe_clock(time);
             self.notes
-                .push(CoreNoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind })
+                .note(
+                    CoreNoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind }.into(),
+                    time,
+                    Default::default(),
+                )
                 .expect("the ring is sized for this");
         }
 
