@@ -8,9 +8,12 @@ GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the des
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
 The policy's scoring constants and musical iteration belong to #621;
-the host time mapping and fixed delay remain conditional on #615's measurements.
-Late-note retiming and finite-buffer exhaustion need explicit contracts in #616 before implementation;
-the selected failure behavior is to delay an unresolved note and report the failure, never substitute an unretuned attack or silently drop it.
+[#630](https://github.com/yan-h/harmonigraph/pull/630) established a constrained working host configuration, not the minimum reliable delay.
+Yan has accepted the latency target, late-track behavior, stop/Off rules, emergency stop at capacity and restricted routing recovery below.
+The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
+those mechanics must satisfy these product decisions before adaptive output is complete.
+An ordinary late assignment retains its attack and reports the failure;
+explicit cancellation and the visible emergency stop are the documented exceptions.
 
 ## Design priorities
 
@@ -41,7 +44,7 @@ A later implementation should not broaden a row merely because its rejected bran
 | Pitch output | CLAP per-note tuning expression only | MTS-ESP, MPE or VST3 note output | Matches sample-timed per-voice frozen assignments and the actual personal host while adding no external tuning service; Bitwig converts a note effect's per-note pitch to MPE or VST3 note expression for the instrument downstream, so the instrument's format is not restricted | A required instrument cannot consume it or #615 disproves reliable delivery |
 | Session transport | In-process registry under a documented Bitwig hosting mode | Cross-process shared memory | Avoids process discovery, crash recovery and stale shared state for compatibility that is not currently needed | #615 shows no usable in-process topology or a concrete workflow requires another hosting mode |
 | Hub ownership | Full Harmonigraph, normally on Master | Headless conductor or elected tuner peer | Reuses the existing configuration, display, take and combined-audio location without another authority or plugin role | The hub cannot remain active in the supported graph or a project demonstrably needs tuning without a full Harmonigraph |
-| Missed assignment deadline | Keep the note pending, accept its valid late assignment and report a failure | Drop it or emit it unretuned at the deadline | Yan prefers extra latency to either missing or incorrectly tuned notes | No automatic fallback; persistent failure and finite-buffer exhaustion require an explicit product decision |
+| Missed assignment deadline | Keep the note pending, accept its valid late assignment and report a failure | Drop it or emit it unretuned at the deadline | Yan prefers extra latency to either missing or incorrectly tuned notes | Lateness alone never changes this rule; actual capacity exhaustion uses the separate visible emergency stop |
 | Participation UI | One Participating/Off control | Independent visibility, context and retune switches | Minimizes persisted states, combinations and tests before anchors or monitor-only tracks have a concrete musical contract | A real project requires a specific excluded combination |
 | Policy location | One pure sequential policy in the hub | Distributed tuner evaluation of shared state | One owner has the complete ordered input and all preceding assignments; tuners buffer and emit answers | The measured hub work budget cannot support the chosen policy |
 
@@ -68,8 +71,8 @@ The first implementation ships a separate lightweight tuner plugin class rather 
 That keeps the pre-instrument instance free of the analyzer, audio rings, recorder, renderer and editor.
 Both classes are exported from the one existing bundle, `nice_export_clap!(Harmonigraph, HarmonigraphTune)`, because a process-wide registry is shared only inside one dylib;
 the loader scripts see the same bundle they see today.
-The Bitwig spike must prove that the companion and hub share the required in-process session under the documented hosting mode;
-only a failed premise can reopen the packaging decision.
+The Bitwig spike proved the companion and hub share the required in-process session under `by Vendor` hosting in its measured graph;
+this does not establish every hosting mode in #623's wider matrix.
 
 ## Locked tuning behavior
 
@@ -96,13 +99,20 @@ A note ending changes future context but does not move the survivors.
 
 ## Delay and late assignments
 
-#615 establishes the smallest reliable D for the supported Bitwig graph, callback sizes and processing modes.
-Neither 10 ms nor one buffer is established by the design.
-One previous host interval may suffice if the measured source-to-hub-to-source schedule permits it;
-framework sub-blocks do not establish that bound.
+The product target is approximately **10 ms of added tuner delay**, on top of the existing monitoring path.
+An initial candidate of **512 samples at 44.1 kHz (11.610 ms)** with a 512-sample engine buffer is acceptable;
+a 128-sample engine buffer is not a product requirement.
+The [#615 measurements](tuning-probe-bitwig.md) retained D = 2,048 samples (46.440 ms) at every tested engine buffer and did not search for a minimum.
+Normal replies at a 512-sample buffer arrived in the next source callback, supporting the smaller candidate;
+calibrated boundary cases at 1,024 samples sometimes needed another callback.
+Neither one buffer nor 11.610 ms is a proven bound for the production policy or arbitrary routing.
+Validate the smaller candidate during normal implementation validation, including event boundaries, branch offsets and the chosen workload limits;
+do not require another standalone latency spike before beginning the feature.
+If the candidate fails, report the measured reason before increasing the accepted latency or requiring a smaller engine buffer.
 Select and report D in samples for an activation, accounting for the supported maximum callback size and measured lead/lag.
 Changing D follows CLAP's activation/restart contract.
-Bitwig's compensation of a note effect, differing track latencies, live input and offline rendering must be measured rather than inferred from audio-effect behavior.
+Bitwig compensated scheduled playback and export in the measured configuration;
+that compensation cannot remove the tuner's added delay from live playing.
 
 Delay the complete performance stream, including note-offs, choke, pedals, expression and unrelated MIDI, so healthy operation preserves durations and gestures.
 Keep D while the tuner's participation control is Off or its session is disconnected.
@@ -115,18 +125,32 @@ Emit that attack at the earliest legal output opportunity under the late-event s
 Do not drop the note, emit it with zero correction, or emit first and repair its pitch later.
 Extra lateness is a fault outside the reported fixed D, so normal plugin delay compensation cannot remove it.
 
-Before implementing #616, specify how the affected queued performance stream is retimed and how it returns to D.
+During lateness, the affected track may temporarily fall behind while other tracks continue.
+Preserve the queued notes' durations and expression relationships;
+do not burst accumulated notes out to catch up.
 A release or expression must not overtake its delayed attack;
 dumping accumulated on/off pairs into one sample must not silently collapse a played note to zero duration.
-Preserve per-voice lifecycle dependencies and specify the effect on earlier sounding notes, pedals, later attacks and other tracks.
+An unrelated pending attack must not add delay to releases or expression of voices already sounding before the fault.
+Return to D at a safe idle boundary with no queued performance events or locally held voices, neutral pedals and an accepted sequencing/recovery boundary.
+Until then, later attacks on the affected stream can inherit its extra delay.
+This permits temporary cross-track timing differences and does not promise a catch-up time during an uninterrupted phrase.
+#616 defines the exact ordering of retriggers, pedals and shared-channel events across that boundary, including the dependency-safe exceptions to original stream order during failure.
 Keeping musical order does not by itself guarantee simultaneous acoustic attacks during a deadline failure;
 cross-track release barriers are not implicitly part of this design.
 
 Persistent failure is not an indefinitely supportable delay with finite storage.
-#616 must expose and resolve the pending-buffer limit, failure at that limit and explicit recovery/reset behavior before implementation.
+At actual required-storage exhaustion, enter a visible, latched **emergency stop**:
+cancel affected queued attacks, invalidate their replies, send releases for affected sounding voices and reject new attacks until explicit Reset and valid recovery.
+This deliberately permits note loss at catastrophic exhaustion;
+a missed deadline, elapsed timeout or unavailable hub alone does not authorize it while the required state still fits.
+Source-local exhaustion stops that source;
+hub/global exhaustion stops the session.
+Dependent unplayed decisions on other sources must be invalidated or rescheduled without treating their planned state as confirmed output.
 Reserve a failure-signaling path that still works when ordinary queues are full.
-The design does not authorize automatic eviction, unretuned output, silent note loss or an unbounded queue.
-Any cancellation by an explicit host/user reset is a separate lifecycle event, not the deadline policy.
+Release/cancellation delivery and its completion tracking must also survive full ordinary queues;
+local state cannot declare a voice terminated before accepted downstream output or a measured host termination boundary.
+Do not silently evict notes, emit unretuned substitutes or allocate an unbounded queue.
+Explicit Stop/Reset cancellation is a separate lifecycle event described below.
 
 ## Emitted assignments are authoritative
 
@@ -226,12 +250,17 @@ Replies additionally identify the exact pending attack and its bound configurati
 Keep input intent time, planned output time and actual output time distinct.
 The mapping accounts for the enclosing host callback, sub-block start, event offset and any measured track-latency relationship.
 The concrete clock source and boundary hook are a required #615 result;
-if the framework does not expose enough information, the spike must identify the necessary boundary change or reject that topology.
+the measured mapping is raw `steady_time` plus a fixed instance offset, the Rust sub-block start and the local event offset.
+One branch with 64 samples of limiter latency required a +64 source offset to recover simultaneous cohorts.
 Do not substitute independent counters that merely happen to start together.
 
 Progress endpoints are exclusive:
 an input watermark at N means all source intents strictly before N are available.
 The sequencer can finalize events at sample t only when every included source has proved progress beyond t.
+Track the beginning of each continuous coverage interval as well as its exclusive endpoint;
+a returning source cannot establish completeness for time it did not process.
+Use one membership snapshot for collection and the completeness calculation so concurrent deactivation cannot remove a limiting source midway through a pass.
+These are the two completeness corrections retained by #630's exported-CLAP regressions.
 Output progress independently identifies complete emitted reports.
 It cannot be inferred from input progress or assignment publication, especially when an attack is late.
 
@@ -239,8 +268,9 @@ Every participating source publishes completed input and output progress even wh
 A watermark advances only after all messages before it are available to the hub;
 queue loss invalidates that progress rather than asserting a complete interval.
 Activity counters help detect stopped callbacks but do not replace sample watermarks.
-#615 measures live/stopped input, transport discontinuities, block splitting, differing track latency, sleeping tracks and faster-than-real-time export.
-It records which reset starts a new epoch and how a returning source acquires a valid mapping before its reports are accepted.
+#615 records selected live/stopped input, transport, sub-block, branch-latency and offline cases with their exclusions;
+actual sleep/wake, variable enclosing callbacks and manual seeks while held remain unproven.
+Its activation/reset observations constrain how a returning source acquires a valid mapping before its reports are accepted.
 An intent arriving behind a finalized input frontier or a report arriving behind confirmed output progress is a protocol failure requiring source recovery, not an event to restamp at drain time.
 A valid assignment arriving after its output deadline is a different case:
 it remains usable by its still-pending attack.
@@ -263,9 +293,31 @@ registration, unregister and final reclamation never free it in an audio callbac
 
 Record named limits for source slots, voices per source and per session, input and output queues, assignment replies, pending performance events, merge storage, history and callback work budgets.
 Record actual byte sizes and the total memory budget, including the buffering needed for D and the supported late-event margin.
+The current workload is about 15 simultaneous notes across three tracks;
+the initial capacity targets deliberately leave substantial growth room:
+
+| Resource | Initial capacity target | Scope |
+|---|---:|---|
+| Registered tuner sources | 16 | Per session; reserve the hub's direct-input identity separately |
+| Simultaneously held voices | 64 | Per source, including locally held Off voices |
+| Simultaneously held voices | 256 | Across the session, including any admitted hub direct-input context |
+| Pending performance events | 8,192 | Per tuner; includes attacks, releases, pedals, expression and unrelated MIDI |
+
+Per-source voice limits share the global limit;
+16 sources cannot each occupy 64 global context slots simultaneously.
+Pending lifetimes and historical assignments are separate from the held-voice counts and need their own bounded accounting.
+Event capacity is not a duration guarantee:
+dense expression can consume it much faster than sparse notes.
+Choose the related intent, reply, output, merge, baseline and history capacities in #617 with an explicit admission/ownership argument and reserve recovery space independently.
+Do not silently overwrite still-required history or state when any limit is reached.
+Registration beyond 16 refuses the extra source visibly without evicting an existing source;
+exceeding an admitted voice or required event/state limit follows the emergency-stop contract.
+These are engineering sizing targets, not measured throughput claims;
+#617/#621 must check the complete central workload and actual byte budget at the selected limits before claiming normal-delay support.
+Any necessary capacity revision is documented against that measurement, rather than silently shrinking support to the three-track fixture.
 Source health uses the measured audio progress/region model, with explicit reset behavior and no wall-clock worker needed for correctness.
 Queue saturation and invalidation must remain observable even when the ordinary channel is full.
-Finite-buffer exhaustion under a persistent assignment failure remains an explicit #616 product decision, not permission to reuse the discarded unretuned fallback.
+Required-storage exhaustion follows the visible emergency-stop contract, never an unretuned assignment fallback.
 
 ## Voice identity
 
@@ -336,8 +388,17 @@ The saved pairing UUID is distinct from the runtime session incarnation and time
 neither a reload nor a transport reset may make an old intent or assignment reply valid again.
 
 The first backend is an in-process registry with bounded per-source intent/output channels and an assignment return path, with the ownership rules above.
-Bitwig's **By manufacturer** hosting mode is the expected initial requirement because it groups plugins from one developer for communication.
-Issue [#623](https://github.com/yan-h/harmonigraph/issues/623) measures the exact process layout and the visible failure behavior of other hosting modes.
+Bitwig's **by Vendor** hosting mode is the measured initial requirement, with individual hosting overrides off for both Harmonigraph classes.
+Issue [#623](https://github.com/yan-h/harmonigraph/issues/623) records the wider process/reload investigation;
+untested cells in its matrix are not additional launch requirements for the already measured mode.
+
+Initial support permits fixed calibrated routing and reinitialization after changes that invalidate track-clock alignment.
+Changes to branch latency require offset revalidation before adaptive sequencing resumes;
+automatic calibration through arbitrary graph edits is not claimed.
+Known held voices retain their offsets while the session reestablishes a valid baseline.
+If downstream held state is unknown, require an explicit voice reset and confirmed termination before rejoining.
+Continuous callbacks remain a supported-configuration requirement;
+missing progress is not silent input, and unobserved sleep/wake behavior is not accepted as safe recovery.
 
 The hosting mode also decides what a build swap costs.
 A sandbox process re-reads the plugin binary only when it starts, and a grouped process lives as long as any instance in its group is loaded, so a project with a tuner on every track holds the old image until every one of them is unloaded.
@@ -352,7 +413,8 @@ A future cross-process implementation must justify its own layout, ownership, sy
 
 The hub normally sits on Master because it is downstream of the participating audio and can analyze their combined signal.
 Master placement is a candidate source-to-hub ordering advantage, not proof of a complete barrier or a one-buffer round trip.
-#615 establishes whether that callback can finalize the required intervals and return assignments before their delayed output opportunities.
+#630 established complete intervals and timely replies at its measured D;
+the smaller production candidate still needs normal implementation validation.
 The session belongs to the plugin process rather than the editor, so closing the Harmonigraph window must not stop progress, sequencing or tuning.
 
 ## Real-time constraints
@@ -377,8 +439,21 @@ The initial tuner has one participation control rather than three independent vi
 - **Off:** remove the source from project context and visualization and intentionally leave newly received notes unretuned at the same D, while finishing the expression/lifecycle handling of already-held voices.
 
 Off is an explicit user selection, not an automatic deadline fallback.
-It must not silently convert a previously pending adaptive request into an unretuned attack;
-#616 specifies pending-request behavior at this transition.
+It affects newly received notes;
+preexisting pending adaptive requests remain adaptive and finish with their valid assignments under the late-stream rules unless explicitly canceled by Stop/Reset or emergency stop.
+Withdrawing a source from future context does not erase its pre-transition sequencing obligations or permit it to stop required callbacks.
+Already-issued replies retain their original configuration binding across a later configuration edit.
+
+An explicit transport **Stop** transition or user **Reset** cancels affected pending attacks, invalidates their replies and dependent planned state, and sends releases for affected sounding voices at the earliest legal output opportunity without the retained stream delay.
+Handle sustain/hold state so a queued pedal or release cannot keep those voices alive after the cancellation.
+Instrument release tails can remain;
+the tuner must not postpone the release command by its accumulated delay.
+Reset the extra delay and resume normal D only after cancellation and the new sequencing boundary are established.
+The measured stop defect is [#632](https://github.com/yan-h/harmonigraph/issues/632).
+Being stopped is not itself a repeated reset:
+new live input while stopped still follows normal tuning, and a loop wrap is not automatically a Stop transition.
+Emergency-stop recovery remains latched until explicit Reset;
+selecting Off cannot bypass that latch.
 
 Specialized states such as a visible-but-untuned track or a fixed anchor are added only when the musical policy has a concrete use for them.
 The single participation control does not remove the need for internal transition states:
@@ -386,9 +461,11 @@ The single participation control does not remove the need for internal transitio
 | Transition or state | New or pending notes | Already-held voices and session state |
 |---|---|---|
 | Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and composing player expression with each frozen offset |
-| Participating to Off | Newly received notes intentionally use zero correction at D; pending adaptive requests follow the explicit transition contract | Withdraw this source from context/display; preserve existing offsets until release |
+| Participating to Off | Newly received notes intentionally use zero correction; pending adaptive requests finish tuned under the normal/late timing contract | Withdraw this source from future context/display; preserve existing offsets until release |
 | Assignment deadline missed | Retain the attack for its valid assignment and report a timing failure; no unretuned or dropped-note fallback | Preserve frozen offsets; handle related queued events under the specified late-event schedule |
-| Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks within bounded storage; persistent failure/exhaustion requires the explicit #616 contract | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
+| Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks while required storage fits | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
+| Required-storage exhaustion | Cancel affected pending attacks visibly and reject new attacks until explicit Reset and valid recovery | Send releases through the independent emergency path; latch source-local or session-wide failure as appropriate |
+| Transport Stop or explicit Reset | Cancel affected pending attacks and reject their obsolete replies | Send releases without accumulated delay, invalidate dependent plans and establish a fresh sequencing boundary |
 | Off to Participating, reconnect or report-loss recovery | Resume adaptive sequencing only after the complete held baseline and pending-request state are accepted | Restore actual state without re-emitting attacks or retuning survivors |
 | Source unregister or slot reuse | Old requests and replies cannot address the replacement | Invalidate the old incarnation and release only its context/display voices |
 | Explicit voice reset or host-guaranteed note termination | Cancel obsolete pending lifetimes under the reset contract, reject their replies and start fresh | Clear offsets only after downstream voices are terminated or the host guarantees they are gone |
@@ -409,7 +486,8 @@ Resetting an empty queue alone is insufficient because a held voice may never se
 Overflow signals and incarnation invalidation must remain deliverable when the ordinary report queue is full.
 
 Host bypass and plugin removal differ from the Off control because callbacks may stop entirely.
-#615 must measure the host's termination/resume behavior.
+#615 measured downstream signal termination for the specific Bitwig bypass/removal actions in its fixture, while mute/solo preserved held lifetimes and callbacks.
+Those observations do not establish termination for every missing callback or host action.
 If lifecycle events were missed, do not republish an assumed local held set on resume:
 require a fresh authoritative baseline or terminate/reset the affected downstream voices before clearing local state and rejoining.
 The supported behavior and its audible reset consequence must be documented.
@@ -525,16 +603,17 @@ That empirical evidence belongs on #615 as bounded traces and measured verdicts,
 
 ## Implementation order
 
-0. [#623](https://github.com/yan-h/harmonigraph/issues/623) measures which sandbox mode carries two classes from one bundle and which reload gesture works, in the same session as the spike below, since its process-grouping table uses the spike's probe bundle.
-1. [#615](https://github.com/yan-h/harmonigraph/issues/615) is a bounded host spike using a second class, an artificial central reply, delayed +50-cent output and preallocated traces flushed off-thread.
-It proves callback/sub-block time mapping, complete input intervals, source-to-hub-to-source turnaround, the supported D, compensation and lifecycle constraints across the actual live/offline topology.
-Inject a missed deadline and record when a valid late answer can actually be emitted.
-Unit tests then encode those observations rather than substituting for them.
+0. Use [#623](https://github.com/yan-h/harmonigraph/issues/623)'s measured engine-restart reload and [#630](https://github.com/yan-h/harmonigraph/pull/630)'s same-process `by Vendor` configuration.
+Other hosting modes remain outside initial support until separately established.
+1. Carry forward [#615](https://github.com/yan-h/harmonigraph/issues/615)'s constrained verdict and retained opt-in probe from #630.
+Its measured D is 2,048 samples, not the accepted production target or a minimum.
+Encode the observations and completeness regressions in production tests;
+validate the smaller candidate as part of implementation without another prerequisite spike.
 2. Before wiring plugins in [#617](https://github.com/yan-h/harmonigraph/issues/617), record the concrete storage primitives, capacity/health table, configuration handoff and source recovery protocol against #615's verdict.
 Implement the companion, audio-owned confirmed active state and effective tuning, and source-aware display/roll/take/replay.
 This aggregation-only milestone preserves input timing and supplies no adaptive output;
 it does not create a second launch mode.
-3. Before implementing [#616](https://github.com/yan-h/harmonigraph/issues/616), resolve late-stream retiming, pending versus confirmed state, transition rules and finite-buffer exhaustion.
+3. Before implementing [#616](https://github.com/yan-h/harmonigraph/issues/616), specify the event-ordering and prospective/confirmed-state mechanics that implement the accepted late-stream, Stop/Off, recovery and emergency-stop decisions above.
 Add the central sequential assigner, bounded full-stream delay and replies with the artificial policy, plus deadline diagnostics and valid late-answer handling.
 4. [#621](https://github.com/yan-h/harmonigraph/issues/621) replaces the artificial policy with the first real one, including the simultaneous cross-track D–F–A case.
 

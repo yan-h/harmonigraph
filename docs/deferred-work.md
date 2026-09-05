@@ -12,7 +12,9 @@ The active design is documented in [`adaptive-tuning.md`](adaptive-tuning.md):
 one lightweight tuner per independent note path, automatic aggregation into one full Harmonigraph, and fixed-delay central sequencing with sequential assignment.
 Each new assignment sees its predecessors across tracks, and its correction remains frozen through release.
 A missed assignment deadline delays the pending attack and reports a failure;
-late-stream retiming and persistent-failure/buffer-exhaustion behavior must be resolved before implementation.
+the affected track can remain late until a safe idle boundary.
+Stop/Reset cancellation and a visible emergency stop at required-storage exhaustion are accepted exceptions to retaining pending attacks.
+The active design records those decisions and their remaining implementation mechanics.
 
 **Immediate and jointly optimized alternatives.** Independent immediate assignment from prior snapshots permits simultaneous cross-track notes to miss each other's choices.
 That does not meet the chosen musical requirement.
