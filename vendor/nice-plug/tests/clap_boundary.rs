@@ -705,6 +705,16 @@ impl Device {
             value: 0.5,
         })
     }
+    fn parameter_value(&self, id: u32) -> f64 {
+        use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_plugin_params};
+        let params = unsafe {
+            &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
+                .cast::<clap_plugin_params>())
+        };
+        let mut value = 0.0;
+        assert!(unsafe { (params.get_value.unwrap())(self.plugin, id, &mut value) });
+        value
+    }
     fn mailbox(&self) -> Arc<ConfigurationMailbox> {
         unsafe {
             &*((*self.plugin)
@@ -1256,6 +1266,35 @@ fn flush_loss_reaches_owner_and_next_process_boundary() {
             expected
         );
     }
+}
+
+#[test]
+fn retained_flush_parameter_is_applied_before_error_recovery_acknowledges_it() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.performance");
+    let Input::Param(parameter) = d.param(57) else { unreachable!() };
+    d.flush(vec![Input::Param(parameter)]);
+    d.flush(vec![on(0); INPUT_SCAN + 1]);
+    assert_eq!(d.run(100, 64, vec![], true), CLAP_PROCESS_ERROR);
+    {
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(o.inputs.len(), 1);
+        let input = o.inputs[0];
+        assert!(input.flush);
+        assert_eq!(input.offset, 57);
+        assert_eq!(input.sample, Some(100));
+        assert_eq!(input.enclosing_start, None);
+        assert_eq!(input.enclosing_frames, 0);
+        assert_eq!(input.event_index, 0);
+        assert_eq!(
+            input.value,
+            InputValue::Parameter { id: parameter.param_id, value: 0.5, modulation: false }
+        );
+    }
+    assert_eq!(d.parameter_value(parameter.param_id), 0.5);
+    assert_eq!(d.run(164, 64, vec![], true), CLAP_PROCESS_CONTINUE_IF_NOT_QUIET);
+    assert_eq!(d.parameter_value(parameter.param_id), 0.5);
+    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(), 1);
 }
 
 #[test]

@@ -212,9 +212,10 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// Wrapper consumption is a third short cursor in the SAME pool. Retain
     /// cells until configuration, performance and this walker have all finished;
     /// no second host scan, pointer cache or converted input deque is needed.
+    /// Without a sub-block start, finish outstanding work without audio splits.
     pub(super) fn walk_owned_input(
         &self,
-        start: u32,
+        start: Option<u32>,
         frames: u32,
         transport: &mut Option<clap_event_transport>,
     ) -> u32 {
@@ -231,7 +232,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             let split = matches!(event.value, InputValue::Transport(_))
                 || P::SAMPLE_ACCURATE_AUTOMATION
                     && matches!(event.value, InputValue::Parameter { .. });
-            if time > start && split {
+            if split && start.is_some_and(|start| time > start) {
                 return time;
             }
             match event.value {
@@ -256,10 +257,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
     pub(super) fn finish_owned_walk(&self) {
-        let mut guard = self.owned_input.lock();
-        let input = guard.as_mut().unwrap();
-        input.walked = input.storage.len();
-        input.reclaim();
+        // Error exits may precede the first audio sub-block or leave later
+        // ordinary automation unread. Apply it through the same cursor before
+        // acknowledging it; raw performance delivery does not update params.
+        self.walk_owned_input(None, 0, &mut None);
     }
 }
 

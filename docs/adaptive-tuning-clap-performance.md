@@ -36,6 +36,7 @@ Configuration applies same-sample parameters before observing notes and learning
 Separate acknowledgement cursors retain configuration and performance consumption, so either can stop without repeating the other's work.
 A third short wrapper cursor reads those same cells to update ordinary parameters and split audio on exact transport/automation boundaries.
 Reclamation requires all enabled consumers to finish.
+Error finalization drains outstanding ordinary parameter work through that same wrapper cursor before acknowledging it, so raw delivery of an accepted flush event cannot stand in for updating the actual parameter value.
 No growing legacy input deque or second host scan carries the performance stream.
 A first event at a nonzero transport offset is itself a split boundary.
 
@@ -115,7 +116,7 @@ Executed on this macOS build, `Option<OwnedInput>` is 176 bytes with alignment e
 The output group allocation is 148,480 bytes plus a 1,280-byte fixed heap index in the owner;
 a completion is a bounded stack value whose reserved group cell remains owned during delivery.
 The two boundary payload allocations therefore total 508,928 bytes per performance-enabled wrapper, excluding small owners and the plugin's configuration/mailbox state.
-The focused boundary target contains 22 fixtures and the existing Harmonigraph configuration factory target contains 21 fixtures.
+The focused boundary target contains 23 fixtures and the existing Harmonigraph configuration factory target contains 21 fixtures.
 No persisted configuration field, take format, latency setting or visual default changes here.
 
 ## Verification and remaining integration
@@ -131,6 +132,7 @@ Existing Harmonigraph configuration factory fixtures protect captured recording 
 Fixtures reach the actual input pool, normal/emergency attempt limits, one-cell-left onset admission, repeated local offsets and short callbacks, exact retained transport, shared configuration/performance backpressure, notification timing and partial gestures, onset rejection/partial acceptance, fencing before claim/between host calls, expression/release retry values and unconditional finalization.
 They validate the real wrapper boundary, without claiming a production session gate, journal or adaptive sequencer exists.
 Recovery fixtures fill the real pool with callback-start transport plus 2,047 notes and exercise true `params.flush` calls at and beyond capacity.
+An accepted ordinary flush parameter followed by a rejected batch must retain its exact raw provenance and update actual host parameter readback before recovery acknowledges its cell.
 Deterministic race fixtures pause the real GUI executor after observing the audio phase, and pause an old host value write while main-thread restore and rescan complete.
 They require a new host callback without relying on a later process call to rescue pending work.
 

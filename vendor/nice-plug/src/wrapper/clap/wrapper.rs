@@ -2288,7 +2288,7 @@ impl<P: ClapPlugin> Wrapper<P> {
 
             let result = loop {
                 if P::CLAP_PERFORMANCE {
-                    block_end = wrapper.walk_owned_input(block_start as u32, process.frames_count, &mut owned_transport) as usize;
+                    block_end = wrapper.walk_owned_input(Some(block_start as u32), process.frames_count, &mut owned_transport) as usize;
                     transport_info = owned_transport.as_ref().map_or(std::ptr::null(), |t| t as *const _);
                 } else if !process.in_events.is_null() {
                     let split_result = unsafe {
