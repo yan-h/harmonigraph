@@ -207,7 +207,12 @@ impl HarmonigraphTune {
             .as_mut()
             .unwrap()
             .input
-            .push(Intent::Progress { generation: self.generation, epoch: self.epoch, through: end })
+            .push(Intent::Progress {
+                generation: self.generation,
+                epoch: self.epoch,
+                from: now,
+                through: end,
+            })
             .is_err()
         {
             self.trace.fault("progress_queue_full", 0, end, true);
@@ -216,6 +221,7 @@ impl HarmonigraphTune {
         self.trace.record(Data::Progress {
             source: self.source,
             generation: self.generation,
+            from: now,
             through: end,
         });
 

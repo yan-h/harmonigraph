@@ -261,6 +261,69 @@ fn accepted_onsets(events: &[Event]) -> Vec<(u32, i32, i16)> {
         .collect()
 }
 
+fn rejoining_source_cannot_cover_a_foreign_pending_attack() {
+    let hub = Device::new(c"com.yan-h.harmonigraph");
+    let a = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    let b = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    hub.activate();
+    a.activate();
+    b.activate();
+    a.run(0, 64, vec![], false);
+    b.run(0, 64, vec![], false);
+    hub.run(0, 64, vec![], false);
+    drop(b);
+    a.run(64, 64, vec![note(CLAP_EVENT_NOTE_ON, 0, 61, 60)], false);
+    assert_ne!(hub.run(64, 64, vec![], false).0, CLAP_PROCESS_ERROR);
+    let replacement = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    replacement.activate();
+    replacement.run(128, 64, vec![], false);
+    assert!(a.run(128, 64, vec![], false).1.is_empty());
+    // B never processed [64, 128). Its new generation cannot make A's
+    // unanswered attack in that interval complete. Abort, without a reply.
+    assert_eq!(hub.run(128, 64, vec![], false).0, CLAP_PROCESS_ERROR);
+    assert!(a.run(192, 64, vec![], false).1.is_empty());
+}
+
+fn deactivation_during_collection_does_not_advance_the_frontier() {
+    let hub = Device::new(c"com.yan-h.harmonigraph");
+    let a = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    let b = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    hub.activate();
+    a.activate();
+    b.activate();
+    a.run(0, 64, vec![], false);
+    b.run(0, 64, vec![], false);
+    hub.run(0, 64, vec![], false);
+    b.run(64, 64, vec![note(CLAP_EVENT_NOTE_ON, 0, 71, 64)], false);
+    super::session::registry()
+        .lock()
+        .unwrap()
+        .shared
+        .deactivate_before_frontier
+        .store(true, Ordering::Relaxed);
+    // A is counted, then deactivated before the frontier is calculated. Its
+    // last exclusive endpoint (64) must still limit this callback's frontier.
+    assert_ne!(hub.run(64, 64, vec![], false).0, CLAP_PROCESS_ERROR);
+    assert!(accepted_onsets(&b.run(128, 64, vec![], false).1).is_empty());
+}
+
+fn discontinuous_source_progress_invalidates_the_run() {
+    let hub = Device::new(c"com.yan-h.harmonigraph");
+    let a = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    let b = Device::new(c"com.yanhan.harmonigraph-tune-probe");
+    hub.activate();
+    a.activate();
+    b.activate();
+    a.run(0, 64, vec![], false);
+    b.run(0, 64, vec![], false);
+    hub.run(0, 64, vec![], false);
+    // A keeps its generation but skips [64, 128). A later endpoint does not
+    // establish a continuous interval, even when no note is pending yet.
+    a.run(128, 64, vec![], false);
+    b.run(64, 64, vec![], false);
+    assert_eq!(hub.run(64, 64, vec![], false).0, CLAP_PROCESS_ERROR);
+}
+
 #[test]
 fn exported_probe_preserves_split_times_and_requires_complete_central_reply() {
     let dir =
@@ -375,6 +438,11 @@ fn exported_probe_preserves_split_times_and_requires_complete_central_reply() {
         assert!(source.run(64, 64, vec![], true).1.is_empty());
         assert_eq!(source.run(128, 64, vec![], false).0, CLAP_PROCESS_ERROR);
     }
+    let rejoin_config = super::Config { expected_sources: 2, ..reject_config };
+    std::fs::write(dir.join("config.json"), serde_json::to_vec(&rejoin_config).unwrap()).unwrap();
+    rejoining_source_cannot_cover_a_foreign_pending_attack();
+    deactivation_during_collection_does_not_advance_the_frontier();
+    discontinuous_source_progress_invalidates_the_run();
     // Complete files are evidence about the fixture, including the exact wrapper split.
     let records: Vec<serde_json::Value> = std::fs::read_dir(&dir)
         .unwrap()
@@ -401,8 +469,13 @@ fn exported_probe_preserves_split_times_and_requires_complete_central_reply() {
         .iter()
         .any(|r| r["kind"] == "fault" && r["reason"] == "obsolete_reply_rejected"));
     assert!(!records.iter().any(|r| r["kind"] == "trace_loss"));
-    for reason in ["assignment_deadline_missed", "missing_raw_steady_clock", "host_output_rejected"]
-    {
+    for reason in [
+        "assignment_deadline_missed",
+        "missing_raw_steady_clock",
+        "host_output_rejected",
+        "input_before_source_coverage",
+        "noncontiguous_source_progress",
+    ] {
         assert!(
             records.iter().any(|r| r["kind"] == "fault" && r["reason"] == reason),
             "missing {reason}"

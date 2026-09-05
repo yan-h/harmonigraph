@@ -5,17 +5,18 @@ Keep this file current when bumping them.
 
 ## nice-plug — vendored at `vendor/nice-plug/`
 
-- **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests.
+- **Upstream base**: crates.io nice-plug 0.1.10, with its normalized standalone manifest, original manifest, README, sources and tests, plus the ISC `LICENSE` from pinned upstream commit `a80e0e267e52027be4bc07480bef77e798d3342c`.
 - **Patch**: an opt-in `ClapPlugin::CLAP_PROCESS_TRACE` hook in `src/wrapper/clap.rs` and `src/wrapper/clap/wrapper.rs` exposes enclosing callback entry/exit, raw CLAP clocks, exact sub-block boundaries, processing start/stop and final host output acceptance.
 An atomic counter records actual latency queries without calling the plugin under a potentially reentrant latency query.
 Ordinary plugins keep the flag false, compiling out processing observations.
+Probe-only `eprintln!` lifecycle diagnostics in `Task::LatencyChanged` and `ext_render_set` record latency/restart decisions and offline-mode switches outside the processing callback.
 - **Why**: #615 cannot infer a shared clock or callback boundaries from Rust `Plugin::process()` counters.
 The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifies the actual CLAP wrapper through an exported-factory fixture.
 - **Patch 2** (`src/wrapper/clap/wrapper.rs`, `activate`): drop the plugin lock and initialization context before marking the wrapper active.
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Upgrade**: replace the vendored upstream files, retain the standalone `[workspace]` table, and reapply the hook sites and activation notification ordering.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics and activation notification ordering.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`

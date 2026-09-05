@@ -4,6 +4,7 @@
 import argparse
 from collections import Counter, defaultdict
 import json
+import os
 from pathlib import Path
 import struct
 
@@ -146,9 +147,19 @@ def analyze(args):
         print(result, end="")
 
 
+def default_directory():
+    override = os.environ.get("HARMONIGRAPH_PROBE_DIR")
+    if override:
+        return Path(override)
+    home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if not home or not Path(home).is_absolute():
+        raise SystemExit("Probe home directory unavailable; set HARMONIGRAPH_PROBE_DIR")
+    return Path(home) / ".cache/harmonigraph/tuning-probe"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--directory", type=Path, default=Path("/tmp/harmonigraph-tuning-probe"))
+    parser.add_argument("--directory", type=Path)
     sub = parser.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare")
     prep.add_argument("--delay", type=int, default=2048)
@@ -160,6 +171,8 @@ def main():
     inspect.add_argument("--output", type=Path)
     inspect.set_defaults(run=analyze)
     args = parser.parse_args()
+    if args.directory is None:
+        args.directory = default_directory()
     args.run(args)
 
 

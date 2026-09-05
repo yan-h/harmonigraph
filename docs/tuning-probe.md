@@ -26,8 +26,12 @@ Its one host parameter, `Probe split`, exists solely to trigger sample-accurate 
 The full Harmonigraph becomes the probe hub for CLAP;
 its ordinary VST3 behavior is unchanged.
 
-Configuration is read at activation from `/tmp/harmonigraph-tuning-probe/config.json`.
-`HARMONIGRAPH_PROBE_DIR` overrides that directory for an isolated hostless fixture.
+Configuration is read at activation from `~/.cache/harmonigraph/tuning-probe/config.json`.
+The CLI and plugin use the same per-user directory;
+`HARMONIGRAPH_PROBE_DIR` overrides it for an isolated run.
+The plugin refuses to overwrite an existing trace filename.
+Historical captures used the former `/tmp/harmonigraph-tuning-probe` directory;
+their archived paths and configurations are preserved as recorded.
 The script also creates `three-tracks.mid`, a type-1 MIDI file with simultaneous attacks, CC events, releases, short notes and silent intervals.
 Import its tracks into a disposable Bitwig project.
 Put a tuner before Polysynth on one track, before Vital VST3 on another, and before an Instrument Layer on the third;
@@ -76,6 +80,10 @@ It orders eligible attacks by input sample, key, channel, source and request, an
 The source never computes that correction.
 Membership is fixed by the expected source count for a trial;
 a missing participant stalls completeness.
+Progress records include the start of each covered interval as well as its exclusive endpoint.
+Noncontiguous progress invalidates a run;
+after a source rejoins, pending attacks before its new coverage start also invalidate the run.
+The hub uses one source-membership snapshot throughout each callback's completeness calculation.
 This is deliberately not session discovery, automatic recovery or a musical policy.
 
 The tuner delays the framework's complete supported performance stream, emits note-on followed by `PolyTuning` at the same sample, and adds the frozen correction to later per-note tuning.

@@ -25,7 +25,7 @@ pub struct Request {
 #[derive(Clone, Copy)]
 pub enum Intent {
     Request(Request),
-    Progress { generation: u64, epoch: u64, through: i64 },
+    Progress { generation: u64, epoch: u64, from: i64, through: i64 },
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +44,9 @@ pub struct Shared {
     pub generations: [AtomicU64; MAX_SOURCES],
     pub epoch: AtomicU64,
     pub hub_active: AtomicBool,
+    // Deterministically exercise a main-thread deactivation after collection.
+    #[cfg(test)]
+    pub deactivate_before_frontier: AtomicBool,
 }
 
 struct HubPorts {
@@ -75,6 +78,8 @@ impl Registry {
                 generations: std::array::from_fn(|_| AtomicU64::new(0)),
                 epoch: AtomicU64::new(1),
                 hub_active: AtomicBool::new(false),
+                #[cfg(test)]
+                deactivate_before_frontier: AtomicBool::new(false),
             }),
             sources: sources.try_into().ok().unwrap(),
             hub: Some(HubPorts {
@@ -107,6 +112,7 @@ pub struct Hub {
     ports: Option<HubPorts>,
     config: Config,
     progress: [i64; MAX_SOURCES],
+    coverage_start: [i64; MAX_SOURCES],
     generations: [u64; MAX_SOURCES],
     pending: Vec<Request>,
     held_replies: Vec<(Request, i64)>,
@@ -124,6 +130,7 @@ impl Default for Hub {
             ports: registry.hub.take(),
             config: Config::default(),
             progress: [i64::MIN; MAX_SOURCES],
+            coverage_start: [i64::MIN; MAX_SOURCES],
             generations: [0; MAX_SOURCES],
             pending: Vec::with_capacity(MAX_EVENTS),
             held_replies: Vec::with_capacity(MAX_EVENTS),
@@ -174,6 +181,7 @@ impl Hub {
         });
         self.epoch = self.shared.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         self.progress.fill(i64::MIN);
+        self.coverage_start.fill(i64::MIN);
         self.pending.clear();
         self.held_replies.clear();
         self.order = 0;
@@ -217,16 +225,21 @@ impl Hub {
         let Some(ports) = self.ports.as_mut() else {
             return false;
         };
+        // Membership must stay consistent between collection and completeness.
+        // A concurrent deactivation may stall the next callback, but cannot
+        // remove a source from this callback's minimum after it was counted.
+        let active_sources: [bool; MAX_SOURCES] =
+            std::array::from_fn(|i| self.shared.active[i].load(Ordering::Acquire));
         let mut active = 0;
-        for source in 0..MAX_SOURCES {
+        for (source, &is_active) in active_sources.iter().enumerate() {
             let generation = self.shared.generations[source].load(Ordering::Acquire);
             if generation != self.generations[source] {
                 self.generations[source] = generation;
                 self.progress[source] = i64::MIN;
+                self.coverage_start[source] = i64::MIN;
                 self.pending.retain(|r| r.source != source);
                 self.held_replies.retain(|(r, _)| r.source != source);
             }
-            let is_active = self.shared.active[source].load(Ordering::Acquire);
             active += usize::from(is_active);
             for _ in 0..QUEUE_CAPACITY {
                 let Ok(intent) = ports.inputs[source].pop() else {
@@ -242,14 +255,20 @@ impl Hub {
                         }
                         self.pending.push(r);
                     }
-                    Intent::Progress { generation: g, epoch, through }
+                    Intent::Progress { generation: g, epoch, from, through }
                         if is_active && g == generation && epoch == self.epoch =>
                     {
-                        if through < self.progress[source] {
-                            self.trace.fault("backward_watermark", 0, through, true);
+                        if through <= from
+                            || (self.progress[source] != i64::MIN && from != self.progress[source])
+                        {
+                            self.trace.fault("noncontiguous_source_progress", 0, from, true);
+                            break;
+                        }
+                        if self.progress[source] == i64::MIN {
+                            self.coverage_start[source] = from;
                         }
                         self.progress[source] = through;
-                        self.trace.record(Data::Progress { source, generation: g, through });
+                        self.trace.record(Data::Progress { source, generation: g, from, through });
                     }
                     _ => {}
                 }
@@ -258,12 +277,30 @@ impl Hub {
         if self.trace.fatal {
             return false;
         }
+        #[cfg(test)]
+        if self.shared.deactivate_before_frontier.swap(false, Ordering::Relaxed) {
+            self.shared.active[0].store(false, Ordering::Release);
+        }
         if active == self.config.expected_sources {
             let frontier = (0..MAX_SOURCES)
-                .filter(|&i| self.shared.active[i].load(Ordering::Acquire))
+                .filter(|&i| active_sources[i])
                 .map(|i| self.progress[i])
                 .min()
                 .unwrap_or(i64::MIN);
+            let coverage_start = (0..MAX_SOURCES)
+                .filter(|&i| active_sources[i])
+                .map(|i| self.coverage_start[i])
+                .max()
+                .unwrap_or(i64::MIN);
+            // A new incarnation only covers intervals it actually processed.
+            // A high first watermark cannot fill its preceding absence gap.
+            // This invalidates the experiment, not a production note-drop policy.
+            if frontier != i64::MIN {
+                if let Some(r) = self.pending.iter().find(|r| r.input < coverage_start) {
+                    self.trace.fault("input_before_source_coverage", r.id, r.input, true);
+                    return false;
+                }
+            }
             // No allocation: unstable in-place sort, with a total deterministic tie break.
             self.pending.sort_unstable_by_key(|r| (r.input, r.key, r.channel, r.source, r.id));
             let complete = self.pending.partition_point(|r| r.input < frontier);

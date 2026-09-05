@@ -4,7 +4,7 @@
 viable with narrower constraints.** In the measured Bitwig graph, complete source intervals, central assignment and accepted delayed output fit a fixed D of 2,048 samples (46.440 ms).
 This establishes a usable host configuration for #615, not a portable CLAP clock guarantee or a finished tuning feature.
 The production transport-stop and late-stream contract remains unresolved in [#632](https://github.com/yan-h/harmonigraph/issues/632) and must be settled before #616 implements it.
-The apparatus is in [draft PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
+The apparatus is in [PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
 
 At this setting, live notes passing through the tuner gain 2,048 samples (46.440 ms) of input-to-instrument delay, in addition to the rest of the monitoring path.
 Bitwig's measured compensation aligns scheduled playback and export;
@@ -37,6 +37,16 @@ Revalidate offsets after changing branch latency, and do not resume an unknown h
 The long-late-answer tests validate a usable answer and a visible timing fault;
 they do not select a production return-to-D or cancellation policy.
 
+Review before merging found two completeness bugs in the apparatus outside the recorded reset conditions.
+Trial 17 reset the requesting source A as well as restoring the missing participant;
+it did not test another source retaining a pending attack across the participant's absence.
+The corrected hub records the beginning as well as the exclusive end of each source's continuous coverage and faults if pending input predates a rejoining source's coverage.
+It also uses one source-membership snapshot for collection and the completeness frontier, so a concurrent deactivation cannot remove the limiting participant after it was counted.
+Both regressions were reproduced through the exported CLAP fixture before their fixes and pass afterward with callback allocation assertions enabled.
+These are hostless guard corrections, not additional Bitwig measurements;
+the archived captures and their measured build revisions remain unchanged.
+An unsupported coverage gap invalidates the experiment rather than selecting a production note-drop policy.
+
 ## Fixture
 
 Measured on 2026-09-04 in Bitwig Studio 6.1 at 44,100 Hz, with explicit engine buffers and `by Vendor` hosting.
@@ -55,6 +65,8 @@ Note IDs are present and the source keys are 60, 64 and 67. The initial accident
 The candidate delay was fixed at 2,048 samples per activation, or 46.440 ms. Unless noted otherwise, every source requested continuous callbacks and published silence progress.
 All clock offsets initially equalled zero.
 The [evidence archive](evidence/615/README.md) preserves the raw traces, disposable projects, analyses and measured source history with checksums and a run index.
+The full archive stays private;
+the filtered package excludes host logs and Bitwig project/preset files.
 The original capture directory was `/tmp/harmonigraph-615-evidence`;
 the directory numbers below identify separate closed trace sets in the archive.
 

@@ -159,6 +159,7 @@ pub enum Data {
     Progress {
         source: usize,
         generation: u64,
+        from: i64,
         through: i64,
     },
     Assignment {
@@ -248,9 +249,12 @@ impl Trace {
         let lost = Arc::new(AtomicU64::new(0));
         let worker_stop = stop.clone();
         let worker_lost = lost.clone();
-        let dir = super::directory();
-        let file = fs::create_dir_all(&dir).and_then(|()| {
-            File::create(dir.join(format!("trace-{}-{instance}.jsonl", std::process::id())))
+        let file = super::directory().and_then(|dir| {
+            fs::create_dir_all(&dir)?;
+            File::options()
+                .write(true)
+                .create_new(true)
+                .open(dir.join(format!("trace-{}-{instance}.jsonl", std::process::id())))
         });
         let fatal = file.is_err();
         let worker = match file {

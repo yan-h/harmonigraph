@@ -16,12 +16,24 @@ pub const MAX_SOURCES: usize = 8;
 pub const MAX_EVENTS: usize = 2048;
 pub const QUEUE_CAPACITY: usize = 4096;
 
-pub fn directory() -> PathBuf {
-    // Read only off the callback; a unique directory lets a hostless fixture run
-    // without changing the configuration intended for Bitwig.
-    std::env::var_os("HARMONIGRAPH_PROBE_DIR")
+pub fn directory() -> std::io::Result<PathBuf> {
+    // Read only off the callback. The CLI and DAW must share the default,
+    // but another local user must not be able to pre-create it under /tmp.
+    if let Some(path) = std::env::var_os("HARMONIGRAPH_PROBE_DIR").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    std::env::var_os("HOME")
+        .filter(|p| !p.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|p| !p.is_empty()))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/harmonigraph-tuning-probe"))
+        .filter(|p| p.is_absolute())
+        .map(|p| p.join(".cache/harmonigraph/tuning-probe"))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "probe home directory unavailable; set HARMONIGRAPH_PROBE_DIR",
+            )
+        })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -54,7 +66,7 @@ impl Default for Config {
 
 impl Config {
     pub fn read() -> Result<Self, String> {
-        let path = directory().join("config.json");
+        let path = directory().map_err(|e| e.to_string())?.join("config.json");
         let config: Self = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
