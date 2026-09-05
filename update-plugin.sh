@@ -24,6 +24,8 @@
 # success. One copy of that lives in `load-plugin.sh` and this script calls it;
 # a second copy here is what drifted out of step with it once already, and
 # nothing in a build notices when it does.
+# That shared swap also refreshes Info.plist's discovery timestamp (#631),
+# so Bitwig can enumerate changed CLAP classes after either install path.
 set -euo pipefail
 
 PKG="harmonigraph-plugin"
