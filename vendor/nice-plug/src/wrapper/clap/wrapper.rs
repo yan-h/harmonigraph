@@ -2025,6 +2025,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             // Also store this for later, so we can reinitialize the plugin after restoring state
             wrapper.current_buffer_config.store(Some(buffer_config));
 
+            // Publish initialize's deferred latency while still being activated. Letting the
+            // context drop after this flag instead requests an unnecessary restart, which can
+            // stall Bitwig's next offline export. Release the plugin lock before host callbacks.
+            drop(plugin);
+            drop(init_context);
             wrapper.is_activated.store(true, Ordering::SeqCst);
 
             true

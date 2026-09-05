@@ -4,10 +4,11 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::mem::size_of;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::*;
-use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
+use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
@@ -17,12 +18,32 @@ use clap_sys::version::CLAP_VERSION;
 
 use super::trace::Event;
 
-unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
-    ptr::null()
+#[derive(Default)]
+struct HostStats {
+    restarts: AtomicUsize,
+    latency_changes: AtomicUsize,
+}
+
+unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
+    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
+        &HOST_LATENCY as *const _ as *const c_void
+    } else {
+        ptr::null()
+    }
+}
+unsafe extern "C" fn restart(host: *const clap_host) {
+    unsafe { &*((*host).host_data as *const HostStats) }.restarts.fetch_add(1, Ordering::Relaxed);
+}
+unsafe extern "C" fn latency_changed(host: *const clap_host) {
+    unsafe { &*((*host).host_data as *const HostStats) }
+        .latency_changes
+        .fetch_add(1, Ordering::Relaxed);
 }
 unsafe extern "C" fn request(_: *const clap_host) {}
 
-static HOST: clap_host = clap_host {
+static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
+
+const HOST: clap_host = clap_host {
     clap_version: CLAP_VERSION,
     host_data: ptr::null_mut(),
     name: c"#615 apparatus fixture".as_ptr(),
@@ -30,7 +51,7 @@ static HOST: clap_host = clap_host {
     url: c"https://github.com/yan-h/harmonigraph/issues/615".as_ptr(),
     version: c"1".as_ptr(),
     get_extension: Some(extension),
-    request_restart: Some(request),
+    request_restart: Some(restart),
     request_process: Some(request),
     request_callback: Some(request),
 };
@@ -130,6 +151,8 @@ unsafe extern "C" fn output_push(
 
 struct Device {
     plugin: *const clap_plugin,
+    _host: Box<clap_host>,
+    stats: Box<HostStats>,
 }
 
 impl Device {
@@ -137,13 +160,22 @@ impl Device {
         let factory =
             unsafe { (crate::clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
                 as *const clap_plugin_factory;
-        let plugin = unsafe { ((*factory).create_plugin.unwrap())(factory, &HOST, id.as_ptr()) };
+        let mut stats = Box::<HostStats>::default();
+        let host = Box::new(clap_host { host_data: &mut *stats as *mut _ as *mut c_void, ..HOST });
+        let plugin = unsafe { ((*factory).create_plugin.unwrap())(factory, &*host, id.as_ptr()) };
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        Self { plugin }
+        Self { plugin, _host: host, stats }
     }
     fn activate(&self) {
         assert!(unsafe { ((*self.plugin).activate.unwrap())(self.plugin, 48_000.0, 1, 64) });
+        // Latency chosen by initialize must be published during this activation,
+        // without leaving a redundant restart for the next offline export.
+        assert_eq!(self.stats.restarts.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            self.stats.latency_changes.load(Ordering::Relaxed),
+            usize::from(self.latency() != 0)
+        );
         assert!(unsafe { ((*self.plugin).start_processing.unwrap())(self.plugin) });
     }
     fn reset(&self) {
