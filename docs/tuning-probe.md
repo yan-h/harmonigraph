@@ -1,8 +1,8 @@
 # #615 Bitwig timing apparatus
 
 Status:
-apparatus in preparation;
-no Bitwig timing verdict yet.
+[Bitwig measurements are in progress](tuning-probe-bitwig.md);
+no final timing verdict yet.
 The selected design lives in [adaptive-tuning.md](adaptive-tuning.md).
 This document describes a disposable experiment, not an implementation of #616 or #617.
 
@@ -52,6 +52,9 @@ It records the original CLAP callback address, instance-local callback number, r
 It observes exact Rust sub-block entry/exit and the final host `try_push` result for each output event.
 It also counts actual CLAP latency queries;
 reporting a latency internally is not treated as evidence that the host queried it.
+The hub records stereo peak and squared energy for each sub-block, without storing audio samples.
+This permits silent downstream voice checks while physical monitoring remains disabled;
+mixed-track energy does not identify individual voices, so isolate the relevant track for lifecycle trials.
 The pointer address is supporting evidence only;
 hosts may reuse it on every callback.
 

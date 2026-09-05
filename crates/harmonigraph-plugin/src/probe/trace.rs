@@ -126,6 +126,12 @@ pub enum Data {
         beats: Option<f64>,
         playing: bool,
     },
+    AudioLevel {
+        peak: f32,
+        energy: f64,
+        values: usize,
+        nonfinite: usize,
+    },
     SubBlock {
         enter: bool,
     },
@@ -140,6 +146,7 @@ pub enum Data {
         accepted: bool,
     },
     Input {
+        #[serde(rename = "input_sequence")]
         sequence: u64,
         request: u64,
         sample: i64,

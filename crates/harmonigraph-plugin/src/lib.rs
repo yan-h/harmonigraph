@@ -518,7 +518,7 @@ impl Plugin for Harmonigraph {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         #[cfg(feature = "tuning-probe")]
-        if !self.probe.process(context.transport()) {
+        if !self.probe.process(context.transport(), buffer) {
             return ProcessStatus::Error("#615 hub probe run invalid; inspect trace");
         }
         let block_start = self.samples_processed;

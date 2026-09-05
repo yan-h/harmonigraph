@@ -183,10 +183,29 @@ impl Hub {
         self.trace.hook(event);
     }
 
-    pub fn process(&mut self, transport: &Transport) -> bool {
+    pub fn process(&mut self, transport: &Transport, audio: &Buffer) -> bool {
         if !self.enabled {
             return true;
         }
+        // Observe downstream voice energy without enabling physical monitoring.
+        // The negotiated block bounds this scan; only the off-thread trace writer
+        // serializes it, and no audio is played or copied into the trace.
+        let mut peak = 0.0_f32;
+        let mut energy = 0.0_f64;
+        let mut values = 0;
+        let mut nonfinite = 0;
+        for channel in audio.as_slice_immutable().iter().take(2) {
+            for &sample in channel.iter() {
+                values += 1;
+                if sample.is_finite() {
+                    peak = peak.max(sample.abs());
+                    energy += f64::from(sample) * f64::from(sample);
+                } else {
+                    nonfinite += 1;
+                }
+            }
+        }
+        self.trace.record(Data::AudioLevel { peak, energy, values, nonfinite });
         self.trace.record(Data::FrameworkTransport {
             seconds: transport.pos_seconds(),
             beats: transport.pos_beats(),
