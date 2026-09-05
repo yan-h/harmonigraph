@@ -5,214 +5,111 @@
 // second pass lays that node's own light around them. Skins/effects iterate
 // here: this file is the main thing to edit when trying a new look.
 
+// GPU groups mirror uniforms.rs; contract tests resolve every bound field
+// through Naga. Scalar settings are named rather than packed into vector lanes.
+struct CompositeParams {
+    @align(16) darkest_pitch: f32,
+    brightest_pitch: f32,
+    render_scale: f32,
+    bloom_strength: f32,
+};
+
+struct CameraParams {
+    @align(16) view_proj: mat4x4<f32>,
+    right: vec4<f32>,
+    up: vec4<f32>,
+};
+
+struct NodeParams {
+    @align(16) radius: f32,
+    band_inner: f32,
+    band_outer: f32,
+    rings_outer: f32,
+    mark_inner: f32,
+    angular_gap: f32,
+    mark_thickness: f32,
+    padding: f32,
+};
+
+struct MarkerParams {
+    @align(16) half_width: f32,
+    taper_start: f32,
+    world_unit: f32,
+    padding: f32,
+};
+
+struct OctaveParams {
+    @align(16) span: f32,
+    center: f32,
+    padding: vec2<f32>,
+    bounds: array<vec4<f32>, 3>,
+};
+
+struct ShimmerParams {
+    @align(16) slide: f32,
+    period: f32,
+    intensity: f32,
+    softness: f32,
+    pattern: f32,
+    padding0: f32,
+    padding1: f32,
+    padding2: f32,
+};
+
+struct SpectralParams {
+    @align(16) inner: f32,
+    outer: f32,
+    range_cents: f32,
+    folded: f32,
+};
+
+struct GlowParams {
+    @align(16) reach: f32,
+    strength: f32,
+    blend: f32,
+    curve: f32,
+    wash: f32,
+    row_capacity: f32,
+    padding: vec2<f32>,
+};
+
+struct ShadowParams {
+    @align(16) width: f32,
+    reach_sigmas: f32,
+    depth: f32,
+    padding: f32,
+};
+
+struct ShadowTargetParams {
+    @align(16) pane_points: vec2<f32>,
+    atlas_texels: vec2<f32>,
+};
+
+struct MarkerCellParams {
+    @align(16) rect: vec4<f32>,
+    cell: vec4<f32>,
+    points_to_texels: f32,
+    aa_scale: f32,
+    arm_points: f32,
+    padding: f32,
+};
+
 struct Uniforms {
-    view_proj: mat4x4<f32>,
-    cam_right: vec4<f32>,
-    cam_up: vec4<f32>,
-    // x: unused — it carried the global clock in seconds, which nothing
-    //    here reads: the shimmer was its one consumer, and it takes its
-    //    travel pre-multiplied and pre-wrapped in misc8.x instead, an f32
-    //    being unable to carry an hour-long song position finely enough to
-    //    phase a band a fiftieth of a world unit wide. A second spelling of
-    //    the same clock is how a later pattern would clock on the wrong one.
-    // y: base node radius (world units),
-    // z: unused — it carried how much two nodes' overlapping light added up,
-    //    a mix between two blends the glow pass wrote at once. One
-    //    screen-blended field now, so there is nothing to dial between.
-    // w: unused — it carried the node style, the paint of a disc at the
-    //    node's centre, from when that disc had more than one. A retired
-    //    slot rather than a repack, which would renumber the ones around it
-    //    for nothing.
-    misc: vec4<f32>,
-    // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
-    // (offscreen pixels per screen pixel — converts the screen-pixel
-    // softness knob to render pixels); w: bloom strength, which blit.wgsl
-    // reads off this same buffer — NOT a free slot, whatever the fact that
-    // nothing in this file touches it suggests. An octave glyph maps its
-    // pitch through x/y to index pitch_lut.
-    misc2: vec4<f32>,
-    // x: unused — it carried the radius of a disc at the node's centre, the
-    // one layer that was not a ring. Retired in place. y/z: the
-    // outer layer's inner/outer band radii (same units; the scene guarantees
-    // z > y where the band draws at all, and hands both as 0 where it does
-    // not). w: the outer edge of the outermost RING the node draws — z, save
-    // where the band is off and a ring inside it is the last one on — which is
-    // what the marks stand off and what the billboard is sized on (`node_rim`).
-    misc3: vec4<f32>,
-    // Pitch->color lookup for the octave glyphs. The disc is colored through
-    // this same table on the CPU, so a glyph and the disc under it match
-    // exactly rather than closely (length mirrors
-    // harmonigraph_scene::PITCH_LUT_N).
-    pitch_lut: array<vec4<f32>, 64>,
-    // x: unused — it carried the solidity of a disc at the node's centre.
-    // y: where the melody/bass strip starts. z/w: unused — they carried the
-    // idle marker's radius and style, from when an unlit node drew a
-    // placeholder of its own.
-    misc4: vec4<f32>,
-    // x: half a resting marker's arm thickness, as a share of one arm's
-    // length; 1 is a filled square. y: where its arms start to taper, as a
-    // share of one arm; 1 is a square end.
-    // z: the node's ANGULAR padding, in quad UV units — the gap between two
-    // neighbouring sectors, wherever sectors are drawn. The RADIAL padding is
-    // a second setting and never arrives: every stand-off it buys is already
-    // spent in the radii in misc3 and misc4.y, which is arithmetic done before
-    // they get here. w: how deep the melody/bass marks reach past the ring
-    // they stand off, same units; 0 = no marks.
-    misc5: vec4<f32>,
-    // x/y/z: unused — x/y carried the trail's mark style and strength, from
-    //    when a memory was a change to the idle marker rather than a kept
-    //    note name, and z a fade width the Shadow now answers for whole.
-    //    w: the melody/bass marks' shimmer pattern
-    //    (0 off, then one index per pattern; see Pulse::shader_index), read
-    //    by mark_pulse — NOT a free slot.
-    misc6: vec4<f32>,
-    // Unused — the pane fill this pass is composited over, from when a draw
-    // here knocked a hole through to it. Nothing cuts to the pane now: a
-    // shadow is a multiply on what the frame already holds. Retired in place
-    // rather than repacked, which would renumber the rows around it for
-    // nothing.
-    background: vec4<f32>,
-    // The unlit ground a node's two rings stand on: one neutral grey, its
-    // brightness the view's own Ground bar. A colour the lattice DRAWS,
-    // where background above is only what it lands on — this grey is free to
-    // sit either side of the pane's own fill, and at the bottom of the bar it
-    // is black. Read by the OCTAVE band alone — a silent slice IS this
-    // colour, and a sounding one's pitch is painted over it. The audio ring
-    // beside it stands on the same grey by carrying it as entry 0 of
-    // spectral_lut, baked on the CPU from the same L*.
+    @align(16) composite: CompositeParams,
+    camera: CameraParams,
+    node: NodeParams,
+    marker: MarkerParams,
+    octave: OctaveParams,
+    shimmer: ShimmerParams,
+    spectral: SpectralParams,
+    glow: GlowParams,
+    geometry_shadow: ShadowParams,
+    marker_shadow: ShadowParams,
+    shadow_target: ShadowTargetParams,
+    marker_cell: MarkerCellParams,
     lattice_ground: vec4<f32>,
-    // The wheel. x: octaves one turn is cut into; y: the MIDI pitch at the top
-    // of every node.
-    // Which SLOTS a node draws, and how far its ring is turned, are derived
-    // per node from these — both depend on the node's pitch class, so there is
-    // no one answer to send.
-    // z/w: the audio ring's inner and outer radius, in quad UV units, both 0
-    // when the ring is off. Beside the wheel because the ring IS the wheel at
-    // smaller radii — same slices, same angles, same table of boundaries —
-    // with the levels coming off the instance's second octave word instead of
-    // its first.
-    misc7: vec4<f32>,
-    // The shimmer's knobs. x: how FAR the bands have travelled, in world
-    // units, already reduced onto one cycle of the pattern — a clock and a
-    // speed cannot be had here separately, and the reason is precision (see
-    // `Scene::shimmer_slide`); y: how wide they are, in world units (the scene
-    // floors it above zero — the band phase divides by it); z: how deep the
-    // light they carry is, 0 none and 1 the tuned depth; w: how gradually it
-    // arrives across the period, 0 a crest and 1 a cosine. See the Shimmer
-    // section below.
-    misc8: vec4<f32>,
-    // The angle from a ring's own seam to each of its slice boundaries, four
-    // to a row and read through oct_bound(): boundary j walking clockwise. One
-    // table for every node, since the widths are the node's only in where they
-    // are turned to. Computed on the CPU (harmonigraph_scene's
-    // `octave_layout`) because it depends on settings alone — the alternative
-    // is accumulating the same widths per pixel per sector.
-    oct_bounds: array<vec4<f32>, 3>,
-    // The audio ring's knobs. x: how many cents of the spectrum one wedge of
-    // the ring spans, centered on that wedge's own octave, read only where y is
-    // 0; y: 1 where each wedge is ONE reading taken at its own octave's pitch
-    // (the FOLD) rather than a window of pitch spread across it; z/w unused.
-    misc9: vec4<f32>,
-    // The node glow's dials. x: how far past a node's outermost drawn edge its
-    // light spreads, in the node's own uv; y: how much light that is; z unused;
-    // w: how widely a node's own ink is averaged into the colour of its light,
-    // 0 keeping each layer's sectors distinct and 1 laying one tint over the
-    // whole halo.
-    //
-    // ZEROED WHOLE where the glow is off, by the CPU, so `u.misc10.x > 0.0` is
-    // the one test anything here makes and no half-on state exists.
-    //
-    // Read by the light's own draw and the strip behind it (`vs_glow` sizes the
-    // billboard, `glow_layer` shapes the light, `glow_blend_kappa` shapes its
-    // colour). The light is written into a target of the glow's own and
-    // composited at the BOTTOM of the scene pass, which is what puts it under
-    // every shadow the lattice casts.
-    misc10: vec4<f32>,
-    // The node glow's falloff inside its reach, as the signed shape of its
-    // normalized exponential in x. The fixed full/zero endpoints are supplied
-    // by `glow_curve_at`; y/z/w unused. Zeroed with misc10.
-    glow_curve: vec4<f32>,
-    // The LATTICE GEOMETRY group's SHADOW dials. x: how wide it is, as a share
-    // of a node's radius — the σ a node's ink is spent at
-    // (`shadow::sigma_points`) and the reach every node quad is grown by
-    // (`shadow_reach_uv`); y: how far the chosen renderer reaches past a
-    // caster's ink in the picture's own σ (`ShadowKernel::reach_sigmas`), which
-    // is what a quad is grown BY; w: how dark it lands, 1 taking the frame under
-    // a solid caster down to `SHADOW_KEEP_FLOOR`. z unused and zeroed by the
-    // CPU.
-    //
-    // A reach and not a σ RATIO in y, because the two renderers do not end at
-    // the same multiple of their own width: the ratio times a constant answers
-    // for a Gaussian and would cut a distance's window off a third of the way
-    // in. The multiple is spent on the CPU, so a quad here is one number.
-    //
-    // Read wherever a node spends its cell (`shadow_through`). NOT zeroed with
-    // misc10: a shadow is cast with no light in the picture at all. Zero in x
-    // is the geometry group's off switch, and `glow_shadow` is the one test a
-    // node takes.
-    misc11: vec4<f32>,
-    // The resting markers' shadow, inherited from the LATTICE TEXT group. The
-    // same four terms and layout as `misc11`: width, the renderer's reach in σ,
-    // unused, and depth. Names read the same group's style from text.wgsl's own
-    // uniform; this row exists because a marker is drawn by this module.
-    plus_shadow: vec4<f32>,
-    // The node glow's plumbing row, which is not a dial. x: how many rows the
-    // ink strip has — the row map's CAPACITY and not this frame's instance
-    // count, rows being handed out per node and held for as long as that node's
-    // light lasts. What `vs_ink_strip` and `vs_ink_blur` place a node's row
-    // inside. y/z/w unused.
-    //
-    // A row of its own rather than the spare half of one above, because it
-    // answers a different question: everything up there is a setting a person
-    // dialled, and this is how tall a texture the renderer allocated. Zeroed
-    // whole with them, on the same rule.
-    misc12: vec4<f32>,
-    // The WASH. x: how much of the light a LIT slice of a node washes its own
-    // ink with (`glow_wash`), where every other piece of the lattice's ink
-    // takes that field whole. y/z/w unused.
-    //
-    // A row of its own rather than a spare slot among the glow's dials: the
-    // wash reads the light RAW, where every dial up there shapes the
-    // light itself, so a bar sitting among them would carry the coupling it
-    // exists to break. Zeroed whole with misc10.
-    misc13: vec4<f32>,
-    // The shadow atlas's plumbing row, which is not a dial. x/y: the pane in
-    // POINTS, which is the space a caster's box is packed in (`shadow::pack`),
-    // so a clip position resolves back to it (`pane_points`); z/w: the atlas in
-    // texels, for the draws that fill a cell — they cannot bind the texture
-    // they are writing, so its size cannot be read off it.
-    misc14: vec4<f32>,
-    // The cell every resting marker's Gaussian is read out of, as a row rather
-    // than a per-instance buffer: every cross is the same shape at the same σ,
-    // and a blur is linear, so `blur(level * ink)` is `level * blur(ink)` and
-    // the level can be spent per marker where the cell is read. The box is in
-    // the pane's points, centred on the crossing.
-    plus_shadow_rect: vec4<f32>,
-    // That box's cell in atlas texels: origin, then size.
-    plus_shadow_cell: vec4<f32>,
-    // x: points to cell texels; y: σ in those texels; z: the cell's share of
-    // the target's pixels, which is the softness the cross is cut with where it
-    // is RASTERIZED (`aa_width`, `vs_plus_cell`); w: one arm in points, which
-    // is what turns a fragment's place on a cross into a place in the cell.
-    //
-    // No level among them: it is 1 for every marker, a marker's own opacity
-    // being the share it spends when it READS the cell (`plus_paint`).
-    plus_shadow_terms: vec4<f32>,
-    // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
-    // table the spectrogram's cells and the Spiral pane's segments are read
-    // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
-    // that is the whole difference between the plugin's two color schemes, and
-    // the reason there are two tables here rather than one.
+    pitch_lut: array<vec4<f32>, 64>,
     spectral_lut: array<vec4<f32>, 64>,
-    // The analyzer's grid through the VOLUME-COLOR dB window, a byte per
-    // bucket, sixteen buckets to a row. Read by the audio ring alone; see
-    // `spectrum_color_at`.
-    //
-    // The one grid the GPU gets. The gate's copy — the same buckets through
-    // the analyzer's own Level window — is answered on the CPU and stays
-    // there (harmonigraph_scene's RingGate and RingFade), so what a wedge
-    // PAINTS is read here while whether a node wears a ring at all is decided
-    // off a window this shader never sees.
     spectrum_color: array<vec4<u32>, 240>,
 };
 
@@ -284,7 +181,7 @@ const INK_STRIP_N: u32 = 64u;
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
 // The geometry group's Shadow: how wide a node's shadow is, as a share of its
-// radius. A resting marker takes the same units from `u.plus_shadow`, inherited
+// radius. A resting marker takes the same units from `u.marker_shadow`, inherited
 // from the text group, while a name's own pipeline receives that group directly.
 // σ is half of the resolved width (`shadow::sigma_points`), where the derivation
 // of that half is stated.
@@ -295,13 +192,13 @@ const INK_STRIP_N: u32 = 64u;
 // rather than a share of each item.
 //
 // Zero is the geometry group off — its nodes pack no cells and each multiplies
-// by 1. NOT zeroed with the glow: `u.misc11` is packed whatever `misc10` says,
+// by 1. NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
 // a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
-    return max(u.misc11.x, 0.0);
+    return max(u.geometry_shadow.width, 0.0);
 }
 
-// How dark a shadow lands (`u.misc11.w`): the share of the frame a caster's
+// How dark a shadow lands (`u.geometry_shadow.depth`): the share of the frame a caster's
 // solid middle takes away, 1 leaving `SHADOW_KEEP_FLOOR` of it.
 //
 // A FLOOR rather than a scale, which is what the `min(…, 1)` under the
@@ -309,32 +206,32 @@ fn glow_shadow() -> f32 {
 // here, and the gain only deepens the thin ones. At 0 nothing casts and every
 // draw multiplies by 1, which is the picture with no shadow in it at all.
 fn glow_shadow_depth() -> f32 {
-    return clamp(u.misc11.w, 0.0, 1.0);
+    return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
 
 // How far this frame's renderer reaches past a caster's ink in the picture's own
-// σ (`u.misc11.y`, `ShadowKernel::reach_sigmas`), which is what every quad is
+// σ (`u.geometry_shadow.reach_sigmas`, `ShadowKernel::reach_sigmas`), which is what every quad is
 // grown by.
 //
 // Floored at `SHADOW_REACH_SIGMAS` so a frame with nothing packed sizes its
 // quads as one Gaussian does.
 fn glow_shadow_reach() -> f32 {
-    return max(u.misc11.y, SHADOW_REACH_SIGMAS);
+    return max(u.geometry_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
 }
 
 // The text-group counterparts used by a resting marker. Kept as one row in the
 // uniform so changing which group a marker inherits cannot leave one of its
 // width, renderer reach or depth behind with the nodes.
 fn plus_shadow_width() -> f32 {
-    return max(u.plus_shadow.x, 0.0);
+    return max(u.marker_shadow.width, 0.0);
 }
 
 fn plus_shadow_depth() -> f32 {
-    return clamp(u.plus_shadow.w, 0.0, 1.0);
+    return clamp(u.marker_shadow.depth, 0.0, 1.0);
 }
 
 fn plus_shadow_reach() -> f32 {
-    return max(u.plus_shadow.y, SHADOW_REACH_SIGMAS);
+    return max(u.marker_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
 }
 
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
@@ -354,8 +251,8 @@ fn shadow_reach_uv(scale: f32) -> f32 {
 fn pane_points(clip: vec4<f32>) -> vec2<f32> {
     let ndc = clip.xy / clip.w;
     return vec2<f32>(
-        (ndc.x * 0.5 + 0.5) * u.misc14.x,
-        (0.5 - ndc.y * 0.5) * u.misc14.y,
+        (ndc.x * 0.5 + 0.5) * u.shadow_target.pane_points.x,
+        (0.5 - ndc.y * 0.5) * u.shadow_target.pane_points.y,
     );
 }
 
@@ -425,7 +322,7 @@ fn plus_shadow_through(
 }
 
 // How much of the light a LIT slice washes over its own ink with
-// (`u.misc13.x`): 1 is the whole field over it, the slice melting into its own
+// (`u.glow.wash`): 1 is the whole field over it, the slice melting into its own
 // halo, and 0 is the slice drawn exactly as it is with the glow off.
 //
 // The lit ink ALONE is what this reaches, and everything else in the lattice
@@ -443,12 +340,12 @@ fn plus_shadow_through(
 // is washed with, and what an item in FRONT of it takes is taken from the
 // finished picture rather than from this field.
 fn glow_wash() -> f32 {
-    return clamp(u.misc13.x, 0.0, 1.0);
+    return clamp(u.glow.wash, 0.0, 1.0);
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
 // wearing one — both marks ride the strip just past the outermost ring — and
-// the outermost ring's own edge (u.misc3.w, the stack's cursor) where it is not.
+// the outermost ring's own edge (u.node.rings_outer, the stack's cursor) where it is not.
 // The ring is ordinarily the octave band; on a node whose band is dialled off it
 // is whichever layer inside it the stack ended on, which is why the edge is
 // handed in rather than read off the band's radii.
@@ -459,9 +356,9 @@ fn glow_wash() -> f32 {
 // is filled where the node's ink is a set of annuli around a clear middle.
 // Being loose costs a little fill and no correctness.
 fn node_rim(marked: bool) -> f32 {
-    var rim = max(u.misc3.w, 0.0);
-    if marked && u.misc5.w > 0.0 {
-        rim = max(rim, u.misc4.y + u.misc5.w);
+    var rim = max(u.node.rings_outer, 0.0);
+    if marked && u.node.mark_thickness > 0.0 {
+        rim = max(rim, u.node.mark_inner + u.node.mark_thickness);
     }
     return rim;
 }
@@ -710,17 +607,17 @@ fn vs_node_cell(
     box: ShadowCell,
 ) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
-    let centre_clip = u.view_proj * vec4<f32>(inst.world_pos, 1.0);
-    let uv_world = u.misc.y * 0.90 * 2.0 * max(inst.scale, 0.05);
+    let centre_clip = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
+    let uv_world = u.node.radius * 0.90 * 2.0 * max(inst.scale, 0.05);
     let right_clip =
-        u.view_proj * vec4<f32>(inst.world_pos + u.cam_right.xyz * uv_world, 1.0);
+        u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.right.xyz * uv_world, 1.0);
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
     if box.who.y < 0.5 {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.cell_map.x);
         out.clip_pos =
-            select(no_quad(), cell_clip(texel, u.misc14.zw, out.clip_pos.w), cell_packed(box.cell));
+            select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, out.clip_pos.w), cell_packed(box.cell));
         out.shadow_box = box.cell;
         out.shadow_at = vec4<f32>(texel, uv_points, box.cell_map.w);
         return out;
@@ -737,7 +634,7 @@ fn vs_node_cell(
     // so both endpoints have one projection depth and the two projected basis
     // vectors span the cell. Inverting that basis reconstructs the node uv at
     // a cell corner even when the camera tilts the sheet.
-    let up_clip = u.view_proj * vec4<f32>(inst.world_pos + u.cam_up.xyz * uv_world, 1.0);
+    let up_clip = u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.up.xyz * uv_world, 1.0);
     let up = pane_points(up_clip) - centre;
     let delta = points - centre;
     let det = right.x * up.y - right.y * up.x;
@@ -746,11 +643,11 @@ fn vs_node_cell(
         delta.x * up.y - delta.y * up.x,
         right.x * delta.y - right.y * delta.x,
     ) / stable_det;
-    out.field = vec2<f32>(dot(inst.world_pos, u.cam_right.xyz), dot(inst.world_pos, u.cam_up.xyz))
+    out.field = vec2<f32>(dot(inst.world_pos, u.camera.right.xyz), dot(inst.world_pos, u.camera.up.xyz))
         + out.uv * uv_world;
 
     out.clip_pos =
-        select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(box.cell));
+        select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
     // The negative sign carries the distance kind without consuming another
     // interpolator; coverage cells return above with the positive scale.
@@ -769,7 +666,7 @@ fn vs_node_cell(
 /// world distance either way and nothing inside the node moves.
 @vertex
 fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, max(u.misc10.x, 0.0), true);
+    return node_vertex(vertex_index, inst, max(u.glow.reach, 0.0), true);
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
@@ -819,13 +716,13 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     // would cut that Gaussian off in a straight line. `extra` is the glow's on
     // top of it. The cell draw writes the packer's one-texel sampling guard too.
     let margin = quad_margin(select(rim, max(rim, lit_rim), light), max(shadow_reach_uv(scale), extra));
-    let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
+    let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
-        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
+        + (u.camera.right.xyz * corner.x + u.camera.up.xyz * corner.y) * radius;
 
     var out: VsOut;
-    out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
+    out.clip_pos = u.camera.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner * margin;
     out.color = inst.color;
     out.params = inst.params;
@@ -849,7 +746,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     // CORNER's world position rather than the node's center, so the field
     // varies across the quad and the interpolator hands the fragment shader
     // the real plane position of every pixel.
-    out.field = vec2<f32>(dot(world, u.cam_right.xyz), dot(world, u.cam_up.xyz));
+    out.field = vec2<f32>(dot(world, u.camera.right.xyz), dot(world, u.camera.up.xyz));
     return out;
 }
 
@@ -920,7 +817,7 @@ const AA_SOFTNESS_PX: f32 = 2.0;
 // other way, a cell antialiased at a width finer than the texels it has to draw
 // in being no antialiasing at all.
 fn aa_width(coord_fwidth: f32, surface_scale: f32) -> f32 {
-    let knob = AA_SOFTNESS_PX * max(u.misc2.z, 0.01) * clamp(surface_scale, 0.0, 1.0);
+    let knob = AA_SOFTNESS_PX * max(u.composite.render_scale, 0.01) * clamp(surface_scale, 0.0, 1.0);
     return max(coord_fwidth, 1e-4) * max(knob, 1.0);
 }
 
@@ -959,11 +856,11 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
 // bound(span)), so a stale or oversized uniform draws a wrong sector rather
 // than reading past the last row.
 fn oct_span() -> u32 {
-    return clamp(u32(u.misc7.x), 1u, MAX_SPAN);
+    return clamp(u32(u.octave.span), 1u, MAX_SPAN);
 }
 // The MIDI pitch at the top of every node's wheel.
 fn oct_center() -> f32 {
-    return u.misc7.y;
+    return u.octave.center;
 }
 // Straight up, in these angles: the bottom of a node is a quarter turn back
 // from zero and clockwise — the direction pitch rises — subtracts.
@@ -971,7 +868,7 @@ const OCT_UP: f32 = -0.75 * TAU;
 // Boundary `j` of a ring, four to a uniform row. j runs 0..span: 0 is the seam
 // and span is the same seam a full turn on.
 fn oct_bound(j: u32) -> f32 {
-    return u.oct_bounds[j / 4u][j % 4u];
+    return u.octave.bounds[j / 4u][j % 4u];
 }
 // Angle from a ring's seam to `x` slices along it, walking clockwise. Linear
 // inside a slice, so a pitch stands at the same fraction of its own octave's
@@ -1068,9 +965,9 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
     return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
 }
 
-// The shimmer's pattern selector (u.misc6.w — see `Pulse`).
+// The shimmer's pattern selector (u.shimmer.pattern — see `Pulse`).
 fn pulse_marks_mode() -> u32 {
-    return u32(u.misc6.w + 0.5);
+    return u32(u.shimmer.pattern + 0.5);
 }
 
 // ---- Shimmer: one sheet of soft light over the whole lattice --------------
@@ -1103,8 +1000,8 @@ fn pulse_marks_mode() -> u32 {
 // more here than a pattern that holds still while the camera moves. Both the
 // settings below are in those units for that reason.
 //
-// Distance from one bright peak to the next (u.misc8.y, the view's Width
-// bar), and how far the sheet has travelled by now (u.misc8.x, the Speed bar
+// Distance from one bright peak to the next (u.shimmer.period, the view's Width
+// bar), and how far the sheet has travelled by now (u.shimmer.slide, the Speed bar
 // against the clock, multiplied out on the CPU). The pair sizes and moves ONE
 // shape: the softness below is what shares the period out between the lit part
 // and the dark, so a wider setting widens both together rather than spacing out
@@ -1113,10 +1010,10 @@ fn pulse_marks_mode() -> u32 {
 fn shimmer_period() -> f32 {
     // The scene clamps this well clear of zero; the floor is here so a hand-
     // built Scene in a test cannot divide by it either.
-    return max(u.misc8.y, 0.01);
+    return max(u.shimmer.period, 0.01);
 }
 // The exponent the raised cosine is taken to, from the Softness bar
-// (u.misc8.w): 8 at 0, 1 at 1, log-spaced so equal drags are equal RATIOS of
+// (u.shimmer.softness): 8 at 0, 1 at 1, log-spaced so equal drags are equal RATIOS of
 // sharpness rather than equal steps of an exponent, which is not a scale
 // anyone reads by eye.
 //
@@ -1132,7 +1029,7 @@ fn shimmer_period() -> f32 {
 // the dark and invert the pattern into holes.
 const SHIMMER_SHARP_MAX: f32 = 3.0;
 fn shimmer_sharpness() -> f32 {
-    return exp2(SHIMMER_SHARP_MAX * (1.0 - clamp(u.misc8.w, 0.0, 1.0)));
+    return exp2(SHIMMER_SHARP_MAX * (1.0 - clamp(u.shimmer.softness, 0.0, 1.0)));
 }
 // What a peak is worth at intensity 1, as the natural log of the gain from the
 // sheet's trough to its crest: an EXPOSURE, not an amount of light to add.
@@ -1235,13 +1132,13 @@ const SHIMMER_CEILING: f32 = 0.95;
 // Weighted rather than a plain mean so a blown yellow pales toward the white
 // its own light names, rather than toward a grey darker than it started.
 const SHIMMER_LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
-// How much of that exposure this view asks for (u.misc8.z, the Intensity bar).
+// How much of that exposure this view asks for (u.shimmer.intensity, the Intensity bar).
 // One number scaling one thing, where an added-light model has a brightness
 // and a coverage fade to keep in step: the sheet is one shape at every setting,
 // and 0 leaves `shimmer_light` returning the layer exactly as it draws
 // unshimmered — from the bar rather than from the mode.
 fn shimmer_depth() -> f32 {
-    return max(u.misc8.z, 0.0);
+    return max(u.shimmer.intensity, 0.0);
 }
 // Which way the sheet is laid and travels. A diagonal because the lattice's
 // own structure is upright — its rows of fifths and thirds — so a pattern
@@ -1364,7 +1261,7 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
     // reduction is exact (every arm below is periodic in it) and it is done
     // in f64 on the CPU, where a song position still HAS the resolution to
     // phase a band with. See `Scene::shimmer_slide`.
-    let slide = u.misc8.x;
+    let slide = u.shimmer.slide;
     // The field slid along the sheet's own direction, which is the one
     // position every pattern is built on.
     let p = field - dir * slide;
@@ -1467,7 +1364,7 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 
 // ---- Outer octave layer ----------------------------------------------------
 // Every outer style draws its glyphs inside the radial band
-// [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
+// [u.node.band_inner, u.node.band_outer] (quad UV units): the band IS the glyph set's
 // radial footprint, so switching styles keeps the octave display the same
 // size. The glyphs are drawn identically whatever the ring inside them does —
 // the layers are independent.
@@ -1489,12 +1386,12 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 // near the center every wedge falls inside the gap band, leaving a small
 // clear hub instead of an N-way mush point.
 //
-// The gap's full width is u.misc5.z (the view's Octave gap bar), in quad UV
+// The gap's full width is u.node.angular_gap (the view's Octave gap bar), in quad UV
 // units. The same value cuts the sides of a melody/bass mark, so one number is
 // every angular interruption on the node; how far the marks stand OFF the band
 // is the radial gap instead, and it reaches here only as a radius.
 fn slice_gap_half() -> f32 {
-    return max(u.misc5.z, 0.0) * 0.5;
+    return max(u.node.angular_gap, 0.0) * 0.5;
 }
 // The backdrop is OPAQUE where the note is fully present, and its color is
 // u.lattice_ground — so a silent slice is that grey exactly, the same grey the
@@ -1671,7 +1568,7 @@ fn outer_glyph(
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
 // octave glyph is the same hue as the disc that pitch would light.
 fn pitch_lut_color(pitch: f32) -> vec3<f32> {
-    let t = clamp((pitch - u.misc2.x) / max(u.misc2.y - u.misc2.x, 0.01), 0.0, 1.0);
+    let t = clamp((pitch - u.composite.darkest_pitch) / max(u.composite.brightest_pitch - u.composite.darkest_pitch, 0.01), 0.0, 1.0);
     let f = t * f32(PITCH_LUT_N - 1u);
     let i0 = u32(floor(f));
     let i1 = min(i0 + 1u, PITCH_LUT_N - 1u);
@@ -1695,11 +1592,11 @@ fn spectral_lut_color(level: f32) -> vec3<f32> {
 }
 
 // Whether each wedge of the audio ring is ONE reading taken at its own
-// octave's pitch (u.misc9.y — the FOLD) rather than a window of pitch spread
+// octave's pitch (u.spectral.folded — the FOLD) rather than a window of pitch spread
 // across the wedge. The two readings differ in what u.spectrum_color holds
 // and in where in the wedge it is sampled, and nowhere else.
 fn folded() -> bool {
-    return u.misc9.y > 0.5;
+    return u.spectral.folded > 0.5;
 }
 
 // ---- The audio ring --------------------------------------------------------
@@ -1720,7 +1617,7 @@ fn folded() -> bool {
 // 7-limit lattice the first sixteen harmonics land on six nodes.
 //
 // SPECTRUM — a wedge is not one number. Angle within it runs linearly over a
-// window of u.misc9.x cents centered on that octave's own pitch —
+// window of u.spectral.range_cents cents centered on that octave's own pitch —
 // counter-clockwise edge the bottom of the window, clockwise edge the top,
 // since clockwise is the direction pitch rises everywhere else on the wheel.
 // So a partial dead on the node paints down the middle of the wedge, and one a
@@ -1754,14 +1651,14 @@ fn folded() -> bool {
 // included — the reading in full, and hundreds of rings saying only where the
 // nodes are.
 //
-// The radius is its own (u.misc7.z/w, the innermost slot of the stack at the
+// The radius is its own (u.spectral.inner/outer, the innermost slot of the stack at the
 // fresh view, reaching the node's own centre); the slices are the band's, off the
 // same `OctRing`, so the two rings share one rhythm of wedges and one meaning
 // for an angle.
 
 // The ring's inner and outer radius in quad UV units, both 0 when it is off.
 fn spectral_radii() -> vec2<f32> {
-    return vec2<f32>(u.misc7.z, u.misc7.w);
+    return vec2<f32>(u.spectral.inner, u.spectral.outer);
 }
 
 // The ring's loudness at bucket `b`, unpacked from the byte it rides as.
@@ -1906,7 +1803,7 @@ fn spectral_ring(
     var pitch = oct_slot_pitch(owner, in.cents);
     if !folded() {
         let across = wedge_fraction(oct_sector(owner, oct), uv);
-        pitch = pitch + (across - 0.5) * u.misc9.x / 100.0;
+        pitch = pitch + (across - 0.5) * u.spectral.range_cents / 100.0;
     }
     // The node's own level taken out of the COVERAGE and not out of the colour:
     // a ring on its way in is the octave layer showing through it, where a
@@ -2334,14 +2231,14 @@ fn node_ink(
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
-    // edge arrives as misc4.y) and cut down its sides by the ANGULAR one, the
+    // edge arrives as u.node.mark_inner) and cut down its sides by the ANGULAR one, the
     // same padding one indicator stands off the next. That second one is what
     // makes an extension read as its slice continued rather than as a second
     // thing stuck to the end of it, and it holds however far out the first
     // stands the strip.
-    let band_in = u.misc3.y;
-    let band_out = u.misc3.z;
-    let mark_thick = u.misc5.w;
+    let band_in = u.node.band_inner;
+    let band_out = u.node.band_outer;
+    let mark_thick = u.node.mark_thickness;
     // The strip's depth is the bar's alone, in the node's own uv: a length in
     // the node's space and not on the surface being drawn, so every pass that
     // rasterizes this node paints the same strip. A screen width here would
@@ -2350,7 +2247,7 @@ fn node_ink(
     // is an atlas texel, so a floor in `aa` comes out σ wide however thin the
     // strip is and the node's shadow reaches past ink it never drew. 0 is off.
     let mark_w = max(mark_thick, 0.0);
-    // The slot the STACK gave the strip (u.misc4.y): a padding out from
+    // The slot the STACK gave the strip (u.node.mark_inner): a padding out from
     // whatever layer the stack ended on — which is the band on a node that
     // draws one and whatever is inside it on a node that does not — and the
     // stack's own START on a node with no rings at all, where a padding would
@@ -2363,7 +2260,7 @@ fn node_ink(
     // QUAD_MARGIN fits the square quad) and ease it off there, rather than
     // letting the corner clip it flat.
     let lim = QUAD_MARGIN - 0.02;
-    let mark_in = min(u.misc4.y, lim);
+    let mark_in = min(u.node.mark_inner, lim);
     let mark_out = min(mark_in + mark_w, lim);
     // Sounding slots draw bright, tinted by their own pitch, each fading on
     // its own envelope; the silent ones draw as the backdrop's ghosts in the
@@ -2845,7 +2742,7 @@ struct PlusVsOut {
 const PLUS_QUAD_MARGIN: f32 = 1.6;
 
 // One quad uv as a world length on the sheet the markers stand on
-// (`u.misc13.y`, `Scene::marker_unit`), which is what puts a marker's two
+// (`u.marker.world_unit`, `Scene::marker_unit`), which is what puts a marker's two
 // lengths into one unit: its arm arrives in world, and the Shadow whose reach
 // its quad has to hold is a node's bar, in the node's uv.
 //
@@ -2853,7 +2750,7 @@ const PLUS_QUAD_MARGIN: f32 = 1.6;
 // markers, so what the floor is worth is finite arithmetic on the way to
 // drawing none.
 fn marker_unit() -> f32 {
-    return max(u.misc13.y, 1e-6);
+    return max(u.marker.world_unit, 1e-6);
 }
 
 // The exact signed distance to the folded box a marker's two arms make, `uv`
@@ -2866,12 +2763,12 @@ fn plus_box_sd(uv: vec2<f32>, end: f32) -> f32 {
     // double up on the diagonals).
     let p = abs(uv);
     let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
-    // `misc5.x` is HALF the arm's thickness, as a share of its length: the bar
+    // `u.marker.half_width` is HALF the arm's thickness, as a share of its length: the bar
     // sets a whole thickness across the arm and `derive_plus_half_width` halves
     // it, because what the fold measures is the distance out from the arm's
     // own centre line. At 1 the box covers the octant and the cross is a filled
     // square, which is the top of that bar and not an accident of the field.
-    let corner = vec2<f32>(q.x - end, q.y - u.misc5.x);
+    let corner = vec2<f32>(q.x - end, q.y - u.marker.half_width);
     // The exact signed distance to that box: outside, the distance to its
     // nearest point; inside, how far in. Exact rather than approximate is what
     // makes the arms' inner corners as clean as their ends — an approximation
@@ -2887,7 +2784,7 @@ fn plus_sd(uv: vec2<f32>) -> f32 {
 fn plus_taper(uv: vec2<f32>) -> f32 {
     let p = abs(uv);
     let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
-    let start = min(u.misc5.y, 1.0 - 1e-3);
+    let start = min(u.marker.taper_start, 1.0 - 1e-3);
     let fade = smoothstep(start, 1.0, clamp(q.x, 0.0, 1.0));
     return 1.0 - fade;
 }
@@ -2896,7 +2793,7 @@ fn plus_taper(uv: vec2<f32>) -> f32 {
 // represented by the taper start held 0.001 short of its tip, so that sentinel
 // keeps the shadow whole instead of cutting its blur off at the box.
 fn plus_shadow_taper(uv: vec2<f32>) -> f32 {
-    return select(plus_taper(uv), 1.0, u.misc5.y >= 1.0 - 1e-3);
+    return select(plus_taper(uv), 1.0, u.marker.taper_start >= 1.0 - 1e-3);
 }
 
 // How much of the marker's full arm box this fragment is inside, before the
@@ -2908,7 +2805,7 @@ fn plus_body_coverage(uv: vec2<f32>, aa: f32) -> f32 {
 // How much of the marker this fragment is inside, `uv` measured in the arm's
 // own length and `aa` the soft band the whole shape is cut with.
 fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
-    // The four ends taper: an arm is solid out to `misc5.y` of its length and
+    // The four ends taper: an arm is solid out to `u.marker.taper_start` of its length and
     // fades to nothing by its tip, the way a line drawn into a node arrives at
     // nothing rather than stopping at something. `plus_taper` reads the
     // distance along whichever arm this fragment is on through the same fold
@@ -2941,10 +2838,10 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // marker with no unit to be measured in casts nothing. The unit is packed
     // whatever the glow says, so this is the marker's own test and not the
     // light's.
-    let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.misc13.y > 0.0);
-    let centre_clip = u.view_proj * vec4<f32>(inst.pos_radius.xyz, 1.0);
-    let arm_clip = u.view_proj
-        * vec4<f32>(inst.pos_radius.xyz + u.cam_right.xyz * inst.pos_radius.w, 1.0);
+    let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.marker.world_unit > 0.0);
+    let centre_clip = u.camera.view_proj * vec4<f32>(inst.pos_radius.xyz, 1.0);
+    let arm_clip = u.camera.view_proj
+        * vec4<f32>(inst.pos_radius.xyz + u.camera.right.xyz * inst.pos_radius.w, 1.0);
     let arm_points = distance(pane_points(centre_clip), pane_points(arm_clip));
     // Grown to hold the SHADOW as well as the ink, in arms. The Gaussian's
     // shared cell is measured at the focus plane and keeps the matching world
@@ -2970,10 +2867,10 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // under an orbit instead of foreshortening into an ellipse.
     let reach = inst.pos_radius.w * margin;
     let world = inst.pos_radius.xyz
-        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
+        + (u.camera.right.xyz * corner.x + u.camera.up.xyz * corner.y) * reach;
 
     var out: PlusVsOut;
-    out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
+    out.clip_pos = u.camera.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner * margin;
     out.color = inst.color;
     // The whole marker field is ONE caster, and it is the first the frame packs
@@ -2983,7 +2880,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // so the "pane point" a marker reads it at is its own place on that cross
     // rather than its place on the pane. A distance has no cell and uses the
     // projected arm carried beside the caster index instead.
-    let shared_arm_points = u.plus_shadow_terms.w;
+    let shared_arm_points = u.marker_cell.arm_points;
     // The marker's own opacity is the SHARE of the shadow it casts, which is
     // what makes a position handing itself back as a name fades off it grow its
     // cross and the cross's shadow on one clock (`derive_pluses`).
@@ -2992,7 +2889,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
 }
 
 /// The one cross every resting marker's GAUSSIAN is taken from, drawn into the
-/// shared cell (`u.plus_shadow_*`) rather than onto the pane. A distance
+/// shared cell (`u.marker_cell`) rather than onto the pane. A distance
 /// collapses this draw because its exact field is evaluated in [`plus_paint`].
 ///
 /// ONE INSTANCE for the whole field. What varies between markers — where each
@@ -3004,21 +2901,21 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
         select(0.0, 1.0, (vertex_index & 1u) == 1u),
         select(0.0, 1.0, (vertex_index & 2u) == 2u),
     );
-    let rect = u.plus_shadow_rect;
-    let cell = u.plus_shadow_cell;
-    let texel = cell.xy + corner * rect.zw * u.plus_shadow_terms.x;
+    let rect = u.marker_cell.rect;
+    let cell = u.marker_cell.cell;
+    let texel = cell.xy + corner * rect.zw * u.marker_cell.points_to_texels;
     var out: PlusVsOut;
-    out.clip_pos = select(no_quad(), cell_clip(texel, u.misc14.zw, 1.0), cell_packed(cell));
+    out.clip_pos = select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, 1.0), cell_packed(cell));
     // The box is one arm grown by the blur's own reach on each side, and the
     // crossing is at its middle, so half the box in arms is this quad's margin.
-    let arm_points = max(u.plus_shadow_terms.w, 1e-6);
+    let arm_points = max(u.marker_cell.arm_points, 1e-6);
     out.uv = (corner * 2.0 - 1.0) * (rect.z * 0.5 / arm_points);
     out.color = vec4<f32>(1.0);
     // No caster to READ — this draw is the one that fills the cell — and the
     // cell's own scale, which is what the cross is cut with here rather than
     // the pane's.
     out.shadow_box = vec4<f32>(0.0);
-    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.plus_shadow_terms.z);
+    out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.marker_cell.aa_scale);
     return out;
 }
 
@@ -3110,12 +3007,12 @@ fn light_coord(frag_pos: vec2<f32>) -> vec2<i32> {
 }
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
-/// concentration that average is taken at (`u.misc10.w`): the bar's bottom is
+/// concentration that average is taken at (`u.glow.blend`): the bar's bottom is
 /// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
 /// concentration at all, one tint over the halo. Read by [`fs_ink_blur`], which
 /// is where the average is taken.
 fn glow_blend_kappa() -> f32 {
-    return GLOW_LOBE_KAPPA * (1.0 - clamp(u.misc10.w, 0.0, 1.0));
+    return GLOW_LOBE_KAPPA * (1.0 - clamp(u.glow.blend, 0.0, 1.0));
 }
 
 /// One layer's angular soft-band width at radius `r`, in the node's uv: the arc
@@ -3183,8 +3080,8 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     // opacity that slice paints — a lit slot's pitch, a silent one's ground, a
     // fading one the two mixed. The same walk the layer itself makes, and the
     // same `oct_slot_ink` at the end of it.
-    let band_in = u.misc3.y;
-    let band_out = u.misc3.z;
+    let band_in = u.node.band_inner;
+    let band_out = u.node.band_outer;
     if band_out > band_in && in.params.x > 0.0 {
         let mid = 0.5 * (band_in + band_out);
         let p = dir * mid;
@@ -3224,10 +3121,10 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     // and two ends, so the stronger owns the direction exactly as it owns the
     // pixel in `node_ink` — and the depth the strip is dialled to, capped at
     // the quad the way the layer's own is, is what weighs it.
-    let mark_thick = u.misc5.w;
+    let mark_thick = u.node.mark_thickness;
     if mark_thick > 0.0 && (in.marks.x | in.marks.y) != 0u {
         let lim = QUAD_MARGIN - 0.02;
-        let mark_in = min(u.misc4.y, lim);
+        let mark_in = min(u.node.mark_inner, lim);
         let mark_out = min(mark_in + mark_thick, lim);
         let mid = 0.5 * (mark_in + mark_out);
         let p = dir * mid;
@@ -3295,7 +3192,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 /// The instance's own vertex stage does everything but the geometry, so what a
 /// node carries into `ink_at` is spelled once and the strip cannot come to
 /// disagree with the billboard about it. What is replaced is the two things a
-/// row is not: where it sits — the row this node was handed, of `u.misc12.x` —
+/// row is not: where it sits — the row this node was handed, of `u.glow.row_capacity` —
 /// and its uv, which carries the ANGLE across the row rather than a position on
 /// a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn, which is what
 /// [`glow_ink`] reads it back at.
@@ -3303,7 +3200,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.misc12.x, 1.0);
+    let rows = max(u.glow.row_capacity, 1.0);
     let v = (out.strip_row + corner.y) / rows;
     out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 0.0);
@@ -3377,7 +3274,7 @@ fn vs_ink_blur(
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.misc12.x, 1.0);
+    let rows = max(u.glow.row_capacity, 1.0);
     let v = (inst.glow.y + corner.y) / rows;
     return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
 }
@@ -3469,7 +3366,7 @@ fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
 /// inflection, so a fast shape cannot make an S-curve.
 fn glow_curve_at(d: f32, span: f32) -> f32 {
     let p = clamp(d / span, 0.0, 1.0);
-    let shape = u.glow_curve.x;
+    let shape = u.glow.curve;
     let remaining = 1.0 - p;
     // This is the second-order series of the quotient below. Both halves match
     // `GlowCurve::sample`; the branch keeps a nearly-linear shape from being
@@ -3487,8 +3384,8 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
 /// layer here returns its ink.
 fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     let level = glow_level(in);
-    let reach = max(u.misc10.x, 0.0);
-    let strength = max(u.misc10.y, 0.0);
+    let reach = max(u.glow.reach, 0.0);
+    let strength = max(u.glow.strength, 0.0);
     // ONE length under the whole layer: the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on

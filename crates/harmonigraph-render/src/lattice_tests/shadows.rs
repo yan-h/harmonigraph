@@ -9,8 +9,8 @@ const SIZE: [u32; 2] = [256, 256];
 
 /// The pane fill every reading on bare ground is taken against.
 ///
-/// The PANE's, not the scene's: nothing in the pass paints a background —
-/// `Uniforms::background` is retired — so a shadow over a region no ink covers
+/// Nothing in the pass paints a background or carries its colour in uniforms,
+/// so a shadow over a region no ink covers
 /// composites as `pane * T` and the Shooter's clear is the whole of what it
 /// lands on. Bright, so one multiply has the range of a channel to move in.
 const GROUND: f64 = 0.8;
@@ -1747,8 +1747,12 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
         callback.casters[0].sigma_points,
     );
     assert_eq!(
-        callback.uniforms.plus_shadow,
-        [text.width, text.kernel.reach_sigmas(), 0.0, text.depth],
+        (
+            callback.uniforms.marker_shadow.width,
+            callback.uniforms.marker_shadow.reach_sigmas,
+            callback.uniforms.marker_shadow.depth,
+        ),
+        (text.width, text.kernel.reach_sigmas(), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 
@@ -2258,4 +2262,65 @@ fn a_distance_rows_crease_is_no_deeper_than_a_lone_edge() {
         "the distance row leaves {crease} in the crease against {edge} at the same distance on \
          the open side, so a distance term is summing rather than answering with the nearest ink",
     );
+}
+
+/// Changing only pane width translates these face-on casters without changing
+/// their point-space shadows. Both the pane and the allocated Gaussian atlas
+/// are materially rectangular, so swapping either coordinate pair is visible.
+/// Glow is off: the marker's world unit still has to reach its shadow quad.
+#[test]
+fn rectangular_panes_and_atlases_preserve_shadow_coordinates() {
+    const NARROW: [u32; 2] = [384, 192];
+    const WIDE: [u32; 2] = [576, 192];
+    let Some(mut shooter) = Shooter::new(NARROW) else { return };
+    shooter.clear = over_ground();
+    let mut scene = on_ground(0.7, 0.85);
+    scene.nodes[0].world_pos = glam::Vec3::new(-1.8, 0.8, 0.0);
+    scene.pluses =
+        vec![one_marker(glam::Vec3::new(2.0, -0.7, 0.0), 0.4, scene.lattice_ground, 1.0)];
+    let mut shadows = Vec::new();
+    for size in [NARROW, WIDE] {
+        shooter.size = size;
+        let shadowed = shooter.shot(&scene);
+        let target = shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
+            .offscreen
+            .as_ref()
+            .unwrap();
+        let atlas = target.shadow.as_ref().expect("Gaussian cells must be allocated");
+        assert_ne!(atlas.size[0], atlas.size[1], "the atlas must really have unequal axes");
+        assert!(target.glow.is_none(), "marker unit is tested without a glow transport");
+        eprintln!("rectangular shadow pane {size:?}, actual atlas {:?}", atlas.size);
+        let styles = scene.shadow;
+        scene.shadow.lattice_geometry.depth = 0.0;
+        scene.shadow.lattice_text.depth = 0.0;
+        let plain = shooter.shot(&scene);
+        scene.shadow = styles;
+        let delta: Vec<i64> = plain
+            .chunks_exact(4)
+            .zip(shadowed.chunks_exact(4))
+            .map(|(a, b)| brightness(&a[..3]) - brightness(&b[..3]))
+            .collect();
+        for world in [scene.nodes[0].world_pos, scene.pluses[0].pos] {
+            let at = on_screen(&scene, size, world);
+            let mut mass = 0i64;
+            for y in (at.y as u32 - 24)..(at.y as u32 + 24) {
+                for x in (at.x as u32 - 24)..(at.x as u32 + 24) {
+                    mass += delta[(y * size[0] + x) as usize].max(0);
+                }
+            }
+            assert!(mass > 500, "caster at {at:?} must cast a visible shadow: {mass}");
+        }
+        shadows.push(delta);
+    }
+    let mut error = 0i64;
+    let mut mass = 0i64;
+    for y in 0..NARROW[1] {
+        for x in 0..NARROW[0] {
+            let a = shadows[0][(y * NARROW[0] + x) as usize];
+            let b = shadows[1][(y * WIDE[0] + x + (WIDE[0] - NARROW[0]) / 2) as usize];
+            error += (a - b).abs();
+            mass += a.max(0);
+        }
+    }
+    assert!(error < mass / 40, "translated shadow changed shape/width: error {error}, mass {mass}");
 }
