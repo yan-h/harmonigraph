@@ -237,6 +237,11 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = history_scene();
     scene.node_radius = 0.6;
+    // Reordering here measures row identity, independently of the Gaussian
+    // shadow atlas repacking when the caster order changes.
+    for style in scene.shadow.groups_mut() {
+        style.depth = 0.0;
+    }
     scene.nodes[0].world_pos.x = -1.2;
     shooter.shot_again(&scene);
     release(&mut scene);
@@ -292,7 +297,12 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     assert!(reused.chunks_exact(4).map(|p| u64::from(p[1])).sum::<u64>() > 64);
     assert!(reused.chunks_exact(4).map(|p| u64::from(p[2])).sum::<u64>() > 64);
     scene.nodes.swap(0, 1);
-    assert_eq!(reused, shooter.shot_again(&scene), "row identity survives instance reordering");
+    let reordered = shooter.shot_again(&scene);
+    assert_eq!(
+        differing_pixels(&reused, &reordered),
+        0,
+        "row identity survives instance reordering"
+    );
     eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
 }
 
@@ -324,11 +334,19 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
     }
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations);
     scene.nodes = nodes;
+    // Inkless nodes at reach zero are culled, so restoring them alone would
+    // still leave this empty. A visible marker really reaches maintenance.
+    scene.pluses.push(one_marker(glam::Vec3::ZERO, 0.1, glam::Vec4::ONE, 1.0));
     shooter.shot_again(&scene);
+    assert_eq!(
+        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane].plus_count,
+        1
+    );
     assert!(target(&shooter).glow.is_none());
     assert!(shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
         .ink_history
         .is_none());
+    scene.pluses.clear();
     scene.glow_reach = 0.8;
     let reset = shooter.shot_again(&scene);
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
