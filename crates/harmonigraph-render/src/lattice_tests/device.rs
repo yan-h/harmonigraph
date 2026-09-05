@@ -61,17 +61,21 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     };
     const SIZE: [u32; 2] = [128, 128];
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let scene = parity_scene();
+    let mut scene = parity_scene();
+    scene.glow_reach = 0.8;
+    scene.bloom_strength = 1.0;
     let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
     // Exactly the plugin's pairing: the docked Lattice pane owns id 0 and the
     // stats sink; the Video preview is a second view with neither.
+    let stats = std::sync::Arc::new(LatticeStats::default());
+    stats.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
     let docked = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
         size,
         format,
         0,
-        Some(std::sync::Arc::new(LatticeStats::default())),
+        Some(stats.clone()),
     );
     let preview =
         LatticeCallback::from_scene(&scene, LatticeLabels::default(), size, format, 1, None);
@@ -80,17 +84,26 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     // Several frames: the cycle is Idle -> Recorded -> Mapping -> Idle, so the
     // premature map can only be recorded once a frame has armed the timer.
-    for _ in 0..4 {
+    let mut measured = false;
+    for _ in 0..12 {
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut bufs = docked.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        let before = resources.get::<LatticeResources>().unwrap().timer.as_ref().unwrap().state;
+        let reading = stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed);
         bufs.extend(preview.prepare(&device, &queue, &screen, &mut encoder, &mut resources));
+        assert!(
+            resources.get::<LatticeResources>().unwrap().timer.as_ref().unwrap().state == before
+        );
+        assert_eq!(reading, stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed));
+        measured |= f32::from_bits(reading).is_finite() && f32::from_bits(reading) > 0.0;
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
+    assert!(measured, "beginning-of-pass timestamps must produce a real measurement");
 }
 
-/// The refactor's core claim: rendering offscreen (with the depth
-/// attachment) and compositing through blit.wgsl reproduces what the
+/// The refactor's core claim: rendering offscreen and compositing through
+/// blit.wgsl reproduces what the
 /// old renderer produced by drawing straight into the egui pass. Runs
 /// the same scene through both paths and compares pixels; tolerance 3
 /// covers the final dither and the half-float working target's rounding.
@@ -245,6 +258,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
     let stats = std::sync::Arc::new(LatticeStats::default());
+    stats.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut frame = |cb: &LatticeCallback| {

@@ -24,7 +24,7 @@ fn the_lattice_keeps_its_gradients_in_half_floats_until_the_final_composite() {
     let pane = resources.panes.get(&shooter.pane).expect("the shot made its pane");
     let offscreen = pane.offscreen.as_ref().expect("the shot made its scene target");
     assert_eq!(offscreen.format, LATTICE_COLOR_FORMAT);
-    assert_eq!(offscreen.bloom.format, LATTICE_COLOR_FORMAT);
+    assert_eq!(offscreen.bloom.as_ref().expect("bloom enabled").chain.format, LATTICE_COLOR_FORMAT);
     assert_eq!(
         offscreen.glow.as_ref().expect("the positive reach made a glow target").format,
         LATTICE_COLOR_FORMAT,

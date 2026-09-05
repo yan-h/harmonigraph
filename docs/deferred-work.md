@@ -46,11 +46,9 @@ revisit another alternative only when a concrete musical or hosting requirement 
 
 ## Depth-buffer sorting
 
-**State.** The lattice renders through an offscreen color + `Depth32Float` pass (`crates/harmonigraph-render/src/lib.rs`).
-Depth is *written*, but `create_pipeline` uses `depth_compare: Always`, so the buffer is never used to reject fragments.
+**State.** The lattice renders through an offscreen colour pass with no depth attachment (`crates/harmonigraph-render/src/lib.rs`).
 Occlusion follows the sheet and per-node painter order materialized by `LatticeCallback::from_scene`.
-The depth attachment exists purely as infrastructure —
-the header comment flags it as "written but not yet read."
+The previously unread `Depth32Float` attachment and its pass-through `Always` pipeline state were removed in the [first GPU batch](lattice-gpu-batch.md).
 
 **The prerequisite.** Reproduce a concrete overlap artifact before proposing depth-based ordering.
 Define which ring, marker, label and shadow should cover which other element, including across sheets, and compare that intended result with the existing painter order.
@@ -67,11 +65,9 @@ A proposal must specify its geometry, depth consumers and composition against th
 
 **Value / effort.** Unpriced until an artifact and candidate behavior are demonstrated.
 There is no measured benefit supporting a depth-sorting refactor today.
-**Do it only if a specific overlap artifact shows up in practice.** Retaining the unused attachment still allocates memory and asks the pass to clear, write and store depth that no consumer reads.
-The actual cost of those operations depends on the GPU and driver;
-discarding the unused store is a small first step before removing the attachment and its pipeline state.
-Removing it while preserving painter order is [#644](https://github.com/yan-h/harmonigraph/issues/644), part of the [lattice rendering plan](lattice-rendering-plan.md);
-that cleanup does not require adopting per-pixel depth sorting.
+**Do it only if a specific overlap artifact shows up in practice.** The [#644](https://github.com/yan-h/harmonigraph/issues/644) cleanup removes the unread allocation, clear, writes and store while preserving painter order.
+The format-derived allocation saving does not establish physical bandwidth or frame-time savings.
+Reintroducing depth would require a demonstrated consumer and composition rule, not infrastructure held for a hypothetical effect.
 
 ## Not deferred — closed
 

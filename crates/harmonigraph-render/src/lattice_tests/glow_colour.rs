@@ -1170,3 +1170,80 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
          ring's green, so the row was written rather than mixed into",
     );
 }
+
+/// Compare the retained unculled blur against the cull over multiple frames.
+/// Glow-free ring nodes alias row zero, including when its active owner ends
+/// and when another node takes that row with a new colour.
+#[test]
+fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = two_colour_node(0.18, 0.0);
+    scene.spectral =
+        ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE)
+            .spectral;
+    scene.node_radius = 0.32;
+    let original = scene.nodes[0];
+    for y in -2..=2 {
+        for x in -2..=2 {
+            if x == 0 && y == 0 {
+                continue;
+            }
+            let mut node = original;
+            node.world_pos = glam::vec3(x as f32 * 0.8, y as f32 * 0.8, 0.0);
+            node.activation = 0.0;
+            node.octaves.fill(0.0);
+            node.melody_level = 0.0;
+            node.melody_slots = 0;
+            node.glow = harmonigraph_scene::GlowStep::default();
+            scene.nodes.push(node);
+        }
+    }
+    let mut resources = LatticeResources::new(&shooter.device, &shooter.queue, shooter.format);
+    let culled = resources.ink_blur_pipeline.clone();
+    let cull =
+        "    if inst.glow.x <= 0.0 {\n        return vec4<f32>(0.0, 0.0, 0.0, 1.0);\n    }\n";
+    let at = SHADER_SRC.find("fn vs_ink_blur(").unwrap();
+    assert!(SHADER_SRC[at..].contains(cull), "reference must remove the cull");
+    let reference = format!("{}{}", &SHADER_SRC[..at], SHADER_SRC[at..].replacen(cull, "", 1));
+    let (_, unculled) = create_ink_strip_pipelines(
+        &shooter.device,
+        &with_common(&reference),
+        &resources.bind_group_layout,
+        &resources.strip_layout,
+    );
+    resources.ink_blur_pipeline = culled.clone();
+    shooter.resources.insert(resources);
+    for phase in 0..5 {
+        match phase {
+            1 => {
+                // Positive glow, no current MIDI ink, but an audio ring remains.
+                scene.nodes[0].activation = 0.0;
+                scene.nodes[0].octaves.fill(0.0);
+                scene.nodes[0].glow.mix = 0.0;
+            }
+            2 => scene.nodes[0].glow.level = 0.0,
+            3 => {
+                // Row zero's new owner seeds green.
+                scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
+                scene.nodes[1].activation = 1.0;
+                scene.nodes[1].octaves.fill(1.0);
+                scene.nodes[1].glow = original.glow;
+            }
+            _ => {}
+        }
+        shooter.pane = 700;
+        shooter.resources.get_mut::<LatticeResources>().unwrap().ink_blur_pipeline = culled.clone();
+        let candidate = shooter.shot_again(&scene);
+        let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&700];
+        assert_eq!(
+            pane.instance_count, 25,
+            "all glow-free audio rings must reach both strip draws"
+        );
+        shooter.pane = 701;
+        shooter.resources.get_mut::<LatticeResources>().unwrap().ink_blur_pipeline =
+            unculled.clone();
+        let reference = shooter.shot_again(&scene);
+        assert_eq!(candidate, reference, "phase {phase}: blur cull changed pixels");
+        assert!(total_light(&candidate) > 64, "fixture must draw visible rings");
+    }
+}
