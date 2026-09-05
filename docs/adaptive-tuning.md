@@ -12,6 +12,8 @@ The policy's scoring constants and musical iteration belong to #621;
 Yan has accepted the latency target, late-track behavior, stop/Off rules, emergency stop at capacity and restricted routing recovery below.
 The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
 those mechanics must satisfy these product decisions before adaptive output is complete.
+The [stage 2 engineering contracts](adaptive-tuning-contracts.md) now select those mechanics, capacities and production verification obligations before plugin wiring.
+They are a specification, not implemented or measured production behavior.
 An ordinary late assignment retains its attack and reports the failure;
 explicit cancellation and the visible emergency stop are the documented exceptions.
 
@@ -284,7 +286,7 @@ The protocol distinguishes intents, assignments, emission outcomes, source progr
 Tuner reads of region-bound global snapshots are no longer on the assignment path.
 Any snapshots used for status or downstream views describe their confirmed frontier and do not replace the request/reply protocol.
 
-#617 selects the concrete bounded storage and publication primitives and documents their ownership and memory-ordering argument before wiring them into plugins.
+#617 implements the concrete bounded storage, publication and ownership rules selected in the [engineering contracts](adaptive-tuning-contracts.md#2-named-capacity-and-admission-limits).
 Use per-source single-producer/single-consumer channels where their ownership fits;
 keep intents and actual output distinguishable and provide a return path for assignments in #616. Concurrent payload access must be atomic or excluded by slot ownership;
 a plain or volatile struct copy racing a writer is not made safe by a seqlock retry afterwards.
@@ -610,11 +612,11 @@ Other hosting modes remain outside initial support until separately established.
 Its measured D is 2,048 samples, not the accepted production target or a minimum.
 Encode the observations and completeness regressions in production tests;
 validate the smaller candidate as part of implementation without another prerequisite spike.
-2. Before wiring plugins in [#617](https://github.com/yan-h/harmonigraph/issues/617), record the concrete storage primitives, capacity/health table, configuration handoff and source recovery protocol against #615's verdict.
+2. Implement and validate [stage 2's storage, capacity/health, configuration and recovery contracts](adaptive-tuning-contracts.md) in [#617](https://github.com/yan-h/harmonigraph/issues/617) against #615's verdict.
 Implement the companion, audio-owned confirmed active state and effective tuning, and source-aware display/roll/take/replay.
 This aggregation-only milestone preserves input timing and supplies no adaptive output;
 it does not create a second launch mode.
-3. Before implementing [#616](https://github.com/yan-h/harmonigraph/issues/616), specify the event-ordering and prospective/confirmed-state mechanics that implement the accepted late-stream, Stop/Off, recovery and emergency-stop decisions above.
+3. Implement and validate stage 2's event ordering, acceptance, revocation and prospective/confirmed-state mechanics in [#616](https://github.com/yan-h/harmonigraph/issues/616), including the accepted late-stream, Stop/Off, recovery and emergency-stop decisions above.
 Add the central sequential assigner, bounded full-stream delay and replies with the artificial policy, plus deadline diagnostics and valid late-answer handling.
 4. [#621](https://github.com/yan-h/harmonigraph/issues/621) replaces the artificial policy with the first real one, including the simultaneous cross-track D–F–A case.
 
