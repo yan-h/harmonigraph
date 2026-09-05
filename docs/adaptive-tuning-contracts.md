@@ -735,14 +735,16 @@ do not truncate identifiers, exact pitch or timestamps to make a guessed size pa
 | Local voice, emergency and two baseline sets | `17 * 4 * 64 * 256` | 1,114,112 |
 | Hub confirmed/prospective voices | `2 * 256 * 256` | 131,072 |
 | Pending manifest windows | `17 * 64 * 256` | 278,528 |
-| Wrapper input and output arrays | `17 * (2048*128 + 640*256)` | 7,241,728 |
+| Wrapper input and output arrays | `17 * (2048*192 + 640*256)` | 9,469,952 |
 | Cohort scratch | `1024 * 256` | 262,144 |
 | Configuration commands and restore slots | `128*256 + 2*256` | 33,280 |
 | Retained configuration timeline | `128 * 256` | 32,768 |
 | Control/channel frames | `17 * (4*256 + 16*256)` | 87,040 |
 | Policy scratch reservation | `4 * 1024 * 1024` | 4,194,304 |
 
-The calculated subtotal is 127,800,832 bytes (about 121.88 MiB).
+The calculated subtotal is 130,029,056 bytes (about 124.01 MiB).
+The [production CLAP boundary](adaptive-tuning-clap-performance.md) raises only the wrapper input-cell ceiling to 192 bytes to retain full transport and original provenance in its single input pool;
+other event/intent/output record ceilings remain 128 bytes.
 Reserve another **16 MiB** for ring headers/endpoint owners, alignment, arena allocator overhead, free lists, dependency/ready indices, cohort edges and diagnostic counters.
 That allowance also covers the fixed registry attachment slots:
 at most `(64 tuner + 4 hub instances) * 4 slots * 256 bytes = 69,632 bytes` process-wide, charged once rather than duplicated on each adoption.

@@ -1,10 +1,11 @@
 #[macro_use]
 mod util;
 
-mod context;
 pub mod configuration;
+mod context;
 mod descriptor;
 pub mod features;
+pub mod performance;
 mod wrapper;
 
 use crate::wrapper::clap::features::ClapFeature;
@@ -30,10 +31,21 @@ pub enum ProcessTrace<'a> {
         latency_queries: u64,
         reported_latency: u32,
     },
-    SubBlockEnter { start: u32, length: u32 },
-    SubBlockExit { start: u32, length: u32 },
-    Output { event: &'a clap_sys::events::clap_event_header, accepted: bool },
-    Exit { status: clap_sys::process::clap_process_status },
+    SubBlockEnter {
+        start: u32,
+        length: u32,
+    },
+    SubBlockExit {
+        start: u32,
+        length: u32,
+    },
+    Output {
+        event: &'a clap_sys::events::clap_event_header,
+        accepted: bool,
+    },
+    Exit {
+        status: clap_sys::process::clap_process_status,
+    },
     Start,
     Stop,
 }
@@ -49,21 +61,33 @@ pub trait ClapPlugin: Plugin {
 
     /// Called once off audio, before editor construction. The handle's methods
     /// are off-thread only; the wrapper retains all shared allocations.
-    fn clap_configuration_install(&mut self, handle: std::sync::Arc<configuration::ConfigurationMailbox>) {}
+    fn clap_configuration_install(
+        &mut self,
+        handle: std::sync::Arc<configuration::ConfigurationMailbox>,
+    ) {
+    }
 
     /// Off-thread parsing, with no live plugin lock. Musical fields are excluded
     /// from generic state application and never parsed from `initialize()`.
-    fn clap_configuration_prepare(state: &nice_plug_core::plugin::PluginState)
-        -> Result<configuration::ConfigurationEdit, configuration::SubmitError> {
+    fn clap_configuration_prepare(
+        state: &nice_plug_core::plugin::PluginState,
+    ) -> Result<configuration::ConfigurationEdit, configuration::SubmitError> {
         Err(configuration::SubmitError::Invalid)
     }
 
     /// Resolve a fixed accepted restore preview off thread, separately from its
     /// still-queued semantic operation. View and save consume this same value.
-    fn clap_configuration_preview(snapshot: configuration::ConfigurationSnapshot) -> configuration::ConfigurationSnapshot { snapshot }
+    fn clap_configuration_preview(
+        snapshot: configuration::ConfigurationSnapshot,
+    ) -> configuration::ConfigurationSnapshot {
+        snapshot
+    }
 
-    fn clap_configuration_save(snapshot: configuration::ConfigurationSnapshot,
-        state: &mut nice_plug_core::plugin::PluginState) {}
+    fn clap_configuration_save(
+        snapshot: configuration::ConfigurationSnapshot,
+        state: &mut nice_plug_core::plugin::PluginState,
+    ) {
+    }
 
     /// All following hooks are inside the process allocation guard. Returning
     /// None retains the exact command/input cursor; this is work backpressure.
@@ -72,11 +96,90 @@ pub trait ClapPlugin: Plugin {
     fn clap_configuration_prefix(&mut self, through: i64) {}
     /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}
-    fn clap_configuration_apply(&mut self, command: configuration::ConfigurationCommand,
-        commit: configuration::ConfigurationCommit) -> Option<configuration::ConfigurationSnapshot> { None }
+    fn clap_configuration_apply(
+        &mut self,
+        command: configuration::ConfigurationCommand,
+        commit: configuration::ConfigurationCommit,
+    ) -> Option<configuration::ConfigurationSnapshot> {
+        None
+    }
     fn clap_configuration_observe(&mut self, event: configuration::OwnedInput) {}
-    fn clap_configuration_group_end(&mut self, sample: i64) -> Option<configuration::ConfigurationEdit> { None }
+    fn clap_configuration_group_end(
+        &mut self,
+        sample: i64,
+    ) -> Option<configuration::ConfigurationEdit> {
+        None
+    }
     fn clap_configuration_fault(&mut self) {}
+    /// Owned raw ingress and bounded host output, independent of configuration.
+    const CLAP_PERFORMANCE: bool = false;
+
+    /// CLAP main-thread lifecycle seams. Unlike Plugin::initialize, these never
+    /// run during audio-thread state restoration. Do not call the host here.
+    fn clap_main_init(&mut self) -> bool {
+        true
+    }
+    fn clap_main_activate(&mut self, config: &nice_plug_core::audio_setup::BufferConfig) -> bool {
+        true
+    }
+    fn clap_main_deactivate(&mut self) {}
+    fn clap_main_destroy(&mut self) {}
+    /// Serialized audio lifecycle; allocation/deallocation guards include these.
+    fn clap_performance_start(&mut self) {}
+    fn clap_performance_stop(&mut self) {}
+    fn clap_performance_reset(&mut self) {}
+    fn clap_performance_begin(
+        &mut self,
+        callback: performance::Callback,
+        output: &mut performance::Output<'_>,
+    ) {
+    }
+    /// Acknowledge only after retaining the exact value/provenance. Pending keeps
+    /// the shared input cell, without repeating configuration observation.
+    fn clap_performance_input(
+        &mut self,
+        input: configuration::OwnedInput,
+    ) -> performance::Consumption {
+        performance::Consumption::Pending
+    }
+    fn clap_performance_process(
+        &mut self,
+        buffer: &mut nice_plug_core::buffer::Buffer,
+        aux: &mut nice_plug_core::audio_setup::AuxiliaryBuffers,
+        context: &mut impl nice_plug_core::context::process::ProcessContext<Self>,
+        block: performance::Block,
+        output: &mut performance::Output<'_>,
+    ) -> nice_plug_core::plugin::ProcessStatus {
+        self.process(buffer, aux, context)
+    }
+    /// Claim the caller's permit here. No host call occurs with this borrow held.
+    /// A false return has an unconditional unattempted completion too.
+    fn clap_performance_prepare(&mut self, group: performance::Group) -> bool {
+        false
+    }
+    /// Durably record exact accepted prefixes BEFORE releasing the caller's
+    /// permit/BUSY. Emergency output may be staged at output.cursor() or later.
+    fn clap_performance_complete(
+        &mut self,
+        completion: performance::Completion,
+        output: &mut performance::Output<'_>,
+    ) {
+    }
+    /// Called once before final emergency draining, including invalid input,
+    /// missing output and process error. Then end observes all settled groups.
+    fn clap_performance_finalize(
+        &mut self,
+        callback: performance::Callback,
+        status: clap_sys::process::clap_process_status,
+        output: &mut performance::Output<'_>,
+    ) {
+    }
+    fn clap_performance_end(
+        &mut self,
+        callback: performance::Callback,
+        summary: performance::Summary,
+    ) {
+    }
     /// Compile out the observation path for plugins which do not request it.
     const CLAP_PROCESS_TRACE: bool = false;
 

@@ -75,6 +75,11 @@ path = "tests/derive_params.rs"
 name = "derive_persist"
 path = "tests/derive_persist.rs"
 
+[[test]]
+name = "clap_boundary"
+path = "tests/clap_boundary.rs"
+required-features = ["assert_process_allocs"]
+
 [dependencies.anyhow]
 version = "1.0"
 

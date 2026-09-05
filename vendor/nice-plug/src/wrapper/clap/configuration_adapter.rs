@@ -1,18 +1,15 @@
-//! Narrow CLAP adapter for ordered configuration ownership. Legacy performance
-//! forwarding remains in the wrapper; this fixed input allocation is reused by
-//! the later owned performance boundary, which has not been implemented here.
+//! Ordered configuration ownership sharing the acknowledged owned input pool
+//! with the independently opted-in performance boundary.
 use super::*;
 use crate::wrapper::clap::configuration::*;
 
 pub(super) struct Runtime {
     pub mailbox: Arc<ConfigurationMailbox>,
     commands: rtrb::Consumer<QueuedConfiguration>,
-    input: InputStorage,
     hashes: [Option<u32>; CONFIG_PARAMETERS],
     base: [f32; CONFIG_PARAMETERS],
     modulation: [f32; CONFIG_PARAMETERS],
     applied_id: u64,
-    batch: u64,
     group: Option<Group>,
     notifications: [Option<Notification>; 16],
     fault: bool,
@@ -24,6 +21,8 @@ pub(super) struct Runtime {
     output_boundary: Option<(i64, u32)>,
     gesture_ends: [bool; CONFIG_PARAMETERS],
     callback_cut: u64,
+    notification_sequence: u64,
+    notification_blocked: [bool; CONFIG_PARAMETERS],
 }
 struct Group {
     sample: i64,
@@ -36,8 +35,11 @@ struct Group {
 #[derive(Clone, Copy)]
 struct Notification {
     id: u64,
+    sequence: u64,
     sample: i64,
     values: [Option<f32>; CONFIG_PARAMETERS],
+    parameter: usize,
+    phase: u8,
 }
 
 impl<P: ClapPlugin> Wrapper<P> {
@@ -75,12 +77,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         *self.configuration.lock() = Some(Runtime {
             mailbox,
             commands,
-            input: InputStorage::default(),
             hashes,
             base,
             modulation: [0.0; CONFIG_PARAMETERS],
             applied_id: 0,
-            batch: 0,
             group: None,
             notifications: [None; 16],
             fault: false,
@@ -91,6 +91,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             output_boundary: None,
             gesture_ends: [false; CONFIG_PARAMETERS],
             callback_cut: 0,
+            notification_sequence: 0,
+            notification_blocked: [false; CONFIG_PARAMETERS],
         });
     }
 
@@ -130,6 +132,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         if matches!(command.origin, ConfigurationOrigin::Ui | ConfigurationOrigin::Learning)
             && runtime.notifications.iter().all(Option::is_some)
         {
+            return false;
+        }
+        if matches!(command.origin, ConfigurationOrigin::Ui | ConfigurationOrigin::Learning)
+            && runtime.notification_sequence == u64::MAX
+        {
+            runtime.fault = true;
+            plugin.clap_configuration_fault();
             return false;
         }
         let mut base = runtime.base;
@@ -173,7 +182,15 @@ impl<P: ClapPlugin> Wrapper<P> {
             // One cell per applied command, bounded by the plugin's 16-work slice.
             if let Some(cell) = runtime.notifications.iter_mut().find(|cell| cell.is_none()) {
                 let values = std::array::from_fn(|i| command.edit.values[i].map(|_| base[i]));
-                *cell = Some(Notification { id: runtime.applied_id, sample, values });
+                runtime.notification_sequence += 1;
+                *cell = Some(Notification {
+                    id: runtime.applied_id,
+                    sequence: runtime.notification_sequence,
+                    sample,
+                    values,
+                    parameter: 0,
+                    phase: 0,
+                });
             } else {
                 runtime.fault = true;
                 plugin.clap_configuration_fault();
@@ -229,20 +246,29 @@ impl<P: ClapPlugin> Wrapper<P> {
         true
     }
 
-    /// Capture once per enclosing process/flush, before the legacy event walker
-    /// can overwrite parameters. Count ALL host events before conversion/growth.
-    pub(super) unsafe fn capture_configuration(
+    pub(super) fn reset_configuration_walk(&self) {
+        if let Some(runtime) = self.configuration.lock().as_mut() {
+            runtime.group = None;
+            runtime.pending_learning = None;
+            runtime.fault = false;
+            for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
+                *sample = None;
+            }
+        }
+    }
+
+    pub(super) fn prepare_configuration_capture(
         &self,
-        input: *const clap_input_events,
+        input: &mut input_adapter::Runtime,
         boundary: Option<(i64, u32)>,
-    ) -> bool {
+    ) -> Option<u64> {
         let mut guard = self.configuration.lock();
         let Some(runtime) = guard.as_mut() else {
-            return true;
+            return Some(0);
         };
         let reset = runtime.mailbox.reset_generation.load(Ordering::Acquire);
         if reset != runtime.reset_generation {
-            runtime.input.reset_timed();
+            input.reset();
             runtime.group = None;
             runtime.pending_learning = None;
             for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
@@ -251,23 +277,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             runtime.fault = false;
             runtime.reset_generation = reset;
         }
-        let count = if input.is_null() {
-            0
-        } else {
-            unsafe {
-                clap_call! { input=>size(input) }
-            }
-        } as usize;
-        if count > INPUT_SCAN || count > runtime.input.available() {
-            runtime.fault = true;
-            self.plugin.lock().clap_configuration_fault();
-            return false;
-        }
-        let Some(batch) = runtime.batch.checked_add(1) else {
-            runtime.fault = true;
-            return false;
-        };
-        runtime.batch = batch;
         let cut = runtime.mailbox.accepted_command.load(Ordering::Acquire);
         runtime.callback_cut = cut;
         runtime.output_boundary = boundary;
@@ -277,109 +286,18 @@ impl<P: ClapPlugin> Wrapper<P> {
                 if cell.is_some() {
                     runtime.fault = true;
                     self.plugin.lock().clap_configuration_fault();
-                    return false;
+                    return None;
                 }
                 *cell = Some((id, boundary.map(|b| b.0)));
             }
             runtime.observed_through = cut;
         }
-        let mut previous_time = 0;
-        for index in 0..count {
-            let pointer = unsafe {
-                clap_call! { input=>get(input, index as u32) }
-            };
-            let header = unsafe { &*pointer };
-            let sample = if let Some((start, frames)) = boundary {
-                if header.time >= frames || (index > 0 && header.time < previous_time) {
-                    runtime.fault = true;
-                    self.plugin.lock().clap_configuration_fault();
-                    return false;
-                }
-                let Some(sample) = start.checked_add(i64::from(header.time)) else {
-                    runtime.fault = true;
-                    return false;
-                };
-                Some(sample)
-            } else {
-                None
-            };
-            previous_time = header.time;
-            let value = if header.space_id != CLAP_CORE_EVENT_SPACE_ID {
-                InputValue::Other
-            } else {
-                match header.type_ {
-                    CLAP_EVENT_PARAM_VALUE => {
-                        let event = unsafe { &*pointer.cast::<clap_event_param_value>() };
-                        InputValue::Parameter {
-                            id: event.param_id,
-                            value: event.value,
-                            modulation: false,
-                        }
-                    }
-                    CLAP_EVENT_PARAM_MOD => {
-                        let event = unsafe { &*pointer.cast::<clap_event_param_mod>() };
-                        if event.note_id == -1 {
-                            InputValue::Parameter {
-                                id: event.param_id,
-                                value: event.amount,
-                                modulation: true,
-                            }
-                        } else {
-                            InputValue::Other
-                        }
-                    }
-                    CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
-                        let event = unsafe { &*pointer.cast::<clap_event_note>() };
-                        InputValue::Note {
-                            kind: header.type_,
-                            note_id: event.note_id,
-                            port: event.port_index,
-                            channel: event.channel,
-                            key: event.key,
-                            velocity: event.velocity,
-                            flags: header.flags,
-                        }
-                    }
-                    CLAP_EVENT_NOTE_EXPRESSION => {
-                        let event = unsafe { &*pointer.cast::<clap_event_note_expression>() };
-                        InputValue::Expression {
-                            expression: event.expression_id,
-                            note_id: event.note_id,
-                            port: event.port_index,
-                            channel: event.channel,
-                            key: event.key,
-                            value: event.value,
-                            flags: header.flags,
-                        }
-                    }
-                    CLAP_EVENT_MIDI => {
-                        let event = unsafe { &*pointer.cast::<clap_event_midi>() };
-                        InputValue::Midi {
-                            port: event.port_index,
-                            data: event.data,
-                            flags: header.flags,
-                        }
-                    }
-                    _ => InputValue::Other,
-                }
-            };
-            runtime
-                .input
-                .push(OwnedInput {
-                    sample,
-                    event_index: index as u32,
-                    flush: boundary.is_none(),
-                    command_cut: cut,
-                    command_sample: boundary.map(|b| b.0),
-                    batch,
-                    value,
-                })
-                .expect("reserved input capacity");
-        }
-        true
+        Some(cut)
     }
 
     pub(super) fn process_configuration(&self, boundary: ConfigurationBoundary) {
+        let mut input_guard = self.owned_input.lock();
+        let input = input_guard.as_mut().unwrap();
         let mut guard = self.configuration.lock();
         let Some(runtime) = guard.as_mut() else {
             return;
@@ -387,7 +305,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         let mut plugin = self.plugin.lock();
         let reset = runtime.mailbox.reset_generation.load(Ordering::Acquire);
         if reset != runtime.reset_generation {
-            runtime.input.reset_timed();
+            input.reset();
             runtime.group = None;
             runtime.pending_learning = None;
             for (_, sample) in runtime.observed_samples.iter_mut().flatten() {
@@ -418,9 +336,9 @@ impl<P: ClapPlugin> Wrapper<P> {
             plugin.clap_configuration_fault();
             return;
         }
-        runtime.input.bind_untimed(boundary.steady_time);
+        input.storage.bind_untimed(boundary.steady_time);
         loop {
-            let Some(first) = runtime.input.get(0) else {
+            let Some(first) = input.get(0) else {
                 break;
             };
             if !self.drain_configuration_commands(
@@ -432,9 +350,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                 return;
             }
             if runtime.group.is_none() {
-                let count = (0..runtime.input.len())
+                let count = (0..input.len())
                     .take_while(|&i| {
-                        runtime.input.get(i).is_some_and(|input| {
+                        input.get(i).is_some_and(|input| {
                             input.sample == first.sample && input.batch == first.batch
                         })
                     })
@@ -454,7 +372,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 < runtime.group.as_ref().unwrap().count
             {
                 let group = runtime.group.as_ref().unwrap();
-                let input = runtime.input.get(group.parameter_cursor).unwrap();
+                let input = input.get(group.parameter_cursor).unwrap();
                 if let InputValue::Parameter { id, value, modulation } = input.value {
                     if let Some(index) = runtime.hashes.iter().position(|hash| *hash == Some(id)) {
                         if !value.is_finite() {
@@ -498,7 +416,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 < runtime.group.as_ref().unwrap().count
             {
                 let cursor = runtime.group.as_ref().unwrap().note_cursor;
-                plugin.clap_configuration_observe(runtime.input.get(cursor).unwrap());
+                plugin.clap_configuration_observe(input.get(cursor).unwrap());
                 runtime.group.as_mut().unwrap().note_cursor += 1;
             }
             let group = runtime.group.as_mut().unwrap();
@@ -516,7 +434,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
             let count = runtime.group.take().unwrap().count;
             for _ in 0..count {
-                runtime.input.pop();
+                input.ack_configuration(P::CLAP_PERFORMANCE);
             }
         }
         // A silent callback still adopts UI/restore commands. Untimed flush never
@@ -538,12 +456,14 @@ impl<P: ClapPlugin> Wrapper<P> {
     }
 
     pub(super) fn publish_configuration_prefix(&self, start: i64, frames: u32) {
+        let input_guard = self.owned_input.lock();
+        let input = input_guard.as_ref().unwrap();
         let guard = self.configuration.lock();
         let Some(runtime) = guard.as_ref() else {
             return;
         };
         let mut through = start.saturating_add(i64::from(frames));
-        if let Some(input) = runtime.input.get(0) {
+        if let Some(input) = input.get(0) {
             through = through.min(input.sample.unwrap_or(start));
         }
         for (_, sample) in runtime.observed_samples.iter().flatten() {
@@ -703,7 +623,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             .is_some_and(|mailbox| mailbox.dirty.load(Ordering::Acquire));
         if dirty {
             unsafe {
-                ((*self.host_callback).request_callback.unwrap())(&*self.host_callback);
+                (self.host_callback.request_callback.unwrap())(&*self.host_callback);
             }
         }
     }
@@ -779,5 +699,176 @@ impl<P: ClapPlugin> Wrapper<P> {
             .iter()
             .position(|id| self.param_id_to_hash[*id] == hash)?;
         Some(f64::from(mailbox.visible().0.normalized[index]))
+    }
+}
+
+/// One owned parameter attempt, with enough identity to finish the retained
+/// transaction after dropping all runtime/plugin locks for the host callback.
+#[derive(Clone, Copy)]
+pub(super) struct NotificationAttempt {
+    cell: Option<usize>,
+    parameter: usize,
+    phase: u8,
+    hash: u32,
+    value: f32,
+    pub time: u32,
+}
+impl NotificationAttempt {
+    pub unsafe fn push(self, output: &clap_output_events) -> bool {
+        let header = |size, kind| clap_event_header {
+            size,
+            time: self.time,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: kind,
+            flags: CLAP_EVENT_IS_LIVE,
+        };
+        if self.phase == 1 {
+            let event = clap_event_param_value {
+                header: header(
+                    mem::size_of::<clap_event_param_value>() as u32,
+                    CLAP_EVENT_PARAM_VALUE,
+                ),
+                param_id: self.hash,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value: f64::from(self.value),
+            };
+            unsafe { (output.try_push.unwrap())(output, &event.header) }
+        } else {
+            let event = clap_event_param_gesture {
+                header: header(
+                    mem::size_of::<clap_event_param_gesture>() as u32,
+                    if self.phase == 0 {
+                        CLAP_EVENT_PARAM_GESTURE_BEGIN
+                    } else {
+                        CLAP_EVENT_PARAM_GESTURE_END
+                    },
+                ),
+                param_id: self.hash,
+            };
+            unsafe { (output.try_push.unwrap())(output, &event.header) }
+        }
+    }
+}
+impl<P: ClapPlugin> Wrapper<P> {
+    pub(super) fn begin_configuration_notifications(&self) {
+        if let Some(runtime) = self.configuration.lock().as_mut() {
+            runtime.notification_blocked.fill(false);
+        }
+    }
+    pub(super) fn next_configuration_notification(
+        &self,
+        through: u32,
+        cursor: u32,
+    ) -> Option<NotificationAttempt> {
+        let mut guard = self.configuration.lock();
+        let r = guard.as_mut()?;
+        // Finite cleanup of completed or superseded cells; a started gesture
+        // still closes even if a newer accepted restore shadows its value.
+        let restore = r.mailbox.accepted_restore.load(Ordering::Acquire);
+        for cell in &mut r.notifications {
+            if let Some(n) = cell {
+                if n.id < restore {
+                    if n.phase == 0 {
+                        *cell = None;
+                        continue;
+                    }
+                    n.phase = 2;
+                }
+                while n.parameter < CONFIG_PARAMETERS && n.values[n.parameter].is_none() {
+                    n.parameter += 1;
+                }
+                if n.parameter == CONFIG_PARAMETERS {
+                    *cell = None;
+                }
+            }
+        }
+        let ready = r
+            .notifications
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| n.map(|n| (i, n)))
+            .filter(|(_, n)| !r.notification_blocked[n.parameter])
+            .filter(|(_, n)| {
+                n.phase != 0
+                    || !r
+                        .notifications
+                        .iter()
+                        .flatten()
+                        .any(|other| other.parameter == n.parameter && other.phase != 0)
+            })
+            .filter_map(|(i, n)| {
+                let time = r
+                    .output_boundary
+                    .map_or(0, |(start, frames)| {
+                        n.sample
+                            .saturating_sub(start)
+                            .max(0)
+                            .min(i64::from(frames.saturating_sub(1))) as u32
+                    })
+                    .max(cursor);
+                (time <= through).then_some((i, n, time))
+            })
+            .min_by_key(|(_, n, time)| (*time, n.sample, n.sequence));
+        let closing_time = ready.map_or(cursor, |(_, _, time)| time);
+        if let Some(i) =
+            (0..CONFIG_PARAMETERS).find(|&i| r.gesture_ends[i] && !r.notification_blocked[i])
+        {
+            return Some(NotificationAttempt {
+                cell: None,
+                parameter: i,
+                phase: 2,
+                hash: r.hashes[i].unwrap(),
+                value: 0.0,
+                time: closing_time,
+            });
+        }
+        let (i, n, time) = ready?;
+        Some(NotificationAttempt {
+            cell: Some(i),
+            parameter: n.parameter,
+            phase: n.phase,
+            hash: r.hashes[n.parameter]?,
+            value: n.values[n.parameter]?,
+            time,
+        })
+    }
+    pub(super) fn complete_configuration_notification(
+        &self,
+        attempt: NotificationAttempt,
+        accepted: bool,
+    ) {
+        let mut guard = self.configuration.lock();
+        let r = guard.as_mut().unwrap();
+        if !accepted {
+            r.mailbox.notification_rejected.store(true, Ordering::Release);
+            r.mailbox.dirty.store(true, Ordering::Release);
+        }
+        if let Some(index) = attempt.cell {
+            let n = r.notifications[index].as_mut().unwrap();
+            match attempt.phase {
+                0 if accepted => n.phase = 1,
+                1 => n.phase = 2,
+                _ => {
+                    if attempt.phase == 2 && !accepted {
+                        r.gesture_ends[attempt.parameter] = true;
+                        r.notification_blocked[attempt.parameter] = true;
+                    }
+                    n.values[attempt.parameter] = None;
+                    n.parameter += 1;
+                    n.phase = 0;
+                }
+            }
+            if n.id < r.mailbox.accepted_restore.load(Ordering::Acquire) {
+                r.mailbox.dirty.store(true, Ordering::Release);
+            }
+        } else {
+            r.gesture_ends[attempt.parameter] = !accepted;
+            r.notification_blocked[attempt.parameter] = !accepted;
+        }
+        r.mailbox.gesture_debt.store(r.gesture_ends.iter().any(|e| *e), Ordering::Release);
     }
 }
