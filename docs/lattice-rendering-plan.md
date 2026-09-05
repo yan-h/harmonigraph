@@ -56,10 +56,13 @@ A measured rejection is a useful completed experiment and should remain in its i
 | Individual passes | Shadow cells/blur, ink history/convolution, glow, ordered scene composition and optional bloom |
 | egui adapter | Schedule preparation and composite the finished view |
 
-Resize already preserves temporal ink history by taking the outgoing `Offscreen`'s strip and adopting it in `Offscreen::ensure_glow` when its row capacity matches.
-Separate that history from viewport-target ownership to remove the transfer mechanism while preserving its behavior.
-The current CPU/GPU handshake is capacity-based:
-`GlowFade::step` asks every row to reseed with `mix = 1.0` when capacity changes, while `ensure_glow` can adopt a carried strip only at the same capacity and only in the replacement frame.
+Before #645 B,
+resize already preserved temporal ink history by taking the outgoing `Offscreen`'s strip and adopting it in `Offscreen::ensure_glow` when its row capacity matched.
+The renderer now keeps that history in `PaneBuffers::ink_history` separately from viewport targets,
+removing the transfer mechanism while preserving its behavior.
+The CPU/GPU handshake remains capacity-based:
+`GlowFade::step` asks every row to reseed with `mix = 1.0` when capacity changes,
+while `PaneBuffers::ensure_ink_history` retains same-capacity strips and replaces them on capacity changes.
 Discarding history at unchanged capacity gets no automatic reseed signal and can extinguish a release whose current ink has already disappeared.
 Retain that fading color deliberately;
 a new empty strip cannot reconstruct it from current ink alone.
