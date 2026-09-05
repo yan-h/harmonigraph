@@ -698,8 +698,19 @@ fn clearing_everything_empties_all_four_accumulations() {
 
     // A note played and released; `prune` past its fade turns the released
     // voice into trail history and leaves the roll's record of it.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(0.5, 0, 60));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        0.0,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        60,
+        1.0,
+    ));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(
+        0.5,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        60,
+    ));
     let env = harmonigraph_core::Envelope { fade_time: 0.1, ..Default::default() };
     state.tracker.prune(600.0, &env);
     // One analyzed column is enough; how audio becomes columns is the

@@ -17,8 +17,8 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:1,sample_rate:48000.0,...))
-//! Note((t:0.5,channel:0,note:60,kind:On((velocity:0.8))))
+//! Header((version:2,sample_rate:48000.0,...))
+//! Note((t:0.5,source:0,channel:0,note:60,kind:On((velocity:0.8))))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
 //!
@@ -44,15 +44,17 @@ use std::io::{BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 /// Bumped when a change would make an older reader misread a take.
-/// [`Take::read`] refuses anything newer than it understands rather than
-/// silently rendering something wrong.
-pub const FORMAT_VERSION: u32 = 1;
+/// [`Take::read`] accepts exactly this version. Version 1 had no source or
+/// reset scope; refusing its HEADER prevents old final notes from being
+/// mistaken for a truncated version 2 record. There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
 
 /// What a take opens with: everything constant for the whole recording.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Header {
     pub version: u32,
     /// The audio clock the event times are in.
@@ -60,7 +62,6 @@ pub struct Header {
     /// Transport position (samples from song start) of time 0, when the
     /// host told us. Lets the take be lined up against a bounced WAV that
     /// starts somewhere else.
-    #[serde(default)]
     pub start_samples: Option<u64>,
     /// The shell's UI state blob (`SharedState::save_persist`) as of the
     /// recording: view settings, camera, spectrum/roll config. This is
@@ -69,19 +70,15 @@ pub struct Header {
     /// In the plugin this is only up to date if the editor window was
     /// closed before the project was saved — the same trap
     /// `read-plugin-state.py` documents.
-    #[serde(default)]
     pub ui_state: Option<String>,
     /// Editor size in logical points when recorded, as a hint for
     /// choosing the render aspect ratio.
-    #[serde(default)]
     pub window_points: Option<(f32, f32)>,
     /// Free-form: which shell wrote this, and out of what.
-    #[serde(default)]
     pub source: String,
     /// File name (not path) of the audio recorded with this take, if
     /// any. A sibling of the take file, so the pair can be moved
     /// together. The renderer uses it when no audio is given explicitly.
-    #[serde(default)]
     pub audio_file: Option<String>,
     /// Take time corresponding to the audio's first sample.
     ///
@@ -89,7 +86,6 @@ pub struct Header {
     /// arming mid-song does not, and without it the spectrum and the
     /// muxed track would both sit at the wrong place by exactly however
     /// far in you started.
-    #[serde(default)]
     pub audio_start: Option<f64>,
 }
 
@@ -113,27 +109,75 @@ impl Default for Header {
 /// is MIT/Apache and must not gain a serde dependency (see `ci.sh`), so it
 /// cannot derive the impls this needs — and the take format must be free to
 /// outlive an internal enum, which reusing one would forfeit.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum NoteKind {
     On {
         velocity: f32,
     },
+    #[default]
     Off,
     /// Per-note tuning offset in semitones (MPE / CLAP note expression).
     Tuning {
         semitones: f32,
     },
-    /// Release everything (transport reset).
-    AllOff,
+    /// Release this record's source; channel and note are ignored.
+    SourceReset,
+    /// Release every source; source, channel and note are ignored.
+    SessionReset,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NoteRecord {
     /// Seconds on the audio clock, from the start of the recording.
     pub t: f64,
+    /// Canonical stream identity, with 0 reserved for observed direct input.
+    /// This is not a saved runtime session, epoch or source-incarnation token.
+    pub source: u64,
     pub channel: u8,
     pub note: u8,
     pub kind: NoteKind,
+}
+
+// Both writers and both replay modes share these conversions. Controls stay
+// ordered among note deltas, at their original timestamps. Future complete
+// baseline controls must extend this same stream, not a separate state feed.
+impl From<harmonigraph_core::NoteEvent> for NoteRecord {
+    fn from(event: harmonigraph_core::NoteEvent) -> Self {
+        use harmonigraph_core::NoteEventKind as Core;
+        Self {
+            t: event.time,
+            source: event.source.0,
+            channel: event.channel,
+            note: event.note,
+            kind: match event.kind {
+                Core::On { velocity } => NoteKind::On { velocity },
+                Core::Off => NoteKind::Off,
+                Core::Tuning { semitones } => NoteKind::Tuning { semitones },
+                Core::SourceReset => NoteKind::SourceReset,
+                Core::SessionReset => NoteKind::SessionReset,
+            },
+        }
+    }
+}
+
+impl From<NoteRecord> for harmonigraph_core::NoteEvent {
+    fn from(record: NoteRecord) -> Self {
+        use harmonigraph_core::{NoteEventKind as Core, SourceId};
+        Self {
+            time: record.t,
+            source: SourceId(record.source),
+            channel: record.channel,
+            note: record.note,
+            kind: match record.kind {
+                NoteKind::On { velocity } => Core::On { velocity },
+                NoteKind::Off => Core::Off,
+                NoteKind::Tuning { semitones } => Core::Tuning { semitones },
+                NoteKind::SourceReset => Core::SourceReset,
+                NoteKind::SessionReset => Core::SessionReset,
+            },
+        }
+    }
 }
 
 /// One automatable parameter changing value. `id` is the host-facing
@@ -180,7 +224,7 @@ pub enum ReadError {
     Parse(usize, ron::error::SpannedError),
     /// The file did not start with a Header record.
     MissingHeader,
-    /// Written by a newer version of this format.
+    /// Written in an unsupported older or newer format.
     Version(u32),
 }
 
@@ -237,7 +281,7 @@ impl Take {
             };
             match record {
                 Record::Header(header) => {
-                    if header.version > FORMAT_VERSION {
+                    if header.version != FORMAT_VERSION {
                         return Err(ReadError::Version(header.version));
                     }
                     take.header = header;
@@ -401,7 +445,13 @@ mod tests {
             params,
             truncated: false,
         };
-        let note = |t| NoteRecord { t, channel: 0, note: 60, kind: NoteKind::On { velocity: 0.8 } };
+        let note = |t| NoteRecord {
+            source: 0,
+            t,
+            channel: 0,
+            note: 60,
+            kind: NoteKind::On { velocity: 0.8 },
+        };
         let param = |t| ParamRecord { t, id: "pitch-class-fade".into(), value: 1.0 };
 
         // Notes and params: the earlier wins, and it is the param snapshot
@@ -425,10 +475,22 @@ mod tests {
             ..Default::default()
         };
         let notes = vec![
-            NoteRecord { t: 0.0, channel: 0, note: 60, kind: NoteKind::On { velocity: 0.8 } },
-            NoteRecord { t: 0.5, channel: 0, note: 60, kind: NoteKind::Tuning { semitones: -0.5 } },
-            NoteRecord { t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
-            NoteRecord { t: 2.0, channel: 3, note: 0, kind: NoteKind::AllOff },
+            NoteRecord {
+                source: 0,
+                t: 0.0,
+                channel: 0,
+                note: 60,
+                kind: NoteKind::On { velocity: 0.8 },
+            },
+            NoteRecord {
+                source: 0,
+                t: 0.5,
+                channel: 0,
+                note: 60,
+                kind: NoteKind::Tuning { semitones: -0.5 },
+            },
+            NoteRecord { source: 0, t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
+            NoteRecord { source: 0, t: 2.0, channel: 3, note: 0, kind: NoteKind::SessionReset },
         ];
         let params = vec![ParamRecord { t: 0.0, id: "pitch-class-fade".into(), value: 2.5 }];
         (header, notes, params)
@@ -519,7 +581,7 @@ mod tests {
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
         for t in out_of_order {
-            let note = NoteRecord { t, channel: 0, note: 60, kind: NoteKind::Off };
+            let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
             text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
             text.push('\n');
             let param = ParamRecord { t, id: "pitch-class-fade".into(), value: t as f32 };
@@ -542,7 +604,7 @@ mod tests {
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
         for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
-            let note = NoteRecord { t: 2.0, channel: 0, note: 60, kind };
+            let note = NoteRecord { source: 0, t: 2.0, channel: 0, note: 60, kind };
             text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
             text.push('\n');
         }
@@ -569,7 +631,7 @@ mod tests {
 
     #[test]
     fn a_file_without_a_header_is_rejected() {
-        let note = NoteRecord { t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
+        let note = NoteRecord { source: 0, t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
         let text = ron::to_string(&Record::Note(note)).unwrap();
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
@@ -587,6 +649,18 @@ mod tests {
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Version(_))
         ));
+    }
+
+    #[test]
+    fn an_old_header_is_refused_before_a_final_record_can_look_truncated() {
+        for version in [0, 1] {
+            for last in ["Note((t:0.0,channel:0,note:60,kind:On((velocity:0.8))))", "Note((t:"] {
+                let text = format!("Header((version:{version},sample_rate:48000.0))\n{last}");
+                let error = Take::parse(std::io::Cursor::new(text)).unwrap_err();
+                assert!(matches!(error, ReadError::Version(v) if v == version));
+                assert!(error.to_string().contains(&format!("format version {version}")));
+            }
+        }
     }
 }
 

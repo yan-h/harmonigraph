@@ -2,8 +2,9 @@
 
 ## Status
 
-This is the decided design for a planned feature;
-none of it is implemented yet.
+This is the decided design for a planned feature.
+The [source-identity foundation](adaptive-tuning-source-identity.md) implements source-aware display/roll/take/replay and scoped resets;
+aggregation, session recovery and adaptive tuning remain unimplemented.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
@@ -594,8 +595,8 @@ The implementation starts from these repository seams:
 
 - [`harmonigraph-plugin/src/lib.rs`](../crates/harmonigraph-plugin/src/lib.rs) declares basic MIDI input/output and forwards host events;
 nice-plug passes the host note id through in both directions and emits PolyTuning as the CLAP tuning expression, but its transport-event sub-block splitting must be accounted for in #615's time mapping;
-- [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) identifies tracked notes by channel and key and already consumes the note-on plus Tuning stream a tuner reports;
-its allocating tracker stays off the audio thread, and every identity-bearing key gains source scope;
+- [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) identifies tracked notes by source, channel and key and consumes the note-on plus Tuning stream a tuner reports;
+its allocating tracker stays off the audio thread;
 - [`harmonigraph-core/src/roll.rs`](../crates/harmonigraph-core/src/roll.rs) has an independent live-note map and bend history that also need source-aware identity and resets;
 - [`harmonigraph-ui/src/lib.rs`](../crates/harmonigraph-ui/src/lib.rs) currently resolves effective tuning in `begin_frame`, so that authority must move into the shared audio-owned configuration path;
 - [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) already records per-note Tuning and gains source/reset/recovery scope, with corresponding offline replay changes;

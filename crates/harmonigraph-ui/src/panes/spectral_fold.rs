@@ -525,7 +525,7 @@ impl RingLevels {
 mod tests {
     use super::*;
     use crate::tests::probe::fresh;
-    use harmonigraph_core::{spectrum::midi_to_hz, LatticePos, NoteEvent, Tuning};
+    use harmonigraph_core::{spectrum::midi_to_hz, LatticePos, NoteEvent, SourceId, Tuning};
     use harmonigraph_scene::{
         derive_scene, octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS,
     };
@@ -993,7 +993,7 @@ mod tests {
         state.frame_params.fade_time = 0.0;
         state.spectrum_config.attack = 0.0;
         state.spectrum_config.release = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 

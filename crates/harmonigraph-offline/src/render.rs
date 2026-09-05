@@ -275,6 +275,7 @@ mod tests {
             let t = i as f64 * 0.7;
             for &note in chord {
                 notes.push(NoteRecord {
+                    source: 0,
                     t,
                     channel: 0,
                     note,
@@ -282,13 +283,20 @@ mod tests {
                 });
             }
             notes.push(NoteRecord {
+                source: 0,
                 t: t + 0.2,
                 channel: 0,
                 note: chord[0],
                 kind: NoteKind::Tuning { semitones: 0.25 },
             });
             for &note in chord {
-                notes.push(NoteRecord { t: t + 0.6, channel: 0, note, kind: NoteKind::Off });
+                notes.push(NoteRecord {
+                    source: 0,
+                    t: t + 0.6,
+                    channel: 0,
+                    note,
+                    kind: NoteKind::Off,
+                });
             }
         }
         Take { header: Header::default(), notes, params: Vec::new(), truncated: false }

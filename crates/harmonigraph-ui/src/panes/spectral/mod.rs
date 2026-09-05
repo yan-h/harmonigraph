@@ -466,9 +466,7 @@ pub(crate) fn spectral_pane(
         // order is part of the picture. The tracker's own order is stable —
         // held voices by (channel, note), then the release tail — but it is
         // not this one: pitch decides which band is on top here.
-        voices.sort_unstable_by(|a, b| {
-            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
-        });
+        voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
         let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
         // One envelope for the whole roll, as every other caller takes it: it
         // is a property of the view and the frame, and rebuilding it per voice

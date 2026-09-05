@@ -1030,7 +1030,7 @@ mod tests {
         pace, target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
         DISPLAY_OVERSAMPLE, FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
-    use harmonigraph_core::notes::NoteEvent;
+    use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
 
     /// The floor this window is held to and the floor the pane layout dials to
@@ -1061,8 +1061,8 @@ mod tests {
             take_control,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
-        for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
-            producer.push(NoteEvent::on(time, 0, note, 1.0)).unwrap();
+        for (source, time) in [(1, 99.950), (2, 99.995)] {
+            producer.push(NoteEvent::on(time, SourceId(source), 0, 60, 1.0)).unwrap();
         }
 
         assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
@@ -1071,6 +1071,7 @@ mod tests {
         assert_eq!(on_times.len(), 2);
         assert!((on_times[1] - on_times[0] - 0.045).abs() < 1e-9, "spacing lost: {on_times:?}");
         assert!(on_times[1] <= 7.0, "never maps into the GUI future");
+        assert_eq!(shared.ui.tracker.voices().map(|v| v.source.0).collect::<Vec<_>>(), vec![1, 2]);
 
         // Empty ring: no work, no repaint request.
         assert!(!shared.drain_into_tracker(7.1));
@@ -1100,7 +1101,7 @@ mod tests {
         // An empty ring is not a repaint.
         assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
 
-        producer.push(NoteEvent::on(1.0, 0, 60, 1.0)).unwrap();
+        producer.push(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0)).unwrap();
         assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
 
         // And the ring is empty again, so the next tick asks for nothing.

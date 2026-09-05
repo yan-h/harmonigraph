@@ -529,12 +529,7 @@ pub(super) fn plan(
     // held. Held notes are lifted out for DRAWING afterwards, which is a
     // separate question from where they sit here — keeping the two apart is
     // what leaves the held-note exemption below with any teeth.
-    notes.sort_unstable_by(|a, b| {
-        a.1.time
-            .total_cmp(&b.1.time)
-            .then(a.0.channel.cmp(&b.0.channel))
-            .then(a.0.note.cmp(&b.0.note))
-    });
+    notes.sort_unstable_by(|a, b| a.1.time.total_cmp(&b.1.time).then(a.0.key().cmp(&b.0.key())));
 
     // The name's ROOM is memoized with it, and has to be: measuring one asks
     // the name for its marks, and each of those builds a String. Per class
@@ -1493,7 +1488,7 @@ mod tests {
     use super::*;
     use crate::tests::probe::{frame_full, fresh, painted_full, themed_at};
     use crate::{SpectralOrientation, SpectrumConfig};
-    use harmonigraph_core::{NoteEvent, NoteEventKind};
+    use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
     /// The window a batch of names is drawn on. Larger than [`PANE`] on both
     /// axes, so a name placed off the pane still lands in the shapes rather
@@ -1535,16 +1530,28 @@ mod tests {
     }
 
     fn on(time: f64, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
+        NoteEvent {
+            source: SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 0.8 },
+        }
     }
 
     fn off(time: f64, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+        NoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind: NoteEventKind::Off }
     }
 
     /// A per-note tuning on a sounding note, in semitones off its key.
     fn tuning(time: f64, note: u8, semitones: f32) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Tuning { semitones } }
+        NoteEvent {
+            source: SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::Tuning { semitones },
+        }
     }
 
     /// A state whose pane shows `range` semitones around middle C over a
@@ -2513,6 +2520,7 @@ mod tests {
             // doubled source, or one MPE part layered over another.
             for channel in [0, 1] {
                 state.tracker.handle_event(NoteEvent {
+                    source: SourceId::DIRECT,
                     time: 1.0,
                     channel,
                     note: 60,

@@ -842,9 +842,7 @@ struct Sounding {
 /// would put a mark on a pitch nothing is playing.
 fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
     let mut voices: Vec<&harmonigraph_core::Voice> = state.tracker.voices().collect();
-    voices.sort_unstable_by(|a, b| {
-        a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
-    });
+    voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
@@ -978,7 +976,7 @@ mod tests {
     use super::*;
     use crate::tests::probe::{events_into, fresh, painted_into, press, themed};
     use crate::SpectrumConfig;
-    use harmonigraph_core::{NoteEvent, NoteEventKind};
+    use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
     /// A square pane at an offset origin, so a mistake that assumes the rect
     /// starts at zero shows up.
@@ -1387,7 +1385,7 @@ mod tests {
             let mut state = fresh();
             state.spectrum_config.low_midi = low;
             state.spectrum_config.high_midi = high;
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
             let shapes = painted(&mut state, 0.1);
             assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
             for shape in &shapes {
@@ -1407,7 +1405,7 @@ mod tests {
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
             let fill = Spiral::new(PANE, &state.spectrum_config).dot();
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             // The COLOURED disc of the pair, not its backing: both are circles,
             // and counting either alone counts the notes once.
             painted(&mut state, 0.1)
@@ -1433,7 +1431,7 @@ mod tests {
     fn the_halo_grows_from_the_dots_that_were_painted() {
         let mut state = fresh();
         for note in [55u8, 60, 67, 76] {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let spiral = Spiral::new(PANE, &state.spectrum_config);
         let lit = sounding(&spiral, &state, 0.1);
@@ -1457,7 +1455,7 @@ mod tests {
             let mut state = fresh();
             state.view.bloom_strength = bloom;
             if sounding {
-                state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+                state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
             }
             painted(&mut state, 0.1)
                 .iter()
@@ -1560,7 +1558,7 @@ mod tests {
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
             for note in 60..72 {
-                state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+                state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             }
             let (batch, spiral) = rim_names(&state, rect, 0.1);
             assert_eq!(batch.pieces().len(), 12, "{name}: twelve pitch classes, twelve names");
@@ -1611,7 +1609,7 @@ mod tests {
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
         for note in [48, 60, 72] {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let (batch, _) = rim_names(&state, PANE, 0.1);
         assert_eq!(batch.pieces().len(), 1, "three Cs are one name");
@@ -1635,9 +1633,10 @@ mod tests {
         let mut state = fresh();
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 72, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 72, 1.0));
         state.tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
             time: 0.0,
             channel: 0,
             note: 72,
@@ -1661,8 +1660,8 @@ mod tests {
         let mut state = fresh();
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 24, 1.0));
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 120, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 24, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 120, 1.0));
         let (batch, _) = rim_names(&state, PANE, 0.1);
         assert_eq!(batch.pieces().len(), 0, "nothing on the disc, nothing on the rim");
     }

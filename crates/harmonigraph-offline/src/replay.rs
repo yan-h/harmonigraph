@@ -14,8 +14,7 @@
 
 use std::cell::Cell;
 
-use harmonigraph_core::{NoteEvent, NoteEventKind};
-use harmonigraph_take::{NoteKind, Take};
+use harmonigraph_take::Take;
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use harmonigraph_ui::SharedState;
 
@@ -84,18 +83,7 @@ impl Replay {
             if record.t > now {
                 break;
             }
-            let kind = match record.kind {
-                NoteKind::On { velocity } => NoteEventKind::On { velocity },
-                NoteKind::Off => NoteEventKind::Off,
-                NoteKind::Tuning { semitones } => NoteEventKind::Tuning { semitones },
-                NoteKind::AllOff => NoteEventKind::AllOff,
-            };
-            state.tracker.handle_event(NoteEvent {
-                time: record.t,
-                channel: record.channel,
-                note: record.note,
-                kind,
-            });
+            state.tracker.handle_event((*record).into());
             self.next_note += 1;
         }
 
@@ -120,18 +108,7 @@ impl Replay {
     pub fn full_roll(&self) -> harmonigraph_core::NoteRoll {
         let mut tracker = harmonigraph_core::NoteTracker::new();
         for record in &self.take.notes {
-            let kind = match record.kind {
-                NoteKind::On { velocity } => NoteEventKind::On { velocity },
-                NoteKind::Off => NoteEventKind::Off,
-                NoteKind::Tuning { semitones } => NoteEventKind::Tuning { semitones },
-                NoteKind::AllOff => NoteEventKind::AllOff,
-            };
-            tracker.handle_event(NoteEvent {
-                time: record.t,
-                channel: record.channel,
-                note: record.note,
-                kind,
-            });
+            tracker.handle_event((*record).into());
         }
         tracker.roll().clone()
     }
@@ -146,18 +123,18 @@ impl Replay {
 mod tests {
     use super::*;
     use harmonigraph_render::wgpu::TextureFormat;
-    use harmonigraph_take::{Header, NoteRecord, ParamRecord};
+    use harmonigraph_take::{Header, NoteKind, NoteRecord, ParamRecord};
 
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take { header: Header::default(), notes, params, truncated: false }
     }
 
     fn on(t: f64, note: u8) -> NoteRecord {
-        NoteRecord { t, channel: 0, note, kind: NoteKind::On { velocity: 0.8 } }
+        NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::On { velocity: 0.8 } }
     }
 
     fn off(t: f64, note: u8) -> NoteRecord {
-        NoteRecord { t, channel: 0, note, kind: NoteKind::Off }
+        NoteRecord { source: 0, t, channel: 0, note, kind: NoteKind::Off }
     }
 
     #[test]
@@ -191,6 +168,75 @@ mod tests {
         // fail the day that default is retuned, for no reason it names.
         let env = harmonigraph_core::Envelope { fade_time: 1.0, ..Default::default() };
         assert!((voice.activation(1.0, &env) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn source_scopes_and_bends_round_trip_into_incremental_and_full_replay() {
+        use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId, VoiceState};
+        let (a, b) = (SourceId(1), SourceId(2));
+        let tuning = |time, source, semitones| NoteEvent {
+            time,
+            source,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones },
+        };
+        let events = [
+            NoteEvent::on(0.125, a, 0, 60, 0.8),
+            tuning(0.125, a, 0.25),
+            NoteEvent::on(0.25, b, 0, 60, 0.6),
+            tuning(0.25, b, -0.25),
+            NoteEvent::off(0.75, a, 0, 60),
+            NoteEvent::on(1.0, a, 0, 60, 0.8),
+            NoteEvent::on(1.25, a, 0, 60, 0.7),
+            NoteEvent::source_reset(1.5, a),
+            tuning(1.75, b, -0.5),
+            NoteEvent::on(2.0, a, 0, 60, 0.9),
+            NoteEvent::session_reset(2.25),
+        ];
+        let mut encoded =
+            ron::to_string(&harmonigraph_take::Record::Header(Header::default())).unwrap();
+        for event in events {
+            encoded.push('\n');
+            encoded
+                .push_str(&ron::to_string(&harmonigraph_take::Record::Note(event.into())).unwrap());
+        }
+        let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
+        assert!(!take.truncated);
+        assert_eq!(take.notes.iter().copied().map(NoteEvent::from).collect::<Vec<_>>(), events);
+        let mut replay = Replay::new(take);
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        replay.advance_to(&mut state, 0.5);
+        assert_eq!(state.tracker.held_count(), 2);
+        let pitches: Vec<_> = state.tracker.voices().map(|v| (v.source, v.pitch)).collect();
+        assert_eq!(pitches, vec![(a, 60.25), (b, 59.75)]);
+        replay.advance_to(&mut state, 1.9);
+        let held: Vec<_> = state.tracker.voices().filter(|v| v.state == VoiceState::Held).collect();
+        assert_eq!(held.len(), 1);
+        assert_eq!((held[0].source, held[0].pitch, held[0].on_time), (b, 59.5, 0.25));
+        replay.advance_to(&mut state, 3.0);
+        assert_eq!(state.tracker.held_count(), 0);
+        assert!(replay.is_spent());
+
+        for roll in [state.tracker.roll(), &replay.full_roll()] {
+            let notes: Vec<_> =
+                roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
+            assert_eq!(
+                notes,
+                vec![
+                    (a, 0.125, Some(0.75), 60.25),
+                    (a, 1.0, Some(1.25), 60.0),
+                    (a, 1.25, Some(1.5), 60.0),
+                    (a, 2.0, Some(2.25), 60.0),
+                    (b, 0.25, Some(2.25), 59.5),
+                ]
+            );
+            let note_b = roll.notes().find(|n| n.source == b).unwrap();
+            assert_eq!(
+                note_b.segments(3.0).collect::<Vec<_>>(),
+                vec![((0.25, 59.75), (1.75, 59.5)), ((1.75, 59.5), (2.25, 59.5)),]
+            );
+        }
     }
 
     #[test]

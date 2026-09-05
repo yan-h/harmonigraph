@@ -35,6 +35,11 @@ Explicit Stop/Reset cancels pending attacks and releases affected voices;
 actual storage exhaustion permits a visible emergency stop that rejects new attacks until Reset.
 See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the decided behavior, the real-time protocol and the deliberately deferred alternatives.
 
+The [source-identity foundation](docs/adaptive-tuning-source-identity.md) gives tracking and replay independent source keys and explicit source/session resets.
+Takes now use format v2;
+v1 takes are refused with a version error and must be recorded again.
+This foundation does not yet connect Harmonigraph Tune instances or retune notes.
+
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
 [`CLAUDE.md`](CLAUDE.md) is the house style they work under;
 GitHub Actions runs `./ci.sh` as the canonical full gate.

@@ -40,7 +40,7 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     voices.sort_by(|a, b| b.pitch.total_cmp(&a.pitch));
 
     ui.monospace(
-        egui::RichText::new("note  oct     cents  node     ch")
+        egui::RichText::new("note  oct     cents  node     ch  source")
             .monospace()
             .color(theme::text_dim()),
     );
@@ -55,12 +55,13 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             let node = nearest_shown_node(&shown, &state.tuning, voice.pitch_class)
                 .map(|pos| display_note_name(pos, state.view.tempered()).to_string());
             let line = format!(
-                "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
+                "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}  {source}",
                 name = KEY_NAMES[usize::from(voice.note % 12)],
                 oct = voice.display_octave(),
                 cents = voice.pitch_class.to_cents(),
                 node = node.as_deref().unwrap_or("--"),
                 ch = voice.channel + 1,
+                source = voice.source.0,
             );
             let mut text = egui::RichText::new(line).monospace();
             if node.is_none() {

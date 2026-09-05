@@ -73,7 +73,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
-use harmonigraph_core::notes::NoteEventKind;
+use harmonigraph_core::notes::{NoteEvent, NoteEventKind, SourceId};
 use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
@@ -131,6 +131,7 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 pub enum Entry {
     Note {
         t: f64,
+        source: SourceId,
         channel: u8,
         note: u8,
         kind: NoteEventKind,
@@ -323,8 +324,8 @@ impl Recorder {
         }
     }
 
-    pub fn note(&mut self, t: f64, channel: u8, note: u8, kind: NoteEventKind) {
-        self.push(Entry::Note { t, channel, note, kind });
+    pub fn note(&mut self, t: f64, source: SourceId, channel: u8, note: u8, kind: NoteEventKind) {
+        self.push(Entry::Note { t, source, channel, note, kind });
     }
 
     pub fn wants_audio(&self) -> bool {
@@ -1119,19 +1120,9 @@ fn drain(
         }
         let writer = &mut current.writer;
         let _ = match entry {
-            Entry::Note { t, channel, note, kind } => writer.note(harmonigraph_take::NoteRecord {
-                t,
-                channel,
-                note,
-                kind: match kind {
-                    NoteEventKind::On { velocity } => harmonigraph_take::NoteKind::On { velocity },
-                    NoteEventKind::Off => harmonigraph_take::NoteKind::Off,
-                    NoteEventKind::Tuning { semitones } => {
-                        harmonigraph_take::NoteKind::Tuning { semitones }
-                    }
-                    NoteEventKind::AllOff => harmonigraph_take::NoteKind::AllOff,
-                },
-            }),
+            Entry::Note { t, source, channel, note, kind } => {
+                writer.note(NoteEvent { time: t, source, channel, note, kind }.into())
+            }
             Entry::Param { t, key, value } => writer.param(harmonigraph_take::ParamRecord {
                 t,
                 id: ParamKey::ALL[key].id().to_string(),
@@ -1727,14 +1718,15 @@ mod tests {
             let mut out = Vec::new();
             while let Ok(entry) = self.entries.pop() {
                 out.push(match entry {
-                    Entry::Note { t, channel, note, kind } => {
+                    Entry::Note { t, source, channel, note, kind } => {
                         let kind = match kind {
                             NoteEventKind::On { .. } => "on",
                             NoteEventKind::Off => "off",
                             NoteEventKind::Tuning { .. } => "tuning",
-                            NoteEventKind::AllOff => "alloff",
+                            NoteEventKind::SessionReset => "session-reset",
+                            NoteEventKind::SourceReset => "source-reset",
                         };
-                        format!("note {note} ch{channel} {kind} @{t}")
+                        format!("note {note} ch{channel} source{} {kind} @{t}", source.0)
                     }
                     Entry::Param { t, key, value } => format!("param {key}={value} @{t}"),
                     Entry::AudioStart(t) => format!("audio-start @{t}"),
@@ -2642,8 +2634,13 @@ mod tests {
             Open::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
         assert!(open.is_some(), "the fixture has to actually open a file to write into");
 
-        let note =
-            Entry::Note { t: 0.0, channel: 0, note: 60, kind: NoteEventKind::On { velocity: 1.0 } };
+        let note = Entry::Note {
+            t: 0.0,
+            source: SourceId::DIRECT,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        };
         producer.push(note).expect("ring has room");
         producer.push(Entry::NewPass).expect("ring has room");
         producer.push(Entry::Param { t: 1.0, key: 0, value: 0.5 }).expect("ring has room");
@@ -2672,19 +2669,42 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The notes are what the take is FOR, and they reach the ring with the
-    /// time, channel, and kind they were given.
+    /// Exercise the actual recorder ring AND writer conversion before parsing.
     #[test]
-    fn notes_reach_the_ring_with_their_time_and_channel() {
+    fn source_scoped_notes_reach_the_take_with_their_original_times() {
         let mut b = Bench::new();
         b.arm();
-        b.rec.note(0.5, 3, 60, NoteEventKind::On { velocity: 0.8 });
-        b.rec.note(1.5, 3, 60, NoteEventKind::Off);
-        b.rec.note(2.0, 0, 0, NoteEventKind::AllOff);
-        assert_eq!(
-            b.pushed(),
-            ["note 60 ch3 on @0.5", "note 60 ch3 off @1.5", "note 0 ch0 alloff @2"]
-        );
+        let events = [
+            NoteEvent::on(0.125, SourceId(1), 3, 60, 0.8),
+            NoteEvent::on(0.25, SourceId(2), 3, 60, 0.6),
+            NoteEvent {
+                time: 0.5,
+                source: SourceId(2),
+                channel: 3,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: -0.25 },
+            },
+            NoteEvent::off(0.75, SourceId(1), 3, 60),
+            NoteEvent::source_reset(1.0, SourceId(1)),
+            NoteEvent::session_reset(1.25),
+        ];
+        for event in events {
+            b.rec.note(event.time, event.source, event.channel, event.note, event.kind);
+        }
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-source-take-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.take");
+        let status = Mutex::new(String::new());
+        let mut open =
+            Open::create(header_for(48_000.0, String::new()), path.clone(), 1, None, &status);
+        assert!(open.is_some(), "fixture must reach the file writer");
+        assert!(drain(&mut b.entries, &mut open, &status));
+        drop(open);
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        assert!(!take.truncated);
+        assert_eq!(take.notes.into_iter().map(NoteEvent::from).collect::<Vec<_>>(), events);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// `mark_audio_start` is idempotent per PASS: the first call fixes where
@@ -2850,7 +2870,7 @@ mod tests {
     fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
         let (mut rec, ctrl) = channel();
         ctrl.recording.store(true, Ordering::Relaxed);
-        rec.note(0.0, 0, 60, NoteEventKind::On { velocity: 1.0 });
+        rec.note(0.0, SourceId::DIRECT, 0, 60, NoteEventKind::On { velocity: 1.0 });
         rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
         ctrl.tick(true, 1);
         assert!(!ctrl.status().contains("DROPPED"), "a shipped ring dropped: {}", ctrl.status());

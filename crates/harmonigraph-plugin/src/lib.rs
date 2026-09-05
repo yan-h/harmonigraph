@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
+use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
 use harmonigraph_record::{interleaved_reservation, TAKE_CHANNELS};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
@@ -499,16 +499,11 @@ impl Plugin for Harmonigraph {
         #[cfg(feature = "tuning-probe")]
         self.probe.reset();
         self.samples_processed = 0;
-        // After a transport reset, note-offs for held notes may never
-        // arrive; tell the GUI to release everything. Time 0.0 is the
-        // restarted sample clock's epoch (the editor's ClockMapper snaps
+        // Reset only observed direct input. The session owner must publish
+        // its own explicit source/session controls after lifecycle validation.
+        // Time 0.0 is the restarted sample clock's epoch (ClockMapper snaps
         // its offset on a jump this large).
-        let _ = self.note_producer.push(CoreNoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 0,
-            kind: NoteEventKind::AllOff,
-        });
+        let _ = self.note_producer.push(CoreNoteEvent::source_reset(0.0, SourceId::DIRECT));
     }
 
     fn process(
@@ -547,10 +542,17 @@ impl Plugin for Harmonigraph {
                 let time = ring_time(block_start, timing, self.sample_rate);
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
-                let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
+                let _ = self.note_producer.push(CoreNoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel,
+                    note,
+                    kind,
+                });
                 if let Some(origin) = take_origin {
                     self.take.note(
                         take_time(origin, timing, self.sample_rate),
+                        SourceId::DIRECT,
                         channel,
                         note,
                         kind,
