@@ -536,4 +536,77 @@ mod tests {
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1);
     }
+    #[test]
+    fn a_full_bend_buffer_preserves_the_gap_after_a_later_expression() {
+        let source = SourceId(1);
+        let mut tracker = NoteTracker::new();
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(
+                NoteEvent::on(0.0, source, 0, 60, 0.8),
+                1,
+            )))
+            .unwrap();
+        for i in 1..64 {
+            tracker
+                .handle_canonical(CanonicalEvent::Note(delta(
+                    NoteEvent {
+                        time: i as f64 / 100.0,
+                        source,
+                        channel: 0,
+                        note: 60,
+                        kind: NoteEventKind::Tuning { semitones: i as f32 / 100.0 },
+                    },
+                    i + 1,
+                )))
+                .unwrap();
+        }
+        assert_eq!(tracker.roll().notes().next().unwrap().segments(0.7).count(), 64);
+        tracker
+            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
+                source: Some(source),
+                time: 1.0,
+                through: 1.9,
+                first: 65,
+                last: 66,
+                reason: GapReason::PublicationFull,
+            }))
+            .unwrap();
+        let row = VoiceBaseline {
+            actual_onset: 0.0,
+            input_onset: 0.0,
+            pitch_microcents: 6_063_000_000,
+            ..voice(60)
+        };
+        let frame = SourceBaseline::new(
+            source,
+            1,
+            2.0,
+            2.0,
+            66,
+            true,
+            &[row],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        tracker.replace_source(&frame).unwrap();
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(
+                NoteEvent {
+                    time: 3.0,
+                    source,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Tuning { semitones: 1.0 },
+                },
+                67,
+            )))
+            .unwrap();
+        let segments: Vec<_> = tracker.roll().notes().next().unwrap().segments(3.1).collect();
+        assert!(
+            segments.iter().all(|((start, _), (end, _))| *end <= 1.0 || *start >= 2.0),
+            "fold crossed missing interval: {segments:?}"
+        );
+        assert!(segments.iter().any(|((start, _), (end, _))| *start == 2.0 && *end == 3.0));
+        assert!(segments.len() <= 64);
+    }
 }

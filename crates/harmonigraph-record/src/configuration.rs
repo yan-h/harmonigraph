@@ -21,6 +21,14 @@ pub(crate) struct RecordFence {
     pub failed: AtomicBool,
     pub configuration_closed: AtomicU64,
     pub source_closed: AtomicU64,
+    #[cfg(all(test, feature = "test-support"))]
+    pub worker_after_empty: TestPause,
+    #[cfg(all(test, feature = "test-support"))]
+    pub worker_after_stop: TestPause,
+    #[cfg(all(test, feature = "test-support"))]
+    pub worker_finished: AtomicBool,
+    #[cfg(all(test, feature = "test-support"))]
+    pub test_directory: parking_lot::Mutex<Option<std::path::PathBuf>>,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
     #[cfg(feature = "test-support")]

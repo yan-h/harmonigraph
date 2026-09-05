@@ -314,24 +314,8 @@ impl EditorShared {
         let Some(offset) = self.clock.offset else { return false };
         let tracker = &mut self.ui.tracker;
         self.consumer.drain(|delivery, _, _| {
-            use harmonigraph_core::canonical::CanonicalEvent;
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
-                let result = match event {
-                    CanonicalEvent::Note(mut delta) => {
-                        delta.event.time += offset;
-                        tracker.handle_canonical(CanonicalEvent::Note(delta))
-                    }
-                    CanonicalEvent::Baseline(baseline) => {
-                        let mut mapped = *baseline;
-                        mapped.translate(offset);
-                        tracker.replace_source(&mapped)
-                    }
-                    CanonicalEvent::Gap(mut gap) => {
-                        gap.time += offset;
-                        gap.through += offset;
-                        tracker.handle_canonical(CanonicalEvent::Gap(gap))
-                    }
-                };
+                let result = tracker.handle_canonical_mapped(event, offset);
                 debug_assert!(result.is_ok(), "validated canonical publication");
             }
             true
@@ -1119,6 +1103,23 @@ mod tests {
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
+        use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
+        use harmonigraph_core::confirmed::PitchProvenance;
+        let accepted = NoteDelta {
+            event: NoteEvent::on(2.0, SourceId(3), 0, 72, 0.8),
+            sequence: 1,
+            lifetime: 61,
+            provenance: PitchProvenance::AcceptedOutput,
+            timing: Some(EventTiming {
+                clock: ClockId::default(),
+                input: 96000,
+                planned: None,
+                sample: 96000,
+                sample_rate: 48000.0,
+            }),
+            pitch_microcents: None,
+        };
+        producer.note(accepted, 11.0, Default::default()).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
         producer.note(event.into(), 11.0, Default::default()).unwrap();
         assert!(shared.drain_into_tracker(21.0));
@@ -1146,12 +1147,69 @@ mod tests {
             [ChannelBaseline::default(); 16],
         )
         .unwrap();
-        producer.baseline(0, &baseline, 11.0, Default::default()).unwrap();
-        shared.drain_into_tracker(22.1);
+        producer.observe_clock(12.0);
+        producer.baseline(0, &baseline, 12.0, Default::default()).unwrap();
+        shared.drain_into_tracker(22.2);
         let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
         assert_eq!(note.start, 12.0);
         assert!(note.history_complete, "baseline retains the matching observed lifetime");
-        assert_eq!(shared.ui.tracker.source_baseline(SourceId::DIRECT).unwrap().time, 13.0);
+        assert!(
+            (shared.ui.tracker.source_baseline(SourceId::DIRECT).unwrap().time - 13.01).abs()
+                < 1e-9
+        );
+        assert_eq!(
+            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            12.0
+        );
+        assert_eq!(
+            shared.ui.tracker.roll().notes().filter(|n| n.source == SourceId::DIRECT).count(),
+            1
+        );
+        use harmonigraph_core::canonical::{GapReason, PublicationGap};
+        producer
+            .gap(
+                PublicationGap {
+                    source: Some(SourceId(3)),
+                    time: 2.5,
+                    through: 3.0,
+                    first: 2,
+                    last: 3,
+                    reason: GapReason::PublicationFull,
+                },
+                12.0,
+                Default::default(),
+            )
+            .unwrap();
+        let resumed = SourceBaseline::new(
+            SourceId(3),
+            1,
+            3.5,
+            3.5,
+            3,
+            true,
+            &[VoiceBaseline {
+                note: 72,
+                lifetime: 61,
+                actual_onset: 2.0,
+                input_onset: 2.0,
+                onset: accepted.timing,
+                velocity: 0.8,
+                pitch_microcents: 7_200_000_000,
+                provenance: PitchProvenance::AcceptedOutput,
+                ..Default::default()
+            }],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        producer.baseline(3, &resumed, 12.0, Default::default()).unwrap();
+        shared.drain_into_tracker(22.3);
+        let voice = shared.ui.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
+        let note = shared.ui.tracker.roll().notes().find(|v| v.source == SourceId(3)).unwrap();
+        assert_eq!(
+            (voice.on_time, note.start),
+            (12.0, 12.0),
+            "accepted lifetime resumes its already-mapped onset after gap"
+        );
     }
 
     /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on

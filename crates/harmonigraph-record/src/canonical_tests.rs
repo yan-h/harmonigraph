@@ -205,8 +205,197 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
             assert_eq!(writer.retained_passes(), 127);
         } else {
             assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
+            // Refusal terminates recording ownership, not display publication.
+            // Three successive uses of one two-slot bank prove reclamation.
+            for id in 1..=3 {
+                let baseline = SourceBaseline::new(
+                    SourceId::DIRECT,
+                    id,
+                    11.0,
+                    0.0,
+                    0,
+                    true,
+                    &[],
+                    [ChannelBaseline::default(); 16],
+                )
+                .unwrap();
+                let route = publication::Route {
+                    address: Some(RecordAddress { epoch: 1, pass: 129 }),
+                    time_offset: 0.0,
+                };
+                recorder.publish_baseline(0, &baseline, 11.0, route).unwrap();
+                recorder
+                    .publish_note(
+                        NoteEvent::on(11.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                        11.0,
+                        route,
+                    )
+                    .unwrap();
+                writer.drain(&mut capture);
+                let displayed = writer.display_events();
+                assert_eq!(displayed.len(), 2);
+                assert!(
+                    matches!(&displayed[0], harmonigraph_take::CanonicalRecord::Baseline(frame) if frame.id == id)
+                );
+                assert!(displayed[1].note().is_some());
+            }
         }
         drop(writer);
         std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
+}
+
+fn wait_for(flag: &AtomicBool) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !flag.load(Ordering::Acquire) && std::time::Instant::now() < until {
+        std::thread::yield_now();
+    }
+    assert!(flag.load(Ordering::Acquire), "real recording worker did not reach deterministic seam");
+}
+
+struct WorkerPause(Arc<RecordFence>);
+impl Drop for WorkerPause {
+    fn drop(&mut self) {
+        self.0.worker_after_empty.enabled.store(false, Ordering::Release);
+        self.0.worker_after_stop.enabled.store(false, Ordering::Release);
+    }
+}
+fn worker_take(directory: &std::path::Path) -> std::path::PathBuf {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "take"))
+        .expect("actual worker created take")
+}
+
+#[test]
+fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
+    let directory = path("worker-start").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    *control.fence.test_directory.lock() = Some(directory.clone());
+    let fence = control.fence.clone();
+    let _resume_on_panic = WorkerPause(fence.clone());
+    fence.worker_after_empty.enabled.store(true, Ordering::Release);
+    wait_for(&fence.worker_after_empty.entered);
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    recorder.configuration_at(
+        address,
+        0.0,
+        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+    );
+    let bank_released = recorder.publication.bank_observer();
+    for id in 1..=2 {
+        let baseline = SourceBaseline::new(
+            SourceId::DIRECT,
+            id,
+            0.0,
+            0.0,
+            0,
+            true,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        recorder
+            .publish_baseline(
+                0,
+                &baseline,
+                1.0,
+                publication::Route { address: Some(address), time_offset: 0.0 },
+            )
+            .unwrap();
+    }
+    for i in 0..publication::PUBLICATION_RING - 2 {
+        recorder
+            .publish_note(
+                NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                1.0,
+                publication::Route { address: Some(address), time_offset: 0.0 },
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        recorder.publish_note(
+            NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
+            1.0,
+            publication::Route { address: Some(address), time_offset: 0.0 }
+        ),
+        Err(publication::PublishError::Lost)
+    );
+    drop(recorder); // No rescue callback or producer operation follows.
+    drop(control);
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_finished);
+    let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
+    assert_eq!(
+        take.notes().count(),
+        4094,
+        "pending Start still owns the complete successful prefix"
+    );
+    assert_eq!(
+        take.events
+            .iter()
+            .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Baseline(_)))
+            .count(),
+        2
+    );
+    assert!(bank_released(), "both primary baseline payloads returned after disk/display copies");
+    assert_eq!(take.configurations.len(), 1, "ordinary lane also waits for Start after failure");
+    let loss = take.incomplete.unwrap();
+    assert_eq!((loss.first_publication, loss.last_publication), (4097, 4097));
+    assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
+    let directory = path("worker-stop").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    *control.fence.test_directory.lock() = Some(directory.clone());
+    let fence = control.fence.clone();
+    let last_take = control.last_take.clone();
+    let _resume_on_panic = WorkerPause(fence.clone());
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    recorder.configuration_at(
+        address,
+        0.0,
+        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+    );
+    fence.worker_after_stop.enabled.store(true, Ordering::Release);
+    control.stop(None);
+    assert!(!recorder.is_armed());
+    recorder.configuration_pass_complete(address);
+    recorder.configuration_epoch_complete(1);
+    wait_for(&fence.worker_after_stop.entered);
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    recorder
+        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), 1.0, route)
+        .unwrap();
+    recorder
+        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), 1.0, route)
+        .unwrap();
+    recorder.source_pass_complete(address, 1.0);
+    recorder.source_epoch_complete(1, 1.0);
+    drop(recorder);
+    drop(control); // The next real worker poll observes Disconnected.
+    fence.worker_after_stop.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_finished);
+    let file = worker_take(&directory);
+    let take = harmonigraph_take::Take::read(&file).unwrap();
+    assert!(
+        take.incomplete.is_none(),
+        "all three publication closures completed before disconnect"
+    );
+    assert_eq!(take.notes().count(), 2);
+    assert_eq!(*last_take.lock(), Some(file));
+    assert!(!fence.failed.load(Ordering::Acquire));
+    std::fs::remove_dir_all(directory).unwrap();
 }

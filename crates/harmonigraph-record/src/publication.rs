@@ -92,6 +92,10 @@ impl Loss {
         // Counter exhaustion is terminal and leaves the previous durable loss.
         let Some(next) = version.checked_add(2) else { return };
         self.version.fetch_add(1, Ordering::AcqRel);
+        // A reader observing any new payload word synchronizes this fence
+        // with its Acquire fence, so its final version cannot precede the odd
+        // write. Atomic payload alone does not establish that ordering.
+        std::sync::atomic::fence(Ordering::Release);
         self.first.store(gap.first, Ordering::Relaxed);
         self.last.store(gap.last, Ordering::Relaxed);
         self.time.store(gap.time.to_bits(), Ordering::Relaxed);
@@ -183,6 +187,12 @@ pub fn channel() -> (Publisher, Consumer) {
 }
 
 impl Publisher {
+    #[cfg(all(test, feature = "test-support"))]
+    pub(crate) fn bank_observer(&self) -> impl Fn() -> bool + use<> {
+        let shared = self.shared.clone();
+        move || shared.slots.iter().all(|slot| slot.state.load(Ordering::Acquire) == EMPTY)
+    }
+
     /// A fresh hub clock observation, independent of delayed history and cuts.
     pub fn observe_clock(&self, time: f64) {
         if time.is_finite() {
@@ -348,6 +358,15 @@ impl Publisher {
 }
 
 impl Consumer {
+    /// No retained payload or unconsumed loss snapshot remains. An unstable
+    /// snapshot is pending work, never evidence that failure may be finalized.
+    pub(crate) fn settled(&self) -> bool {
+        self.pending.is_none()
+            && self.ring.is_empty()
+            && (self.shared.loss.version.load(Ordering::Acquire) == 0
+                || self.shared.loss.read().is_some_and(|(gap, _)| gap.last <= self.seen))
+    }
+
     pub fn clock(&self) -> Option<f64> {
         let time = f64::from_bits(self.shared.clock.load(Ordering::Acquire));
         time.is_finite().then_some(time)
@@ -439,6 +458,41 @@ mod tests {
     use super::*;
     use harmonigraph_core::canonical::{ChannelBaseline, VoiceBaseline};
     use harmonigraph_core::{NoteEvent, SourceId};
+
+    #[test]
+    fn loss_snapshot_never_accepts_words_from_two_outages() {
+        // Small memory-model equivalent of Loss::{write, read}, with every
+        // independently published payload word represented by first/last.
+        // The production prefix skip is safe only if an accepted range is
+        // wholly old (1,1) or wholly new (3,3), never (1,3).
+        loom::model(|| {
+            use loom::sync::atomic::{fence, AtomicU64, Ordering};
+            let state =
+                loom::sync::Arc::new([AtomicU64::new(2), AtomicU64::new(1), AtomicU64::new(1)]);
+            let writer = state.clone();
+            let thread = loom::thread::spawn(move || {
+                writer[0].fetch_add(1, Ordering::AcqRel);
+                fence(Ordering::Release);
+                // Paired release fence belongs here, exactly as in Loss::write.
+                writer[1].store(3, Ordering::Relaxed);
+                writer[2].store(3, Ordering::Relaxed);
+                writer[0].store(4, Ordering::Release);
+            });
+            let before = state[0].load(Ordering::Acquire);
+            if before & 1 == 0 {
+                let first = state[1].load(Ordering::Relaxed);
+                let last = state[2].load(Ordering::Relaxed);
+                fence(Ordering::Acquire);
+                if before == state[0].load(Ordering::Acquire) {
+                    assert!(
+                        (first == 1 && last == 1) || (first == 3 && last == 3),
+                        "accepted mixed loss range {first}..={last}"
+                    );
+                }
+            }
+            thread.join().unwrap();
+        });
+    }
 
     #[test]
     fn actual_publication_capacity_retains_loss_without_another_audio_callback() {

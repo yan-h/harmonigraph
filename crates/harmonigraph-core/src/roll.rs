@@ -34,6 +34,7 @@ pub struct RollNote {
     pub note: u8,
     pub velocity: f32,
     pub start: Time,
+    original_onset: Time,
     /// When it was released, or `None` while it is still sounding.
     pub end: Option<Time>,
     /// Observation stopped without proof of termination. This is not a release.
@@ -124,7 +125,7 @@ impl RollNote {
     /// When this note stops: its release, or `now` while it is still
     /// sounding (a held note's segment reaches the present moment).
     pub fn stop(&self, now: Time) -> Time {
-        self.end.or(self.observed_until).unwrap_or(now).max(self.start)
+        self.observed_until.or(self.end).unwrap_or(now).max(self.start)
     }
 
     /// The note as straight-line segments `((t0, pitch0), (t1, pitch1))`,
@@ -153,16 +154,33 @@ impl RollNote {
         if self.bends[last].1 == pitch {
             return;
         }
-        if self.bends.len() >= Self::MAX_BENDS {
+        if self.bends.len() >= Self::MAX_BENDS && !self.breaks.contains(&self.bends[last].0) {
             self.bends[last] = (at, pitch);
         } else {
-            self.bends.push((at, pitch));
+            self.push_point(at, pitch, false);
         }
         // Still part of the onset: this is how a retuned note reaches the
         // pitch it is actually playing. Recorded as it happens, so the fold
         // above can never take it back.
         if at <= self.start + Self::SETTLE {
             self.settled = pitch;
+        }
+    }
+
+    /// Preserve both ends of every missing interval when the buffer folds.
+    /// If every point is a boundary, forget the oldest prefix conservatively.
+    fn push_point(&mut self, at: Time, pitch: f32, break_before: bool) {
+        if self.bends.len() >= Self::MAX_BENDS {
+            let removable = (1..self.bends.len() - 1).rev().find(|&i| {
+                !self.breaks.contains(&self.bends[i].0)
+                    && !self.breaks.contains(&self.bends[i + 1].0)
+            });
+            self.bends.remove(removable.unwrap_or(0));
+            self.breaks.retain(|at| self.bends.iter().any(|point| point.0 == *at));
+        }
+        self.bends.push((at, pitch));
+        if break_before && !self.breaks.contains(&at) {
+            self.breaks.push(at);
         }
     }
 }
@@ -207,6 +225,7 @@ impl NoteRoll {
                 note: key.note,
                 velocity,
                 start: at,
+                original_onset: at,
                 end: None,
                 observed_until: None,
                 lifetime: None,
@@ -222,9 +241,26 @@ impl NoteRoll {
         self.close(key, at);
     }
 
-    pub(crate) fn set_lifetime(&mut self, key: VoiceKey, lifetime: Option<u64>) {
+    pub(crate) fn set_identity(&mut self, key: VoiceKey, lifetime: Option<u64>, onset: Time) {
         if let Some(note) = self.live.get_mut(&key) {
             note.lifetime = lifetime;
+            note.original_onset = onset;
+        }
+    }
+
+    pub(crate) fn live_onset(&self, key: VoiceKey) -> Option<Time> {
+        self.live.get(&key).map(|note| note.start)
+    }
+
+    /// A factual accepted release survives loss of the intervening trajectory.
+    pub(crate) fn observed_release(&mut self, key: VoiceKey, lifetime: u64, at: Time) {
+        if let Some(note) = self.past.iter_mut().rev().find(|note| {
+            note.key() == key
+                && note.lifetime == Some(lifetime)
+                && note.end.is_none()
+                && note.observed_until.is_some()
+        }) {
+            note.end = Some(at.max(note.start));
         }
     }
 
@@ -252,11 +288,17 @@ impl NoteRoll {
         }
     }
 
-    pub(crate) fn replace_source(&mut self, source: SourceId, voices: &[VoiceBaseline], at: Time) {
+    pub(crate) fn replace_source(
+        &mut self,
+        source: SourceId,
+        voices: &[VoiceBaseline],
+        at: Time,
+        offset: Time,
+    ) {
         let matches = |row: &VoiceBaseline, note: &RollNote| {
             row.key(source) == note.key()
                 && if row.lifetime == 0 {
-                    note.lifetime.is_none() && row.actual_onset == note.start
+                    note.lifetime.is_none() && row.actual_onset == note.original_onset
                 } else {
                     note.lifetime == Some(row.lifetime)
                 }
@@ -284,15 +326,8 @@ impl NoteRoll {
                     let mut note = self.past.remove(index).unwrap();
                     let until = note.observed_until.take().unwrap();
                     let pitch = note.end_pitch();
-                    if note.bends.len() > RollNote::MAX_BENDS - 2 {
-                        note.bends.truncate(RollNote::MAX_BENDS - 2);
-                    }
-                    note.bends.push((until, pitch));
-                    if note.breaks.len() >= RollNote::MAX_BENDS {
-                        note.breaks.remove(0);
-                    }
-                    note.breaks.push(at);
-                    note.bends.push((at, row.pitch()));
+                    note.push_point(until, pitch, false);
+                    note.push_point(at, row.pitch(), true);
                     self.live.insert(row.key(source), note);
                 }
             }
@@ -301,14 +336,7 @@ impl NoteRoll {
                     // A baseline is a state observation, not an expression
                     // path connecting the previous sample to the recovered one.
                     note.history_complete = false;
-                    if note.breaks.len() >= RollNote::MAX_BENDS {
-                        note.breaks.remove(0);
-                    }
-                    note.breaks.push(at);
-                    if note.bends.len() >= RollNote::MAX_BENDS {
-                        note.bends.pop();
-                    }
-                    note.bends.push((at, row.pitch()));
+                    note.push_point(at, row.pitch(), true);
                 }
                 continue;
             }
@@ -319,7 +347,8 @@ impl NoteRoll {
                     channel: row.channel,
                     note: row.note,
                     velocity: row.velocity,
-                    start: row.actual_onset,
+                    start: row.actual_onset + offset,
+                    original_onset: row.actual_onset,
                     end: None,
                     observed_until: None,
                     lifetime: (row.lifetime != 0).then_some(row.lifetime),

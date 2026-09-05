@@ -371,6 +371,10 @@ pub struct Voice {
     /// MIDI octave (C4 = middle C = note 60 → octave 4).
     pub octave: i8,
     pub on_time: Time,
+    /// Presentation timestamp before a shell's moving clock offset.
+    original_onset: Time,
+    /// Visibility at the factual release, independent of frame/prune cadence.
+    history_eligible: bool,
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
     pub state: VoiceState,
@@ -407,6 +411,8 @@ impl Voice {
             pitch_class: PitchClass::from_cents(0.0),
             octave: 0,
             on_time,
+            original_onset: on_time,
+            history_eligible: true,
             lifetime: None,
             state: VoiceState::Held,
             wore_high: None,
@@ -599,7 +605,7 @@ fn baseline_matches(row: &VoiceBaseline, voice: &Voice) -> bool {
     row.channel == voice.channel
         && row.note == voice.note
         && if row.lifetime == 0 {
-            voice.lifetime.is_none() && row.actual_onset == voice.on_time
+            voice.lifetime.is_none() && row.actual_onset == voice.original_onset
         } else {
             voice.lifetime == Some(row.lifetime)
         }
@@ -623,8 +629,23 @@ impl NoteTracker {
         &mut self,
         event: CanonicalEvent<'_>,
     ) -> Result<bool, InvalidCanonical> {
+        self.handle_canonical_mapped(event, 0.0)
+    }
+
+    /// Map drawing times while retaining the source's immutable onset identity.
+    pub fn handle_canonical_mapped(
+        &mut self,
+        event: CanonicalEvent<'_>,
+        offset: Time,
+    ) -> Result<bool, InvalidCanonical> {
+        if !offset.is_finite() {
+            return Err(InvalidCanonical);
+        }
         match event {
-            CanonicalEvent::Note(delta) => {
+            CanonicalEvent::Note(mut delta) => {
+                delta.validate()?;
+                let original_onset = delta.event.time;
+                delta.event.time += offset;
                 delta.validate()?;
                 if delta.sequence != 0 {
                     let cursor = self.canonical.entry(delta.event.source).or_default();
@@ -639,6 +660,9 @@ impl NoteTracker {
                     cursor.output = delta.sequence;
                 }
                 let key = delta.event.key();
+                if matches!(delta.event.kind, NoteEventKind::Off) && delta.lifetime != 0 {
+                    self.roll.observed_release(key, delta.lifetime, delta.event.time);
+                }
                 if !matches!(
                     delta.event.kind,
                     NoteEventKind::On { .. }
@@ -656,17 +680,25 @@ impl NoteTracker {
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
                     if let Some(voice) = self.held.get_mut(&key) {
                         voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
+                        voice.original_onset = original_onset;
                         if let Some(pitch) = delta.pitch_microcents {
                             voice.set_pitch((pitch as f64 / 100_000_000.0) as f32);
                             self.roll.bend(key, delta.event.time, voice.pitch);
                         }
                     }
-                    self.roll.set_lifetime(key, (delta.lifetime != 0).then_some(delta.lifetime));
+                    self.roll.set_identity(
+                        key,
+                        (delta.lifetime != 0).then_some(delta.lifetime),
+                        original_onset,
+                    );
                     self.restamp_ends(delta.event.time);
                 }
             }
-            CanonicalEvent::Baseline(frame) => return self.replace_source(frame),
-            CanonicalEvent::Gap(gap) => {
+            CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
+            CanonicalEvent::Gap(mut gap) => {
+                gap.validate()?;
+                gap.time += offset;
+                gap.through += offset;
                 gap.validate()?;
                 if let Some(source) = gap.source {
                     self.uncertain_sources.insert(source);
@@ -691,7 +723,18 @@ impl NoteTracker {
     /// their onset, bend history and held-end identity. Missing observations
     /// are closed as history gaps, never fictional downstream releases.
     pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
+        self.replace_source_mapped(frame, 0.0)
+    }
+
+    fn replace_source_mapped(
+        &mut self,
+        frame: &SourceBaseline,
+        offset: Time,
+    ) -> Result<bool, InvalidCanonical> {
         frame.validate()?;
+        let mut mapped = *frame;
+        mapped.translate(offset);
+        mapped.validate()?;
         if self.canonical.get(&frame.source).is_some_and(|cursor| frame.id <= cursor.baseline) {
             return Ok(false);
         }
@@ -706,15 +749,17 @@ impl NoteTracker {
             self.hidden_sources.insert(frame.source);
         }
         self.roll.set_participating(frame.source, frame.participating);
-        self.roll.replace_source(frame.source, voices, frame.time);
+        self.roll.replace_source(frame.source, voices, mapped.time, offset);
         self.held.retain(|key, voice| {
             key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
         });
         for row in voices {
+            let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
             let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
                 let mut voice =
-                    Voice::new(frame.source, row.channel, row.note, row.velocity, row.actual_onset);
+                    Voice::new(frame.source, row.channel, row.note, row.velocity, onset);
                 voice.lifetime = (row.lifetime != 0).then_some(row.lifetime);
+                voice.original_onset = row.actual_onset;
                 voice
             });
             voice.set_pitch(row.pitch());
@@ -722,10 +767,10 @@ impl NoteTracker {
         let cursor = self.canonical.entry(frame.source).or_default();
         cursor.baseline = frame.id;
         cursor.state_cut = frame.output_cut;
-        self.baselines.insert(frame.source, *frame);
+        self.baselines.insert(frame.source, mapped);
         self.uncertain_sources.remove(&frame.source);
         self.restored_sources.insert(frame.source);
-        self.restamp_ends(frame.time);
+        self.restamp_ends(mapped.time);
         Ok(true)
     }
 
@@ -761,6 +806,7 @@ impl NoteTracker {
                 if let Some(mut voice) = self.held.remove(&event.key()) {
                     self.stamp_ends_worn(&mut voice);
                     voice.state = VoiceState::Released { at: event.time };
+                    voice.history_eligible = !self.hidden_sources.contains(&voice.source);
                     self.released.push(voice);
                     self.roll.note_off(event.key(), event.time);
                 }
@@ -853,7 +899,7 @@ impl NoteTracker {
             if voice.release_level(now, env) > 0.0 {
                 return true;
             }
-            if !self.hidden_sources.contains(&voice.source) {
+            if voice.history_eligible {
                 history.record(voice, now);
             }
             false
@@ -924,6 +970,7 @@ impl NoteTracker {
         for mut voice in std::mem::take(&mut self.held).into_values() {
             self.stamp_ends_worn(&mut voice);
             voice.state = VoiceState::Released { at: now };
+            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
             self.released.push(voice);
         }
         self.restamp_ends(now);
@@ -949,6 +996,7 @@ impl NoteTracker {
             voice.wore_high = worn(high);
             voice.wore_low = worn(low);
             voice.state = VoiceState::Released { at: now };
+            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
             released.push(voice);
             false
         });

@@ -35,6 +35,10 @@ When a baseline resumes a known lifetime after a gap, it reuses the original rol
 it does not create another source/onset cache identity.
 Off visibility retains factual hidden lifetimes so later expressions and rejoin keep their original history.
 Pitch history already accumulated from earlier visible observations remains historical evidence.
+Eligibility for adding a released voice to pitch history is captured at its factual release, so later visibility changes and frame/prune cadence cannot erase it.
+An accepted Off arriving after a gap retains its actual release time on the matching historical lifetime while its drawn trajectory still ends at the last observation.
+At the 64-bend limit, folding preserves both boundaries of a missing interval;
+when every retained point is a boundary, it conservatively forgets the oldest prefix instead of drawing across loss.
 
 A gap makes affected source current state uncertain and remains in historical diagnostics after recovery.
 A later On establishes only that individual lifetime.
@@ -66,6 +70,12 @@ No GUI, background or disk acknowledgement decides musical retention, baseline a
 A failed ordinary enqueue records a serial range in a separate atomic loss descriptor.
 The reader uses one bounded version check;
 all descriptor payload words are atomic, so an interrupted read is retried on its next poll without racing ordinary memory.
+The writer places a Release fence after publishing its odd version and before relaxed payload stores, paired with the reader's Acquire fence after payload loads.
+If a reader sees any new payload word, those fences order the odd-version update before its final version load;
+atomic coherence then forbids accepting the previous even version with mixed payload.
+An initial Acquire load of the new final even version instead observes its preceding complete payload.
+This uses Rust's [fence-to-fence synchronization rule](https://doc.rust-lang.org/std/sync/atomic/fn.fence.html).
+A Loom model of the production version/payload ordering accepts a mixed range without the writer fence and passes with it.
 The descriptor cannot overtake successful earlier queue items.
 It delivers a gap even if the producer never calls again.
 A resumed publisher queues the gap before claiming subsequent continuity.
@@ -96,6 +106,12 @@ Delayed notes can therefore arrive after Stop or rewind and still reach their or
 WAV tails remain with their own pass.
 The real 128-pass limit refuses the 129th unresolved source pass with durable incompleteness;
 source closure is drained before a new pass is charged, so released capacity is reusable even when controls arrive on different lanes.
+A producer failure requests finalization but does not prove its retained prefix has reached disk.
+The worker waits for pending Start/NewPass ownership and both lanes, including a stable consumed loss snapshot, before accounting failure for that exact epoch.
+Capacity or file-creation refusal keeps the existing writers until they have been marked and flushed, or an actual I/O refusal has been reported.
+After failure is accounted, only that epoch's recording copies are discarded;
+display fanout and baseline reclamation continue.
+Disconnect enters the same cross-lane pump and first honors a pending Stop whose final source closure has now arrived.
 
 ## Take format and replay
 
@@ -103,7 +119,7 @@ Take format is now **4**.
 Versions 0 through 3 are refused explicitly;
 there is no compatibility shim.
 Every persisted record struct has container-level serde defaults, while a complete baseline still must satisfy its full semantic contract.
-Malformed complete final baselines and invalid cut ordering are errors, not successful truncated recordings.
+Malformed complete final records, including typed integer/enum failures and invalid cut ordering, are errors, not successful truncated recordings.
 A genuinely interrupted last line retains the format's existing readable-prefix behavior.
 
 `Take.events` is one ordered canonical note/control stream.
@@ -116,15 +132,20 @@ An incomplete take is readable for inspection, but the offline render entrypoint
 Live timing uses continuous presentation seconds across raw sample-clock resets/rate changes and a fresh audio heartbeat independent of historical delivery times.
 Queued pre-reset history therefore keeps its presentation domain while exact clock epochs remain available for original recording routes.
 An idle GUI poll cannot re-anchor an old heartbeat.
-The same translation maps a baseline cut, all its original onsets and gaps;
-exact sample provenance is unchanged.
-A fixture with audio now 11 and GUI now 21 maps delayed audio time 2 to GUI time 12, including a later matching baseline.
+The consumer maps drawing times while retaining the unshifted onset for direct lifetime matching and exact sample provenance for accepted output.
+A known lifetime keeps its already-mapped onset even when a later heartbeat changes the offset or a baseline resumes it after a gap.
+A fixture with audio now 11 and GUI now 21 maps delayed audio time 2 to GUI time 12;
+a later heartbeat changes the offset by 0.01 while both direct and accepted lifetimes retain GUI onset 12.
 
 ## Verification and measurements
 
 Maintained fixtures exercise complete 64-voice replacement and invalid duplicate/65th/final entries, other-source isolation, retained complete lifetimes before an empty baseline, duplicate retransmission, matching held recovery and Off/rejoin, actual publication saturation and no-future-callback loss, owned baseline backpressure/copy/reuse and gap-to-baseline resumption.
 The recorder fixtures use its production rings and writer to serialize delayed history, original rewind routes, disarmed provenance, WAV tails and actual 128/129 pass capacity.
-The replay fixture parses one serialized v4 stream at 1 ms, 24 fps and 60 fps and compares exact roll history with full-roll reconstruction.
+Serialized v4 replay fixtures run at 1 ms, 24 fps and 60 fps, compare exact roll history with full-roll reconstruction, and actually prune at each cadence for visibility/history checks.
+Two deterministic fixtures pause the spawned recording worker after its actual Empty poll or after Stop is consumed:
+the former retains two baseline payloads plus 4,094 notes and exact loss 4,097 without another producer call;
+the latter receives final source history/closure before Disconnected and finishes a valid take.
+The 128/129 fixture continues publishing after refusal and reuses the same two-slot baseline bank three times through disk/display fanout.
 
 The plugin target runs the real exported CLAP factory with `nice-plug/assert_process_allocs`.
 Its allocation guard checks deallocation too.

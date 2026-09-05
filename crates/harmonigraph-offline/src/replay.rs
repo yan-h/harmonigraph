@@ -162,6 +162,148 @@ mod tests {
     }
 
     #[test]
+    fn accepted_off_after_gap_is_retained_without_a_held_baseline() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::confirmed::PitchProvenance;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        use harmonigraph_take::{CanonicalRecord, Record};
+        let source = SourceId(1);
+        let delta = |event: NoteEvent, sequence| {
+            CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
+                event,
+                sequence,
+                lifetime: 61,
+                provenance: PitchProvenance::AcceptedOutput,
+                timing: Some(EventTiming {
+                    clock: ClockId::default(),
+                    input: 0,
+                    planned: None,
+                    sample: (event.time * 48000.0) as i64,
+                    sample_rate: 48000.0,
+                }),
+                pitch_microcents: None,
+            }))
+        };
+        let empty = SourceBaseline::new(
+            source,
+            1,
+            5.0,
+            5.0,
+            4,
+            true,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for record in [
+            delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1),
+            CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
+                source: Some(source),
+                time: 2.0,
+                through: 3.0,
+                first: 2,
+                last: 3,
+                reason: GapReason::PublicationFull,
+            })),
+            delta(NoteEvent::off(4.0, source, 0, 60), 4),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
+        ] {
+            text.push('\n');
+            text.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
+        }
+        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
+        for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
+            let mut replay = Replay::new(take.clone());
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut now = 0.0;
+            while now < 4.5 {
+                replay.advance_to(&mut state, now);
+                now += cadence;
+            }
+            assert!(
+                !state.tracker.source_current_certain(source),
+                "actual Off does not repair source completeness"
+            );
+            replay.advance_to(&mut state, 5.0);
+            for roll in [state.tracker.roll(), &replay.full_roll()] {
+                let note = roll.notes().next().unwrap();
+                assert_eq!(
+                    (note.start, note.end, note.observed_until),
+                    (1.0, Some(4.0), Some(2.0))
+                );
+                assert!(note.segments(5.0).all(|segment| segment.1 .0 <= 2.0));
+                assert_eq!(roll.notes().count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn visibility_boundaries_keep_pitch_history_independent_of_prune_cadence() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        use harmonigraph_take::{CanonicalRecord, Record};
+        let source = SourceId::DIRECT;
+        let off = SourceBaseline::new(
+            source,
+            1,
+            0.03,
+            0.0,
+            0,
+            false,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let rejoin = SourceBaseline::new(
+            source,
+            2,
+            0.08,
+            0.0,
+            0,
+            true,
+            &[],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for record in [
+            CanonicalRecord::from_event(CanonicalEvent::Note(
+                NoteEvent::on(0.01, source, 0, 60, 0.8).into(),
+            )),
+            CanonicalRecord::from_event(CanonicalEvent::Note(
+                NoteEvent::off(0.02, source, 0, 60).into(),
+            )),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&off)),
+            CanonicalRecord::from_event(CanonicalEvent::Baseline(&rejoin)),
+        ] {
+            text.push('\n');
+            text.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
+        }
+        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
+        for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
+            let mut replay = Replay::new(take.clone());
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let envelope = harmonigraph_core::Envelope {
+                attack_time: 0.0,
+                fade_time: 0.0,
+                ..Default::default()
+            };
+            let mut now = 0.0;
+            while now < 0.1 {
+                replay.advance_to(&mut state, now);
+                state.tracker.prune(now, &envelope);
+                now += cadence;
+            }
+            replay.advance_to(&mut state, 0.1);
+            state.tracker.prune(0.1, &envelope);
+            let history: Vec<_> =
+                state.tracker.history().visits().map(|v| (v.pitch, v.last_off)).collect();
+            assert_eq!(history, [(60.0, 0.02)], "cadence {cadence}");
+        }
+    }
+
+    #[test]
     fn canonical_serialization_has_one_history_at_every_replay_cadence() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::confirmed::PitchProvenance;

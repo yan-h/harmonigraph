@@ -819,6 +819,8 @@ impl Control {
             return;
         }
         let dir = take_dir();
+        #[cfg(all(test, feature = "test-support"))]
+        let dir = self.fence.test_directory.lock().clone().unwrap_or(dir);
         if let Err(err) = std::fs::create_dir_all(&dir) {
             *self.status.lock() = format!("cannot create {}: {err}", dir.display());
             return;
@@ -1034,7 +1036,10 @@ pub fn channel() -> (Recorder, Control) {
         let mut open: Option<Open> = None;
         let mut pending_stop = None;
         let mut fanout = CanonicalFanout::default();
+        let failure = FailureAccount::default();
+        let mut disconnected = false;
         loop {
+            if !disconnected {
             match orders.try_recv() {
                 Ok(Command::Start(epoch, header, path, spec)) => {
                     if pending_stop.is_some() {
@@ -1051,6 +1056,10 @@ pub fn channel() -> (Recorder, Control) {
                             && open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none())
                         {
                             thread_fence.fail();
+                            failure.account(&mut open, epoch, &thread_status, harmonigraph_take::IncompleteRecord {
+                                reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                                ..Default::default()
+                            });
                         }
                     }
                 }
@@ -1078,75 +1087,81 @@ pub fn channel() -> (Recorder, Control) {
                         }
                     }
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    drain_with_audio(
-                        &mut consumer,
-                        Some(&mut audio_consumer),
-                        &mut open,
-                        &thread_status,
-                        Some(&thread_fence),
-                    );
-                    fanout.drain(&mut publications, Some(&mut display), &mut open, &thread_fence);
-                    if thread_fence.enabled.load(Ordering::Acquire) && open.is_some() {
-                        thread_fence.fail();
-                        *thread_status.lock() =
-                            "recording incomplete: producer disconnected before finalization"
-                                .into();
-                    }
-                    if let Some(current) = open.as_mut() {
-                        current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                            ..Default::default()
-                        });
-                    }
-                    return;
+                Err(mpsc::TryRecvError::Empty) => {
+                    #[cfg(all(test, feature = "test-support"))]
+                    thread_fence.worker_after_empty.reach();
                 }
+                Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
+            }
             }
             let had_records = drain_with_boundaries(
-                &mut consumer,
-                Some(&mut audio_consumer),
-                &mut open,
-                &thread_status,
-                Some(&thread_fence),
+                &mut consumer, Some(&mut audio_consumer), &mut open,
+                &thread_status, Some(&thread_fence), &failure,
                 |open| {
-                    fanout.drain(&mut publications, Some(&mut display), open, &thread_fence);
+                    fanout.drain(&mut publications, Some(&mut display), open, &thread_fence, &failure);
                 },
             );
             let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
                 && drain_audio(&mut audio_consumer, &mut open);
-            let had_publications =
-                fanout.drain(&mut publications, Some(&mut display), &mut open, &thread_fence) != 0;
+            let had_publications = fanout.drain(
+                &mut publications, Some(&mut display), &mut open, &thread_fence, &failure,
+            ) != 0;
+            #[cfg(all(test, feature = "test-support"))]
+            if pending_stop.is_some() { thread_fence.worker_after_stop.reach(); }
+
+            // Failure is pending until both lanes, including the independent
+            // loss snapshot, have delivered their retained prefix to its file.
             if thread_fence.failed.load(Ordering::Acquire) {
-                if let Some(current) = open.as_mut() {
-                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                        ..Default::default()
-                    });
+                if !failure.contains(thread_fence.epoch())
+                    && consumer.is_empty() && publications.settled()
+                    && (open.is_some() || disconnected)
+                {
+                    failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                        harmonigraph_take::IncompleteRecord {
+                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                            ..Default::default()
+                        });
+                    pending_stop = None;
+                    thread_fence.finishing.store(false, Ordering::Release);
                 }
-                open = None;
-                pending_stop = None;
-                thread_fence.finishing.store(false, Ordering::Release);
-                *thread_status.lock() = CONFIGURATION_FAILURE.into();
-            } else if pending_stop
-                .as_ref()
+            } else if pending_stop.as_ref()
                 .is_some_and(|(epoch, _)| open.as_ref().is_some_and(|o| o.ready(*epoch)))
             {
                 let (_, render) = pending_stop.take().unwrap();
-                let Some(path) = finish_ready(&mut open, thread_fence.epoch(), &thread_fence)
-                else {
-                    continue;
-                };
-                *thread_last_take.lock() = Some(path.clone());
-                thread_fence.finishing.store(false, Ordering::Release);
-                if let Some(render) = render {
-                    spawn_render(
-                        *render,
-                        path,
-                        thread_status.clone(),
-                        thread_progress.clone(),
-                        thread_render.clone(),
-                    );
+                if let Some(path) = finish_ready(&mut open, thread_fence.epoch(), &thread_fence) {
+                    *thread_last_take.lock() = Some(path.clone());
+                    thread_fence.finishing.store(false, Ordering::Release);
+                    if let Some(render) = render {
+                        spawn_render(*render, path, thread_status.clone(),
+                            thread_progress.clone(), thread_render.clone());
+                    }
+                }
+            }
+            // Shutdown uses the same cross-lane pump and honors a now-ready
+            // Stop first. Only ownership still unresolved after that is lost.
+            if disconnected && consumer.is_empty() {
+                if publications.settled() {
+                    if open.is_some() {
+                        thread_fence.fail();
+                        failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                            harmonigraph_take::IncompleteRecord {
+                                reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                                ..Default::default()
+                            });
+                        *thread_status.lock() = "recording incomplete: producer disconnected before finalization".into();
+                    }
+                    #[cfg(all(test, feature = "test-support"))]
+                    thread_fence.worker_finished.store(true, Ordering::Release);
+                    return;
+                }
+                if fanout.waiting_file {
+                    // No remaining command can materialize this addressed file.
+                    thread_fence.fail();
+                    failure.account(&mut open, thread_fence.epoch(), &thread_status,
+                        harmonigraph_take::IncompleteRecord {
+                            reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
+                            ..Default::default()
+                        });
                 }
             }
             if !had_records && !had_audio && !had_publications {
@@ -1266,6 +1281,9 @@ pub mod testing {
         stopping: bool,
         pub finished: Option<std::path::PathBuf>,
         fanout: CanonicalFanout,
+        failure: FailureAccount,
+        display: publication::Publisher,
+        displayed: publication::Consumer,
     }
     impl FileWriter {
         pub fn retained_passes(&self) -> usize {
@@ -1276,6 +1294,7 @@ pub mod testing {
         }
         pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
             let status = Mutex::new(String::new());
+            let (display, displayed) = publication::channel();
             let mut open =
                 Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
             open.epoch = capture.fence.epoch();
@@ -1287,6 +1306,9 @@ pub mod testing {
                 stopping: false,
                 finished: None,
                 fanout: CanonicalFanout::default(),
+                failure: FailureAccount::default(),
+                display,
+                displayed,
             }
         }
         pub fn stop(&mut self) {
@@ -1299,23 +1321,53 @@ pub mod testing {
                 &mut self.open,
                 &self.status,
                 Some(&self.fence),
+                &self.failure,
                 |open| {
-                    self.fanout.drain(&mut capture.publications, None, open, &self.fence);
+                    self.fanout.drain(
+                        &mut capture.publications,
+                        Some(&mut self.display),
+                        open,
+                        &self.fence,
+                        &self.failure,
+                    );
                 },
             );
-            self.fanout.drain(&mut capture.publications, None, &mut self.open, &self.fence);
+            self.fanout.drain(
+                &mut capture.publications,
+                Some(&mut self.display),
+                &mut self.open,
+                &self.fence,
+                &self.failure,
+            );
             if self.fence.failed.load(Ordering::Acquire) {
-                if let Some(current) = self.open.as_mut() {
-                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                        reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
-                        ..Default::default()
-                    });
+                if capture._records.is_empty()
+                    && capture.publications.settled()
+                    && !self.failure.contains(self.fence.epoch())
+                {
+                    self.failure.account(
+                        &mut self.open,
+                        self.fence.epoch(),
+                        &self.status,
+                        harmonigraph_take::IncompleteRecord {
+                            reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
+                            ..Default::default()
+                        },
+                    );
                 }
-                self.open = None;
             } else if self.stopping {
                 self.finished = finish_ready(&mut self.open, self.fence.epoch(), &self.fence)
                     .or_else(|| self.finished.take());
             }
+        }
+        pub fn display_events(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
+            let mut events = Vec::new();
+            self.displayed.drain(|delivery, _, _| {
+                if let publication::Delivery::Event(event) = delivery {
+                    events.push(harmonigraph_take::CanonicalRecord::from_event(event));
+                }
+                true
+            });
+            events
         }
         pub fn failed(&self) -> bool {
             self.fence.failed.load(Ordering::Acquire)
@@ -1368,8 +1420,40 @@ pub mod testing {
     }
 }
 
+/// Worker-owned recording disposal proof. A producer's failure flag requests
+/// failure; only flushed file markers (or a reported I/O refusal) account it.
+/// Recording cannot restart after failure until reload, so one exact epoch
+/// suffices. This state grants no source-journal acknowledgement.
+#[derive(Default)]
+struct FailureAccount(std::cell::Cell<Option<u64>>);
+
+impl FailureAccount {
+    fn contains(&self, epoch: u64) -> bool {
+        self.0.get() == Some(epoch)
+    }
+
+    fn account(
+        &self,
+        open: &mut Option<Open>,
+        epoch: u64,
+        status: &Mutex<String>,
+        record: harmonigraph_take::IncompleteRecord,
+    ) {
+        *status.lock() = CONFIGURATION_FAILURE.into();
+        if let Some(current) = open.as_mut() {
+            if let Err(error) = current.mark_incomplete(record) {
+                *status.lock() =
+                    format!("recording incomplete: cannot flush failure marker: {error}");
+            }
+        }
+        self.0.set(Some(epoch));
+        *open = None;
+    }
+}
+
 #[derive(Default)]
 struct CanonicalFanout {
+    waiting_file: bool,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
 }
@@ -1381,8 +1465,10 @@ impl CanonicalFanout {
         mut display: Option<&mut publication::Publisher>,
         open: &mut Option<Open>,
         fence: &RecordFence,
+        failure: &FailureAccount,
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
+        self.waiting_file = false;
         if let (Some(clock), Some(display)) = (publications.clock(), display.as_deref_mut()) {
             display.observe_clock(clock);
         }
@@ -1394,20 +1480,31 @@ impl CanonicalFanout {
                 publication::Delivery::EpochComplete(epoch) => {
                     Some(RecordAddress { epoch, pass: 0 })
                 }
+                publication::Delivery::Event(CanonicalEvent::Gap(_))
+                    if route.address.is_none()
+                        && fence.failed.load(Ordering::Acquire)
+                        && fence.epoch() != 0 =>
+                {
+                    Some(RecordAddress { epoch: fence.epoch(), pass: 0 })
+                }
                 publication::Delivery::Event(_) => route.address,
             };
             if let Some(address) = address {
-                if !fence.failed.load(Ordering::Acquire)
+                if !failure.contains(address.epoch)
                     && open.as_ref().is_none_or(|o| {
                         o.epoch < address.epoch
                             || (o.epoch == address.epoch && o.pass < address.pass)
                     })
                 {
+                    self.waiting_file = true;
                     return false;
                 }
             }
             match delivery {
                 publication::Delivery::PassComplete(address) => {
+                    if failure.contains(address.epoch) {
+                        return true;
+                    }
                     if let Some(current) = open.as_mut() {
                         if let Some(pass) = current.addressed(address) {
                             pass.source_complete = true;
@@ -1422,6 +1519,9 @@ impl CanonicalFanout {
                     }
                 }
                 publication::Delivery::EpochComplete(epoch) => {
+                    if failure.contains(epoch) {
+                        return true;
+                    }
                     if let Some(current) = open.as_mut().filter(|o| o.epoch == epoch) {
                         current.source_closed = true;
                     } else {
@@ -1458,7 +1558,7 @@ impl CanonicalFanout {
                     // Disk serialization happens while the primary payload is
                     // Reading. The display gets its OWN complete payload copy.
                     let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
-                    if let Some(address) = route.address {
+                    if let Some(address) = route.address.filter(|a| !failure.contains(a.epoch)) {
                         record.translate(route.time_offset);
                         if let Some(pass) = open.as_mut().and_then(|o| o.addressed(address)) {
                             if pass.source_complete {
@@ -1476,12 +1576,13 @@ impl CanonicalFanout {
                     if let CanonicalEvent::Gap(gap) = event {
                         if route.address.is_some() || fence.failed.load(Ordering::Acquire) {
                             if let Some(current) = open.as_mut() {
-                                current.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                                    first_publication: gap.first,
-                                    last_publication: gap.last,
-                                    reason: harmonigraph_take::canonical::GapRecord::from(gap)
-                                        .reason,
-                                });
+                                let _ =
+                                    current.mark_incomplete(harmonigraph_take::IncompleteRecord {
+                                        first_publication: gap.first,
+                                        last_publication: gap.last,
+                                        reason: harmonigraph_take::canonical::GapRecord::from(gap)
+                                            .reason,
+                                    });
                             }
                             fence.fail();
                         }
@@ -1677,47 +1778,36 @@ impl Open {
     }
 
     /// Close this pass's files and open the next pass's.
-    fn next_pass(mut self, status: &Mutex<String>) -> Option<Open> {
-        if self.epoch != 0 {
-            if self.retained.len() + 1 >= RECORD_PASSES {
-                self.mark_incomplete(harmonigraph_take::IncompleteRecord {
-                    reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
-                    ..Default::default()
-                });
-                return None;
-            }
-            let mut header = self.header.clone();
-            header.audio_start = None;
-            let mut next = Open::create(
-                header,
-                self.base.clone(),
-                self.pass.checked_add(1)?,
-                self.spec,
-                status,
-            )?;
-            if self.spec.is_some() && next.audio.is_none() {
-                return None;
-            }
-            next.epoch = self.epoch;
-            next.source_enabled = self.source_enabled;
-            next.last_voiced_number = if self.voiced { self.pass } else { self.last_voiced_number };
-            next.last_voiced = self.voiced_so_far();
-            next.retained = std::mem::take(&mut self.retained);
-            next.retained.push(self);
-            return Some(next);
+    fn next_pass(open: &mut Option<Open>, status: &Mutex<String>) -> bool {
+        let Some(current) = open.as_ref() else { return true };
+        if current.epoch != 0 && current.retained.len() + 1 >= RECORD_PASSES {
+            return false;
         }
-        let carried = self.voiced_so_far();
-        let Open { mut header, base, pass, writer, audio, spec, .. } = self;
-        if let Some(audio) = audio {
-            let _ = audio.finish();
-        }
-        drop(writer);
-        // Each pass records its own audio from its own start, so the
-        // previous pass's alignment must not be inherited.
+        let Some(pass) = current.pass.checked_add(1) else { return false };
+        let mut header = current.header.clone();
         header.audio_start = None;
-        let mut next = Open::create(header, base, pass + 1, spec, status)?;
-        next.last_voiced = carried;
-        Some(next)
+        let Some(mut next) = Open::create(header, current.base.clone(), pass, current.spec, status)
+        else {
+            return false;
+        };
+        if current.spec.is_some() && next.audio.is_none() {
+            return false;
+        }
+        // Keep the entire old owner until creation and the capacity check pass.
+        let mut previous = open.take().unwrap();
+        next.last_voiced = previous.voiced_so_far();
+        if previous.epoch != 0 {
+            next.epoch = previous.epoch;
+            next.source_enabled = previous.source_enabled;
+            next.last_voiced_number =
+                if previous.voiced { previous.pass } else { previous.last_voiced_number };
+            next.retained = std::mem::take(&mut previous.retained);
+            next.retained.push(previous);
+        } else {
+            previous.finish();
+        }
+        *open = Some(next);
+        true
     }
 
     fn finish_configuration(mut self) -> std::io::Result<std::path::PathBuf> {
@@ -1756,14 +1846,21 @@ impl Open {
         Ok(())
     }
 
-    fn mark_incomplete(&mut self, record: harmonigraph_take::IncompleteRecord) {
+    fn mark_incomplete(
+        &mut self,
+        record: harmonigraph_take::IncompleteRecord,
+    ) -> std::io::Result<()> {
+        let mut result = Ok(());
         if !self.incomplete {
-            let _ = self.writer.incomplete(record);
-            self.incomplete = true;
+            result = self.writer.incomplete(record).and_then(|_| self.writer.flush());
+            self.incomplete = result.is_ok();
         }
         for pass in &mut self.retained {
-            pass.mark_incomplete(record);
+            if let Err(error) = pass.mark_incomplete(record) {
+                result = Err(error);
+            }
         }
+        result
     }
     fn addressed(&mut self, address: RecordAddress) -> Option<&mut Open> {
         if self.epoch != address.epoch {
@@ -1820,7 +1917,7 @@ fn drain_with_audio(
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
 ) -> bool {
-    drain_with_boundaries(consumer, audio, open, status, fence, |_| {})
+    drain_with_boundaries(consumer, audio, open, status, fence, &FailureAccount::default(), |_| {})
 }
 
 fn drain_with_boundaries(
@@ -1829,13 +1926,13 @@ fn drain_with_boundaries(
     open: &mut Option<Open>,
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
+    failure: &FailureAccount,
     mut before_new_pass: impl FnMut(&mut Option<Open>),
 ) -> bool {
     // Start is a separate off-thread message, published before arming. Retain
     // records if this iteration observed the ring before that command.
     if open.is_none()
-        && fence
-            .is_some_and(|f| f.enabled.load(Ordering::Acquire) && !f.failed.load(Ordering::Acquire))
+        && fence.is_some_and(|f| f.enabled.load(Ordering::Acquire) && !failure.contains(f.epoch()))
     {
         return false;
     }
@@ -1852,12 +1949,24 @@ fn drain_with_boundaries(
             // A completed source cut in the other lane can release a pass
             // before this allocation. Queue ordering alone is not exhaustion.
             before_new_pass(open);
-            if let Some(current) = open.take() {
-                *open = current.next_pass(status);
-                if open.is_none() {
-                    fail();
-                }
+            if !Open::next_pass(open, status) {
+                fail();
+                let epoch = open.as_ref().map_or(0, |o| o.epoch);
+                failure.account(
+                    open,
+                    epoch,
+                    status,
+                    harmonigraph_take::IncompleteRecord {
+                        reason: harmonigraph_take::canonical::GapReasonRecord::InvalidRecord,
+                        ..Default::default()
+                    },
+                );
             }
+            continue;
+        }
+        if fence.is_some_and(|f| failure.contains(f.epoch()))
+            && !matches!(entry, Entry::AudioSamples(_))
+        {
             continue;
         }
         match entry {

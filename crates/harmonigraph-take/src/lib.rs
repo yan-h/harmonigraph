@@ -264,6 +264,26 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
+/// Check syntax independently of Record's typed deserialization. RON can
+/// report an expected closing delimiter/comma at EOF instead of Error::Eof.
+fn unfinished_ron(line: &str) -> bool {
+    use ron::error::Error;
+    let Ok(mut parser) = ron::Deserializer::from_str(line) else { return false };
+    match <serde::de::IgnoredAny as serde::Deserialize>::deserialize(&mut parser) {
+        Err(Error::Eof) => true,
+        Err(
+            Error::ExpectedArrayEnd
+            | Error::ExpectedMapEnd
+            | Error::ExpectedStructLikeEnd
+            | Error::ExpectedComma
+            | Error::ExpectedMapColon
+            | Error::ExpectedIdentifier
+            | Error::ExpectedStringEnd,
+        ) => parser.remainder().is_empty(),
+        _ => false,
+    }
+}
+
 impl Take {
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Take, ReadError> {
         let file = std::fs::File::open(path)?;
@@ -272,10 +292,8 @@ impl Take {
 
     pub fn parse(input: impl BufRead) -> Result<Take, ReadError> {
         // Read the lines up front so the last one can be recognized: a
-        // record that fails to parse *there* is a half-written line from
-        // an interrupted export, which the format is line-oriented
-        // specifically to survive. The same failure anywhere earlier is
-        // real corruption and must not be waved through.
+        // syntactically unfinished final record can be a half-written line.
+        // A complete record with an invalid type/value is corruption even there.
         let lines = input.lines().collect::<Result<Vec<String>, _>>()?;
         let mut take = Take::default();
         let mut have_header = false;
@@ -289,7 +307,7 @@ impl Take {
             }
             let record = match ron::from_str::<Record>(line) {
                 Ok(record) => record,
-                Err(_) if i + 1 == lines.len() => {
+                Err(_) if i + 1 == lines.len() && unfinished_ron(line) => {
                     take.truncated = true;
                     break;
                 }
@@ -744,6 +762,22 @@ mod tests {
             [ChannelBaseline::default(); 16],
         )
         .unwrap();
+        let full = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Baseline(&baseline),
+        )))
+        .unwrap();
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for invalid in [
+            full.replace("note:60", "note:256"),
+            full.replace("ObservedDirect", "UnknownProvenance"),
+        ] {
+            assert_ne!(invalid, full);
+            let parsed = Take::parse(std::io::Cursor::new(format!("{header}\n{invalid}")));
+            assert!(
+                matches!(parsed, Err(ReadError::Parse(2, _))),
+                "complete malformed record was accepted: {parsed:?}"
+            );
+        }
         let mut record = canonical::BaselineRecord::from(&baseline);
         record.voices = vec![row.into(); 65];
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
