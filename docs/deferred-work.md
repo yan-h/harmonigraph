@@ -71,7 +71,9 @@ That's a real pipeline + shader change, not a toggle.
 Payoff is *situational*:
 the CPU sort already handles separated billboards well;
 per-pixel depth mainly helps when billboards actually intersect or crowd at steep camera angles, and the glow-based aesthetic doesn't obviously benefit.
-**Do it only if a specific overlap artifact shows up in practice.** Retaining the unused attachment still costs allocation, clears and writes.
+**Do it only if a specific overlap artifact shows up in practice.** Retaining the unused attachment still allocates memory and asks the pass to clear, write and store depth that no consumer reads.
+The actual cost of those operations depends on the GPU and driver;
+discarding the unused store is a small first step before removing the attachment and its pipeline state.
 Removing it while preserving painter order is [#644](https://github.com/yan-h/harmonigraph/issues/644), part of the [lattice rendering plan](lattice-rendering-plan.md);
 that cleanup does not require adopting per-pixel depth sorting.
 
