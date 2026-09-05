@@ -22,3 +22,9 @@ mod ships;
 mod sweep;
 mod targets;
 mod timing;
+
+// Thread-local so concurrent GPU fixtures count only their own creations,
+// including strips discarded before any frame can observe their handles.
+thread_local! {
+    pub(super) static INK_STRIP_CREATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
