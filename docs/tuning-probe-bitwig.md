@@ -6,6 +6,13 @@ This establishes a usable host configuration for #615, not a portable CLAP clock
 The production transport-stop and late-stream contract remains unresolved in [#632](https://github.com/yan-h/harmonigraph/issues/632) and must be settled before #616 implements it.
 The apparatus is in [draft PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
 
+At this setting, live notes passing through the tuner gain 2,048 samples (46.440 ms) of input-to-instrument delay, in addition to the rest of the monitoring path.
+Bitwig's measured compensation aligns scheduled playback and export;
+it cannot anticipate a live key press or remove this delay from live playing.
+The stopped-input trial confirms the delayed event path for one zero-duration gesture, not the total keyboard-to-audio latency of a performance setup.
+The investigation retained D = 2,048 across all tested engine buffers and did not search for the minimum reliable delay.
+Reducing the live-playing cost requires fresh measurements at smaller D values under explicitly supported conditions.
+
 ## Supported configuration and limits
 
 | Area | Measured support / required constraint |
