@@ -1,0 +1,55 @@
+{
+  ".build": [
+    "codex/615-tuning-probe @3954fe18",
+    "codex/615-tuning-probe @637d4448",
+    "codex/615-tuning-probe @b664e1e3",
+    "codex/615-tuning-probe @efc1db7c"
+  ],
+  ".class": [
+    "hub",
+    "tuner"
+  ],
+  ".clock_mapping": [
+    "candidate: raw steady_time plus configured offset; cross-instance validity unproven"
+  ],
+  ".event_kind": [
+    "cc",
+    "note_off",
+    "note_on",
+    "tuning"
+  ],
+  ".kind": [
+    "activation",
+    "assignment",
+    "audio_level",
+    "callback_enter",
+    "callback_exit",
+    "clock_gap",
+    "fault",
+    "footer",
+    "framework_transport",
+    "header",
+    "input",
+    "lifecycle",
+    "planned_output",
+    "progress",
+    "raw_input",
+    "raw_output",
+    "reply_published",
+    "reply_visible",
+    "sub_block",
+    "transport"
+  ],
+  ".name": [
+    "hub_deactivate",
+    "hub_reset",
+    "source_deactivate",
+    "source_reset",
+    "start_processing",
+    "stop_processing"
+  ],
+  ".reason": [
+    "assignment_deadline_missed",
+    "progress_queue_full"
+  ]
+}

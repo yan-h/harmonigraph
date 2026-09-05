@@ -1,0 +1,72 @@
+{
+  "scope": "Host evidence summary for parent #615 documentation; no production implementation verdict beyond the explicitly narrowed configuration.",
+  "narrow_configuration": "Bitwig Studio6.1/macOS,44.1kHz, three CLAP tuner sources and one CLAP Master hub in the tested shared process grouping, fixed graph with verified source offsets, keep_alive=true, fixed128/512/1024-sample activation bounds, D2048, explicitly measured lifecycle resets. Vital receiving requires the tested host/plugin MPE and48-semitone range settings.",
+  "rows": [
+    {
+      "case": "Shared clock and cohorts",
+      "evidence": "Runs09-11,23: independently timed callback pairing and reinserted instances support a common raw engine counter in this fixture. Calibrated B+64 aligns all five three-source musical cohorts exactly; every accepted assignment has all source intervals complete.",
+      "limit": "Raw counter equality alone is insufficient; branch PDC can move musical input times. Fixed measured offsets only; no automatic calibration or arbitrary graph changes."
+    },
+    {
+      "case": "Round trip, D and callback bounds",
+      "evidence": "Runs05-07: RT/offline at128/512/1024; accepted events preserve D2048 and durations. Run24 calibrated boundary replies are visible one or two source callbacks later; healthy minimum deadline margin is1021samples (raw offset1021), with1023sample margin at exact last1023.",
+      "limit": "Every activation reported min=max. Short or variable enclosing host callbacks remain unobserved; different buffer/sample-rate configurations are outside the measured scope. D2048 is a conservative measured candidate, not a proven minimum or future scheduling guarantee."
+    },
+    {
+      "case": "Subblocks and boundaries",
+      "evidence": "Run18 actual64-sample automation splits and callback-boundary crossing; run21 gives345 callbacks per pass with distinct subblocks sharing local8; run24 accepts raw offset0 and exact last1023, with identity/tuning preserved.",
+      "limit": "Transport event offsets remain0. No intra-callback transport-event split; no exact local63 of a64-sample subblock. Equal-offset case is measured at local8, not local0."
+    },
+    {
+      "case": "Playback, stopped live, loop and seek",
+      "evidence": "Runs18-19: song wraps with continuous raw sample clock; held notes released at4s loop boundary. One stopped live note at offset0 is accepted at D and its audio returns to zero. Manual transport jumps are recorded.",
+      "limit": "Measured manual seeks occurred after the note released. Held or pending manual seek is outside the supported scope; do not describe intended ruler targets as measured targets."
+    },
+    {
+      "case": "Accelerated offline and latency activation",
+      "evidence": "Run05 fixes an observed initial-activation latency restart ordering defect; subsequent accelerated offline exports complete. Runs21/24 preserve ordering, D, pitch and identity offline.",
+      "limit": "Use the fixed wrapper ordering and documented tested host configuration. RT/offline reactivation creates shared positive raw counter gaps and fresh generations; it is not uninterrupted processing."
+    },
+    {
+      "case": "PDC and audible onset",
+      "evidence": "Run24 isolated B with64-sample limiter and configured+64: tuner output lies64samples before input song time on hub timeline, limiter restores nominal time, both WAVs first become nonzero1sample after each nominal onset.",
+      "limit": "This is one known branch latency. Time Shift's intentional advance in run09 is a separate manipulation and must not be called ordinary effect compensation."
+    },
+    {
+      "case": "Valid late reply and queued event stream",
+      "evidence": "Runs07/15/16: intentional miss is diagnosed; output begins at first legal callback after visibility. Run16 receives release, three pitch expressions and CC before answer; accepted output preserves whole-stream timing and note duration.",
+      "limit": "Apparatus extra-shift policy is not a production retiming contract. CC timing/type are traced; controller/value bytes are not."
+    },
+    {
+      "case": "Silence, mute, solo and sleep",
+      "evidence": "Runs13/17: silent or muted/soloed live sources keep complete intervals. Run13 preserves the held lifetime across mute/solo without MIDI retrigger. Run20 returns CONTINUE_IF_NOT_QUIET but remains continuously scheduled through silent stopped periods.",
+      "limit": "Actual host sleep and wake were not observed. Keep-alive is an explicit supported-configuration requirement; missing callbacks cannot be inferred as silence."
+    },
+    {
+      "case": "Held/pending bypass, removal and recovery",
+      "evidence": "Runs11/12/14/17: fresh generations and independently timed rejoin; held downstream signal extinguishes on measured bypass/removal. Pending reset cancels old events and does not resurrect an attack when the missing source returns.",
+      "limit": "Only the tested reset/activation routes are supported. Numeric downstream silence does not reveal the host/instrument's private voice termination mechanism."
+    },
+    {
+      "case": "Stop with late translated voices",
+      "evidence": "Run15:1025 stopped-transport blocks remain nonzero until translated NoteOff; first zero is24.125292s after stop. Bypass/removal behaved differently.",
+      "limit": "BLOCKER before #616: resolve #632 explicit stop cancellation of pending and held voices, reply invalidation and return to normal D. Do not silently adopt whole-stream translation as the production stop policy."
+    },
+    {
+      "case": "Pitch, expression composition and note identity",
+      "evidence": "Run21 RT/offline each forwards3103 changing expressions as exact f32(input+.5), ordered at D; isolated Polysynth audio follows75\u2192175c. Run24 isolated Vital early/sustained pitch is approximately+50.10c in RT/offline. Explicit attack IDs and injected tuning IDs match; source identity separates reused IDs.",
+      "limit": "Windowed spectral measurements do not prove the first individual audio sample's pitch. Vital requires the tested MPE/range configuration. Releases can carry wildcard note_id=-1."
+    },
+    {
+      "case": "Same-key overlap and editor/process independence",
+      "evidence": "Run23 attempted overlap arrives already serialized: raw off(-1) before each replacement on, preserved as off\u2192on\u2192same-ID tuning at D. Editor-free runs and shared-PID/reload evidence are retained in the archives.",
+      "limit": "Actual overlapping same-key lifetimes never reached the tuner, so overlap support remains excluded. No upstream control trace identifies the source of retrigger termination. Shared-process restrictions still apply."
+    }
+  ],
+  "blocking_issue": {
+    "number": 632,
+    "url": "https://github.com/yan-h/harmonigraph/issues/632",
+    "title": "Define transport-stop cancellation for delayed pending and held voices",
+    "must_be_resolved_before": 616
+  }
+}

@@ -15,7 +15,7 @@ members = [
     "xtask",
 ]
 # The vendored crates are their own workspaces, only referenced via [patch].
-exclude = ["vendor/baseview", "vendor/egui-baseview"]
+exclude = ["vendor/baseview", "vendor/egui-baseview", "vendor/nice-plug"]
 
 [workspace.package]
 version = "0.3.0"
@@ -81,14 +81,16 @@ ron = "0.12"
 midir = "0.11"
 raw-window-handle = "0.5"
 
-# Vendored crates with small fixes (see PATCHES.md; both worth upstreaming):
+# Vendored crates with local patches (see PATCHES.md):
 # - baseview 0.1.4: macOS frame timer in kCFRunLoopCommonModes so the GUI
 #   keeps updating during mouse-tracking loops instead of freezing.
 # - egui-baseview 0.3.0: Queue::resize physical->logical unit fix so windows
 #   aren't resized pixels_per_point times too large on scaled displays.
+# - nice-plug 0.1.10: opt-in CLAP probe hooks and activation latency ordering.
 [patch.crates-io]
 baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }
+nice-plug = { path = "vendor/nice-plug" }
 
 [profile.release]
 # Cross-crate LTO reaches exactly one artifact here, and it is not the plugin.

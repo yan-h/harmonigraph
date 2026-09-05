@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical full CI gate: formatting, markdown clause breaks, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, harmonigraph-render's own tests,
-# both vendored crates' tests, doc links, the harmonigraph-core dependency
+# vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
 # guard, worktree reclaim safety, and the registered-worktree bundle swap.
 #
 # GitHub Actions invokes this script unchanged on the toolchain pinned by
@@ -48,6 +48,12 @@ run cargo test --workspace
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
 
+# #615's optional apparatus exercises the actual CLAP boundary and callback
+# allocation guard. Default workspace tests cannot see this feature.
+run cargo clippy -p harmonigraph-plugin --all-targets --features tuning-probe -- -D warnings
+run cargo test -p harmonigraph-plugin --features tuning-probe,nice-plug/assert_process_allocs \
+  probe::tests::
+
 # ...and RUN harmonigraph-render's own tests in that same configuration, which
 # is the half a check cannot do. The unification above does not merely compile
 # the plugin with hot-reload on, it also deletes every
@@ -61,10 +67,11 @@ run cargo test -p harmonigraph-render
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
-# dependencies and runs none of their tests. The patches they carry are the
-# reason to run them: the ones in baseview's macOS view decide when a gesture
-# is over, which is not something to find out about in the DAW. Only baseview
-# — and egui-baseview's font-atlas bound now carries its own test. The nested
+# dependencies and runs none of their tests. The GUI patches carry focused
+# tests: baseview's macOS view decides when a gesture ends, and egui-baseview
+# tests the font-atlas bound. nice-plug's upstream tests exercise macros and
+# serialization; its patched CLAP boundary is exercised by the exported-CLAP
+# fixture above, including activation latency and allocation guards. The nested
 # crate cannot see the workspace's baseview patch, so its command repeats that
 # path explicitly; WGPU is the backend the plugin ships.
 #
