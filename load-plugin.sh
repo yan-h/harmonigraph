@@ -208,6 +208,19 @@ load_build() {  # $1 = worktree index
       echo "         A host holding the old one keeps serving the old build until its" >&2
       echo "         sandbox process exits; restart Bitwig to be sure of this build." >&2
     fi
+    # Bitwig caches the bundle's class list by Info.plist's mtime and size,
+    # not by the executable (#631). Refresh that fingerprint on every install,
+    # including a rollback to a build with fewer classes. Only the timestamp
+    # moves: codesign seals the plist's bytes, so its signature stays valid.
+    # Cross a whole-second boundary even on a rapid repeat install; touching
+    # twice within one timestamp tick must not leave discovery on the old list.
+    local plist="$bundle/Contents/Info.plist" plist_mtime
+    plist_mtime="$(stat -f %m "$plist")"
+    touch -m "$plist"
+    while [[ "$(stat -f %m "$plist")" == "$plist_mtime" ]]; do
+      sleep 1
+      touch -m "$plist"
+    done
     codesign --verify --verbose=1 "$bundle"
     echo "Loaded + signed: $bundle"
     updated=$(( updated + 1 ))

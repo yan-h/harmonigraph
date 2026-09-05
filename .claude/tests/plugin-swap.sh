@@ -130,11 +130,61 @@ PLIST
   codesign --force --sign - "$bundle" >/dev/null 2>&1
 done
 
+# Bitwig's class-discovery cache fingerprints Info.plist's mtime and size,
+# not the executable (#631). Keep the signed bytes for comparison and give
+# each install an old fingerprint: otherwise a test can pass just because
+# bundle setup happened in a different clock tick.
+cp "$repo/target/bundled/$NAME.clap/Contents/Info.plist" "$TMP/original.plist"
+prime_discovery_metadata() {
+  for ext in clap vst3; do
+    touch -m -t 200101010000 "$repo/target/bundled/$NAME.$ext/Contents/Info.plist"
+  done
+}
+check_discovery_metadata() {
+  local caller="$1" ext bundle plist
+  for ext in clap vst3; do
+    bundle="$repo/target/bundled/$NAME.$ext"
+    plist="$bundle/Contents/Info.plist"
+    if [ "$(stat -f %m "$plist")" -le "$metadata_before" ]; then
+      echo "✗ $caller did not refresh $ext discovery metadata" >&2
+      failures=$((failures + 1))
+    fi
+    if ! cmp -s "$TMP/original.plist" "$plist"; then
+      echo "✗ $caller changed $ext signed plist contents" >&2
+      failures=$((failures + 1))
+    fi
+    if ! codesign --verify --verbose=1 "$bundle" >/dev/null 2>&1; then
+      echo "✗ $caller left an invalid $ext signature after metadata refresh" >&2
+      failures=$((failures + 1))
+    fi
+  done
+}
+
 # A `cargo` that builds nothing: the artifacts are already staged above, and
 # what is under test is the swap rather than the compile.
 mkdir -p "$TMP/bin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/cargo"
 chmod +x "$TMP/bin/cargo"
+
+# Model a timestamp tick collision deterministically: the first metadata touch
+# per bundle leaves mtime unchanged, just as a repeat install within the same
+# clock tick can. Subsequent calls use the real touch. The direct-loader case
+# must reach the retry and still refresh both fingerprints; no timing race in
+# fixture compilation/signing decides whether that branch gets exercised.
+real_touch=$(command -v touch)
+cat > "$TMP/bin/touch" <<'SH'
+#!/usr/bin/env bash
+if [[ -n "${PLUGIN_SWAP_COLLISION_DIR:-}" && "$1" == -m ]]; then
+  marker="$PLUGIN_SWAP_COLLISION_DIR/$(basename "$(dirname "$(dirname "$2")")")"
+  if [[ ! -f "$marker" ]]; then
+    : > "$marker"
+    exit 0
+  fi
+fi
+exec "$PLUGIN_SWAP_REAL_TOUCH" "$@"
+SH
+chmod +x "$TMP/bin/touch"
+export PLUGIN_SWAP_REAL_TOUCH="$real_touch"
 
 # The inodes a host would be holding, read before the swap.
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
@@ -143,6 +193,8 @@ before_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 # HOME redirected: the scripts install the offline renderer under
 # ~/Library/Application Support, and a test must not write to the real one.
 out="$TMP/run.log"
+prime_discovery_metadata
+metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
 ( cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./update-plugin.sh ) \
   > "$out" 2>&1
 status=$?
@@ -152,6 +204,7 @@ if [ "$status" -ne 0 ]; then
   sed 's/^/    /' "$out" >&2
   failures=$((failures + 1))
 fi
+check_discovery_metadata update-plugin.sh
 
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 after_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
@@ -217,7 +270,11 @@ if ! printf '%s\n' "$codex_list" | grep -Fq "$codex_branch"; then
 fi
 
 codex_out="$TMP/codex-load.log"
-(cd "$repo" && HOME="$TMP/home" ./load-plugin.sh "$codex_branch") \
+prime_discovery_metadata
+metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
+mkdir -p "$TMP/collisions"
+(cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" \
+  PLUGIN_SWAP_COLLISION_DIR="$TMP/collisions" ./load-plugin.sh "$codex_branch") \
   >"$codex_out" 2>&1
 codex_status=$?
 if [ "$codex_status" -ne 0 ]; then
@@ -232,6 +289,18 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
   || ! grep -Fq "tag=$codex_branch @$sha" "$loaded"; then
   echo "✗ .loaded does not identify the Codex-managed build:" >&2
   sed 's/^/    /' "$loaded" >&2
+  failures=$((failures + 1))
+fi
+check_discovery_metadata load-plugin.sh
+for ext in clap vst3; do
+  if [ ! -f "$TMP/collisions/$NAME.$ext" ]; then
+    echo "✗ the $ext timestamp collision fixture was not reached" >&2
+    failures=$((failures + 1))
+  fi
+done
+if [ "$before_clap" != "$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")" ] \
+  || [ "$before_vst3" != "$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")" ]; then
+  echo "✗ load-plugin.sh changed an executable inode" >&2
   failures=$((failures + 1))
 fi
 

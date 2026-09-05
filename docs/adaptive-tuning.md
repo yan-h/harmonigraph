@@ -71,6 +71,7 @@ The first implementation ships a separate lightweight tuner plugin class rather 
 That keeps the pre-instrument instance free of the analyzer, audio rings, recorder, renderer and editor.
 Both classes are exported from the one existing bundle, `nice_export_clap!(Harmonigraph, HarmonigraphTune)`, because a process-wide registry is shared only inside one dylib;
 the loader scripts see the same bundle they see today.
+The [stage 1 discovery handoff](adaptive-tuning-stage-1.md) records the plist fingerprint refresh needed for Bitwig to discover a changed class list after installation.
 The Bitwig spike proved the companion and hub share the required in-process session under `by Vendor` hosting in its measured graph;
 this does not establish every hosting mode in #623's wider matrix.
 
