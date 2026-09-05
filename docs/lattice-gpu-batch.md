@@ -21,7 +21,7 @@ glow-free audio rings no longer repeat it.
 - The unread `Depth32Float` texture, scene attachment and pipeline depth declarations are removed.
 Painter order remains responsible for occlusion, including interleaved markers and each label's shadow then ink.
 - An optional `LatticeBloom` owns the independent nodes-only attachment and three bloom intermediates.
-It exists while bloom strength is positive and a drawable scene needs it.
+It is first allocated on a drawable frame with positive bloom strength, then retained through silence until bloom is disabled or the viewport is replaced.
 Single- and dual-attachment `ScenePipelines` are built by the same factory at startup and hot reload.
 Glyph ink still writes only the visible picture;
 label shadows preserve their existing treatment of both images when bloom is on.
@@ -31,6 +31,7 @@ Bloom's retained key is its enabled state within an `Offscreen` of fixed scene a
 Changing a positive strength updates uniforms only.
 Crossing zero replaces only bloom allocations and the final composite binding;
 main colour, shadows, glow and ink history remain untouched.
+Empty frames release disabled bloom but retain enabled targets for the next note.
 Resize retains the existing same-capacity strip transfer.
 Capacity growth retains the existing replacement/reseed behaviour, including loss of a release colour that has no current ink.
 There is no saved-state or scene/instance API change.

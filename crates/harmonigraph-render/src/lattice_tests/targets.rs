@@ -106,10 +106,18 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert!(target(&shooter).glow.is_none());
     scene.glow_reach = 0.8;
     assert_eq!(fresh, shooter.shot_again(&scene));
-    // Empty geometry still retires the bloom allocation. It must not keep a
-    // previous enabled frame's four images merely because sizing was skipped.
+    // Silence while enabled retains the same bloom allocation for the next
+    // note. Empty geometry gates allocation, not retention.
+    let sounding = scene.clone();
+    let held_bloom = target(&shooter).bloom.as_ref().unwrap().nodes_view.clone();
     scene.nodes.clear();
     scene.pluses.clear();
+    shooter.shot_again(&scene);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
+    shooter.shot_again(&sounding);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
+    // Switching off while empty still retires the allocation, and switching
+    // back on waits for a scene to draw before allocating again.
     scene.bloom_strength = 0.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none());

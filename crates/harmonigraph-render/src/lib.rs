@@ -3705,15 +3705,13 @@ impl LatticeResources {
                 offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
             }
         }
-        // An empty frame skips target sizing but must still release bloom.
-        // Do not allocate it until a frame actually has a scene pass to write it.
-        if let Some(offscreen) = pane.offscreen.as_mut() {
-            offscreen.ensure_bloom(
-                device,
-                &shared,
-                &pane.uniform_buffer,
-                wants.bloom && offscreen_size.is_some(),
-            );
+        // Empty frames still retire disabled bloom, but keep enabled targets
+        // through silence: the next note should not allocate them all again.
+        // First allocation waits until a scene pass can actually write them.
+        if let Some(offscreen) =
+            pane.offscreen.as_mut().filter(|_| !wants.bloom || offscreen_size.is_some())
+        {
+            offscreen.ensure_bloom(device, &shared, &pane.uniform_buffer, wants.bloom);
         }
         // The casters' kernels, whose buffer and bind group are one object:
         // rebuilt together or the group names a buffer that is gone.
