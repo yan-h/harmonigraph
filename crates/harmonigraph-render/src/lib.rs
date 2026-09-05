@@ -3137,6 +3137,7 @@ fn create_glow_over_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     };
+    let targets = [Some(target.clone()), Some(target)];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("fs_glow_over"),
         layout: Some(&layout),
@@ -3150,7 +3151,7 @@ fn create_glow_over_pipeline(
             module: &shader,
             entry_point: Some(if bloom { "fs_glow_over" } else { "fs_blit" }),
             compilation_options: Default::default(),
-            targets: if bloom { &[Some(target.clone()), Some(target)] } else { &[Some(target)] },
+            targets: &targets[..if bloom { 2 } else { 1 }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,

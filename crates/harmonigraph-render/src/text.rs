@@ -756,6 +756,7 @@ pub(crate) fn create_shadow_box_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     });
+    let targets = [target.clone(), target];
     glyph_pipeline(
         device,
         shader,
@@ -763,7 +764,7 @@ pub(crate) fn create_shadow_box_pipeline(
         &[Some(layout), None, Some(atlas), Some(casters)],
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
-        if bloom { &[target.clone(), target] } else { &[target] },
+        &targets[..if bloom { 2 } else { 1 }],
     )
 }
 
