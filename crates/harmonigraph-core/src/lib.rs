@@ -30,7 +30,8 @@ pub mod tuning;
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
 pub use notes::{
-    Envelope, HeldEnd, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState,
+    Envelope, HeldEnd, NoteEvent, NoteEventKind, NoteTracker, SourceId, Time, Voice, VoiceKey,
+    VoiceState,
 };
 pub use roll::{NoteRoll, RollNote};
 pub use spectrogram::{SpectrogramColumn, SpectrumHistory};

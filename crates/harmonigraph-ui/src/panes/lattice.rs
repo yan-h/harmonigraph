@@ -596,7 +596,7 @@ pub(crate) fn draw_node_labels(
 mod tests {
     use super::*;
     use crate::tests::probe::{frame_full, fresh, painted_full, painted_into, themed};
-    use harmonigraph_core::NoteEvent;
+    use harmonigraph_core::{NoteEvent, SourceId};
 
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.
@@ -620,7 +620,7 @@ mod tests {
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
         }
         let scene = derive_scene(
             &state.tracker,
@@ -921,7 +921,7 @@ mod tests {
         // A long arrival, so the climb through the reserve's band is a stretch
         // to sample rather than a frame of it.
         state.frame_params.fade_time = 1.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -956,7 +956,7 @@ mod tests {
         // depth into the departure the reserve DOES hold the name up. Without
         // this half, a fix that simply never reserved would pass the half
         // above.
-        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -998,8 +998,8 @@ mod tests {
     fn a_departing_name_and_the_marker_under_it_are_one_rule() {
         let mut state = fresh();
         state.frame_params.fade_time = 1.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -1218,8 +1218,8 @@ mod tests {
             NoteNames::Past,
             "the fresh view keeps the past, which is what holds a departing name opaque",
         );
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(2.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
 
         // Held, mid-release, and settled onto the record the trail keeps.
         let held = drawn_label(&mut state, 1.9);

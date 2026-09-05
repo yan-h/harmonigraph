@@ -378,7 +378,13 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
     };
     let notes = [60u8, 64, 67, 72]
         .into_iter()
-        .map(|note| NoteRecord { t: 0.0, channel: 0, note, kind: NoteKind::On { velocity: 0.85 } })
+        .map(|note| NoteRecord {
+            source: 0,
+            t: 0.0,
+            channel: 0,
+            note,
+            kind: NoteKind::On { velocity: 0.85 },
+        })
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
@@ -528,7 +534,13 @@ fn spectral_shadow_frame_ms(
         harmonigraph_scene::ShadowStyle { kernel: text, width: 0.75, depth: 0.85 };
     let notes = [60u8, 64, 67, 72]
         .into_iter()
-        .map(|note| NoteRecord { t: 0.0, channel: 0, note, kind: NoteKind::On { velocity: 0.85 } })
+        .map(|note| NoteRecord {
+            source: 0,
+            t: 0.0,
+            channel: 0,
+            note,
+            kind: NoteKind::On { velocity: 0.85 },
+        })
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },

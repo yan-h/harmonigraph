@@ -324,7 +324,13 @@ mod tests {
         state.view.glow_attack = 0.0;
         state.view.glow_release = 0.0;
         for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                0.0,
+                harmonigraph_core::SourceId::DIRECT,
+                0,
+                note,
+                1.0,
+            ));
         }
 
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
@@ -428,7 +434,13 @@ mod tests {
         state.view.glow_reach = 2.0;
         state.view.glow_strength = 1.0;
         for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                0.0,
+                harmonigraph_core::SourceId::DIRECT,
+                0,
+                note,
+                1.0,
+            ));
         }
 
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
@@ -562,7 +574,13 @@ mod tests {
             state.frame_params.fade_time = 0.0;
             if chord {
                 for note in [55u8, 60, 64, 67, 71] {
-                    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                        0.0,
+                        harmonigraph_core::SourceId::DIRECT,
+                        0,
+                        note,
+                        1.0,
+                    ));
                 }
             }
             state.camera.zoom_by(2.5);
@@ -660,7 +678,13 @@ mod tests {
             state.set_background((24, 25, 29));
             state.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                    0.0,
+                    harmonigraph_core::SourceId::DIRECT,
+                    0,
+                    note,
+                    1.0,
+                ));
             }
             state.camera.zoom_by(2.0);
             for style in state.view.shadow.groups_mut() {
@@ -761,7 +785,13 @@ mod tests {
             // which is a claim of its own and not the light under the body.
             state.view.show_labels = false;
             for note in [60u8, 64, 67, 70] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                    0.0,
+                    harmonigraph_core::SourceId::DIRECT,
+                    0,
+                    note,
+                    1.0,
+                ));
             }
             state.camera.zoom_by(2.0);
             let output = context.run_ui(
@@ -878,7 +908,13 @@ mod tests {
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
         state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 48, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            48,
+            1.0,
+        ));
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
 
@@ -1077,13 +1113,24 @@ mod tests {
                 style.depth = depth;
             }
             state.camera.zoom_by(2.0);
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                0.0,
+                harmonigraph_core::SourceId::DIRECT,
+                0,
+                60,
+                1.0,
+            ));
             let mut released = false;
             let mut now = 0.0f64;
             let mut shot = 0usize;
             while shot < want.len() {
                 if !released && now >= OFF {
-                    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(now, 0, 60));
+                    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(
+                        now,
+                        harmonigraph_core::SourceId::DIRECT,
+                        0,
+                        60,
+                    ));
                     released = true;
                 }
                 let output = context.run_ui(
@@ -1181,7 +1228,13 @@ mod tests {
             state.set_background((24, 25, 29));
             state.frame_params.fade_time = 0.0;
             for note in [55u8, 60, 64, 67, 71] {
-                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                    0.0,
+                    harmonigraph_core::SourceId::DIRECT,
+                    0,
+                    note,
+                    1.0,
+                ));
             }
             state.camera.projection = if tag == "cabinet" {
                 harmonigraph_scene::Projection::Cabinet

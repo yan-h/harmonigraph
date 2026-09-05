@@ -2,7 +2,7 @@
 //! and the lookups that find one node in it.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
 
 pub(super) fn scene_of(
     tracker: &NoteTracker,
@@ -55,14 +55,14 @@ pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {
 /// A held note, for the suites that need something sounding to measure.
 pub(super) fn sounding() -> NoteTracker {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker
 }
 
 /// A tracker with one note held from time 0.
 pub(super) fn held(note: u8) -> NoteTracker {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     tracker
 }
 

@@ -120,11 +120,23 @@ mod tests {
     use crate::notes::{Envelope, NoteEvent, NoteEventKind, NoteTracker};
 
     fn on(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
+        NoteEvent {
+            source: crate::SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 0.8 },
+        }
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+        NoteEvent {
+            source: crate::SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::Off,
+        }
     }
 
     /// Play `note` and let its fade complete, which is what moves it into
@@ -197,6 +209,7 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 0.1,
             channel: 0,
             note: 60,
@@ -218,6 +231,7 @@ mod tests {
             let t = i as f64;
             tracker.handle_event(on(t, 60));
             tracker.handle_event(NoteEvent {
+                source: crate::SourceId::DIRECT,
                 time: t,
                 channel: 0,
                 note: 60,

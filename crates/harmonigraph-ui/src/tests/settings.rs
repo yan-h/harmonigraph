@@ -1130,7 +1130,13 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
         state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
     }
     for note in 40..80 {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.5, 0, note, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.5,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
     }
     // The window scales with the chrome, so every pane overflows it by the same
     // margin at every scale rather than the sweep having a size per scale.

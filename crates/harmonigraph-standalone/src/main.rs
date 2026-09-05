@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::sync::mpsc;
 use std::time::Instant;
 
-use harmonigraph_core::{NoteEvent, NoteEventKind};
+use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use harmonigraph_ui::SharedState;
 
@@ -148,20 +148,7 @@ impl Recorder {
     }
 
     fn note(&mut self, event: &NoteEvent) {
-        let kind = match event.kind {
-            NoteEventKind::On { velocity } => harmonigraph_take::NoteKind::On { velocity },
-            NoteEventKind::Off => harmonigraph_take::NoteKind::Off,
-            NoteEventKind::Tuning { semitones } => {
-                harmonigraph_take::NoteKind::Tuning { semitones }
-            }
-            NoteEventKind::AllOff => harmonigraph_take::NoteKind::AllOff,
-        };
-        let _ = self.writer.note(harmonigraph_take::NoteRecord {
-            t: event.time,
-            channel: event.channel,
-            note: event.note,
-            kind,
-        });
+        let _ = self.writer.note((*event).into());
     }
 
     /// Write any parameter that moved since the last frame.
@@ -328,6 +315,7 @@ impl MidiDecoder {
                     self.held.push((channel, note));
                 }
                 out.push(NoteEvent {
+                    source: SourceId::DIRECT,
                     time,
                     channel,
                     note,
@@ -337,6 +325,7 @@ impl MidiDecoder {
                 // bent channel must start at the bent pitch.
                 if self.bend[channel as usize] != 0.0 {
                     out.push(NoteEvent {
+                        source: SourceId::DIRECT,
                         time,
                         channel,
                         note,
@@ -348,7 +337,13 @@ impl MidiDecoder {
             0x80 | 0x90 => {
                 let note = d1;
                 self.held.retain(|&held| held != (channel, note));
-                out.push(NoteEvent { time, channel, note, kind: NoteEventKind::Off });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel,
+                    note,
+                    kind: NoteEventKind::Off,
+                });
             }
             0xE0 => {
                 // 14-bit bend, center 8192.
@@ -358,6 +353,7 @@ impl MidiDecoder {
                 for &(ch, note) in &self.held {
                     if ch == channel {
                         out.push(NoteEvent {
+                            source: SourceId::DIRECT,
                             time,
                             channel,
                             note,
@@ -367,11 +363,17 @@ impl MidiDecoder {
                 }
             }
             // All sound off / all notes off. The tracker's release is
-            // global rather than per-channel; close enough for a panic
+            // source-wide rather than per-channel; close enough for a panic
             // button on a dev harness.
             0xB0 if d1 == 120 || d1 == 123 => {
                 self.held.clear();
-                out.push(NoteEvent { time, channel, note: 0, kind: NoteEventKind::AllOff });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel,
+                    note: 0,
+                    kind: NoteEventKind::SourceReset,
+                });
             }
             _ => {}
         }
@@ -472,9 +474,46 @@ impl App {
         switch_to
     }
 
+    /// One ordered fan-out for input and source-switch controls.
+    fn handle_event(&mut self, event: NoteEvent) {
+        if self.log_events {
+            self.state.log(format!(
+                "{:7.2}s source{} ch{:<2} note {:<3} {}",
+                event.time,
+                event.source.0,
+                event.channel + 1,
+                event.note,
+                match event.kind {
+                    NoteEventKind::On { .. } => "on",
+                    NoteEventKind::Off => "off",
+                    NoteEventKind::Tuning { .. } => "tune",
+                    NoteEventKind::SourceReset => "source-reset",
+                    NoteEventKind::SessionReset => "session-reset",
+                }
+            ));
+        }
+        if let Some(recorder) = &mut self.recorder {
+            recorder.note(&event);
+        }
+        self.state.tracker.handle_event(event);
+    }
+
     fn switch_source(&mut self, source: MidiSource, now: f64) {
-        // Silence whatever the previous source left sounding.
-        self.state.tracker.all_notes_off(now);
+        // Stop the producer, then publish its queued input BEFORE the reset.
+        // Otherwise an old queued attack can resurrect this source after the
+        // switch, and the live view and take disagree about what was cleared.
+        self.connection = None;
+        let mut pending = Vec::new();
+        while let Ok(raw) = self.midi_rx.try_recv() {
+            self.decoder.decode(raw, &mut pending);
+        }
+        // `now` was sampled before closing the producer; its last callback
+        // may be newer. Keep the reset after all old input in take-time order.
+        let reset_at = pending.iter().map(|event| event.time).fold(now, f64::max);
+        for event in pending {
+            self.handle_event(event);
+        }
+        self.handle_event(NoteEvent::source_reset(reset_at, SourceId::DIRECT));
         self.decoder.reset();
         match source {
             MidiSource::Mock => {
@@ -515,24 +554,7 @@ impl eframe::App for App {
         }
 
         for event in self.collect_events(now) {
-            if self.log_events {
-                self.state.log(format!(
-                    "{:7.2}s ch{:<2} note {:<3} {}",
-                    event.time,
-                    event.channel + 1,
-                    event.note,
-                    match event.kind {
-                        NoteEventKind::On { .. } => "on",
-                        NoteEventKind::Off => "off",
-                        NoteEventKind::Tuning { .. } => "tune",
-                        NoteEventKind::AllOff => "all-off",
-                    }
-                ));
-            }
-            if let Some(recorder) = &mut self.recorder {
-                recorder.note(&event);
-            }
-            self.state.tracker.handle_event(event);
+            self.handle_event(event);
         }
         if let Some(recorder) = &mut self.recorder {
             recorder.params(&self.params, now);
@@ -652,7 +674,13 @@ impl MockMidi {
         if let Some((prev_index, true)) = self.last {
             let (notes, channel) = CHORDS[prev_index];
             for &note in notes {
-                out.push(NoteEvent { time: now, channel, note, kind: NoteEventKind::Off });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time: now,
+                    channel,
+                    note,
+                    kind: NoteEventKind::Off,
+                });
             }
         }
         // Start the new chord.
@@ -660,6 +688,7 @@ impl MockMidi {
             let (notes, channel) = CHORDS[index];
             for &note in notes {
                 out.push(NoteEvent {
+                    source: SourceId::DIRECT,
                     time: now,
                     channel,
                     note,
@@ -818,13 +847,13 @@ mod tests {
         // CC 123 (all notes off).
         let events = decode_all(&mut decoder, &[[0xB0, 123, 0]]);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, NoteEventKind::AllOff);
+        assert_eq!(events[0].kind, NoteEventKind::SourceReset);
         // Held state is gone: a later bend tunes nothing.
         assert!(decode_all(&mut decoder, &[[0xE0, 0x7F, 0x7F]]).is_empty());
         // CC 120 (all sound off) does the same.
         decode_all(&mut decoder, &[[0x90, 60, 100]]);
         let events = decode_all(&mut decoder, &[[0xB5, 120, 0]]);
-        assert_eq!(events[0].kind, NoteEventKind::AllOff);
+        assert_eq!(events[0].kind, NoteEventKind::SourceReset);
     }
 
     #[test]

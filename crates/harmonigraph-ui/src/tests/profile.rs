@@ -29,7 +29,7 @@
 
 use super::harness::*;
 use crate::*;
-use harmonigraph_core::NoteEvent;
+use harmonigraph_core::{NoteEvent, SourceId};
 
 /// Counts what a frame takes off the heap. Two relaxed atomics per
 /// allocation, which is small enough that the timings stay readable with it
@@ -94,7 +94,7 @@ fn chord_samples(n: usize, phase: &mut f64) -> Vec<f32> {
 /// lattice and give the roll something to scroll.
 fn held_chord(state: &mut SharedState, now: f64) {
     for note in [57u8, 61, 64, 69, 73, 76] {
-        state.tracker.handle_event(NoteEvent::on(now, 0, note, 0.8));
+        state.tracker.handle_event(NoteEvent::on(now, SourceId::DIRECT, 0, note, 0.8));
     }
 }
 
@@ -158,8 +158,8 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
             // memoized per pitch class, so a stuck note would measure one
             // cache hit a frame instead of the naming work.
             let note = 36 + ((i * load.notes_per_frame + k) * 7 % 60) as u8;
-            state.tracker.handle_event(NoteEvent::on(t, 0, note, 0.7));
-            state.tracker.handle_event(NoteEvent::off(t + 0.25, 0, note));
+            state.tracker.handle_event(NoteEvent::on(t, SourceId::DIRECT, 0, note, 0.7));
+            state.tracker.handle_event(NoteEvent::off(t + 0.25, SourceId::DIRECT, 0, note));
         }
 
         let events = load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();

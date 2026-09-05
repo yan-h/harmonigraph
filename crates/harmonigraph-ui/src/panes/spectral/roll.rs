@@ -432,9 +432,7 @@ pub(super) fn note_instances(
     // the octave zoom — a comparison each. What it buys is a cull that is
     // exact instead of one that is wrong by however steep the picture is.
     let mut notes: Vec<&RollNote> = roll.notes().filter(|note| note.stop(now) >= edge).collect();
-    notes.sort_unstable_by(|a, b| {
-        a.start.total_cmp(&b.start).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
-    });
+    notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then(a.key().cmp(&b.key())));
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
@@ -827,7 +825,7 @@ mod tests {
     use super::*;
     use crate::tests::probe::fresh;
     use crate::{SharedState, SpectralOrientation};
-    use harmonigraph_core::{NoteEvent, NoteEventKind};
+    use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
     /// The pane the tests paint into: 300 points along the time axis, 100
     /// across pitch.
@@ -863,7 +861,7 @@ mod tests {
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
         state.view.shadow.spectral_geometry = style;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         instances(&state, 0.05)
     }
 
@@ -905,8 +903,8 @@ mod tests {
         state.spectrum_config.roll_seconds = 10.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(1.5, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
 
         // The moment the note's BOX leaves: released at 1.5 with a 10 s window.
         let box_gone = 11.5;
@@ -1032,8 +1030,8 @@ mod tests {
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
             state.view.shadow.spectral_geometry = style(depth);
-            state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
-            state.tracker.handle_event(NoteEvent::off(1.5, 0, 60));
+            state.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
             (11_500..12_000)
                 .map(|millis| millis as f64 / 1_000.0)
                 .take_while(|&now| !instances(&state, now).is_empty())
@@ -1095,8 +1093,8 @@ mod tests {
             state.spectrum_config.roll_seconds = 10.0;
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
-            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-            state.tracker.handle_event(NoteEvent::off(2.0 + length, 0, 60));
+            state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(2.0 + length, SourceId::DIRECT, 0, 60));
             let notes = instances(&state, 5.0);
             let note = *one(&notes);
             let axes = Axes::new(PANE, &state.spectrum_config);
@@ -1196,7 +1194,7 @@ mod tests {
             state.spectrum_config.roll_lead = 0.0;
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
             let cfg = &state.spectrum_config;
             let axes = Axes::new(PANE, cfg);
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
@@ -1253,8 +1251,8 @@ mod tests {
         state.spectrum_config.roll_lead = 0.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(0.05, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(0.05, SourceId::DIRECT, 0, 60));
 
         let cfg = &state.spectrum_config;
         let axes = Axes::new(PANE, cfg);
@@ -1305,8 +1303,8 @@ mod tests {
         // The whole take at once, the way the offline renderer lays it out: a
         // brief note that is over well before the playhead reaches it, so the
         // floor is what draws it and there is a clamp to get wrong.
-        state.tracker.handle_event(NoteEvent::on(6.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(6.02, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(6.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(6.02, SourceId::DIRECT, 0, 60));
         let roll = state.tracker.roll().clone();
         state.whole_song =
             Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
@@ -1352,8 +1350,8 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(6.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(6.02, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(6.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(6.02, SourceId::DIRECT, 0, 60));
         let roll = state.tracker.roll().clone();
         state.whole_song =
             Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
@@ -1395,8 +1393,8 @@ mod tests {
         let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 10.0;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(2.001, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(2.001, SourceId::DIRECT, 0, 60));
         let cfg = &state.spectrum_config;
         let axes = Axes::new(PANE, cfg);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
@@ -1435,10 +1433,11 @@ mod tests {
         state.spectrum_config.roll_seconds = 60.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
         // One 512-frame block at 48 kHz behind the note-on, which is what a
         // host's per-note tuning actually does.
         state.tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
             time: 2.011,
             channel: 0,
             note: 60,
@@ -1447,7 +1446,7 @@ mod tests {
         // Released almost at once, so the NOTE is under the length floor and
         // the floor is what draws it — which is the case this is about, now
         // that a segment is only stretched as its note is.
-        state.tracker.handle_event(NoteEvent::off(2.02, 0, 60));
+        state.tracker.handle_event(NoteEvent::off(2.02, SourceId::DIRECT, 0, 60));
         let axes = Axes::new(PANE, &state.spectrum_config);
         // The whole drift any segment of this note can carry, as a half-extent
         // in points: 0.3 semitones of a 36-semitone axis. No segment may reach
@@ -1494,9 +1493,10 @@ mod tests {
         state.spectrum_config.roll_seconds = 60.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
         for (i, at) in [2.02, 2.04, 2.06, 2.08].into_iter().enumerate() {
             state.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
                 time: at,
                 channel: 0,
                 note: 60,
@@ -1551,8 +1551,9 @@ mod tests {
             state.spectrum_config.roll_seconds = 10.0;
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
-            state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
             state.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
                 time: 1.5,
                 channel: 0,
                 note: 60,
@@ -1611,8 +1612,8 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
         let roll = state.tracker.roll().clone();
         // The crop opens exactly where the note closed.
         state.whole_song =
@@ -1687,7 +1688,7 @@ mod tests {
                     state.spectrum_config.roll_lead_fade = 0.0;
                     // Held since 2 s and never released, so its leading end is
                     // the now-line itself.
-                    state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+                    state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
 
                     let axes = Axes::new(PANE, &state.spectrum_config);
                     let split = super::super::axes::spectrum_share(&state.spectrum_config);
@@ -1724,9 +1725,9 @@ mod tests {
             state.spectrum_config.high_midi = 84.0;
             state.spectrum_config.roll_lead = 0.05;
             state.spectrum_config.roll_lead_release = 0.25;
-            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
             if let Some(at) = release {
-                state.tracker.handle_event(NoteEvent::off(at, 0, 60));
+                state.tracker.handle_event(NoteEvent::off(at, SourceId::DIRECT, 0, 60));
             }
             let axes = Axes::new(PANE, &state.spectrum_config);
             let split = super::super::axes::spectrum_share(&state.spectrum_config);
@@ -1798,8 +1799,8 @@ mod tests {
             state.spectrum_config.roll_lead_fade = 0.04;
             state.spectrum_config.roll_lead_release = release;
             state.view.shadow.spectral_geometry.width = 1.0;
-            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-            state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+            state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
             let axes = Axes::new(PANE, &state.spectrum_config);
             let split = super::super::axes::spectrum_share(&state.spectrum_config);
@@ -1858,8 +1859,8 @@ mod tests {
         state.spectrum_config.roll_lead = 0.05;
         state.spectrum_config.roll_lead_fade = 0.04;
         state.spectrum_config.roll_lead_release = 0.4;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
         let at = |state: &SharedState, now: f64| {
             let notes = instances(state, now);
@@ -1925,8 +1926,8 @@ mod tests {
         // The retired roll setting opened at a two-point reach. Keep that
         // geometry explicit: this test is about cap/lead timing, not defaults.
         state.view.shadow.spectral_geometry.width = 0.25;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
         let at = |now: f64| *one(&instances(&state, now));
         // On the line, where the space past it is the lead's alone.
@@ -2000,8 +2001,8 @@ mod tests {
         state.spectrum_config.roll_lead = 0.05;
         state.spectrum_config.roll_lead_fade = 0.04;
         state.spectrum_config.roll_lead_release = 0.0;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
         let at = |elapsed: f64| *one(&instances(&state, 4.0 + elapsed));
         // BISECTED rather than stepped. The cap grows continuously with the
@@ -2042,9 +2043,10 @@ mod tests {
         state.spectrum_config.high_midi = 84.0;
         state.spectrum_config.roll_lead = 0.05;
         state.spectrum_config.roll_lead_fade = 0.03;
-        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
         for (i, at) in [2.5, 3.0, 3.5].into_iter().enumerate() {
             state.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
                 time: at,
                 channel: 0,
                 note: 60,
@@ -2101,7 +2103,7 @@ mod tests {
     fn the_leads_fade_is_its_own_setting_and_stops_at_the_reach() {
         let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         // The fractions come back as points, so each expectation is stated in
         // the currency the bar is dialled in and converted the way [`lead`]
         // converts it.
@@ -2184,8 +2186,9 @@ mod tests {
             state.spectrum_config.high_midi = 60.0;
             // The retired outline bar topped out at a four-point reach.
             state.view.shadow.spectral_geometry.width = 0.5;
-            state.tracker.handle_event(NoteEvent::on(2.0, 0, 62, 1.0));
+            state.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 62, 1.0));
             state.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
                 time: 2.0 + after,
                 channel: 0,
                 note: 62,
@@ -2222,12 +2225,13 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let held = instances(&state, 1.0);
         assert_eq!(one(&held).shear, 0.0, "a held note should not be sheared");
 
         // Bend it a semitone up over the next second.
         state.tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
             time: 1.0,
             channel: 0,
             note: 60,
@@ -2260,7 +2264,7 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         // A step that scrolls the roll by well under one point.
         let axes = Axes::new(PANE, &state.spectrum_config);
         let window = f64::from(state.spectrum_config.roll_seconds);

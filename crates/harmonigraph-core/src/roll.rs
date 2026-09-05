@@ -22,12 +22,13 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::notes::Time;
+use crate::notes::{SourceId, Time, VoiceKey};
 
 /// One press of one key: when it started, when it stopped, and the pitch
 /// it traced in between.
 #[derive(Clone, Debug)]
 pub struct RollNote {
+    pub source: SourceId,
     pub channel: u8,
     pub note: u8,
     pub velocity: f32,
@@ -54,6 +55,10 @@ pub struct RollNote {
 }
 
 impl RollNote {
+    pub fn key(&self) -> VoiceKey {
+        VoiceKey { source: self.source, channel: self.channel, note: self.note }
+    }
+
     /// Breakpoints kept per note. Past this the newest overwrites the
     /// previous one, so a long continuous bend keeps an accurate *current*
     /// pitch and loses only middle detail. Generous: a note has to be bent
@@ -165,7 +170,7 @@ pub struct NoteRoll {
     /// from the front of: past `MAX_NOTES`, a hashed order here would decide
     /// which press is forgotten. Bounded by the number of keys, so never
     /// trimmed.
-    live: BTreeMap<(u8, u8), RollNote>,
+    live: BTreeMap<VoiceKey, RollNote>,
 }
 
 impl NoteRoll {
@@ -181,13 +186,14 @@ impl NoteRoll {
     /// [`NoteTracker`](crate::NoteTracker)'s replace-the-voice rule — and if
     /// that instant is the previous entry's own onset, [`close`](Self::close)
     /// drops it, the note having never sounded.
-    pub fn note_on(&mut self, channel: u8, note: u8, velocity: f32, pitch: f32, at: Time) {
-        self.close(channel, note, at);
+    pub fn note_on(&mut self, key: VoiceKey, velocity: f32, pitch: f32, at: Time) {
+        self.close(key, at);
         self.live.insert(
-            (channel, note),
+            key,
             RollNote {
-                channel,
-                note,
+                source: key.source,
+                channel: key.channel,
+                note: key.note,
                 velocity,
                 start: at,
                 end: None,
@@ -197,14 +203,14 @@ impl NoteRoll {
         );
     }
 
-    pub fn note_off(&mut self, channel: u8, note: u8, at: Time) {
-        self.close(channel, note, at);
+    pub fn note_off(&mut self, key: VoiceKey, at: Time) {
+        self.close(key, at);
     }
 
     /// Record a per-note tuning change on a sounding note. Unknown keys
     /// are ignored (the bend arrived after the note-off).
-    pub fn bend(&mut self, channel: u8, note: u8, at: Time, pitch: f32) {
-        if let Some(note) = self.live.get_mut(&(channel, note)) {
+    pub fn bend(&mut self, key: VoiceKey, at: Time, pitch: f32) {
+        if let Some(note) = self.live.get_mut(&key) {
             note.bend(at, pitch);
         }
     }
@@ -212,6 +218,18 @@ impl NoteRoll {
     /// Close every sounding note (transport reset).
     pub fn all_off(&mut self, at: Time) {
         for mut note in std::mem::take(&mut self.live).into_values() {
+            note.end = Some(at.max(note.start));
+            self.past.push_back(note);
+        }
+        self.enforce_cap();
+    }
+
+    /// Close this source's sounding notes, with the same unknown-duration
+    /// clamp as a session reset. Other sources' bend histories remain live.
+    pub fn source_off(&mut self, source: SourceId, at: Time) {
+        let keys: Vec<_> = self.live.keys().filter(|k| k.source == source).copied().collect();
+        for key in keys {
+            let mut note = self.live.remove(&key).expect("collected live key");
             note.end = Some(at.max(note.start));
             self.past.push_back(note);
         }
@@ -242,8 +260,8 @@ impl NoteRoll {
     /// timestamp is a transport event's, not a statement about any one note, so
     /// a held note it closes did sound — only its length is unknown, and
     /// clamping that to the onset must not erase it.
-    fn close(&mut self, channel: u8, note: u8, at: Time) {
-        if let Some(mut note) = self.live.remove(&(channel, note)) {
+    fn close(&mut self, key: VoiceKey, at: Time) {
+        if let Some(mut note) = self.live.remove(&key) {
             if at <= note.start {
                 return;
             }
@@ -269,7 +287,7 @@ impl NoteRoll {
     }
 
     /// Every remembered note, finished ones first and then the sounding
-    /// ones in `(channel, note)` order. Not sorted by start time:
+    /// ones in `(source, channel, note)` order. Not sorted by start time:
     /// overlapping notes draw as overlapping ribbons either way, and the
     /// pane sorts for itself when the paint order matters.
     pub fn notes(&self) -> impl Iterator<Item = &RollNote> {
@@ -314,15 +332,21 @@ mod tests {
     use crate::notes::{Envelope, NoteEvent, NoteEventKind, NoteTracker};
 
     fn on(time: Time, note: u8) -> NoteEvent {
-        NoteEvent::on(time, 0, note, 0.8)
+        NoteEvent::on(time, crate::SourceId::DIRECT, 0, note, 0.8)
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
-        NoteEvent::off(time, 0, note)
+        NoteEvent::off(time, crate::SourceId::DIRECT, 0, note)
     }
 
     fn bend(time: Time, note: u8, semitones: f32) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Tuning { semitones } }
+        NoteEvent {
+            source: crate::SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::Tuning { semitones },
+        }
     }
 
     #[test]
@@ -366,7 +390,7 @@ mod tests {
         let live: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
         assert_eq!(live, expected, "sounding notes must iterate in key order");
 
-        tracker.all_notes_off(1.0);
+        tracker.session_notes_off(1.0);
         let past: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
         assert_eq!(past, expected, "the finished tail must inherit key order");
     }
@@ -488,10 +512,11 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(on(0.0, 64));
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 3.0,
             channel: 0,
             note: 0,
-            kind: NoteEventKind::AllOff,
+            kind: NoteEventKind::SessionReset,
         });
         let roll = tracker.roll();
         assert_eq!(roll.len(), 2);
@@ -506,7 +531,7 @@ mod tests {
     fn every_channel_reaches_the_roll() {
         for channel in 0..16u8 {
             let mut tracker = NoteTracker::new();
-            tracker.handle_event(NoteEvent::on(0.0, channel, 60, 0.8));
+            tracker.handle_event(NoteEvent::on(0.0, crate::SourceId::DIRECT, channel, 60, 0.8));
             assert_eq!(tracker.roll().len(), 1, "channel {channel}");
         }
     }

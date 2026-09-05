@@ -305,7 +305,7 @@ mod tests {
     use std::sync::atomic::AtomicU32;
     use std::time::Instant;
 
-    use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
+    use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
 
     use super::*;
 
@@ -399,7 +399,7 @@ mod tests {
 
         fn push_kind(&mut self, time: f64, note: u8, kind: NoteEventKind) {
             self.notes
-                .push(CoreNoteEvent { time, channel: 0, note, kind })
+                .push(CoreNoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind })
                 .expect("the ring is sized for this");
         }
 

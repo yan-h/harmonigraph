@@ -132,7 +132,13 @@ const CHORD: [u8; 5] = [55, 60, 64, 67, 71];
 fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     let mut tracker = harmonigraph_core::NoteTracker::new();
     for note in CHORD {
-        tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
     }
     // The Fade off, so one frame is the whole picture rather than a shot of an
     // envelope part way through. The light's own clock is already out: nothing
