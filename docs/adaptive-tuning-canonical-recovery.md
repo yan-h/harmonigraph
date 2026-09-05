@@ -111,6 +111,7 @@ The worker waits for pending Start/NewPass ownership and both lanes, including a
 Capacity or file-creation refusal keeps the existing writers until they have been marked and flushed, or an actual I/O refusal has been reported.
 After failure is accounted, only that epoch's recording copies are discarded;
 display fanout and baseline reclamation continue.
+A later Stop of that already-accounted epoch is terminal, clears the finishing state and drops its render request on the worker while preserving the failure status.
 Disconnect enters the same cross-lane pump and first honors a pending Stop whose final source closure has now arrived.
 
 ## Take format and replay
@@ -120,7 +121,8 @@ Versions 0 through 3 are refused explicitly;
 there is no compatibility shim.
 Every persisted record struct has container-level serde defaults, while a complete baseline still must satisfy its full semantic contract.
 Malformed complete final records, including typed integer/enum failures and invalid cut ordering, are errors, not successful truncated recordings.
-A genuinely interrupted last line retains the format's existing readable-prefix behavior.
+A genuinely interrupted last line retains the format's existing readable-prefix behavior, including a cut inside a nonempty parameter ID string.
+RON leaves unterminated string contents unconsumed, so string EOF is recognized independently of the empty-remainder check used for missing delimiters.
 
 `Take.events` is one ordered canonical note/control stream.
 The `notes()` iterator is an inspection adapter, not a second replay list.
@@ -143,8 +145,9 @@ Maintained fixtures exercise complete 64-voice replacement and invalid duplicate
 The recorder fixtures use its production rings and writer to serialize delayed history, original rewind routes, disarmed provenance, WAV tails and actual 128/129 pass capacity.
 Serialized v4 replay fixtures run at 1 ms, 24 fps and 60 fps, compare exact roll history with full-roll reconstruction, and actually prune at each cadence for visibility/history checks.
 Two deterministic fixtures pause the spawned recording worker after its actual Empty poll or after Stop is consumed:
-the former retains two baseline payloads plus 4,094 notes and exact loss 4,097 without another producer call;
+the former retains two complete empty baseline payloads plus 4,094 notes and exact loss 4,097 without another producer call;
 the latter receives final source history/closure before Disconnected and finishes a valid take.
+The same spawned-worker fixture also sends Stop after failure has been accounted and checks terminal cleanup at the next actual Empty poll, before another callback or disconnect.
 The 128/129 fixture continues publishing after refusal and reuses the same two-slot baseline bank three times through disk/display fanout.
 
 The plugin target runs the real exported CLAP factory with `nice-plug/assert_process_allocs`.

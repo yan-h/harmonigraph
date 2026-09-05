@@ -1066,8 +1066,10 @@ pub fn channel() -> (Recorder, Control) {
                 Ok(Command::Stop(epoch, render)) => {
                     if thread_fence.enabled.load(Ordering::Acquire) {
                         pending_stop = Some((epoch, render));
-                        *thread_status.lock() =
-                            "finishing — waiting for the audio/configuration prefix".into();
+                        if !failure.contains(epoch) {
+                            *thread_status.lock() =
+                                "finishing — waiting for the audio/configuration prefix".into();
+                        }
                     } else {
                         // Drain what the audio thread already queued
                         // before closing, or the tail of the take is lost.
@@ -1121,8 +1123,15 @@ pub fn channel() -> (Recorder, Control) {
                             reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                             ..Default::default()
                         });
+                }
+                if failure.contains(thread_fence.epoch()) {
+                    // Stop may arrive after the files were already accounted.
+                    // Its render request is disposed here on the worker, and
+                    // the failure status remains visible without another callback.
                     pending_stop = None;
                     thread_fence.finishing.store(false, Ordering::Release);
+                    #[cfg(all(test, feature = "test-support"))]
+                    thread_fence.worker_failure_accounted.store(true, Ordering::Release);
                 }
             } else if pending_stop.as_ref()
                 .is_some_and(|(epoch, _)| open.as_ref().is_some_and(|o| o.ready(*epoch)))

@@ -270,15 +270,16 @@ fn unfinished_ron(line: &str) -> bool {
     use ron::error::Error;
     let Ok(mut parser) = ron::Deserializer::from_str(line) else { return false };
     match <serde::de::IgnoredAny as serde::Deserialize>::deserialize(&mut parser) {
-        Err(Error::Eof) => true,
+        // RON searches for the closing quote before consuming string contents,
+        // so a genuine string EOF can leave a nonempty remainder.
+        Err(Error::Eof | Error::ExpectedStringEnd) => true,
         Err(
             Error::ExpectedArrayEnd
             | Error::ExpectedMapEnd
             | Error::ExpectedStructLikeEnd
             | Error::ExpectedComma
             | Error::ExpectedMapColon
-            | Error::ExpectedIdentifier
-            | Error::ExpectedStringEnd,
+            | Error::ExpectedIdentifier,
         ) => parser.remainder().is_empty(),
         _ => false,
     }
@@ -642,6 +643,21 @@ mod tests {
             .unwrap_or_else(|e| panic!("truncated take should still read: {e}"));
         // The partial last line is the only casualty, and the take says so.
         assert_eq!(take.notes().collect::<Vec<_>>(), notes[..notes.len() - 1]);
+        assert!(take.truncated);
+
+        // A real parameter line cut inside a NONEMPTY string reaches RON's
+        // ExpectedStringEnd path, which leaves the unterminated text unconsumed.
+        let (header, notes, params) = sample();
+        let parameter = ron::to_string(&Record::Param(params[0].clone())).unwrap();
+        let inside_id = parameter.find("id:\"").unwrap() + "id:\"".len() + 3;
+        let text = format!(
+            "{}\n{}\n{}",
+            ron::to_string(&Record::Header(header)).unwrap(),
+            ron::to_string(&Record::Note(notes[0])).unwrap(),
+            &parameter[..inside_id]
+        );
+        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
+        assert_eq!(take.notes().collect::<Vec<_>>(), notes[..1]);
         assert!(take.truncated);
     }
 

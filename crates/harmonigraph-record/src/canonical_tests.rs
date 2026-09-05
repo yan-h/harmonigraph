@@ -270,85 +270,116 @@ fn worker_take(directory: &std::path::Path) -> std::path::PathBuf {
 
 #[test]
 fn real_worker_materializes_pending_start_before_accounting_publication_loss() {
-    let directory = path("worker-start").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
-    *control.fence.test_directory.lock() = Some(directory.clone());
-    let fence = control.fence.clone();
-    let _resume_on_panic = WorkerPause(fence.clone());
-    fence.worker_after_empty.enabled.store(true, Ordering::Release);
-    wait_for(&fence.worker_after_empty.entered);
-    control.start(48000.0, String::new(), false);
-    assert!(recorder.is_armed());
-    let address = RecordAddress { epoch: 1, pass: 1 };
-    recorder.configuration_at(
-        address,
-        0.0,
-        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
-    );
-    let bank_released = recorder.publication.bank_observer();
-    for id in 1..=2 {
-        let baseline = SourceBaseline::new(
-            SourceId::DIRECT,
-            id,
+    for stop_after_failure in [false, true] {
+        let directory = path(if stop_after_failure { "worker-start-stop" } else { "worker-start" })
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let (mut recorder, control) = channel();
+        recorder.enable_configuration();
+        recorder.enable_canonical();
+        *control.fence.test_directory.lock() = Some(directory.clone());
+        let fence = control.fence.clone();
+        let _resume_on_panic = WorkerPause(fence.clone());
+        fence.worker_after_empty.enabled.store(true, Ordering::Release);
+        wait_for(&fence.worker_after_empty.entered);
+        control.start(48000.0, String::new(), false);
+        assert!(recorder.is_armed());
+        let address = RecordAddress { epoch: 1, pass: 1 };
+        recorder.configuration_at(
+            address,
             0.0,
-            0.0,
-            0,
-            true,
-            &[],
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap();
-        recorder
-            .publish_baseline(
+            harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+        );
+        let bank_released = recorder.publication.bank_observer();
+        for id in 1..=2 {
+            let baseline = SourceBaseline::new(
+                SourceId::DIRECT,
+                id,
+                0.0,
+                0.0,
                 0,
-                &baseline,
-                1.0,
-                publication::Route { address: Some(address), time_offset: 0.0 },
+                true,
+                &[],
+                [ChannelBaseline::default(); 16],
             )
             .unwrap();
-    }
-    for i in 0..publication::PUBLICATION_RING - 2 {
-        recorder
-            .publish_note(
-                NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+            recorder
+                .publish_baseline(
+                    0,
+                    &baseline,
+                    1.0,
+                    publication::Route { address: Some(address), time_offset: 0.0 },
+                )
+                .unwrap();
+        }
+        for i in 0..publication::PUBLICATION_RING - 2 {
+            recorder
+                .publish_note(
+                    NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                    1.0,
+                    publication::Route { address: Some(address), time_offset: 0.0 },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            recorder.publish_note(
+                NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
                 1.0,
-                publication::Route { address: Some(address), time_offset: 0.0 },
-            )
-            .unwrap();
+                publication::Route { address: Some(address), time_offset: 0.0 }
+            ),
+            Err(publication::PublishError::Lost)
+        );
+        if stop_after_failure {
+            fence.worker_after_empty.enabled.store(false, Ordering::Release);
+            wait_for(&fence.worker_failure_accounted);
+            fence.worker_after_stop.enabled.store(true, Ordering::Release);
+            control.stop(RenderRequest::from_config(&harmonigraph_take::RenderConfig::default()));
+            wait_for(&fence.worker_after_stop.entered);
+            fence.worker_after_empty.entered.store(false, Ordering::Release);
+            fence.worker_after_empty.enabled.store(true, Ordering::Release);
+            fence.worker_after_stop.enabled.store(false, Ordering::Release);
+            wait_for(&fence.worker_after_empty.entered);
+            assert!(
+                !fence.finishing.load(Ordering::Acquire),
+                "accounted failed Stop is terminal without another callback or disconnect"
+            );
+            assert_eq!(*control.status.lock(), CONFIGURATION_FAILURE);
+            assert!(!control.is_recording());
+            assert!(control.last_take.lock().is_none());
+            assert_eq!(control.progress.in_flight.load(Ordering::Acquire), 0);
+        }
+        drop(recorder); // No rescue callback or producer operation follows.
+        drop(control);
+        fence.worker_after_empty.enabled.store(false, Ordering::Release);
+        wait_for(&fence.worker_finished);
+        let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
+        assert_eq!(
+            take.notes().count(),
+            4094,
+            "pending Start still owns the complete successful prefix"
+        );
+        assert_eq!(
+            take.events
+                .iter()
+                .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Baseline(_)))
+                .count(),
+            2
+        );
+        assert!(
+            bank_released(),
+            "both primary baseline payloads returned after disk/display copies"
+        );
+        assert_eq!(
+            take.configurations.len(),
+            1,
+            "ordinary lane also waits for Start after failure"
+        );
+        let loss = take.incomplete.unwrap();
+        assert_eq!((loss.first_publication, loss.last_publication), (4097, 4097));
+        assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
+        std::fs::remove_dir_all(directory).unwrap();
     }
-    assert_eq!(
-        recorder.publish_note(
-            NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(),
-            1.0,
-            publication::Route { address: Some(address), time_offset: 0.0 }
-        ),
-        Err(publication::PublishError::Lost)
-    );
-    drop(recorder); // No rescue callback or producer operation follows.
-    drop(control);
-    fence.worker_after_empty.enabled.store(false, Ordering::Release);
-    wait_for(&fence.worker_finished);
-    let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
-    assert_eq!(
-        take.notes().count(),
-        4094,
-        "pending Start still owns the complete successful prefix"
-    );
-    assert_eq!(
-        take.events
-            .iter()
-            .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Baseline(_)))
-            .count(),
-        2
-    );
-    assert!(bank_released(), "both primary baseline payloads returned after disk/display copies");
-    assert_eq!(take.configurations.len(), 1, "ordinary lane also waits for Start after failure");
-    let loss = take.incomplete.unwrap();
-    assert_eq!((loss.first_publication, loss.last_publication), (4097, 4097));
-    assert!(matches!(take.events.last(), Some(harmonigraph_take::CanonicalRecord::Gap(_))));
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

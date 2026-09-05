@@ -28,6 +28,8 @@ pub(crate) struct RecordFence {
     #[cfg(all(test, feature = "test-support"))]
     pub worker_finished: AtomicBool,
     #[cfg(all(test, feature = "test-support"))]
+    pub worker_failure_accounted: AtomicBool,
+    #[cfg(all(test, feature = "test-support"))]
     pub test_directory: parking_lot::Mutex<Option<std::path::PathBuf>>,
     #[cfg(feature = "test-support")]
     pub boundary_pause: TestPause,
