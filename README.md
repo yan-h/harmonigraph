@@ -30,6 +30,9 @@ The plan adds one lightweight Harmonigraph Tune note effect before each particip
 one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a fixed delay.
 Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
 A missed assignment deadline delays the note further and reports a failure, rather than dropping it or emitting an unretuned attack.
+The added-delay target is about 10 ms, with 512 samples at 44.1 kHz (11.610 ms) an accepted initial candidate to validate during implementation.
+Explicit Stop/Reset cancels pending attacks and releases affected voices;
+actual storage exhaustion permits a visible emergency stop that rejects new attacks until Reset.
 See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the decided behavior, the real-time protocol and the deliberately deferred alternatives.
 
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
