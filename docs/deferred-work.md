@@ -47,33 +47,31 @@ revisit another alternative only when a concrete musical or hosting requirement 
 ## Depth-buffer sorting
 
 **State.** The lattice renders through an offscreen color + `Depth32Float` pass (`crates/harmonigraph-render/src/lib.rs`).
-Depth is *written*, but the node pipeline is created with `depth_compare: Always` (~`lib.rs:575`), so the buffer is never used to reject fragments.
-Occlusion is still done the old way:
-nodes are sorted **back-to-front on the CPU** and painted in that order (painter's algorithm, ~`lib.rs:276`).
+Depth is *written*, but `create_pipeline` uses `depth_compare: Always`, so the buffer is never used to reject fragments.
+Occlusion follows the sheet and per-node painter order materialized by `LatticeCallback::from_scene`.
 The depth attachment exists purely as infrastructure —
 the header comment flags it as "written but not yet read."
 
-**The work.** Switch `depth_compare` to a real test (`Less` / `LessEqual`) so overlapping nodes resolve per-pixel by true depth instead of draw order.
+**The prerequisite.** Reproduce a concrete overlap artifact before proposing depth-based ordering.
+Define which ring, marker, label and shadow should cover which other element, including across sheets, and compare that intended result with the existing painter order.
 
-**The catch —
-why it isn't a one-line flag flip.** The nodes aren't opaque spheres.
-They're soft, semi-transparent discs with glows, and both the glow skirt and the envelope fades are translucent.
-Depth testing + alpha blending is order-dependent:
+**The current geometry and composition.** Nodes are camera-facing billboards, not curved opaque surfaces with fragment-varying depth.
+Their rings, glyphs, fades and shadows are composed in the scene's deliberate sheet and per-node order.
+Node glow is assembled in a separate depthless pass and composited before the ordered scene;
+it is also sampled to illuminate node ink and labels.
+Enabling `Less` or `LessEqual` in the scene would change its ordering contract, but would neither add curved geometry nor make the existing glow field depth-aware.
 
-- if transparent fragments *write* depth, a faint glow halo starts occluding
-nodes behind it → visible haloes / hard edges;
-- if they *don't*, you still need the back-to-front sort for correct blending.
+Transparent ring and glyph fragments still require an explicit blending and depth-write policy.
+There is no established opaque-core/transparent-skirt split for the current picture.
+A proposal must specify its geometry, depth consumers and composition against this architecture, then verify the affected overlaps, fades, shadows and glow in live and offline output.
 
-The correct approach is a **two-pass split**:
-opaque cores with depth write + test (any order), then the transparent layers (glows, outer octave glyphs, fades) drawn back-to-front with depth **read-only** (test but no write).
-That's a real pipeline + shader change, not a toggle.
-
-**Value / effort.** Medium-high effort (pipeline + `lattice.wgsl` + careful visual verification in Bitwig).
-Payoff is *situational*:
-the CPU sort already handles separated billboards well;
-per-pixel depth mainly helps when billboards actually intersect or crowd at steep camera angles, and the glow-based aesthetic doesn't obviously benefit.
-**Do it only if a specific overlap artifact shows up in practice** —
-otherwise the infrastructure can keep sitting there unused at zero cost.
+**Value / effort.** Unpriced until an artifact and candidate behavior are demonstrated.
+There is no measured benefit supporting a depth-sorting refactor today.
+**Do it only if a specific overlap artifact shows up in practice.** Retaining the unused attachment still allocates memory and asks the pass to clear, write and store depth that no consumer reads.
+The actual cost of those operations depends on the GPU and driver;
+discarding the unused store is a small first step before removing the attachment and its pipeline state.
+Removing it while preserving painter order is [#644](https://github.com/yan-h/harmonigraph/issues/644), part of the [lattice rendering plan](lattice-rendering-plan.md);
+that cleanup does not require adopting per-pixel depth sorting.
 
 ## Not deferred — closed
 
