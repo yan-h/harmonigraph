@@ -1,0 +1,54 @@
+   Compiling bitflags v2.13.1
+   Compiling smallvec v1.15.2
+   Compiling font-types v0.11.3
+   Compiling ahash v0.8.12
+   Compiling serde_core v1.0.228
+   Compiling emath v0.35.0
+   Compiling serde v1.0.228
+   Compiling uuid v1.24.0
+   Compiling objc2-core-foundation v0.3.2
+   Compiling parking_lot_core v0.9.12
+   Compiling kurbo v0.13.1
+   Compiling wgpu-types v29.0.4
+   Compiling naga v29.0.4
+   Compiling parking_lot v0.12.5
+   Compiling peniko v0.6.1
+   Compiling read-fonts v0.39.2
+   Compiling vello_common v0.0.9
+   Compiling objc2-foundation v0.3.2
+   Compiling ecolor v0.35.0
+   Compiling accesskit v0.24.1
+   Compiling png v0.18.1
+   Compiling skrifa v0.42.1
+   Compiling harfrust v0.7.0
+   Compiling objc2-metal v0.3.2
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-golden)
+   Compiling objc2-quartz-core v0.3.2
+   Compiling vello_cpu v0.0.9
+   Compiling raw-window-metal v1.1.0
+   Compiling glam v0.33.6
+   Compiling epaint v0.35.0
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-scene)
+   Compiling egui v0.35.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling wgpu v29.0.4
+   Compiling egui-wgpu v0.35.0
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-render)
+    Finished `release` profile [optimized] target(s) in 42.87s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-7293db373823dae3)
+
+running 9 tests
+test spectrogram::tests::a_delta_upload_draws_what_a_full_upload_draws ... ok
+test spectrogram::tests::a_pane_that_stops_drawing_gives_its_grid_back ... ok
+test spectrogram::tests::a_pixel_narrower_than_a_bucket_reads_between_the_two_under_it ... ok
+test spectrogram::tests::a_pixel_wider_than_a_bucket_reads_the_mean_of_the_buckets_under_it ... ok
+test spectrogram::tests::a_range_past_the_top_of_the_spectrum_reads_its_last_two_buckets ... ok
+test spectrogram::tests::baked_spectrogram_shader_validates ... ok
+test spectrogram::tests::slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads ... ok
+test spectrogram::tests::the_headless_frame_is_the_frame_the_callback_paints ... ok
+test spectrogram::tests::the_pipeline_builds_against_a_headless_device ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 225 filtered out; finished in 0.14s

@@ -22,6 +22,10 @@ it implements no proposed rendering change.
 | [scratch-initial.txt](scratch-initial.txt) | First CPU/allocation/gap/coverage/timestamp measurements |
 | [scratch-final.txt](scratch-final.txt) | Repeat, plus gap reproduction through public sample ingestion |
 | [probe.patch](probe.patch) | Exact final scratch fixture, applicable to the source baseline; not part of compiled production code |
+| [render-tests.txt](render-tests.txt) | Post-snapshot renderer spectrogram suite: 9 passed |
+| [offline-goldens.txt](offline-goldens.txt) | Post-snapshot spectral goldens: 5 passed unchanged |
+| [active-work-overlap.txt](active-work-overlap.txt) | Final inspected implementation heads, cumulative file lists and worktree status |
+| [Review reports and dispositions](review-disposition.md) | Independent initial verdicts, source validation, accepted/qualified/declined recommendations |
 
 Existing commands, run before scratch results were used:
 
@@ -90,6 +94,8 @@ the whole timed stage bounds possible savings at this fixture, and a replacement
 A frozen-history frame and a pitch-only zoom/row change allocate zero within this boundary and return no dirty slabs.
 Those single sub-microsecond samples establish the path, not a reliable nanosecond performance comparison.
 The current data path needs optimization while data changes, not a new pitch-zoom cache.
+The existing 0.121 ms whole-pane probe is not comparable to the 0.226 ms scratch subset:
+it has only about five seconds of history and does not acknowledge callbacks, so `accept` skips the full `SentRun::moved` scan the scratch reaches.
 
 ## Defect reproductions and eliminated explanations
 
@@ -112,6 +118,9 @@ signal content is irrelevant to zero-gap capacity, but real FFT columns must exi
 Source explanation:
 `SlabGrid::fold` iterates every absent key and extends `power`;
 `SpectrogramAgg::view` later drains prefixes but keeps the allocation.
+Post-review source validation also identifies `rebuild`'s `partition_point(...).min(first)` as a second entry to the same large fill when layout/rung changes.
+The archived measurements exercise warm increment;
+no separate cold-gap timing is claimed.
 Eliminated:
 FFT time (outside the measured region), GPU allocation/upload (no GPU in this fixture), non-acknowledged callbacks (serial explicitly acknowledged), and an oversized final visible run (length is trimmed).
 No proposed repair was tried or reverted;
@@ -120,6 +129,9 @@ Still needed:
 bounded implementation, exact short-gap/held-copy equivalence, huge-gap intermediate bounds, and an actual host pause/resume check if a host-specific claim is made.
 Stopped transport with continuously delivered silent audio does not trigger this gap;
 the sample feed must cease or skip time.
+Closing the editor alone continues ingestion in the background.
+Engine suspension, plugin/track deactivation and a large forward anchor snap are candidate host reproductions, not measured host outcomes.
+SG1 acceptance now names both fold drivers, pre-allocation bounds, post-gap far-edge extent, and the fewer-than-two-slabs no-callback path.
 
 ### SG2: offline batch endpoint mismatch
 
@@ -156,6 +168,8 @@ The two-second deterministic whole-song tone test never reaches a hop wider than
 The late-window pre-roll test reaches trimming but likewise never reaches the long-span hop.
 Still needed:
 sweep burst phase, FFT size and sample rate, compare to a regular-hop reference, choose a quality policy, and measure long-window CPU/memory cost before selecting preaggregation.
+The independent reviews add one/five-taper comparisons, explicit raw-column memory admission, and non-nested placement-grid fixtures to that gate.
+The 323 MB Fast/192 kHz/30-minute raw-column example is calculated from a one-window hop, not a measured allocation or export duration.
 
 ## GPU, composition, and measurement limitations
 
@@ -184,3 +198,14 @@ These are explicit remaining gates rather than grounds to extrapolate CPU alloca
 Review the complete plan and all SG1–SG6 briefs, this evidence, both scratch logs and the patch, and the actual source at the baseline.
 The review is of technical proposals, priority and dependency claims, not just prose or diff style.
 The frozen snapshot and independent reports/disposition are recorded in the review files beside this packet.
+Both initial verdicts target commit `994fbac5657193d0e0b14706808edc27c9807a9c`.
+`initial-snapshot.sha256` remains the immutable manifest of that version;
+verify against `git show 994fbac5:<path>`, because this README and the plan now include accepted revisions.
+The reports are preserved verbatim in `.txt` files, including recommendations qualified or declined by [the disposition record](review-disposition.md).
+
+Post-snapshot baseline validation, with no golden changes:
+
+```sh
+cargo test --release -p harmonigraph-render spectrogram -- --test-threads=1
+cargo test --release -p harmonigraph-offline frame_on_record -- --nocapture --test-threads=1
+```

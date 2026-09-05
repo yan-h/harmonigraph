@@ -1,0 +1,14 @@
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-ui)
+   Compiling harmonigraph-offline v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-offline)
+    Finished `release` profile [optimized] target(s) in 17.64s
+     Running unittests src/main.rs (target/release/deps/harmonigraph_offline-f62dbface63e0294)
+
+running 5 tests
+test golden::a_short_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_tall_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_zoomed_in_pane_draws_the_frame_on_record ... ok
+test golden::mixed_spectral_shadows_draw_the_frame_on_record ... ok
+test golden::the_whole_song_layout_draws_the_frame_on_record ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.94s
