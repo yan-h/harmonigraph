@@ -3376,6 +3376,9 @@ impl LatticeResources {
                 .as_ref()
                 .is_none_or(|o| o.size != size || o.screen_size != screen_size)
             {
+                // Release the large old images before allocating replacements,
+                // as before. The pane-owned ink history stays alive beside them.
+                pane.offscreen = None;
                 pane.offscreen =
                     Some(Offscreen::new(device, &shared, &pane.uniform_buffer, size, screen_size));
             }
