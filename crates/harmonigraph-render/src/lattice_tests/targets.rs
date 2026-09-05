@@ -108,14 +108,17 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert_eq!(fresh, shooter.shot_again(&scene));
     // Silence while enabled retains the same bloom allocation for the next
     // note. Empty geometry gates allocation, not retention.
-    let sounding = scene.clone();
     let held_bloom = target(&shooter).bloom.as_ref().unwrap().nodes_view.clone();
-    scene.nodes.clear();
-    scene.pluses.clear();
+    let nodes = std::mem::take(&mut scene.nodes);
+    let pluses = std::mem::take(&mut scene.pluses);
     shooter.shot_again(&scene);
     assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
-    shooter.shot_again(&sounding);
+    scene.nodes = nodes;
+    scene.pluses = pluses;
+    shooter.shot_again(&scene);
     assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
+    scene.nodes.clear();
+    scene.pluses.clear();
     // Switching off while empty still retires the allocation, and switching
     // back on waits for a scene to draw before allocating again.
     scene.bloom_strength = 0.0;
