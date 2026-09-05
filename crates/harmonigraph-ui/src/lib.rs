@@ -74,7 +74,7 @@ pub(crate) use state::default_dock;
 pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 pub use text::use_renderer_font_texture;
 
-use harmonigraph_core::{Comma, PitchClass, Tuning};
+use harmonigraph_core::{Comma, PitchClass};
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell
 // writes — is deliberately not re-exported from here: the contract runs from
 // the shell to the model, and routing it through the crate that only passes it
@@ -434,7 +434,10 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 /// draws [`Pane`]s directly, and skipping this would leave it rendering
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    learn_step(state, params);
+    let owned = params.configuration();
+    if owned.is_none() && state.replayed_configuration.is_none() {
+        learn_step(state, params);
+    }
 
     // Rotated here so the window belongs to a whole frame rather than to a
     // point in the dock's draw order: the lattice publishes as it builds, and
@@ -446,63 +449,21 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // that misleads.
     state.drawn = state.drawn_this_frame.take();
 
-    state.tuning = params::tuning_from_params(params);
-    // Auto-detect, then lock, one comma at a time and up the primes — the
-    // order of `Comma::ALL`, and the order that makes the two identities
-    // compose: the septimal one reads the third, so it has to see the third
-    // the syntonic lock has already derived, not the inert param under it.
-    //
-    // Auto-detect: a tuning that IS one of these temperaments engages its
-    // mode, whatever put it there — the 12-TET preset, a learned chord, a
-    // drag of any bar. Engage only. Once a lock holds, the axis it derives
-    // stops being read at all, so a released mode would have to be
-    // re-detected from axes that no longer describe the lattice — dragging
-    // the fifth would drop the lock it is meant to carry along. Releasing is
-    // an explicit edit of the derived axis instead (see `panes::tuning`),
-    // which is the one gesture that can mean nothing else.
-    //
-    // And each comma judges each tuning ONCE, which is what gives its switch
-    // a working OFF direction: nothing about an unchanged tuning can have
-    // changed the answer, so a mode switched off stays off until the tuning
-    // itself moves.
-    //
-    // Once is also the only reading that survives the plugin's parameters.
-    // A `set` there is queued for the host — nih-plug: "the parameter's
-    // actual value will only be changed when the output event is written" —
-    // so for a frame or more after ANY tuning write, `get` still reports the
-    // value being written away FROM. Judging those stale axes afresh undoes
-    // the edit that is in flight: the mode the user just switched off comes
-    // back for a frame (press twice to disengage), and a Just preset re-locks
-    // on the tuning it is leaving. Judging once means the stale frames say
-    // nothing, and a tuning gets its verdict when it arrives.
-    // Judged against the PARAMS, before any lock derives an axis from them:
-    // what a verdict is about is the tuning someone set, and a mode switch is
-    // not a tuning edit. Keyed on the derived values instead, releasing
-    // meantone would move the third the septimal identity reads and re-open a
-    // marvel verdict the user had just switched off.
-    let params_tuning = state.tuning;
-    for comma in Comma::ALL {
-        let axes = judged_axes(comma, &params_tuning);
-        if state.view.temper_auto(comma)
-            && !state.view.tempers(comma)
-            && state.temper_judged[comma.index()] != Some(axes)
-        {
-            let tuning = &state.tuning;
-            *state.view.temper_mut(comma) =
-                comma.is_tempered(tuning.three_cents(), tuning.five_cents(), tuning.seven_cents());
-        }
-        // Every frame, engaged or not: an engaged mode that is switched off
-        // must find its own tuning already judged, or the frame after the
-        // switch reads as a tuning nobody has looked at.
-        state.temper_judged[comma.index()] = Some(axes);
-        // Then the lock itself: derive the axis here, so the whole pipeline
-        // (scene pitch classes, matching, readouts) sees the derived value
-        // without any tempering awareness of its own. It is exact in integer
-        // microcents, so comma-equivalent nodes collapse to one pitch. The
-        // derived axis's param is left untouched (inert while the lock is on).
-        if state.view.tempers(comma) {
-            state.tuning.temper(comma);
-        }
+    if let Some(owned) = owned {
+        apply_resolved(state, owned.resolved);
+        state.configuration_status = owned.status;
+        state.configuration_pending = owned.pending;
+    } else if let Some(recorded) = state.replayed_configuration {
+        apply_resolved(state, recorded);
+    } else {
+        let modes = tuning_modes(state);
+        state.config_reducer.sync_display(
+            params::tuning_from_params(params),
+            modes,
+            state.temper_judged,
+        );
+        state.temper_judged = state.config_reducer.judged();
+        apply_resolved(state, state.config_reducer.resolved());
     }
     state.frame_params = FrameParams {
         fade_time: params.get(params::ParamKey::Fade),
@@ -514,51 +475,63 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     state.tracker.prune(now, &state.view.envelope(&state.frame_params));
 }
 
-/// The tuning axes one comma's identity reads, in microcents — the key its
-/// auto-detect judges a tuning by. Always the PARAM values, never a locked
-/// axis derived from them (see `begin_frame`).
-///
-/// Only the axes it reads, and that is the point: a seventh that moved says
-/// nothing about the syntonic comma, so re-opening that question would
-/// re-engage a meantone the user had just switched off. The unread axis is
-/// zeroed rather than left out so both keys are one type.
-fn judged_axes(comma: Comma, tuning: &Tuning) -> (i32, i32, i32) {
-    match comma {
-        Comma::Syntonic => (tuning.three, tuning.five, 0),
-        Comma::SeptimalKleisma => (tuning.three, tuning.five, tuning.seven),
+pub(crate) fn tuning_modes(state: &SharedState) -> harmonigraph_core::configuration::TuningModes {
+    harmonigraph_core::configuration::TuningModes {
+        tempered: harmonigraph_core::Tempered {
+            syntonic: state.view.meantone,
+            septimal_kleisma: state.view.marvel,
+        },
+        auto: [state.view.meantone_auto, state.view.marvel_auto],
+        learning: state.learn_active,
     }
 }
 
-/// The axes one comma's identity reads, as a learned chord states them, or
-/// `None` when the chord did not pin all of them down — a bare fifth settles
-/// nothing about the syntonic comma, and a triad nothing about the septimal.
-/// This is the only place a learn decides what a chord is evidence FOR.
-///
-/// The septimal identity reads the third the LATTICE will use, which is the
-/// derived one whenever the syntonic lock holds — including one this same
-/// chord has just engaged, an arm earlier in `Comma::ALL` order. Read the
-/// played third instead and a chord that is not a marvel against the tuning
-/// in force engages the mode anyway, which the engage-only detect can then
-/// never release.
-///
-/// The syntonic comma reads no seventh at all, so it gets none: the 0 stands
-/// for an axis its identity does not look at, and `is_meantone` does not.
-fn learned_axes(
-    comma: Comma,
-    learned: &harmonigraph_core::LearnedTuning,
-    view: &harmonigraph_scene::ViewConfig,
-) -> Option<(f32, f32, f32)> {
-    let (three, five) = (learned.three?, learned.five?);
-    match comma {
-        Comma::Syntonic => Some((three, five, 0.0)),
-        Comma::SeptimalKleisma => {
-            let five = if view.tempers(Comma::Syntonic) {
-                harmonigraph_core::tuning::meantone_third(three)
-            } else {
-                five
-            };
-            Some((three, five, learned.seven?))
+pub(crate) fn apply_resolved(
+    state: &mut SharedState,
+    config: harmonigraph_core::configuration::ResolvedConfig,
+) {
+    state.tuning = config.tuning;
+    state.view.meantone = config.modes.tempered.syntonic;
+    state.view.marvel = config.modes.tempered.septimal_kleisma;
+    state.view.meantone_auto = config.modes.auto[0];
+    state.view.marvel_auto = config.modes.auto[1];
+    state.learn_active = config.modes.learning;
+}
+
+/// One semantic action, including every axis and explicit unlock in a preset.
+/// CLAP submits it once; standalone/legacy writes synchronously through the same
+/// pure reducer at the next frame boundary.
+pub(crate) fn tuning_edit(
+    state: &mut SharedState,
+    params: &dyn ParamBackend,
+    edit: harmonigraph_core::configuration::ConfigEdit,
+) {
+    if let Some(accepted) = params.submit_tuning(edit) {
+        state.configuration_pending = accepted;
+        if !accepted {
+            state.console.log("Tuning command refused: configuration storage is full");
         }
+        return;
+    }
+    for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
+        if let Some(value) = value {
+            params.set(key, value as f32 / 1_000_000.0);
+        }
+    }
+    for comma in Comma::ALL {
+        let i = comma.index();
+        if let Some(on) = edit.tempered[i] {
+            *state.view.temper_mut(comma) = on;
+        }
+        if let Some(on) = edit.auto[i] {
+            *state.view.temper_auto_mut(comma) = on;
+            if on {
+                state.temper_judged[i] = None;
+            }
+        }
+    }
+    if let Some(on) = edit.learning {
+        state.learn_active = on;
     }
 }
 
@@ -676,25 +649,9 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
                 params.set(key, value);
             }
         }
-        // Auto-engage (or release) each comma's mode from what was learned:
-        // when the chord pins down every axis that comma's identity reads,
-        // turn its mode on iff they sit in that relationship. A chord that
-        // fixes only some of them leaves the mode as the user left it — a
-        // bare fifth says nothing about the third.
-        //
-        // The one place the auto-detect also RELEASES, and it can: a chord
-        // fixing every axis of an identity states the whole relationship in
-        // one gesture, so a learned just third is as explicit as dragging
-        // one. With a detect off, learn retunes the axes and leaves that mode
-        // alone — one switch governs every automatic decision about its comma.
-        for comma in Comma::ALL {
-            if !state.view.temper_auto(comma) {
-                continue;
-            }
-            if let Some((three, five, seven)) = learned_axes(comma, &learned, &state.view) {
-                *state.view.temper_mut(comma) = comma.is_tempered(three, five, seven);
-            }
-        }
+        let modes = harmonigraph_core::configuration::learned_modes(learned, tuning_modes(state));
+        state.view.meantone = modes.tempered.syntonic;
+        state.view.marvel = modes.tempered.septimal_kleisma;
         state.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
     }
     state.last_learned_classes = Some(classes);

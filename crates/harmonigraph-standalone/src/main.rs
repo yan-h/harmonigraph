@@ -124,6 +124,7 @@ struct Recorder {
     writer: harmonigraph_take::Writer,
     /// Last value seen for each parameter, so only changes are written.
     last: [f32; ParamKey::ALL.len()],
+    configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
 }
 
 impl Recorder {
@@ -138,7 +139,11 @@ impl Recorder {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 eprintln!("recording take: {path}");
-                Some(Recorder { writer, last: [f32::NAN; ParamKey::ALL.len()] })
+                Some(Recorder {
+                    writer,
+                    last: [f32::NAN; ParamKey::ALL.len()],
+                    configuration: None,
+                })
             }
             Err(err) => {
                 eprintln!("could not record take to {path}: {err}");
@@ -152,7 +157,14 @@ impl Recorder {
     }
 
     /// Write any parameter that moved since the last frame.
-    fn params(&mut self, params: &StandaloneParams, now: f64) {
+    fn params(&mut self, params: &StandaloneParams, state: &SharedState, now: f64) {
+        let configuration = state.resolved_configuration();
+        if self.configuration != Some(configuration) {
+            let _ = self
+                .writer
+                .configuration(harmonigraph_take::ConfigurationRecord::new(now, configuration));
+            self.configuration = Some(configuration);
+        }
         for (i, key) in ParamKey::ALL.into_iter().enumerate() {
             let value = params.get(key);
             if self.last[i] != value {
@@ -566,7 +578,7 @@ impl eframe::App for App {
         let source = self.source_picker(ui.ctx());
         let now = self.input_frame(source, now);
         if let Some(recorder) = &mut self.recorder {
-            recorder.params(&self.params, now);
+            recorder.params(&self.params, &self.state, now);
         }
 
         // The harness has no real audio; synthesize the held notes so the
@@ -777,6 +789,7 @@ mod tests {
             writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
                 .unwrap(),
             last: [f32::NAN; ParamKey::ALL.len()],
+            configuration: None,
         });
         // The callback raced the frame's clock read. Mock's first chord is
         // sounding at both times, so the replacement really emits attacks.

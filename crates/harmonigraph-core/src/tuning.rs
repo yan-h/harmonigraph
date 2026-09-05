@@ -266,6 +266,11 @@ impl Tempered {
 pub struct PitchClass(u32);
 
 impl PitchClass {
+    /// Fold exact absolute pitch into one octave without a float conversion.
+    pub fn from_microcents(value: i64) -> Self {
+        Self(value.rem_euclid(i64::from(OCTAVE_MICROCENTS)) as u32)
+    }
+
     pub fn from_cents(cents: f32) -> Self {
         // `f32::rem_euclid(1200.0)` can round *up* to exactly 1200.0 for
         // tiny negative inputs (a negative `c_offset`, a downward tuning
@@ -471,8 +476,22 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
     classes.sort_unstable();
     classes.dedup();
 
-    let [three, five, seven] = learn_primes(&classes);
-    LearnedTuning { c_offset: learn_c_offset(&classes), three, five, seven }
+    learn_sorted_classes(&classes)
+}
+
+/// Allocation-free inference from sorted, distinct classes. The confirmed-state
+/// component supplies its fixed scratch slice here, preserving deterministic ties.
+pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
+    learn_sorted_classes_counted(classes, &mut 0)
+}
+
+pub(crate) fn learn_sorted_classes_counted(
+    classes: &[PitchClass],
+    pair_visits: &mut usize,
+) -> LearnedTuning {
+    debug_assert!(classes.windows(2).all(|pair| pair[0] < pair[1]));
+    let [three, five, seven] = learn_primes(classes, pair_visits);
+    LearnedTuning { c_offset: learn_c_offset(classes), three, five, seven }
 }
 
 /// The sounding pitch class closest to C, as a signed cents offset in
@@ -502,7 +521,7 @@ fn learn_c_offset(classes: &[PitchClass]) -> Option<f32> {
 /// are candidates — a fourth implies a fifth, since octaves are assumed
 /// perfectly tuned — and the candidate closest to just wins, if within
 /// [`LEARN_RANGE_CENTS`].
-fn learn_primes(classes: &[PitchClass]) -> [Option<f32>; 3] {
+fn learn_primes(classes: &[PitchClass], pair_visits: &mut usize) -> [Option<f32>; 3] {
     let mut best = [
         (PitchClass::from_cents(THREE_JUST), None::<PitchClass>),
         (PitchClass::from_cents(FIVE_JUST), None),
@@ -510,6 +529,7 @@ fn learn_primes(classes: &[PitchClass]) -> [Option<f32>; 3] {
     ];
     for (i, &a) in classes.iter().enumerate() {
         for &b in &classes[i + 1..] {
+            *pair_visits += 1;
             for interval in [a - b, b - a] {
                 for (target, best_so_far) in &mut best {
                     let diff = interval.distance_to(*target);

@@ -268,6 +268,7 @@ impl Shot {
             header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
             notes: Vec::new(),
             params: Vec::new(),
+            configurations: Vec::new(),
             truncated: false,
         }
     }
@@ -390,6 +391,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
         notes,
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
     };
     check_take("spectrogram-spectral-shadows-mixed", shot, take);
@@ -453,6 +455,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
         notes: Vec::new(),
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
     };
     let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
@@ -546,6 +549,7 @@ fn spectral_shadow_frame_ms(
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
         notes,
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
     };
     let settings = Settings {

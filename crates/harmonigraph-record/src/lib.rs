@@ -129,6 +129,7 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
 #[derive(Clone, Copy)]
 pub enum Entry {
+    Configuration(harmonigraph_take::ConfigurationRecord),
     Note {
         t: f64,
         source: SourceId,
@@ -258,6 +259,7 @@ pub fn default_renderer_path() -> std::path::PathBuf {
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
+    last_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, when the take is recording audio too.
     audio: rtrb::Producer<f32>,
@@ -307,6 +309,7 @@ impl Recorder {
         let armed = self.armed.load(Ordering::Relaxed);
         if armed && !self.was_armed {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
+            self.last_configuration = None;
             self.last_position = None;
             self.audio_started = false;
             self.finished = false;
@@ -484,6 +487,7 @@ impl Recorder {
             && !self.end_at_rewind.load(Ordering::Relaxed)
         {
             self.push(Entry::NewPass);
+            self.last_configuration = None;
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
         }
@@ -491,9 +495,21 @@ impl Recorder {
         rolling
     }
 
-    /// Record any parameter that moved. Called once per block: nice-plug
-    /// is not configured for sample-accurate automation, so block
-    /// granularity is exactly as precise as the plugin itself is.
+    /// Preserve each effective resolved boundary, independently of UI cadence.
+    pub fn configuration(
+        &mut self,
+        t: f64,
+        resolved: harmonigraph_core::configuration::ResolvedConfig,
+    ) {
+        if self.last_configuration != Some(resolved) {
+            self.push(Entry::Configuration(harmonigraph_take::ConfigurationRecord::new(
+                t, resolved,
+            )));
+            self.last_configuration = Some(resolved);
+        }
+    }
+
+    /// Record raw parameter mirrors at plugin-block granularity.
     pub fn params(&mut self, t: f64, values: [f32; ParamKey::ALL.len()]) {
         for (i, value) in values.into_iter().enumerate() {
             if self.last_params[i] != value {
@@ -832,6 +848,7 @@ pub fn channel() -> (Recorder, Control) {
 
     (
         Recorder {
+            last_configuration: None,
             producer,
             armed: armed.clone(),
             dropped: dropped.clone(),
@@ -905,6 +922,7 @@ pub mod testing {
         let end_at_rewind = Arc::new(AtomicBool::new(false));
         let hit_rewind = Arc::new(AtomicBool::new(false));
         let recorder = Recorder {
+            last_configuration: None,
             producer,
             audio,
             with_audio: with_audio.clone(),
@@ -1120,6 +1138,7 @@ fn drain(
         }
         let writer = &mut current.writer;
         let _ = match entry {
+            Entry::Configuration(config) => writer.configuration(config),
             Entry::Note { t, source, channel, note, kind } => {
                 writer.note(NoteEvent { time: t, source, channel, note, kind }.into())
             }
@@ -1672,6 +1691,7 @@ mod tests {
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
+                    last_configuration: None,
                     producer,
                     audio,
                     with_audio: Arc::new(AtomicBool::new(false)),
@@ -1730,6 +1750,9 @@ mod tests {
                     }
                     Entry::Param { t, key, value } => format!("param {key}={value} @{t}"),
                     Entry::AudioStart(t) => format!("audio-start @{t}"),
+                    Entry::Configuration(config) => {
+                        format!("configuration {} @{}", config.revision, config.t)
+                    }
                     Entry::NewPass => "new-pass".to_owned(),
                 });
             }
@@ -2764,6 +2787,38 @@ mod tests {
             "the new pass, then a full set for it: {after:?}"
         );
         assert_eq!(after[0], "new-pass");
+    }
+
+    #[test]
+    fn resolved_boundaries_keep_sample_times_and_restart_each_take_pass() {
+        let mut b = Bench::new();
+        b.arm();
+        let mut reducer = harmonigraph_core::configuration::ConfigReducer::default();
+        let first = reducer.resolved();
+        b.rec.configuration(0.0, first);
+        b.rec.configuration(0.5, first);
+        reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(
+            harmonigraph_core::configuration::ConfigEdit::axis(1, 696_000_000),
+        ));
+        let second = reducer.resolved();
+        b.rec.configuration(31.0 / 48000.0, second);
+        for (time, expected) in [(0.0, first), (31.0 / 48000.0, second)] {
+            let Entry::Configuration(record) = b.entries.pop().unwrap() else {
+                panic!("configuration record");
+            };
+            assert_eq!(record.t, time);
+            assert_eq!(record.resolved(), expected);
+        }
+        assert!(b.entries.pop().is_err());
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(matches!(b.entries.pop().unwrap(), Entry::NewPass));
+        b.rec.configuration(0.0, second);
+        assert!(
+            matches!(b.entries.pop().unwrap(), Entry::Configuration(_)),
+            "a new empty pass must carry its initial configuration"
+        );
     }
 
     /// The reserved samples actually reach the ring.

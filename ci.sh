@@ -48,6 +48,9 @@ run cargo test --workspace
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
 
+# The default CLAP configuration owner is exercised without enabling the probe.
+run cargo test -p harmonigraph-plugin --features nice-plug/assert_process_allocs configuration::tests::
+
 # #615's optional apparatus exercises the actual CLAP boundary and callback
 # allocation guard. Default workspace tests cannot see this feature.
 run cargo clippy -p harmonigraph-plugin --all-targets --features tuning-probe -- -D warnings

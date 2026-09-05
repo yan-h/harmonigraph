@@ -4,7 +4,8 @@
 
 This is the decided design for a planned feature.
 The [source-identity foundation](adaptive-tuning-source-identity.md) implements source-aware display/roll/take/replay and scoped resets;
-aggregation, session recovery and adaptive tuning remain unimplemented.
+the [effective-configuration foundation](adaptive-tuning-effective-configuration.md) adds CLAP audio ownership, bounded learning, prepared restore and resolved take replay.
+Aggregation, session recovery, companion output and adaptive assignment remain unimplemented.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.

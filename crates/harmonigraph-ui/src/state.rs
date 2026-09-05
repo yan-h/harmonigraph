@@ -171,6 +171,11 @@ pub struct SharedState {
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
+    pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
+    /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
+    pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
+    pub configuration_status: u32,
+    pub configuration_pending: bool,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
     /// Per comma (indexed by [`Comma::index`]): the tuning axes (microcents)
@@ -682,6 +687,11 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 }
 
 impl SharedState {
+    /// The synchronous reducer's last complete value, for standalone recording.
+    pub fn resolved_configuration(&self) -> harmonigraph_core::configuration::ResolvedConfig {
+        self.replayed_configuration.unwrap_or_else(|| self.config_reducer.resolved())
+    }
+
     pub fn new(target_format: TextureFormat) -> Self {
         SharedState {
             tracker: NoteTracker::new(),
@@ -696,6 +706,10 @@ impl SharedState {
             target_format,
             background: harmonigraph_scene::skin::well_color(),
             learn_active: false,
+            config_reducer: Default::default(),
+            replayed_configuration: None,
+            configuration_status: 0,
+            configuration_pending: false,
             last_learned_classes: None,
             temper_judged: [None; Comma::COUNT],
             camera_presets: Vec::new(),

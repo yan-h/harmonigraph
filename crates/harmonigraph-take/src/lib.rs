@@ -17,7 +17,7 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:2,sample_rate:48000.0,...))
+//! Header((version:3,sample_rate:48000.0,...))
 //! Note((t:0.5,source:0,channel:0,note:60,kind:On((velocity:0.8))))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
@@ -33,7 +33,9 @@
 //! events with. They are deliberately NOT wall-clock or frame times: the
 //! whole point is that the replay chooses its own frame rate.
 
+pub mod configuration;
 pub mod params;
+pub use configuration::ConfigurationRecord;
 pub mod render;
 
 pub use params::{ParamKey, MAX_TUNING_OFFSET};
@@ -44,10 +46,11 @@ use std::io::{BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 /// Bumped when a change would make an older reader misread a take.
-/// [`Take::read`] accepts exactly this version. Version 1 had no source or
-/// reset scope; refusing its HEADER prevents old final notes from being
-/// mistaken for a truncated version 2 record. There are no compatibility shims.
-pub const FORMAT_VERSION: u32 = 2;
+/// [`Take::read`] accepts exactly this version. Version 1 lacked source/reset
+/// scope; version 2 lacked resolved configuration boundaries. Refusing an old
+/// header prevents its final record from looking like an interrupted write.
+/// There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
@@ -196,6 +199,7 @@ pub enum Record {
     Header(Header),
     Note(NoteRecord),
     Param(ParamRecord),
+    Configuration(ConfigurationRecord),
 }
 
 /// A whole take, read into memory. Takes are small — a busy ten-minute
@@ -209,6 +213,7 @@ pub struct Take {
     /// Parameter changes, time-ordered. Only *changes* are recorded, so
     /// the value at any moment is the last record at or before it.
     pub params: Vec<ParamRecord>,
+    pub configurations: Vec<ConfigurationRecord>,
     /// The final line was incomplete, so the recording was cut off mid
     /// write — a killed export, a crash. Everything before it is intact
     /// and usable; callers should say so rather than pretend the take is
@@ -289,6 +294,7 @@ impl Take {
                 }
                 Record::Note(note) => take.notes.push(note),
                 Record::Param(param) => take.params.push(param),
+                Record::Configuration(config) => take.configurations.push(config),
             }
         }
         if !have_header {
@@ -304,6 +310,7 @@ impl Take {
         // replaces it, and so on).
         take.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
         take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
+        take.configurations.sort_by(|a, b| a.t.total_cmp(&b.t));
         Ok(take)
     }
 
@@ -312,7 +319,7 @@ impl Take {
     pub fn duration(&self) -> f64 {
         let last_note = self.notes.last().map(|n| n.t).unwrap_or(0.0);
         let last_param = self.params.last().map(|p| p.t).unwrap_or(0.0);
-        last_note.max(last_param)
+        last_note.max(last_param).max(self.configurations.last().map_or(0.0, |c| c.t))
     }
 
     /// When recording actually began: the earliest event of any kind, or
@@ -334,11 +341,10 @@ impl Take {
     pub fn first_event(&self) -> Option<f64> {
         let first_note = self.notes.first().map(|n| n.t);
         let first_param = self.params.first().map(|p| p.t);
-        match (first_note, first_param) {
-            (Some(n), Some(p)) => Some(n.min(p)),
-            (only, None) => only,
-            (None, only) => only,
-        }
+        [first_note, first_param, self.configurations.first().map(|c| c.t)]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
     }
 }
 
@@ -386,6 +392,10 @@ impl Writer {
 
     pub fn note(&mut self, note: NoteRecord) -> std::io::Result<()> {
         self.write(&Record::Note(note))
+    }
+
+    pub fn configuration(&mut self, config: ConfigurationRecord) -> std::io::Result<()> {
+        self.write(&Record::Configuration(config))
     }
 
     pub fn param(&mut self, param: ParamRecord) -> std::io::Result<()> {
@@ -443,6 +453,7 @@ mod tests {
             header: Header::default(),
             notes,
             params,
+            configurations: Vec::new(),
             truncated: false,
         };
         let note = |t| NoteRecord {
@@ -653,7 +664,7 @@ mod tests {
 
     #[test]
     fn an_old_header_is_refused_before_a_final_record_can_look_truncated() {
-        for version in [0, 1] {
+        for version in [0, 1, 2] {
             for last in ["Note((t:0.0,channel:0,note:60,kind:On((velocity:0.8))))", "Note((t:"] {
                 let text = format!("Header((version:{version},sample_rate:48000.0))\n{last}");
                 let error = Take::parse(std::io::Cursor::new(text)).unwrap_err();

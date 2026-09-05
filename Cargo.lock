@@ -2110,6 +2110,7 @@ dependencies = [
  "objc2 0.6.4",
  "parking_lot",
  "raw-window-handle 0.5.2",
+ "rtrb",
  "serde_json",
  "vst3",
  "widestring",

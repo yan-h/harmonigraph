@@ -13,6 +13,7 @@ use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod background;
+mod configuration;
 mod editor;
 #[cfg(feature = "tuning-probe")]
 mod probe;
@@ -42,6 +43,7 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    configuration: Option<Box<configuration::Owner>>,
     #[cfg(feature = "tuning-probe")]
     probe: probe::Hub,
     /// Keeps the spectrogram's history running while the editor window is
@@ -83,6 +85,8 @@ pub struct Harmonigraph {
 
 #[derive(Params)]
 pub struct HarmonigraphParams {
+    configuration:
+        std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
     /// Window size in logical pixels, persisted with the plugin state.
     #[persist = "editor-state"]
     pub editor_state: Arc<editor::EguiState>,
@@ -169,6 +173,7 @@ fn param_for_key(key: ParamKey) -> FloatParam {
 impl Default for HarmonigraphParams {
     fn default() -> Self {
         HarmonigraphParams {
+            configuration: std::sync::OnceLock::new(),
             editor_state: editor::EguiState::from_size(
                 editor::DEFAULT_SIZE.0,
                 editor::DEFAULT_SIZE.1,
@@ -208,6 +213,8 @@ impl HarmonigraphParams {
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a HarmonigraphParams,
     pub setter: &'a ParamSetter<'a>,
+    pub configuration:
+        Option<(nice_plug::wrapper::clap::configuration::ConfigurationSnapshot, bool)>,
     /// The key currently inside an explicit begin_set/end_set gesture, if
     /// any. Lives in EditorShared so it survives across frames (this
     /// adapter is rebuilt every frame).
@@ -215,11 +222,37 @@ pub(crate) struct PluginParamBackend<'a> {
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
+    fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
+        self.configuration.map(|(snapshot, pending)| configuration::view(snapshot, pending))
+    }
+    fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
+        self.params
+            .configuration
+            .get()
+            .map(|mailbox| mailbox.submit(configuration::packet(edit)).is_ok())
+    }
+
     fn get(&self, key: ParamKey) -> f32 {
+        if let (Some((snapshot, _)), Some(index)) =
+            (self.configuration, ParamKey::TUNING.iter().position(|k| *k == key))
+        {
+            return snapshot.raw[index];
+        }
         self.params.param_for(key).value()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
+        if let (Some(mailbox), Some(index)) =
+            (self.params.configuration.get(), ParamKey::TUNING.iter().position(|k| *k == key))
+        {
+            let _ = mailbox.submit(configuration::packet(
+                harmonigraph_core::configuration::ConfigEdit::axis(
+                    index,
+                    harmonigraph_core::tuning::microcents(value),
+                ),
+            ));
+            return;
+        }
         let param = self.params.param_for(key);
         if self.gesture.get() == Some(key) {
             // Inside an explicit gesture (drag): just set.
@@ -244,6 +277,9 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn begin_set(&self, key: ParamKey) {
+        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
+            return;
+        }
         // Close a dangling gesture first (shouldn't happen, but a host
         // seeing unbalanced begin/end is worse than a spurious end).
         if let Some(previous) = self.gesture.get() {
@@ -254,6 +290,9 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn end_set(&self, key: ParamKey) {
+        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
+            return;
+        }
         if self.gesture.get() == Some(key) {
             self.setter.end_set_parameter(self.params.param_for(key));
             self.gesture.set(None);
@@ -423,6 +462,7 @@ impl Default for Harmonigraph {
             params.ui_state.clone(),
         );
         Harmonigraph {
+            configuration: None,
             #[cfg(feature = "tuning-probe")]
             probe: probe::Hub::default(),
             params,
@@ -496,6 +536,17 @@ impl Plugin for Harmonigraph {
     }
 
     fn reset(&mut self) {
+        if let Some(owner) = self.configuration.as_mut() {
+            owner.reset();
+            let mailbox = self.params.configuration.get().unwrap();
+            let generation = mailbox.reset_generation.load(Ordering::Relaxed);
+            if let Some(next) = generation.checked_add(1) {
+                mailbox.reset_generation.store(next, Ordering::Release);
+            } else {
+                owner.fault();
+            }
+            mailbox.published.publish(owner.snapshot);
+        }
         #[cfg(feature = "tuning-probe")]
         self.probe.reset();
         self.samples_processed = 0;
@@ -605,6 +656,9 @@ impl Plugin for Harmonigraph {
         }
 
         if let Some(origin) = take_origin {
+            if let Some(owner) = self.configuration.as_mut() {
+                owner.record(&mut self.take, origin);
+            }
             self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
             // The take's own audio, when asked for: the selected analysis input
@@ -637,6 +691,75 @@ impl Plugin for Harmonigraph {
 }
 
 impl ClapPlugin for Harmonigraph {
+    const CLAP_CONFIGURATION: bool = true;
+    const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
+        &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
+    const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
+    fn clap_configuration_install(
+        &mut self,
+        handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
+    ) {
+        let owner = Box::new(configuration::Owner::new(&self.params));
+        handle.published.publish(owner.snapshot);
+        self.params
+            .configuration
+            .set(handle)
+            .unwrap_or_else(|_| panic!("configuration installed twice"));
+        self.configuration = Some(owner);
+    }
+    fn clap_configuration_prepare(
+        state: &nice_plug::plugin::PluginState,
+    ) -> Result<
+        nice_plug::wrapper::clap::configuration::ConfigurationEdit,
+        nice_plug::wrapper::clap::configuration::SubmitError,
+    > {
+        configuration::prepare(state)
+    }
+    fn clap_configuration_save(
+        snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
+        state: &mut nice_plug::plugin::PluginState,
+    ) {
+        configuration::save(snapshot, state);
+    }
+    fn clap_configuration_begin(
+        &mut self,
+        boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
+    ) {
+        self.configuration.as_mut().unwrap().begin(boundary);
+    }
+    fn clap_configuration_apply(
+        &mut self,
+        command: nice_plug::wrapper::clap::configuration::ConfigurationCommand,
+        commit: nice_plug::wrapper::clap::configuration::ConfigurationCommit,
+    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
+        let owner = self.configuration.as_mut().unwrap();
+        let result = owner.apply(command, commit);
+        if result.is_none() {
+            self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+        }
+        result
+    }
+    fn clap_configuration_observe(
+        &mut self,
+        event: nice_plug::wrapper::clap::configuration::OwnedInput,
+    ) {
+        self.configuration.as_mut().unwrap().observe(event);
+    }
+    fn clap_configuration_group_end(
+        &mut self,
+        _sample: i64,
+    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
+        let owner = self.configuration.as_mut().unwrap();
+        let result = owner.group_end();
+        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+        result
+    }
+    fn clap_configuration_fault(&mut self) {
+        let owner = self.configuration.as_mut().unwrap();
+        owner.fault();
+        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+    }
+
     #[cfg(feature = "tuning-probe")]
     const CLAP_PROCESS_TRACE: bool = true;
     #[cfg(feature = "tuning-probe")]
