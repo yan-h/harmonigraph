@@ -1,0 +1,122 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling cfg_aliases v0.2.2
+   Compiling arrayvec v0.7.8
+   Compiling foldhash v0.2.0
+   Compiling num-traits v0.2.19
+   Compiling cfg-if v1.0.4
+   Compiling thiserror v2.0.18
+   Compiling zerocopy v0.8.54
+   Compiling hashbrown v0.17.1
+   Compiling log v0.4.33
+   Compiling objc2 v0.6.4
+   Compiling once_cell v1.21.4
+   Compiling libc v0.2.186
+   Compiling objc2-encode v4.1.0
+   Compiling syn v2.0.119
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling zerocopy-derive v0.8.54
+   Compiling thiserror-impl v2.0.18
+   Compiling bytemuck v1.25.1
+   Compiling parking_lot_core v0.9.12
+   Compiling version_check v0.9.5
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling block2 v0.6.2
+   Compiling polycool v0.4.0
+   Compiling naga v29.0.4
+   Compiling equivalent v1.0.2
+   Compiling bit-vec v0.9.1
+   Compiling unicode-width v0.2.2
+   Compiling profiling v1.0.18
+   Compiling bit-set v0.9.1
+   Compiling color v0.3.3
+   Compiling codespan-reporting v0.13.1
+   Compiling indexmap v2.14.0
+   Compiling euclid v0.22.14
+   Compiling hashbrown v0.16.1
+   Compiling linebender_resource_handle v0.1.1
+   Compiling raw-window-handle v0.6.2
+   Compiling rustc-hash v1.1.0
+   Compiling hexf-parse v0.2.1
+   Compiling guillotiere v0.7.0
+   Compiling ahash v0.8.12
+   Compiling wgpu-hal v29.0.4
+   Compiling unicode-general-category v1.1.0
+   Compiling fearless_simd v0.4.1
+   Compiling bitflags v2.13.1
+   Compiling wgpu-core v29.0.4
+   Compiling nohash-hasher v0.2.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling self_cell v1.3.0
+   Compiling epaint_default_fonts v0.35.0
+   Compiling litrs v1.0.0
+   Compiling uuid v1.24.0
+   Compiling enumn v0.1.14
+   Compiling objc2-core-foundation v0.3.2
+   Compiling wgpu-types v29.0.4
+   Compiling document-features v0.2.12
+   Compiling wgpu v29.0.4
+   Compiling either v1.16.0
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling itertools v0.14.0
+   Compiling rustc-hash v2.1.3
+   Compiling smallvec v1.15.2
+   Compiling font-types v0.11.3
+   Compiling emath v0.35.0
+   Compiling accesskit v0.24.1
+   Compiling objc2-foundation v0.3.2
+   Compiling kurbo v0.13.1
+   Compiling read-fonts v0.39.2
+   Compiling parking_lot v0.12.5
+   Compiling ecolor v0.35.0
+   Compiling typeid v1.0.3
+   Compiling harmonigraph-core v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-core)
+   Compiling static_assertions v1.1.0
+   Compiling type-map v0.5.1
+   Compiling glam v0.33.6
+   Compiling web-time v1.1.0
+   Compiling color_space v0.5.4
+   Compiling peniko v0.6.1
+   Compiling paste v1.0.15
+   Compiling half v2.7.1
+   Compiling heck v0.5.0
+   Compiling pollster v0.4.0
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-perf)
+   Compiling vello_common v0.0.9
+   Compiling duplicate v2.0.1
+   Compiling ron v0.12.2
+   Compiling objc2-metal v0.3.2
+   Compiling vello_cpu v0.0.9
+   Compiling harmonigraph-take v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-take)
+   Compiling objc2-quartz-core v0.3.2
+   Compiling harmonigraph-scene v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-scene)
+   Compiling skrifa v0.42.1
+   Compiling harfrust v0.7.0
+   Compiling raw-window-metal v1.1.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling epaint v0.35.0
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling egui v0.35.0
+   Compiling egui-wgpu v0.35.0
+   Compiling egui_dock v0.20.1
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-render)
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-ui)
+    Finished `release` profile [optimized] target(s) in 1m 27s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_ui-73c77dd12ccacf82)
+
+running 1 test
+test tests::profile::profile_picture_panes ... 
+-- one picture pane at 1000x900, ms per frame --
+Lattice   0.033 ms (med  0.040)
+Spectral   0.115 ms (med  0.121)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 704 filtered out; finished in 0.23s
+

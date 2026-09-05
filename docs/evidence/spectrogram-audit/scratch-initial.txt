@@ -1,0 +1,29 @@
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-ui)
+    Finished `release` profile [optimized] target(s) in 26.41s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_ui-73c77dd12ccacf82)
+
+running 2 tests
+test spectrogram::audit_scratch::audit_cpu_and_gap ... bins=3828 max_history_bytes=31358976
+window=12 depth=1024 cold=(1.536625, 37, 18610840, 0, 751, 1032) warm_p50=(0.22616699999999998, 5, 2880932, 3, 751, 1032) warm_p95_ms=0.840167 mean_requested_bytes=2880927 mean_allocs=5 dirty_range=(Some(2), Some(3)) refolds=1 full_uploads=1
+same_history_stopped=(0.0005, 0, 0, 0, 751, 1032) pitch_zoom=(4.1e-5, 0, 0, 0, 751, 1032)
+window=180 depth=512 cold=(1.533417, 30, 5295792, 0, 353, 520) warm_p50=(0.070417, 5, 1354196, 2, 353, 520) warm_p95_ms=0.129000 mean_requested_bytes=1353070 mean_allocs=5 dirty_range=(Some(1), Some(2)) refolds=1 full_uploads=1
+same_history_stopped=(0.000292, 0, 0, 0, 353, 520) pitch_zoom=(4.2e-5, 0, 0, 0, 353, 520)
+window=180 depth=1024 cold=(2.559208, 33, 10571316, 0, 704, 1032) warm_p50=(0.142083, 5, 2700624, 1, 704, 1032) warm_p95_ms=0.209792 mean_requested_bytes=2702063 mean_allocs=5 dirty_range=(Some(1), Some(2)) refolds=1 full_uploads=1
+same_history_stopped=(4.2e-5, 0, 0, 0, 705, 1032) pitch_zoom=(4.2e-5, 0, 0, 0, 705, 1032)
+window=600 depth=1024 cold=(3.320833, 33, 10122504, 0, 587, 1032) warm_p50=(0.12375, 5, 2251812, 1, 587, 1032) warm_p95_ms=0.213875 mean_requested_bytes=2252419 mean_allocs=5 dirty_range=(Some(1), Some(2)) refolds=1 full_uploads=1
+same_history_stopped=(0.000625, 0, 0, 0, 587, 1032) pitch_zoom=(4.1e-5, 0, 0, 0, 587, 1032)
+gap=1s resumed=(0.035500000000000004, 11, 979340, 0, 127, 1032) retained_grid_len=127 retained_grid_capacity_bytes=489984
+gap=60s resumed=(2.433166, 21, 34900360, 0, 1032, 1034) retained_grid_len=1032 retained_grid_capacity_bytes=15679488
+gap=600s resumed=(14.379833, 33, 506390920, 0, 1032, 1034) retained_grid_len=1032 retained_grid_capacity_bytes=250871808
+ok
+test spectrogram::audit_scratch::audit_whole_song_coverage_and_timing ... whole_span=12 columns=229 peak_byte=203 cpu_ms=27.153334 allocs=244 requested_bytes=1048788
+whole_span=180 columns=67 peak_byte=203 cpu_ms=8.032625 allocs=81 requested_bytes=424556
+whole_span=600 columns=21 peak_byte=190 cpu_ms=2.736375 allocs=33 requested_bytes=245396
+whole_span=1800 columns=8 peak_byte=0 cpu_ms=1.246250 allocs=18 requested_bytes=194864
+offline_chunk_convention fps=30 last_center=0.881333333 sample_grid_center=0.914645833 offset_ms=-33.312500
+offline_chunk_convention fps=60 last_center=0.898000000 sample_grid_center=0.914645833 offset_ms=-16.645833
+offline_chunk_convention fps=120 last_center=0.906333333 sample_grid_center=0.914645833 offset_ms=-8.312500
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 705 filtered out; finished in 0.26s
+
