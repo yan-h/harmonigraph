@@ -197,6 +197,7 @@ pub struct ConfigurationMailbox {
     pub published: PublishedConfiguration,
     pub dirty: AtomicBool,
     pub notification_rejected: AtomicBool,
+    pub gesture_debt: AtomicBool,
     submission_rejected: AtomicBool,
     pub reset_generation: AtomicU64,
     /// Unsent older UI value notifications may not overwrite a newer accepted
@@ -218,6 +219,7 @@ impl ConfigurationMailbox {
                 published: PublishedConfiguration::default(),
                 dirty: AtomicBool::new(false),
                 notification_rejected: AtomicBool::new(false),
+                gesture_debt: AtomicBool::new(false),
                 submission_rejected: AtomicBool::new(false),
                 reset_generation: AtomicU64::new(0),
                 accepted_restore: AtomicU64::new(0),
@@ -322,8 +324,9 @@ impl ConfigurationMailbox {
         if self.submission_rejected.load(Ordering::Acquire) {
             applied.status |= 8;
         }
-        if let Some(shadow) = producer.shadow {
+        if let Some(mut shadow) = producer.shadow {
             if applied.applied_id < shadow.applied_id {
+                shadow.status |= applied.status;
                 return (shadow, true);
             }
             producer.shadow = None;

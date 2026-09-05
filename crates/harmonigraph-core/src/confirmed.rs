@@ -19,6 +19,8 @@ pub struct ConfirmedPitch {
     pub key: VoiceKey,
     /// Supplied by the validated source owner; absent for today's direct input.
     pub lifetime: Option<u64>,
+    /// CLAP address metadata, independent of the source/key identity.
+    pub host_note_id: Option<i32>,
     pub pitch_microcents: i64,
     pub onset_sample: i64,
     pub provenance: PitchProvenance,
@@ -167,6 +169,7 @@ impl ConfirmedPitches {
             NoteEventKind::On { .. } => self.on(ConfirmedPitch {
                 key,
                 lifetime: None,
+                host_note_id: None,
                 onset_sample: sample,
                 pitch_microcents: i64::from(event.note) * 100_000_000,
                 provenance: PitchProvenance::ObservedDirect,
@@ -285,6 +288,7 @@ mod tests {
                         note: (i % 64) as u8,
                     },
                     lifetime: Some(i as u64),
+                    host_note_id: None,
                     onset_sample: 0,
                     pitch_microcents: (i as i64) * 4_687_499,
                     provenance: PitchProvenance::AcceptedOutput,

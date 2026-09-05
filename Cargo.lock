@@ -1395,6 +1395,7 @@ dependencies = [
  "harmonigraph-perf",
  "harmonigraph-record",
  "harmonigraph-render",
+ "harmonigraph-take",
  "harmonigraph-ui",
  "libc",
  "nice-plug",

@@ -434,10 +434,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 /// draws [`Pane`]s directly, and skipping this would leave it rendering
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    let owned = params.configuration();
-    if owned.is_none() && state.replayed_configuration.is_none() {
-        learn_step(state, params);
-    }
+    resolve_tuning(state, params);
 
     // Rotated here so the window belongs to a whole frame rather than to a
     // point in the dock's draw order: the lattice publishes as it builds, and
@@ -448,6 +445,24 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // one that was. A diagnostic that holds its last good reading is the one
     // that misleads.
     state.drawn = state.drawn_this_frame.take();
+
+    state.frame_params = FrameParams {
+        fade_time: params.get(params::ParamKey::Fade),
+        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
+        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
+    };
+    // Every layer of a node fades on this one envelope, so a voice is dead to
+    // the display exactly when its release reaches zero.
+    state.tracker.prune(now, &state.view.envelope(&state.frame_params));
+}
+
+/// Resolve current musical values without advancing drawing or envelope state.
+/// Synchronous shells also call this after edits, before capturing their frame.
+pub fn resolve_tuning(state: &mut SharedState, params: &dyn ParamBackend) {
+    let owned = params.configuration();
+    if owned.is_none() && state.replayed_configuration.is_none() {
+        learn_step(state, params);
+    }
 
     if let Some(owned) = owned {
         apply_resolved(state, owned.resolved);
@@ -465,14 +480,6 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
         state.temper_judged = state.config_reducer.judged();
         apply_resolved(state, state.config_reducer.resolved());
     }
-    state.frame_params = FrameParams {
-        fade_time: params.get(params::ParamKey::Fade),
-        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
-        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
-    };
-    // Every layer of a node fades on this one envelope, so a voice is dead to
-    // the display exactly when its release reaches zero.
-    state.tracker.prune(now, &state.view.envelope(&state.frame_params));
 }
 
 pub(crate) fn tuning_modes(state: &SharedState) -> harmonigraph_core::configuration::TuningModes {

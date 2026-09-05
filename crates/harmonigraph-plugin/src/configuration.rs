@@ -7,7 +7,9 @@ use harmonigraph_core::configuration::timeline::{
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
+use harmonigraph_core::confirmed::{
+    ConfirmedPitch, ConfirmedPitches, LearningState, PitchProvenance,
+};
 use harmonigraph_core::{LearnedTuning, NoteEvent as CoreEvent, SourceId, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
@@ -128,6 +130,10 @@ pub fn view(snapshot: ConfigurationSnapshot, pending: bool) -> ConfigurationView
     ConfigurationView { resolved, status: snapshot.status, pending }
 }
 
+pub fn resolve_preview(snapshot: &mut ConfigurationSnapshot) {
+    snapshot.payload = payload(view(*snapshot, true).resolved);
+}
+
 pub fn prepare(state: &PluginState) -> Result<ConfigurationEdit, SubmitError> {
     let settings: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
         Some(json) => serde_json::from_str(json).map_err(|error| {
@@ -162,6 +168,8 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
     );
 }
 
+mod recording;
+
 pub struct Owner {
     pub timeline: ConfigTimeline,
     confirmed: ConfirmedPitches,
@@ -170,9 +178,7 @@ pub struct Owner {
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
-    recording_start: ResolvedConfig,
-    recording_boundaries: [Option<(i64, ResolvedConfig)>; 16],
-    recording_pending: bool,
+    recording: recording::Recording,
 }
 impl Owner {
     pub fn new(params: &super::HarmonigraphParams) -> Self {
@@ -189,12 +195,10 @@ impl Owner {
             payload: payload(timeline.reducer().resolved()),
             ..Default::default()
         };
-        let recording_start = timeline.reducer().resolved();
+
         Self {
             timeline,
-            recording_start,
-            recording_boundaries: [None; 16],
-            recording_pending: false,
+            recording: recording::Recording::default(),
             confirmed: ConfirmedPitches::default(),
             learning: LearningState::default(),
             budget: ControlBudget::default(),
@@ -209,21 +213,24 @@ impl Owner {
             },
         }
     }
-    pub fn begin(&mut self, boundary: ConfigurationBoundary) {
+    pub fn begin(
+        &mut self,
+        boundary: ConfigurationBoundary,
+        recorder: &harmonigraph_record::Recorder,
+    ) {
         self.boundary = boundary;
-        self.recording_start = self.timeline.reducer().resolved();
-        self.recording_boundaries = [None; 16];
-        self.recording_pending = true;
+        self.recording.captured_intent = recorder.capture_recording_intent();
+        self.recording.block_start = boundary.steady_time;
+        self.recording.block_frames = boundary.frames;
         self.budget = ControlBudget::default();
     }
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
         self.timeline = ConfigTimeline::new(self.timeline.reducer().clone());
         self.snapshot.status = 0;
-        self.recording_pending = false;
-        self.recording_boundaries = [None; 16];
+        self.recording.reset(recorder);
     }
     pub fn fault(&mut self) {
         self.snapshot.status |= 2;
@@ -232,10 +239,12 @@ impl Owner {
         &mut self,
         command: ConfigurationCommand,
         commit: ConfigurationCommit,
+        recorder: &harmonigraph_record::Recorder,
     ) -> Option<ConfigurationSnapshot> {
         if self.snapshot.status & 2 != 0 || self.budget.remaining() < 2 {
             return None;
         }
+        let previous = self.timeline.reducer().resolved();
         let raw = tuning(commit.raw);
         let mutation = match command.edit.payload[0] {
             RESTORE => ConfigMutation::Restore { raw, modes: modes(command.edit.payload[1]) },
@@ -303,10 +312,8 @@ impl Owner {
             }
         };
         let resolved = marker.resolved?;
-        if let Some(cell) = self.recording_boundaries.iter_mut().find(|cell| cell.is_none()) {
-            *cell = Some((marker.effective_sample, resolved));
-        } else {
-            self.fault();
+        if resolved != previous {
+            self.recording.change(marker.effective_sample, resolved, recorder);
         }
         if command.edit.payload[0] == LEARN {
             self.learned = None;
@@ -323,18 +330,26 @@ impl Owner {
         self.snapshot.modulation = commit.modulation;
         Some(self.snapshot)
     }
-    pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: f64) {
-        if !self.recording_pending {
-            return;
+    pub fn prefix(&mut self, through: i64) {
+        self.recording.prefix = through;
+    }
+    pub fn segment(&mut self, start: u32, frames: u32) {
+        self.recording.block_start = self.boundary.steady_time + i64::from(start);
+        self.recording.block_frames = frames;
+    }
+    pub fn recording_intent(&self) -> u64 {
+        self.recording.captured_intent
+    }
+    pub fn record(&mut self, recorder: &mut harmonigraph_record::Recorder, origin: Option<f64>) {
+        if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
+            recorder.fail_configuration();
         }
-        self.recording_pending = false;
-        recorder.configuration(origin, self.recording_start);
-        for (sample, config) in self.recording_boundaries.into_iter().flatten() {
-            let time = origin
-                + (sample - self.boundary.steady_time) as f64
-                    / f64::from(self.boundary.sample_rate);
-            recorder.configuration(time, config);
-        }
+        self.recording.segment(
+            recorder,
+            &self.timeline,
+            origin,
+            f64::from(self.boundary.sample_rate),
+        );
     }
 
     pub fn observe(&mut self, event: OwnedInput) {
@@ -344,27 +359,33 @@ impl Owner {
         };
         let time = sample as f64 / f64::from(self.boundary.sample_rate);
         match event.value {
-            InputValue::Note { kind: 0, port: 0, channel, key, velocity, .. }
+            InputValue::Note { kind: 0, port: 0, channel, key, note_id, .. }
                 if (0..16).contains(&channel) && (0..128).contains(&key) =>
             {
-                let event = CoreEvent::on(
-                    time,
-                    SourceId::DIRECT,
-                    channel as u8,
-                    key as u8,
-                    velocity as f32,
-                );
-                if self.confirmed.observe_direct(event, sample).is_err() {
+                let row = ConfirmedPitch {
+                    key: harmonigraph_core::VoiceKey {
+                        source: SourceId::DIRECT,
+                        channel: channel as u8,
+                        note: key as u8,
+                    },
+                    lifetime: None,
+                    host_note_id: (note_id >= 0).then_some(note_id),
+                    pitch_microcents: i64::from(key) * 100_000_000,
+                    onset_sample: sample,
+                    provenance: PitchProvenance::ObservedDirect,
+                };
+                if self.confirmed.on(row).is_err() {
                     self.snapshot.status |= 1;
                 }
             }
-            InputValue::Note { kind: 1 | 2, port: 0 | -1, channel, key, .. } => {
+            InputValue::Note { kind: 1 | 2, port: 0 | -1, channel, key, note_id, .. } => {
                 let mut keys = [None; 64];
                 for (i, row) in self
                     .confirmed
                     .rows()
                     .filter(|row| {
-                        (channel == -1 || channel == i16::from(row.key.channel))
+                        (note_id == -1 || row.host_note_id == Some(note_id))
+                            && (channel == -1 || channel == i16::from(row.key.channel))
                             && (key == -1 || key == i16::from(row.key.note))
                     })
                     .enumerate()
@@ -375,7 +396,15 @@ impl Owner {
                     self.confirmed.release(key, None);
                 }
             }
-            InputValue::Expression { expression: 2, port: 0 | -1, channel, key, value, .. } => {
+            InputValue::Expression {
+                expression: 2,
+                port: 0 | -1,
+                channel,
+                key,
+                value,
+                note_id,
+                ..
+            } => {
                 if !value.is_finite() {
                     self.fault();
                     return;
@@ -385,7 +414,8 @@ impl Owner {
                     .confirmed
                     .rows()
                     .filter(|row| {
-                        (channel == -1 || channel == i16::from(row.key.channel))
+                        (note_id == -1 || row.host_note_id == Some(note_id))
+                            && (channel == -1 || channel == i16::from(row.key.channel))
                             && (key == -1 || key == i16::from(row.key.note))
                     })
                     .enumerate()
@@ -458,6 +488,11 @@ impl Owner {
             Ok(None) => None,
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn injected_recorder() -> Option<harmonigraph_record::Recorder> {
+    tests::take_recorder()
 }
 
 #[cfg(test)]

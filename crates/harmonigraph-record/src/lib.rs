@@ -77,6 +77,9 @@ use harmonigraph_core::notes::{NoteEvent, NoteEventKind, SourceId};
 use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
+pub mod configuration;
+use configuration::{RecordAddress, RecordFence, RECORD_PASSES};
+
 /// Ring capacity. Sized for a fast offline render rather than for a
 /// frame: even at 20x realtime a dense piece is only a few thousand
 /// records a second, and the writer thread drains continuously.
@@ -130,6 +133,15 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 #[derive(Clone, Copy)]
 pub enum Entry {
     Configuration(harmonigraph_take::ConfigurationRecord),
+    ConfigurationAt {
+        address: RecordAddress,
+        config: harmonigraph_take::ConfigurationRecord,
+    },
+    ConfigurationPassComplete(RecordAddress),
+    ConfigurationEpochComplete(u64),
+    ProducerClosed(u64),
+    /// Exactly this committed audio prefix belongs at this point in the stream.
+    AudioSamples(usize),
     Note {
         t: f64,
         source: SourceId,
@@ -163,9 +175,9 @@ pub struct AudioSpec {
 }
 
 enum Command {
-    Start(Box<harmonigraph_take::Header>, std::path::PathBuf, Option<AudioSpec>),
+    Start(u64, Box<harmonigraph_take::Header>, std::path::PathBuf, Option<AudioSpec>),
     /// Close the file, and — if asked — render it to video.
-    Stop(Option<Box<RenderRequest>>),
+    Stop(u64, Option<Box<RenderRequest>>),
 }
 
 /// What to run once a take is complete.
@@ -259,6 +271,10 @@ pub fn default_renderer_path() -> std::path::PathBuf {
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
+    fence: Arc<RecordFence>,
+    record_epoch: u64,
+    record_pass: u32,
+    closed_epoch: u64,
     last_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, when the take is recording audio too.
@@ -306,7 +322,29 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn is_armed(&mut self) -> bool {
-        let armed = self.armed.load(Ordering::Relaxed);
+        if self.fence.enabled.load(Ordering::Acquire) {
+            return self.is_armed_at(self.capture_recording_intent());
+        }
+        self.update_armed(self.armed.load(Ordering::Relaxed))
+    }
+
+    /// Use the arm/disarm intent captured at the enclosing callback boundary,
+    /// so a concurrent stop cannot cut off that callback's remaining audio.
+    pub fn is_armed_at(&mut self, intent: u64) -> bool {
+        let armed = intent & 1 != 0;
+        let epoch = intent >> 1;
+        if armed && epoch != self.record_epoch {
+            self.record_epoch = epoch;
+            self.record_pass = 1;
+        }
+        if !armed && epoch > self.closed_epoch {
+            self.push(Entry::ProducerClosed(epoch));
+            self.closed_epoch = epoch;
+        }
+        self.update_armed(armed)
+    }
+
+    fn update_armed(&mut self, armed: bool) -> bool {
         if armed && !self.was_armed {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.last_configuration = None;
@@ -324,6 +362,9 @@ impl Recorder {
     fn push(&mut self, entry: Entry) {
         if self.producer.push(entry).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            if self.fence.enabled.load(Ordering::Acquire) {
+                self.fence.fail();
+            }
         }
     }
 
@@ -364,12 +405,21 @@ impl Recorder {
             interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            if self.fence.enabled.load(Ordering::Acquire) {
+                self.fence.fail();
+            }
         }
         if room == 0 {
             return;
         }
-        if let Ok(chunk) = self.audio.write_chunk_uninit(room) {
+        let written = if let Ok(chunk) = self.audio.write_chunk_uninit(room) {
             chunk.fill_from_iter(block.take(room));
+            true
+        } else {
+            false
+        };
+        if written && self.fence.enabled.load(Ordering::Acquire) {
+            self.push(Entry::AudioSamples(room));
         }
     }
 
@@ -486,6 +536,13 @@ impl Recorder {
             && std::mem::take(&mut self.pending_split)
             && !self.end_at_rewind.load(Ordering::Relaxed)
         {
+            if self.fence.enabled.load(Ordering::Acquire) {
+                if let Some(pass) = self.record_pass.checked_add(1) {
+                    self.record_pass = pass;
+                } else {
+                    self.fence.fail();
+                }
+            }
             self.push(Entry::NewPass);
             self.last_configuration = None;
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
@@ -493,6 +550,46 @@ impl Recorder {
         }
         self.rolling.store(rolling, Ordering::Relaxed);
         rolling
+    }
+
+    pub fn enable_configuration(&self) {
+        self.fence.enabled.store(true, Ordering::Release);
+    }
+    pub fn capture_recording_intent(&self) -> u64 {
+        self.fence.intent.load(Ordering::Acquire)
+    }
+    pub fn capture_recording_epoch(&self) -> Option<u64> {
+        self.fence.capture()
+    }
+    pub fn recording_epoch(&self) -> u64 {
+        self.fence.epoch()
+    }
+    pub fn configuration_address(&self) -> Option<RecordAddress> {
+        (self.was_armed && !self.finished && self.record_epoch != 0)
+            .then_some(RecordAddress { epoch: self.record_epoch, pass: self.record_pass })
+    }
+    pub fn fail_configuration(&self) {
+        self.fence.fail();
+    }
+    pub fn configuration_at(
+        &mut self,
+        address: RecordAddress,
+        t: f64,
+        resolved: harmonigraph_core::configuration::ResolvedConfig,
+    ) {
+        self.push(Entry::ConfigurationAt {
+            address,
+            config: harmonigraph_take::ConfigurationRecord::new(t, resolved),
+        });
+    }
+    pub fn configuration_pass_complete(&mut self, address: RecordAddress) {
+        self.push(Entry::ConfigurationPassComplete(address));
+    }
+    pub fn configuration_epoch_complete(&mut self, epoch: u64) {
+        if epoch != 0 && epoch > self.fence.configuration_closed.load(Ordering::Acquire) {
+            self.push(Entry::ConfigurationEpochComplete(epoch));
+            self.fence.configuration_closed.store(epoch, Ordering::Release);
+        }
     }
 
     /// Preserve each effective resolved boundary, independently of UI cadence.
@@ -520,10 +617,23 @@ impl Recorder {
     }
 }
 
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        if self.fence.enabled.load(Ordering::Acquire)
+            && self.record_epoch != 0
+            && (self.closed_epoch < self.record_epoch
+                || self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch)
+        {
+            self.fence.fail();
+        }
+    }
+}
+
 /// The GUI-thread half: start and stop recording, and report what
 /// happened. Cloneable so the editor can hold it.
 #[derive(Clone)]
 pub struct Control {
+    fence: Arc<RecordFence>,
     commands: mpsc::Sender<Command>,
     armed: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
@@ -623,6 +733,16 @@ impl Control {
         if self.is_recording() {
             return;
         }
+        if self.fence.failed.load(Ordering::Acquire) {
+            *self.status.lock() =
+                "recording incomplete — reload the plugin before starting another take".into();
+            return;
+        }
+        if self.fence.finishing.load(Ordering::Acquire) {
+            *self.status.lock() =
+                "finishing the previous take — waiting for its audio/configuration prefix".into();
+            return;
+        }
         let dir = take_dir();
         if let Err(err) = std::fs::create_dir_all(&dir) {
             *self.status.lock() = format!("cannot create {}: {err}", dir.display());
@@ -640,7 +760,19 @@ impl Control {
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
         let spec = audio.then_some(AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 });
-        if self.commands.send(Command::Start(Box::new(header), path, spec)).is_err() {
+        let epoch = if self.fence.enabled.load(Ordering::Acquire) {
+            let Some(epoch) =
+                self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
+            else {
+                *self.status.lock() = "recording epoch exhausted".into();
+                return;
+            };
+            self.fence.failed.store(false, Ordering::Release);
+            epoch
+        } else {
+            0
+        };
+        if self.commands.send(Command::Start(epoch, Box::new(header), path, spec)).is_err() {
             *self.status.lock() = "take writer thread is gone".into();
             return;
         }
@@ -650,6 +782,9 @@ impl Control {
         // the transport even rolls. The audio thread also clears it on arm.
         self.hit_rewind.store(false, Ordering::Relaxed);
         self.armed.store(true, Ordering::Relaxed);
+        if epoch != 0 {
+            self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
+        }
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
 
@@ -664,8 +799,15 @@ impl Control {
         // Disarm first, so the audio thread stops pushing before the
         // writer is told to close.
         self.armed.store(false, Ordering::Relaxed);
-        self.with_audio.store(false, Ordering::Relaxed);
-        let _ = self.commands.send(Command::Stop(render.map(Box::new)));
+        if !self.fence.enabled.load(Ordering::Acquire) {
+            self.with_audio.store(false, Ordering::Relaxed);
+        }
+        let epoch = self.fence.epoch();
+        if self.fence.enabled.load(Ordering::Acquire) {
+            self.fence.intent.store(epoch << 1, Ordering::Release);
+            self.fence.finishing.store(true, Ordering::Release);
+        }
+        let _ = self.commands.send(Command::Stop(epoch, render.map(Box::new)));
         self.recording.store(false, Ordering::Relaxed);
     }
 
@@ -803,43 +945,112 @@ pub fn channel() -> (Recorder, Control) {
     let progress = Arc::new(Progress::default());
     let render = Arc::new(RenderControl::default());
 
+    let fence = Arc::new(RecordFence::default());
+    let thread_fence = fence.clone();
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
     let thread_render = render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut open: Option<Open> = None;
+        let mut pending_stop = None;
         loop {
             match orders.try_recv() {
-                Ok(Command::Start(header, path, spec)) => {
-                    open = Open::create(*header, path, 1, spec, &thread_status);
-                }
-                Ok(Command::Stop(render)) => {
-                    // Drain what the audio thread already queued
-                    // before closing, or the tail of the take is lost.
-                    drain(&mut consumer, &mut open, &thread_status);
-                    let finished = open.take().map(|o| o.finish());
-                    if let Some(path) = &finished {
-                        *thread_last_take.lock() = Some(path.clone());
+                Ok(Command::Start(epoch, header, path, spec)) => {
+                    if pending_stop.is_some() {
+                        thread_fence.fail();
+                    } else {
+                        open =
+                            Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
+                                open.epoch = epoch;
+                                open
+                            });
+                        if epoch != 0
+                            && open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none())
+                        {
+                            thread_fence.fail();
+                        }
                     }
-                    if let (Some(path), Some(render)) = (finished, render) {
-                        spawn_render(
-                            *render,
-                            path,
-                            thread_status.clone(),
-                            thread_progress.clone(),
-                            thread_render.clone(),
-                        );
+                }
+                Ok(Command::Stop(epoch, render)) => {
+                    if thread_fence.enabled.load(Ordering::Acquire) {
+                        pending_stop = Some((epoch, render));
+                        *thread_status.lock() =
+                            "finishing — waiting for the audio/configuration prefix".into();
+                    } else {
+                        // Drain what the audio thread already queued
+                        // before closing, or the tail of the take is lost.
+                        drain(&mut consumer, &mut open, &thread_status);
+                        let finished = open.take().map(|o| o.finish());
+                        if let Some(path) = &finished {
+                            *thread_last_take.lock() = Some(path.clone());
+                        }
+                        if let (Some(path), Some(render)) = (finished, render) {
+                            spawn_render(
+                                *render,
+                                path,
+                                thread_status.clone(),
+                                thread_progress.clone(),
+                                thread_render.clone(),
+                            );
+                        }
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    drain(&mut consumer, &mut open, &thread_status);
+                    drain_with_audio(
+                        &mut consumer,
+                        Some(&mut audio_consumer),
+                        &mut open,
+                        &thread_status,
+                        Some(&thread_fence),
+                    );
+                    if thread_fence.enabled.load(Ordering::Acquire) && open.is_some() {
+                        thread_fence.fail();
+                        *thread_status.lock() =
+                            "recording incomplete: producer disconnected before finalization"
+                                .into();
+                    }
                     return;
                 }
             }
-            let had_records = drain(&mut consumer, &mut open, &thread_status);
-            let had_audio = drain_audio(&mut audio_consumer, &mut open);
+            let had_records = drain_with_audio(
+                &mut consumer,
+                Some(&mut audio_consumer),
+                &mut open,
+                &thread_status,
+                Some(&thread_fence),
+            );
+            let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
+                && drain_audio(&mut audio_consumer, &mut open);
+            if thread_fence.failed.load(Ordering::Acquire) {
+                open = None;
+                pending_stop = None;
+                thread_fence.finishing.store(false, Ordering::Release);
+                *thread_status.lock() =
+                    "recording incomplete: configuration/audio ownership failed; no render started"
+                        .into();
+            } else if pending_stop
+                .as_ref()
+                .is_some_and(|(epoch, _)| open.as_ref().is_some_and(|o| o.ready(*epoch)))
+            {
+                let (_, render) = pending_stop.take().unwrap();
+                let Some(path) = finish_ready(&mut open, thread_fence.epoch(), &thread_fence)
+                else {
+                    continue;
+                };
+                *thread_last_take.lock() = Some(path.clone());
+                thread_fence.finishing.store(false, Ordering::Release);
+                if let Some(render) = render {
+                    spawn_render(
+                        *render,
+                        path,
+                        thread_status.clone(),
+                        thread_progress.clone(),
+                        thread_render.clone(),
+                    );
+                }
+            }
             if !had_records && !had_audio {
                 std::thread::sleep(DRAIN_IDLE);
             }
@@ -848,6 +1059,10 @@ pub fn channel() -> (Recorder, Control) {
 
     (
         Recorder {
+            fence: fence.clone(),
+            record_epoch: 0,
+            record_pass: 1,
+            closed_epoch: 0,
             last_configuration: None,
             producer,
             armed: armed.clone(),
@@ -866,6 +1081,7 @@ pub fn channel() -> (Recorder, Control) {
             pending_split: false,
         },
         Control {
+            fence,
             commands,
             armed,
             dropped,
@@ -891,6 +1107,7 @@ pub mod testing {
     use super::*;
 
     pub struct Capture {
+        fence: Arc<RecordFence>,
         _records: rtrb::Consumer<Entry>,
         audio: rtrb::Consumer<f32>,
         armed: Arc<AtomicBool>,
@@ -898,7 +1115,22 @@ pub mod testing {
     }
 
     impl Capture {
+        pub fn arm(&self) {
+            if self.fence.enabled.load(Ordering::Acquire) {
+                self.fence.intent.store((self.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+            }
+            self.armed.store(true, Ordering::Relaxed);
+        }
+        pub fn stop(&self) {
+            self.armed.store(false, Ordering::Relaxed);
+            self.fence.intent.store(self.fence.epoch() << 1, Ordering::Release);
+            self.fence.finishing.store(true, Ordering::Release);
+        }
+        pub fn drain_entries(&mut self) -> Vec<Entry> {
+            std::iter::from_fn(|| self._records.pop().ok()).collect()
+        }
         pub fn arm_audio(&self) {
+            self.arm();
             self.with_audio.store(true, Ordering::Relaxed);
             self.armed.store(true, Ordering::Relaxed);
         }
@@ -912,6 +1144,52 @@ pub mod testing {
         }
     }
 
+    /// File-backed consumer of the very same captured producer stream and
+    /// completion gate used by the worker. No synthetic musical resolution.
+    pub struct FileWriter {
+        open: Option<Open>,
+        fence: Arc<RecordFence>,
+        status: Mutex<String>,
+        stopping: bool,
+        pub finished: Option<std::path::PathBuf>,
+    }
+    impl FileWriter {
+        pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
+            let status = Mutex::new(String::new());
+            let mut open =
+                Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
+            open.epoch = capture.fence.epoch();
+            Self {
+                open: Some(open),
+                fence: capture.fence.clone(),
+                status,
+                stopping: false,
+                finished: None,
+            }
+        }
+        pub fn stop(&mut self) {
+            self.stopping = true;
+        }
+        pub fn drain(&mut self, capture: &mut Capture) {
+            drain_with_audio(
+                &mut capture._records,
+                Some(&mut capture.audio),
+                &mut self.open,
+                &self.status,
+                Some(&self.fence),
+            );
+            if self.fence.failed.load(Ordering::Acquire) {
+                self.open = None;
+            } else if self.stopping {
+                self.finished = finish_ready(&mut self.open, self.fence.epoch(), &self.fence)
+                    .or_else(|| self.finished.take());
+            }
+        }
+        pub fn failed(&self) -> bool {
+            self.fence.failed.load(Ordering::Acquire)
+        }
+    }
+
     pub fn channel() -> (Recorder, Capture) {
         let (producer, records) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
         let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
@@ -921,7 +1199,12 @@ pub mod testing {
         let rolling = Arc::new(AtomicBool::new(false));
         let end_at_rewind = Arc::new(AtomicBool::new(false));
         let hit_rewind = Arc::new(AtomicBool::new(false));
+        let fence = Arc::new(RecordFence::default());
         let recorder = Recorder {
+            fence: fence.clone(),
+            record_epoch: 0,
+            record_pass: 1,
+            closed_epoch: 0,
             last_configuration: None,
             producer,
             audio,
@@ -939,7 +1222,8 @@ pub mod testing {
             advanced: false,
             pending_split: false,
         };
-        let capture = Capture { _records: records, audio: audio_consumer, armed, with_audio };
+        let capture =
+            Capture { fence, _records: records, audio: audio_consumer, armed, with_audio };
         (recorder, capture)
     }
 }
@@ -965,6 +1249,11 @@ fn drain_audio(consumer: &mut rtrb::Consumer<f32>, open: &mut Option<Open>) -> b
 /// The file currently being written, and what it takes to open the next
 /// one when the transport loops.
 struct Open {
+    epoch: u64,
+    retained: Vec<Open>,
+    producer_closed: bool,
+    configuration_closed: bool,
+    configuration_complete: bool,
     writer: harmonigraph_take::Writer,
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
@@ -1015,6 +1304,11 @@ impl Open {
                     format!("pass {pass} -> {}", path.display())
                 };
                 Some(Open {
+                    epoch: 0,
+                    retained: Vec::new(),
+                    producer_closed: false,
+                    configuration_closed: false,
+                    configuration_complete: false,
                     writer,
                     header,
                     base,
@@ -1077,7 +1371,29 @@ impl Open {
     }
 
     /// Close this pass's files and open the next pass's.
-    fn next_pass(self, status: &Mutex<String>) -> Option<Open> {
+    fn next_pass(mut self, status: &Mutex<String>) -> Option<Open> {
+        if self.epoch != 0 {
+            if self.retained.len() + 1 >= RECORD_PASSES {
+                return None;
+            }
+            let mut header = self.header.clone();
+            header.audio_start = None;
+            let mut next = Open::create(
+                header,
+                self.base.clone(),
+                self.pass.checked_add(1)?,
+                self.spec,
+                status,
+            )?;
+            if self.spec.is_some() && next.audio.is_none() {
+                return None;
+            }
+            next.epoch = self.epoch;
+            next.last_voiced = self.voiced_so_far();
+            next.retained = std::mem::take(&mut self.retained);
+            next.retained.push(self);
+            return Some(next);
+        }
         let carried = self.voiced_so_far();
         let Open { mut header, base, pass, writer, audio, spec, .. } = self;
         if let Some(audio) = audio {
@@ -1092,6 +1408,31 @@ impl Open {
         Some(next)
     }
 
+    fn finish_configuration(mut self) -> std::io::Result<std::path::PathBuf> {
+        let path = self.take_path();
+        self.writer.flush()?;
+        if let Some(audio) = self.audio {
+            audio.finish()?;
+        }
+        Ok(path)
+    }
+
+    fn ready(&self, epoch: u64) -> bool {
+        self.epoch == epoch
+            && self.producer_closed
+            && self.configuration_closed
+            && self.retained.is_empty()
+    }
+    fn addressed(&mut self, address: RecordAddress) -> Option<&mut Open> {
+        if self.epoch != address.epoch {
+            return None;
+        }
+        if self.pass == address.pass {
+            return Some(self);
+        }
+        self.retained.iter_mut().find(|pass| pass.pass == address.pass)
+    }
+
     /// The latest pass up to and including this one that anything played in, so
     /// a run of unvoiced passes keeps pointing at the last one carrying music.
     fn voiced_so_far(&self) -> Option<std::path::PathBuf> {
@@ -1103,6 +1444,23 @@ impl Open {
     }
 }
 
+fn finish_ready(
+    open: &mut Option<Open>,
+    epoch: u64,
+    fence: &RecordFence,
+) -> Option<std::path::PathBuf> {
+    if !open.as_ref().is_some_and(|o| o.ready(epoch)) {
+        return None;
+    }
+    match open.take().unwrap().finish_configuration() {
+        Ok(path) => Some(path),
+        Err(_) => {
+            fence.fail();
+            None
+        }
+    }
+}
+
 /// Move everything queued into the writer (discarding it if none is
 /// open). Returns whether anything was there.
 fn drain(
@@ -1110,14 +1468,107 @@ fn drain(
     open: &mut Option<Open>,
     status: &Mutex<String>,
 ) -> bool {
+    drain_with_audio(consumer, None, open, status, None)
+}
+
+fn drain_with_audio(
+    consumer: &mut rtrb::Consumer<Entry>,
+    mut audio: Option<&mut rtrb::Consumer<f32>>,
+    open: &mut Option<Open>,
+    status: &Mutex<String>,
+    fence: Option<&RecordFence>,
+) -> bool {
+    // Start is a separate off-thread message, published before arming. Retain
+    // records if this iteration observed the ring before that command.
+    if open.is_none()
+        && fence
+            .is_some_and(|f| f.enabled.load(Ordering::Acquire) && !f.failed.load(Ordering::Acquire))
+    {
+        return false;
+    }
+    let fail = || {
+        if let Some(fence) = fence {
+            fence.fail();
+        }
+        *status.lock() = "recording incomplete: missing or exhausted pass ownership".into();
+    };
     let mut any = false;
     while let Ok(entry) = consumer.pop() {
         any = true;
         if matches!(entry, Entry::NewPass) {
             if let Some(current) = open.take() {
                 *open = current.next_pass(status);
+                if open.is_none() {
+                    fail();
+                }
             }
             continue;
+        }
+        match entry {
+            Entry::ConfigurationAt { address, config } => {
+                match open.as_mut().and_then(|o| o.addressed(address)) {
+                    Some(pass) if !pass.configuration_complete => {
+                        if pass.writer.configuration(config).is_err() {
+                            fail();
+                        }
+                    }
+                    _ => fail(),
+                }
+                continue;
+            }
+            Entry::ConfigurationPassComplete(address) => {
+                if let Some(current) = open.as_mut().filter(|o| o.epoch == address.epoch) {
+                    if current.pass == address.pass {
+                        current.configuration_complete = true;
+                    } else if let Some(index) =
+                        current.retained.iter().position(|p| p.pass == address.pass)
+                    {
+                        if current.retained.remove(index).finish_configuration().is_err() {
+                            fail();
+                        }
+                    } else {
+                        fail();
+                    }
+                } else {
+                    fail();
+                }
+                continue;
+            }
+            Entry::ProducerClosed(epoch) | Entry::ConfigurationEpochComplete(epoch) => {
+                if let Some(current) = open.as_mut().filter(|o| o.epoch == epoch) {
+                    if matches!(entry, Entry::ProducerClosed(_)) {
+                        current.producer_closed = true;
+                    } else {
+                        current.configuration_closed = true;
+                    }
+                } else {
+                    fail();
+                }
+                continue;
+            }
+            Entry::AudioSamples(count) => {
+                if let Some(consumer) = audio.as_deref_mut() {
+                    if consumer.slots() < count {
+                        fail();
+                        continue;
+                    }
+                    if let Ok(chunk) = consumer.read_chunk(count) {
+                        if let Some(writer) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+                            let (first, second) = chunk.as_slices();
+                            if writer.write(first).and_then(|_| writer.write(second)).is_err() {
+                                fail();
+                            }
+                        }
+                        chunk.commit_all();
+                    } else {
+                        fail();
+                    }
+                } else {
+                    fail();
+                }
+                continue;
+            }
+            _ => {}
         }
         if let Entry::AudioStart(t) = entry {
             // Rewrite the header now that the WAV's alignment is known.
@@ -1127,7 +1578,9 @@ fn drain(
             if let Some(current) = open.as_mut() {
                 current.header.audio_start = Some(t);
                 let header = current.header.clone();
-                let _ = current.writer.write(&harmonigraph_take::Record::Header(header));
+                if current.writer.write(&harmonigraph_take::Record::Header(header)).is_err() {
+                    fail();
+                }
             }
             continue;
         }
@@ -1137,7 +1590,7 @@ fn drain(
             current.voiced = true;
         }
         let writer = &mut current.writer;
-        let _ = match entry {
+        let result = match entry {
             Entry::Configuration(config) => writer.configuration(config),
             Entry::Note { t, source, channel, note, kind } => {
                 writer.note(NoteEvent { time: t, source, channel, note, kind }.into())
@@ -1148,8 +1601,17 @@ fn drain(
                 value,
             }),
             // Both handled above; the writer never sees them.
-            Entry::NewPass | Entry::AudioStart(_) => Ok(()),
+            Entry::NewPass
+            | Entry::AudioStart(_)
+            | Entry::ConfigurationAt { .. }
+            | Entry::ConfigurationPassComplete(_)
+            | Entry::ConfigurationEpochComplete(_)
+            | Entry::ProducerClosed(_)
+            | Entry::AudioSamples(_) => Ok(()),
         };
+        if result.is_err() {
+            fail();
+        }
     }
     any
 }
@@ -1691,6 +2153,10 @@ mod tests {
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
+                    fence: Arc::new(RecordFence::default()),
+                    record_epoch: 0,
+                    record_pass: 1,
+                    closed_epoch: 0,
                     last_configuration: None,
                     producer,
                     audio,
@@ -1754,6 +2220,11 @@ mod tests {
                         format!("configuration {} @{}", config.revision, config.t)
                     }
                     Entry::NewPass => "new-pass".to_owned(),
+                    Entry::ConfigurationAt { .. }
+                    | Entry::ConfigurationPassComplete(_)
+                    | Entry::ConfigurationEpochComplete(_)
+                    | Entry::ProducerClosed(_)
+                    | Entry::AudioSamples(_) => "configuration-protocol".to_owned(),
                 });
             }
             out
@@ -2728,6 +3199,94 @@ mod tests {
         assert!(!take.truncated);
         assert_eq!(take.notes.into_iter().map(NoteEvent::from).collect::<Vec<_>>(), events);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
+        for retire in [false, true] {
+            let mut b = Bench::new();
+            b.rec.enable_configuration();
+            b.rec.fence.intent.store(3, Ordering::Release);
+            assert!(b.rec.is_armed());
+            let fence = b.rec.fence.clone();
+            let dir = std::env::temp_dir()
+                .join(format!("harmonigraph-pass-bound-{}-{retire}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let status = Mutex::new(String::new());
+            let mut open = Open::create(
+                header_for(48_000.0, String::new()),
+                dir.join("record.take"),
+                1,
+                None,
+                &status,
+            );
+            open.as_mut().unwrap().epoch = 1;
+            assert!(b.rec.observe_transport(10.0, true));
+            for _ in 1..RECORD_PASSES {
+                assert!(b.rec.observe_transport(0.0, true));
+                assert!(b.rec.observe_transport(10.0, true));
+            }
+            drain_with_audio(
+                &mut b.entries,
+                Some(&mut b.samples),
+                &mut open,
+                &status,
+                Some(&fence),
+            );
+            assert_eq!(open.as_ref().unwrap().retained.len(), RECORD_PASSES - 1);
+            assert!(!fence.failed.load(Ordering::Acquire));
+            if retire {
+                b.rec.configuration_pass_complete(RecordAddress { epoch: 1, pass: 1 });
+            }
+            assert!(b.rec.observe_transport(0.0, true));
+            drain_with_audio(
+                &mut b.entries,
+                Some(&mut b.samples),
+                &mut open,
+                &status,
+                Some(&fence),
+            );
+            assert_eq!(fence.failed.load(Ordering::Acquire), !retire);
+            assert_eq!(
+                open.is_some(),
+                retire,
+                "the 129th unclosed pass must not be silently finalized or dropped"
+            );
+            drop(open);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn configuration_stop_preserves_the_observed_callback_and_drop_refuses_unclosed_work() {
+        let mut b = Bench::new();
+        b.rec.enable_configuration();
+        b.rec.fence.intent.store(3, Ordering::Release);
+        let observed = b.rec.capture_recording_intent();
+        // Main thread stops after the callback captured its intent.
+        b.rec.fence.intent.store(2, Ordering::Release);
+        assert!(b.rec.is_armed_at(observed));
+        b.rec.audio(&mut [1.0, 2.0, 3.0, 4.0].into_iter(), 4);
+        assert!(matches!(b.entries.pop(), Ok(Entry::AudioSamples(4))));
+        assert!(!b.rec.is_armed());
+        assert!(matches!(b.entries.pop(), Ok(Entry::ProducerClosed(1))));
+        let fence = b.rec.fence.clone();
+        assert!(!fence.failed.load(Ordering::Acquire));
+        drop(b.rec);
+        assert!(
+            fence.failed.load(Ordering::Acquire),
+            "producer closure alone cannot prove deferred configuration complete"
+        );
+    }
+
+    #[test]
+    fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
+        let mut b = Bench::new();
+        b.rec.enable_configuration();
+        b.rec.audio(&mut std::iter::repeat(0.0), 1026);
+        assert!(b.rec.fence.failed.load(Ordering::Acquire));
+        assert_eq!(b.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(b.samples.slots(), 1024, "the fixture must fill the actual ring");
     }
 
     /// `mark_audio_start` is idempotent per PASS: the first call fixes where

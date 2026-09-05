@@ -58,12 +58,20 @@ pub trait ClapPlugin: Plugin {
         Err(configuration::SubmitError::Invalid)
     }
 
+    /// Resolve a fixed accepted restore preview off thread, separately from its
+    /// still-queued semantic operation. View and save consume this same value.
+    fn clap_configuration_preview(snapshot: configuration::ConfigurationSnapshot) -> configuration::ConfigurationSnapshot { snapshot }
+
     fn clap_configuration_save(snapshot: configuration::ConfigurationSnapshot,
         state: &mut nice_plug_core::plugin::PluginState) {}
 
     /// All following hooks are inside the process allocation guard. Returning
     /// None retains the exact command/input cursor; this is work backpressure.
     fn clap_configuration_begin(&mut self, boundary: configuration::ConfigurationBoundary) {}
+    /// Exclusive prefix with no retained earlier configuration input/commands.
+    fn clap_configuration_prefix(&mut self, through: i64) {}
+    /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
+    fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}
     fn clap_configuration_apply(&mut self, command: configuration::ConfigurationCommand,
         commit: configuration::ConfigurationCommit) -> Option<configuration::ConfigurationSnapshot> { None }
     fn clap_configuration_observe(&mut self, event: configuration::OwnedInput) {}

@@ -13,11 +13,17 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Default)]
 struct Host {
     dirty: AtomicUsize,
+    callbacks: AtomicUsize,
+    plugin: AtomicUsize,
+    cache: AtomicU64,
+    pause_value: AtomicBool,
+    value_entered: AtomicBool,
+    resume_value: AtomicBool,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     let id = unsafe { CStr::from_ptr(id) };
@@ -33,7 +39,24 @@ unsafe extern "C" fn dirty(host: *const clap_host) {
     unsafe { &*((*host).host_data.cast::<Host>()) }.dirty.fetch_add(1, Ordering::Relaxed);
 }
 unsafe extern "C" fn request(_: *const clap_host) {}
-unsafe extern "C" fn rescan(_: *const clap_host, _: u32) {}
+unsafe extern "C" fn callback(host: *const clap_host) {
+    unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
+}
+unsafe extern "C" fn rescan(host: *const clap_host, _: u32) {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    let plugin = stats.plugin.load(Ordering::Relaxed) as *const clap_plugin;
+    if !plugin.is_null() {
+        let wrapper = unsafe {
+            &*((*plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+        };
+        stats.cache.store(
+            f64::from(wrapper.configuration_handle().unwrap().visible().0.normalized[1]).to_bits(),
+            Ordering::Relaxed,
+        );
+    }
+}
 unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 static PARAMS: clap_host_params =
     clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
@@ -45,6 +68,7 @@ enum Input {
     Mod(clap_event_param_mod),
     Note(clap_event_note),
     Tuning(clap_event_note_expression),
+    Transport(clap_event_transport),
 }
 impl Input {
     fn header(&self) -> &clap_event_header {
@@ -53,6 +77,7 @@ impl Input {
             Self::Mod(e) => &e.header,
             Self::Note(e) => &e.header,
             Self::Tuning(e) => &e.header,
+            Self::Transport(e) => &e.header,
         }
     }
 }
@@ -78,17 +103,41 @@ unsafe extern "C" fn input_get(
 struct Sink {
     values: Vec<(u32, f64)>,
     reject: bool,
+    reject_kind: Option<u16>,
+    attempts: Vec<(u16, u32, u32, bool)>,
+    host: usize,
 }
 unsafe extern "C" fn output_push(
     output: *const clap_output_events,
     event: *const clap_event_header,
 ) -> bool {
     let sink = unsafe { &mut *((*output).ctx.cast::<Sink>()) };
-    if sink.reject {
+    let header = unsafe { &*event };
+    let id = match header.type_ {
+        CLAP_EVENT_PARAM_VALUE => unsafe { (*event.cast::<clap_event_param_value>()).param_id },
+        CLAP_EVENT_PARAM_GESTURE_BEGIN | CLAP_EVENT_PARAM_GESTURE_END => unsafe {
+            (*event.cast::<clap_event_param_gesture>()).param_id
+        },
+        _ => 0,
+    };
+    let accepted = !sink.reject && sink.reject_kind != Some(header.type_);
+    assert!(sink.attempts.len() < sink.attempts.capacity());
+    sink.attempts.push((header.type_, header.time, id, accepted));
+    if !accepted {
         return false;
     }
-    if unsafe { (*event).type_ } == CLAP_EVENT_PARAM_VALUE {
+    if header.type_ == CLAP_EVENT_PARAM_VALUE {
         let event = unsafe { &*event.cast::<clap_event_param_value>() };
+        if sink.host != 0 {
+            let host = unsafe { &*(sink.host as *const Host) };
+            if host.pause_value.swap(false, Ordering::AcqRel) {
+                host.value_entered.store(true, Ordering::Release);
+                while !host.resume_value.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            }
+            host.cache.store(event.value.to_bits(), Ordering::Relaxed);
+        }
         assert!(sink.values.len() < sink.values.capacity());
         sink.values.push((event.param_id, event.value));
     }
@@ -113,7 +162,7 @@ impl Device {
             get_extension: Some(extension),
             request_restart: Some(request),
             request_process: Some(request),
-            request_callback: Some(request),
+            request_callback: Some(callback),
         });
         let factory =
             unsafe { (crate::clap_entry.get_factory.unwrap())(CLAP_PLUGIN_FACTORY_ID.as_ptr()) }
@@ -121,6 +170,7 @@ impl Device {
         let plugin = unsafe {
             ((*factory).create_plugin.unwrap())(factory, &*host, c"com.yan-h.harmonigraph".as_ptr())
         };
+        stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
         Self { plugin, _host: host, stats, active: false }
@@ -214,12 +264,37 @@ impl Device {
         events: Vec<Input>,
         reject: bool,
     ) -> (clap_process_status, Sink) {
+        self.run_reject_kind(steady, events, reject, None)
+    }
+    fn run_reject_kind(
+        &self,
+        steady: i64,
+        events: Vec<Input>,
+        reject: bool,
+        reject_kind: Option<u16>,
+    ) -> (clap_process_status, Sink) {
+        self.run_transport(steady, events, reject, reject_kind, None)
+    }
+    fn run_transport(
+        &self,
+        steady: i64,
+        events: Vec<Input>,
+        reject: bool,
+        reject_kind: Option<u16>,
+        transport: Option<clap_event_transport>,
+    ) -> (clap_process_status, Sink) {
         let input = clap_input_events {
             ctx: (&events as *const Vec<Input>).cast_mut().cast(),
             size: Some(input_size),
             get: Some(input_get),
         };
-        let mut sink = Sink { values: Vec::with_capacity(128), reject };
+        let mut sink = Sink {
+            values: Vec::with_capacity(128),
+            reject,
+            reject_kind,
+            attempts: Vec::with_capacity(1024),
+            host: (&*self.stats as *const Host) as usize,
+        };
         let output = clap_output_events {
             ctx: (&mut sink as *mut Sink).cast(),
             try_push: Some(output_push),
@@ -227,6 +302,9 @@ impl Device {
         let mut left = [0.0_f32; 64];
         let mut right = [0.0_f32; 64];
         let mut channels = [left.as_mut_ptr(), right.as_mut_ptr()];
+        let mut side_left = [0.0_f32; 64];
+        let mut side_right = [0.0_f32; 64];
+        let mut side_channels = [side_left.as_mut_ptr(), side_right.as_mut_ptr()];
         let mut audio = clap_audio_buffer {
             data32: channels.as_mut_ptr(),
             data64: ptr::null_mut(),
@@ -234,13 +312,23 @@ impl Device {
             latency: 0,
             constant_mask: 0,
         };
+        let inputs = [
+            audio,
+            clap_audio_buffer {
+                data32: side_channels.as_mut_ptr(),
+                data64: ptr::null_mut(),
+                channel_count: 2,
+                latency: 0,
+                constant_mask: 0,
+            },
+        ];
         let process = clap_process {
             steady_time: steady,
             frames_count: 64,
-            transport: ptr::null(),
-            audio_inputs: &audio,
+            transport: transport.as_ref().map_or(ptr::null(), |t| t),
+            audio_inputs: inputs.as_ptr(),
             audio_outputs: &mut audio,
-            audio_inputs_count: 1,
+            audio_inputs_count: 2,
             audio_outputs_count: 1,
             in_events: &input,
             out_events: &output,
@@ -254,7 +342,12 @@ impl Device {
             size: Some(input_size),
             get: Some(input_get),
         };
-        let mut sink = Sink { values: Vec::with_capacity(128), reject: false };
+        let mut sink = Sink {
+            values: Vec::with_capacity(128),
+            reject: false,
+            attempts: Vec::with_capacity(1024),
+            ..Default::default()
+        };
         let output = clap_output_events {
             ctx: (&mut sink as *mut Sink).cast(),
             try_push: Some(output_push),
@@ -603,4 +696,340 @@ fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner(
         "VST/standalone initialization has no CLAP-only owner or callback work"
     );
     assert!(plugin.params.configuration.get().is_none());
+}
+
+// The fixture invokes only CLAP's allowed concurrent main/audio entrypoints;
+// activation, destruction, and ordinary processing remain exclusively owned.
+unsafe impl Sync for Device {}
+
+#[test]
+fn newly_observed_ui_behind_retained_input_keeps_its_first_callback_boundary() {
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    device.run(
+        0,
+        (0..24).map(|i| device.param(ParamKey::Three, 690.0 + (i % 10) as f32, i)).collect(),
+        false,
+    );
+    let id = mailbox.submit(packet(ConfigEdit::axis(1, 705_000_000))).unwrap();
+    device.run(64, vec![], false);
+    device.run(128, vec![], false);
+    device.run(192, vec![], false);
+    assert_eq!(mailbox.visible().0.applied_id, id);
+    assert_eq!(mailbox.visible().0.effective_sample, 64);
+}
+
+#[test]
+fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
+    for gui in [false, true] {
+        let mut device = Device::new();
+        device.activate();
+        let mailbox = device.mailbox();
+        let mut state = restored(&device, 700.0);
+        state.fields.insert(
+            MUSICAL_SETTINGS.into(),
+            serde_json::to_string(&MusicalSettings {
+                meantone: false,
+                marvel: false,
+                meantone_auto: true,
+                marvel_auto: true,
+                learning: false,
+            })
+            .unwrap(),
+        );
+        device.load(state, gui);
+        let preview = view(mailbox.visible().0, true).resolved;
+        let saved: MusicalSettings =
+            serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!(saved.modes(), preview.modes);
+        let saved_gui: MusicalSettings =
+            serde_json::from_str(&device.wrapper().get_state_object().fields[MUSICAL_SETTINGS])
+                .unwrap();
+        assert_eq!(saved_gui.modes(), preview.modes);
+        device.run(0, vec![], false);
+        assert_eq!(view(mailbox.visible().0, false).resolved.modes, preview.modes);
+    }
+}
+
+#[test]
+fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
+    let device = Device::new();
+    let mailbox = device.mailbox();
+    device.load(restored(&device, 690.0), false);
+    let mut applied = mailbox.published.load();
+    applied.status = 2;
+    mailbox.published.publish(applied);
+    for _ in 0..127 {
+        mailbox.submit(packet(ConfigEdit::default())).unwrap();
+    }
+    assert_eq!(mailbox.submit(packet(ConfigEdit::default())), Err(SubmitError::Full));
+    assert_eq!(mailbox.visible().0.status & 10, 10);
+    assert_eq!(mailbox.visible().0.unmodulated[1], 690.0);
+}
+
+#[test]
+fn suspended_gui_restore_requests_main_thread_without_processing() {
+    let device = Device::new();
+    let before = device.stats.callbacks.load(Ordering::Relaxed);
+    device.load(restored(&device, 690.0), true);
+    assert!(device.stats.callbacks.load(Ordering::Relaxed) > before);
+    unsafe {
+        ((*device.plugin).on_main_thread.unwrap())(device.plugin);
+    }
+    assert!(device.stats.dirty.load(Ordering::Relaxed) > 0);
+}
+
+#[test]
+fn successful_old_notification_after_restore_rescan_retains_another_rescan() {
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    let restore = restored(&device, 705.0);
+    device.stats.pause_value.store(true, Ordering::Release);
+    std::thread::scope(|scope| {
+        let audio = scope.spawn(|| device.run(0, vec![], false).values);
+        while !device.stats.value_entered.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        device.load(restore, true);
+        unsafe {
+            ((*device.plugin).on_main_thread.unwrap())(device.plugin);
+        }
+        assert!(!mailbox.dirty.load(Ordering::Acquire));
+        device.stats.resume_value.store(true, Ordering::Release);
+        audio.join().unwrap();
+    });
+    assert!(
+        mailbox.dirty.load(Ordering::Acquire),
+        "successful stale output must leave a new rescan obligation"
+    );
+    unsafe {
+        ((*device.plugin).on_main_thread.unwrap())(device.plugin);
+    }
+    assert_eq!(
+        f64::from_bits(device.stats.cache.load(Ordering::Relaxed)),
+        device.get(ParamKey::Three)
+    );
+}
+
+#[test]
+fn rejected_gesture_end_is_retried_before_another_begin() {
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    let (_, rejected) =
+        device.run_reject_kind(0, vec![], false, Some(CLAP_EVENT_PARAM_GESTURE_END));
+    assert!(rejected.attempts.contains(&(
+        CLAP_EVENT_PARAM_GESTURE_END,
+        0,
+        device.id(ParamKey::Three),
+        false
+    )));
+    mailbox.submit(packet(ConfigEdit::axis(1, 695_000_000))).unwrap();
+    let accepted = device.run(64, vec![], false);
+    let kinds: Vec<_> = accepted
+        .attempts
+        .iter()
+        .filter(|e| e.2 == device.id(ParamKey::Three))
+        .map(|e| e.0)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            CLAP_EVENT_PARAM_GESTURE_END,
+            CLAP_EVENT_PARAM_GESTURE_BEGIN,
+            CLAP_EVENT_PARAM_VALUE,
+            CLAP_EVENT_PARAM_GESTURE_END
+        ]
+    );
+    mailbox.submit(packet(ConfigEdit::axis(1, 697_000_000))).unwrap();
+    let (_, rejected_begin) =
+        device.run_reject_kind(128, vec![], false, Some(CLAP_EVENT_PARAM_GESTURE_BEGIN));
+    assert_eq!(
+        rejected_begin.attempts.iter().filter(|e| e.2 == device.id(ParamKey::Three)).count(),
+        1,
+        "an unaccepted begin creates no gesture or value/end output"
+    );
+}
+
+fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {
+    Input::Note(clap_event_note {
+        header: header::<clap_event_note>(kind, time),
+        note_id: id,
+        port_index: 0,
+        channel: 0,
+        key,
+        velocity: 0.8,
+    })
+}
+fn id_tuning(id: i32, value: f64) -> Input {
+    Input::Tuning(clap_event_note_expression {
+        header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 0),
+        expression_id: CLAP_NOTE_EXPRESSION_TUNING,
+        note_id: id,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value,
+    })
+}
+#[test]
+fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
+    let sink = device.run(
+        1000,
+        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 31, CLAP_EVENT_NOTE_ON)],
+        false,
+    );
+    let fifth: Vec<_> = sink
+        .attempts
+        .iter()
+        .filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == device.id(ParamKey::Three))
+        .collect();
+    assert_eq!(fifth.len(), 1);
+    assert_eq!(fifth[0].1, 31);
+    assert!(
+        sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
+        "configuration and performance outputs must share chronological order"
+    );
+}
+#[test]
+fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
+    device.run(
+        0,
+        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
+        false,
+    );
+    mailbox.submit(packet(ConfigEdit::axis(1, 690_000_000))).unwrap();
+    device.run(64, vec![id_tuning(10, 1.0)], false);
+    assert_eq!(
+        mailbox.visible().0.raw[1],
+        690.0,
+        "only C moved: the remaining interval supplies no fifth evidence"
+    );
+    let mut release = match note(10, -1, 0, CLAP_EVENT_NOTE_OFF) {
+        Input::Note(event) => event,
+        _ => unreachable!(),
+    };
+    release.channel = -1;
+    release.port_index = -1;
+    device.run(128, vec![Input::Note(release)], false);
+    mailbox.submit(packet(ConfigEdit::axis(2, 390_000_000))).unwrap();
+    device.run(192, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], false);
+    assert_eq!(
+        mailbox.visible().0.raw[2],
+        400.0,
+        "ID20 survived the ID10 release and now supplies C beside E"
+    );
+}
+
+std::thread_local! {
+    static RECORDER: std::cell::RefCell<Option<harmonigraph_record::Recorder>> = const { std::cell::RefCell::new(None) };
+}
+pub(super) fn take_recorder() -> Option<harmonigraph_record::Recorder> {
+    RECORDER.with(|r| r.borrow_mut().take())
+}
+fn recorded_device() -> (Device, harmonigraph_record::testing::Capture) {
+    let (recorder, capture) = harmonigraph_record::testing::channel();
+    RECORDER.with(|r| {
+        assert!(r.borrow_mut().replace(recorder).is_none());
+    });
+    (Device::new(), capture)
+}
+fn transport(seconds: f64, time: u32) -> clap_event_transport {
+    let mut transport: clap_event_transport = unsafe { std::mem::zeroed() };
+    transport.header = header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, time);
+    transport.flags = CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | CLAP_TRANSPORT_IS_PLAYING;
+    transport.song_pos_seconds =
+        (seconds * clap_sys::fixedpoint::CLAP_SECTIME_FACTOR as f64) as i64;
+    transport
+}
+
+#[test]
+fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for_completion() {
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm_audio();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-rewind-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(
+        &capture,
+        path.clone(),
+        Some(harmonigraph_record::AudioSpec { sample_rate: 48000.0, channels: 2 }),
+    );
+    // Warm up the transport so a subsequent rewind is a real pass split.
+    device.run_transport(
+        0,
+        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)],
+        false,
+        None,
+        Some(transport(9.0, 0)),
+    );
+    writer.drain(&mut capture);
+    let mut events: Vec<_> =
+        (0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 8)).collect();
+    events.push(Input::Transport(transport(0.0, 32)));
+    events.push(note(20, 64, 40, CLAP_EVENT_NOTE_ON));
+    device.run_transport(64, events, false, None, Some(transport(10.0, 0)));
+    writer.drain(&mut capture);
+    capture.stop();
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(
+        writer.finished.is_none(),
+        "Stop intent cannot finalize pending configuration or producer work"
+    );
+    // Audio is disarmed, yet the ninth mutation still belongs to the old pass.
+    device.run_transport(128, vec![], false, None, Some(transport(32.0 / 48000.0, 0)));
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    assert!(writer.finished.is_some());
+    let first = harmonigraph_take::Take::read(&path).unwrap();
+    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    let late = first.configurations.iter().find(|c| c.axes[1] == 698_000_000).unwrap();
+    assert!((late.t - (10.0 + 8.0 / 48000.0)).abs() < 1e-9);
+    assert_eq!(second.configurations.first().unwrap().t, 0.0);
+    assert_eq!(second.configurations.first().unwrap().axes[1], 698_000_000);
+    // Exactly warmup64 + oldsegment32 versus newsegment32 frames. Closure may
+    // not let the final old audio prefix leak into the new WAV or lose its tail.
+    for (name, frames) in [("record.wav", 96_u32), ("record-2.wav", 32)] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        assert_eq!(bytes.len(), 44 + frames as usize * 2 * 4);
+    }
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    let events = (0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 8)).collect();
+    device.run(0, events, false);
+    capture.arm();
+    device.run(64, vec![], false);
+    let records = capture.drain_entries();
+    let configs: Vec<_> = records
+        .into_iter()
+        .filter_map(|entry| match entry {
+            harmonigraph_record::Entry::ConfigurationAt { config, .. } => Some(config),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(configs.len(), 1, "only the new pass's initial value is recorded");
+    assert_eq!(configs[0].axes[1], 698_000_000);
+    assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
 }

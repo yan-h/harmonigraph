@@ -127,3 +127,76 @@ the continuation fixture now pins the first boundary.
 No session, adaptive output, or live Bitwig timing evidence is inferred from these apparatus checks.
 Before pausing, commit first, build both release packages, and read `./load-plugin.sh --tag`;
 the shared Bitwig plugin and renderer slots remain untouched.
+
+## Review corrections and recording completion
+
+The first independent review found ten actionable issues, all reproduced and corrected before the second review.
+New command observation is captured before retained host input drains, including commands first seen on different callbacks.
+Notifications retain their actual sample and merge with performance output chronologically;
+a late host notification uses the earliest legal offset without changing the effective configuration's original time.
+A rejected gesture end remains a bounded closing debt and is retried before another begin.
+The final host write checks its original command ID against any concurrently accepted restore and relatches the main-thread rescan even when the old write succeeded.
+GUI restores explicitly request the main callback when processing is suspended.
+Accepted restore previews run the same resolver used at adoption, and their shadow preserves fault/refusal status.
+Direct CLAP notes retain host note IDs, so ID-only expression and release match the addressed held note.
+Standalone recording resolves the current frame after its edits and learning before writing configuration.
+
+Deferred configuration can outlive a transport rewind and even the stop request.
+CLAP recording therefore captures one coherent arm/epoch intent per enclosing callback and retains original sample-to-pass mappings, including explicit disarmed spans.
+It routes changes to their original epoch, pass, and transport time, and seeds a new pass only after all input and commands through its start are represented.
+The private recording prefix is the minimum of the next retained input, every observed pending command, pending learning, and the callback end.
+It does not retire the session's configuration timeline or stand in for the later session consumer frontier.
+
+This requires 2,178 fixed segment cells, 128 staged configuration changes, and 128 pass ownership cells on the plugin owner.
+Adjacent mappings coalesce only when the address and time mapping agree.
+The writer retains at most 128 unfinished pass files, and an actual completion record makes a slot reusable.
+Private runtime epoch/pass identities do not enter the take format.
+Committed audio chunks carry ordered sample-count records so a rewind and stop cannot move the previous WAV's tail into another pass or drop it.
+A stop request is intent;
+the writer publishes the completed take and starts rendering only after ordered producer closure, configuration-prefix closure, and completion of retained passes.
+Starting another take while finishing is refused visibly.
+A suspended host may therefore remain in finishing until another callback supplies that proof.
+Destruction, reset of unresolved work, capacity exhaustion, or a write failure reports an incomplete recording and starts no render;
+a failed ownership epoch requires reloading the plugin before recording again.
+The default-disabled legacy VST recording path retains its existing behavior.
+
+The actual factory-to-file fixture has nine distinct changes at offset 8, a rewind at offset 32, and the ninth change deferred to the next callback after disarming.
+It parses both resulting take files and checks the original pass/time, the new pass's correct initial configuration, and exact WAV frame counts of 96 and 32. Separate fixtures reach disarmed-to-armed continuation, all 128 unfinished writer slots and the 129th, retirement/reuse, stop during an observed callback, incomplete destruction, and a full audio ring.
+All 19 factory fixtures pass with the callback allocation/deallocation guard;
+all 55 recording crate tests pass.
+The fixture also exposed an independent preexisting auxiliary-port bounds defect;
+[issue #638](https://github.com/yan-h/harmonigraph/issues/638) preserves the crash trace and reproduction.
+Providing the plugin's declared stereo sidechain resolved the fixture crash without changing that unrelated wrapper path.
+
+## Measured checkpoint and local checks
+
+At committed checkpoint `e6c6f86d1a75e4f36f476665531f00b1f1984358`, all changed-package/all-targets clippy checks passed with warnings denied.
+Core passed 111 tests with one preexisting ignored probe;
+take passed 16 and standalone passed seven.
+The 30 existing lattice regressions, nine real exported-factory allocation/deallocation-guard fixtures, recorder boundary/new-pass fixture, and serialized replay cadence fixture passed.
+The allocator guard checks both allocation and deallocation;
+it covers the real opt-in process/flush paths, including restore adoption, retained work and learning.
+Both release packages built from that committed state;
+the actual loader tag was `codex/617-effective-configuration @e6c6f86d`.
+The final PR handoff names any later reviewed head and its fresh release pair.
+
+A temporary harness against the actual compiled types measured these byte layouts on this macOS machine;
+every listed type has alignment eight.
+`ResolvedConfig` is 64 bytes, `ConfigReducer` 128, `ConfigMarker` 152, `ConfigTimeline` 19,720, `ConfirmedPitch` 56, `ConfirmedPitches` 14,616, `LearningState` 2,072, `ConfigurationCommand` 120, `ConfigurationSnapshot` 176, and `OwnedInput`/`Option<OwnedInput>` 88. The one 2,048-cell input payload is therefore 180,224 bytes, excluding its small owner.
+The fixed restore payload is `Copy`;
+slot reclamation transfers ownership without an audio-thread destructor.
+
+With optimized test dependencies, 512 fresh 256-class inferences averaged 211,658 ns and the largest observed was 429,958 ns.
+Each visited all 32,640 unordered pairs, counted in the actual pair loop.
+A further 4,096 unchanged-set inferences averaged 690 ns and visited zero pairs.
+These are isolated local observations including harness overhead, not worst-case execution bounds or full host callback timing evidence.
+The temporary harness is verification rather than a maintained benchmark and is not committed.
+
+After the first review corrections, a second temporary harness measured `ConfirmedPitch` at 64 bytes, `ConfirmedPitches` at 16,664, the recording owner at 163,000, the complete plugin configuration owner at 201,712, and a recorder ring `Entry` at 88;
+all align to eight bytes.
+The other types listed above are unchanged.
+The recorder ring therefore reserves 5,767,168 payload bytes for its 65,536 entries, and its separate audio ring reserves 4,194,304 bytes.
+The isolated disarmed recording-prefix path averaged 5,909 ns over 4,096 calls in this optimized test build;
+this is neither an armed-path measurement nor a host timing bound.
+The full fixed recording map is visited even while disarmed;
+no unbounded search or growing allocation is used on audio.

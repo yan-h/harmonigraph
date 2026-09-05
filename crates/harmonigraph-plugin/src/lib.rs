@@ -437,6 +437,8 @@ impl Default for Harmonigraph {
         // block, while reading mono as stereo would de-interleave silence.
         let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
+        #[cfg(test)]
+        let take = configuration::injected_recorder().unwrap_or(take);
         let take_events = Arc::new(AtomicU64::new(0));
         let params = Arc::new(HarmonigraphParams::default());
         let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
@@ -537,7 +539,7 @@ impl Plugin for Harmonigraph {
 
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
-            owner.reset();
+            owner.reset(&self.take);
             let mailbox = self.params.configuration.get().unwrap();
             let generation = mailbox.reset_generation.load(Ordering::Relaxed);
             if let Some(next) = generation.checked_add(1) {
@@ -574,7 +576,10 @@ impl Plugin for Harmonigraph {
         // getter: it latches `was_armed` and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
-        let armed = self.take.is_armed();
+        let armed = match self.configuration.as_ref() {
+            Some(owner) => self.take.is_armed_at(owner.recording_intent()),
+            None => self.take.is_armed(),
+        };
         let take_origin =
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
                 OriginSource::Idle => None,
@@ -655,10 +660,10 @@ impl Plugin for Harmonigraph {
             }
         }
 
+        if let Some(owner) = self.configuration.as_mut() {
+            owner.record(&mut self.take, take_origin);
+        }
         if let Some(origin) = take_origin {
-            if let Some(owner) = self.configuration.as_mut() {
-                owner.record(&mut self.take, origin);
-            }
             self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
             // The take's own audio, when asked for: the selected analysis input
@@ -699,6 +704,7 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
     ) {
+        self.take.enable_configuration();
         let owner = Box::new(configuration::Owner::new(&self.params));
         handle.published.publish(owner.snapshot);
         self.params
@@ -715,6 +721,12 @@ impl ClapPlugin for Harmonigraph {
     > {
         configuration::prepare(state)
     }
+    fn clap_configuration_preview(
+        mut snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
+    ) -> nice_plug::wrapper::clap::configuration::ConfigurationSnapshot {
+        configuration::resolve_preview(&mut snapshot);
+        snapshot
+    }
     fn clap_configuration_save(
         snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
         state: &mut nice_plug::plugin::PluginState,
@@ -725,7 +737,13 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
     ) {
-        self.configuration.as_mut().unwrap().begin(boundary);
+        self.configuration.as_mut().unwrap().begin(boundary, &self.take);
+    }
+    fn clap_configuration_prefix(&mut self, through: i64) {
+        self.configuration.as_mut().unwrap().prefix(through);
+    }
+    fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
+        self.configuration.as_mut().unwrap().segment(start, frames);
     }
     fn clap_configuration_apply(
         &mut self,
@@ -733,7 +751,7 @@ impl ClapPlugin for Harmonigraph {
         commit: nice_plug::wrapper::clap::configuration::ConfigurationCommit,
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.apply(command, commit);
+        let result = owner.apply(command, commit, &self.take);
         if result.is_none() {
             self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         }

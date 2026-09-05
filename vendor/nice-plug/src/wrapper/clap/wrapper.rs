@@ -1072,6 +1072,7 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) {
         // We'll always write these events to the first sample, so even when we add note output we
         // shouldn't have to think about interleaving events here
+        if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, current_sample_idx as u32); } }
         let sample_rate = self.current_buffer_config.load().map(|c| c.sample_rate);
         while let Some(change) = self.output_parameter_events.pop() {
             let push_successful = match change {
@@ -1152,6 +1153,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 total_buffer_len as u32,
             );
 
+            if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, time); } }
             let push_successful = match event {
                 NoteEvent::NoteOn {
                     timing: _,
@@ -2159,9 +2161,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                         .map(|t| t.song_pos_seconds as f64 / CLAP_SECTIME_FACTOR as f64),
                     playing: transport.is_some_and(|t| t.flags & CLAP_TRANSPORT_IS_PLAYING != 0),
                 });
-                if let Some(output) = unsafe { process.out_events.as_ref() } {
-                    unsafe { wrapper.notify_configuration(output, 0); }
-                }
+                wrapper.publish_configuration_prefix(process.steady_time, process.frames_count);
                 wrapper.configuration_request_main();
             }
 
@@ -2449,6 +2449,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                         outputs: buffers.aux_outputs,
                     };
                     let mut context = wrapper.make_process_context(transport);
+                    if P::CLAP_CONFIGURATION { plugin.clap_configuration_segment(block_start as u32, block_len as u32); }
                     if P::CLAP_PROCESS_TRACE {
                         plugin.clap_process_trace(ProcessTrace::SubBlockEnter {
                             start: block_start as u32, length: block_len as u32,
@@ -2487,7 +2488,9 @@ impl<P: ClapPlugin> Wrapper<P> {
                             total_buffer_len,
                         )
                     };
+                    if P::CLAP_CONFIGURATION { unsafe { wrapper.notify_configuration(&*process.out_events, block_end.saturating_sub(1) as u32); } }
                 }
+                if P::CLAP_CONFIGURATION { wrapper.configuration_request_main(); }
 
                 // If our block ends at the end of the buffer then that means there are no more
                 // unprocessed (parameter) events. If there are more events, we'll just keep going
@@ -3346,6 +3349,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 if !unsafe { wrapper.capture_configuration(in_, None) } { return; }
                 if !in_.is_null() { unsafe { wrapper.handle_in_events(&*in_, 0, 0); } }
                 if !out.is_null() { unsafe { wrapper.handle_out_events(&*out, 0, 0); } }
+                wrapper.configuration_request_main();
             });
             return;
         }
