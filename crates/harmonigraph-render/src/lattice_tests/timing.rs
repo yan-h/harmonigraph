@@ -3,8 +3,8 @@
 //! `#[ignore]`d — it prints a figure and asserts nothing.
 //!
 //! Timestamps bracket the whole of `prepare`'s encoder rather than the plugin
-//! overlay's own bracket, which opens at the scene pass: the atlas and the
-//! light are drawn before that, and they are the cost this rework moves. Two
+//! overlay's asynchronous readback. Both now cover the atlas, ink, light,
+//! scene and bloom preparation; the final egui composite is excluded. Two
 //! empty passes carry the stamps, because a stamp written straight into the
 //! encoder never signals on Metal.
 //!
@@ -74,7 +74,53 @@ fn a_frame_of_names_at_each_kernel_costs_this_much() {
     }
 }
 
+/// The cull's workload: audio rings still ship nodes with no owned glow row.
+/// One active owner also checks the shared row-zero case under the same load.
+#[test]
+#[ignore = "a probe: prints a timing and asserts nothing"]
+fn a_frame_of_audio_rings_costs_this_much() {
+    for lit in [false, true] {
+        let mut scene =
+            ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+        let mut node = scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves.fill(0.0);
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
+        node.melody_slots = 0;
+        node.bass_slots = 0;
+        node.audio_ring = 1.0;
+        node.glow = harmonigraph_scene::GlowStep::default();
+        scene.nodes = (-7..=7)
+            .flat_map(|y| {
+                (-7..=7).map(move |x| {
+                    let mut n = node;
+                    n.world_pos = glam::vec3(x as f32 * 0.9, y as f32 * 0.9, 0.0);
+                    n
+                })
+            })
+            .collect();
+        if lit {
+            let n = &mut scene.nodes[112];
+            n.activation = 1.0;
+            n.octaves.fill(1.0);
+            n.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 0, mix: 1.0, marked: 0.0 };
+        }
+        scene.node_radius = 0.34;
+        scene.glow_rows = 1;
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        time_a_frame_of_names(
+            scene,
+            if lit { "225 audio rings, one MIDI glow" } else { "225 audio rings, no MIDI glow" },
+        );
+    }
+}
+
 fn time_a_frame_of_names(mut scene: Scene, what: &str) {
+    if let Ok(value) = std::env::var("PROBE_BLOOM") {
+        scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
+    }
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -157,8 +203,8 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let stamp = |encoder: &mut wgpu::CommandEncoder, index: u32| {
         let writes = wgpu::RenderPassTimestampWrites {
             query_set: &set,
-            beginning_of_pass_write_index: (index == 0).then_some(0),
-            end_of_pass_write_index: (index == 1).then_some(1),
+            beginning_of_pass_write_index: Some(index),
+            end_of_pass_write_index: None,
         };
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("timing_stamp_pass"),
@@ -185,6 +231,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
+    let mut cpu_samples = Vec::with_capacity(frames);
     for frame in 0..frames + 10 {
         let labels = names(runs.clone());
         let cb = LatticeCallback::from_scene(
@@ -197,7 +244,12 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         );
         let mut encoder = device.create_command_encoder(&Default::default());
         stamp(&mut encoder, 0);
+        let cpu_start = std::time::Instant::now();
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
+        if frame == 0 {
+            eprintln!("{what}: cold prepare CPU {cpu_ms:.3} ms (includes pipeline/target creation), bloom {}", scene.bloom_strength);
+        }
         stamp(&mut encoder, 1);
         encoder.resolve_query_set(&set, 0..2, &resolve, 0);
         encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
@@ -229,17 +281,21 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             bytemuck::cast_slice::<u8, u64>(&view).to_vec()
         };
         staging.unmap();
-        let ms = (ticks[1].wrapping_sub(ticks[0])) as f64 * f64::from(period) / 1.0e6;
+        assert!(ticks[0] > 0 && ticks[1] >= ticks[0], "unsupported timestamp pair: {ticks:?}");
+        let ms = (ticks[1] - ticks[0]) as f64 * f64::from(period) / 1.0e6;
         if frame >= 10 {
             samples.push(ms);
+            cpu_samples.push(cpu_ms);
         }
     }
     samples.sort_by(|a, b| a.total_cmp(b));
+    cpu_samples.sort_by(f64::total_cmp);
+    let cpu_median = cpu_samples[cpu_samples.len() / 2];
     let median = samples[samples.len() / 2];
     let (lo, hi) = (samples[samples.len() / 10], samples[samples.len() * 9 / 10]);
     eprintln!(
         "{what}: {named} names on {} lit nodes at {}x{}: prepare's encoder \
-         {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames)",
+         {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames); prepare CPU {cpu_median:.3} ms median",
         scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
         SIZE[0],
         SIZE[1],

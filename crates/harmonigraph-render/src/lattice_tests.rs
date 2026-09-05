@@ -20,4 +20,5 @@ mod shadows;
 mod shimmer;
 mod ships;
 mod sweep;
+mod targets;
 mod timing;

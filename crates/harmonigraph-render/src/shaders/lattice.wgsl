@@ -3022,9 +3022,8 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     return out;
 }
 
-/// The node pipelines. `fs_main` is the single-attachment form, which the
-/// parity test's direct-to-egui-pass reference draws through; `fs_main_scene`
-/// is the one the offscreen pass uses.
+/// The node pipelines. `fs_main` serves bloom-off production and the parity
+/// reference. `fs_main_scene` also writes the independent bloom input.
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return seen_of(node_paint(in));
@@ -3372,6 +3371,11 @@ fn vs_ink_blur(
     @builtin(vertex_index) vertex_index: u32,
     inst: Instance,
 ) -> @builtin(position) vec4<f32> {
+    // No light means no owned row, just as in vs_ink_strip. The pass still
+    // clears obsolete rows; an active owner computes its own row once.
+    if inst.glow.x <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
     let rows = max(u.misc12.x, 1.0);
     let v = (inst.glow.y + corner.y) / rows;

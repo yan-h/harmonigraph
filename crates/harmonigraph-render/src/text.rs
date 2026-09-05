@@ -64,6 +64,7 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_distance_pad",
     "vs_shadow_box",
     "fs_shadow_box",
+    "fs_shadow_box_plain",
 ];
 
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
@@ -644,7 +645,6 @@ pub(crate) fn create_glyph_cell_pipelines(
             blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
             write_mask: wgpu::ColorWrites::ALL,
         })],
-        None,
     );
     let distance = glyph_pipeline(
         device,
@@ -658,7 +658,6 @@ pub(crate) fn create_glyph_cell_pipelines(
             blend: Some(wgpu::BlendState { color: MIN_COMPONENT, alpha: MIN_COMPONENT }),
             write_mask: wgpu::ColorWrites::ALL,
         })],
-        None,
     );
     let pad = glyph_pipeline(
         device,
@@ -672,7 +671,6 @@ pub(crate) fn create_glyph_cell_pipelines(
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         })],
-        None,
     );
     (coverage, distance, pad)
 }
@@ -702,7 +700,6 @@ fn create_glyph_sdf_coverage_pipeline(
             blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
             write_mask: wgpu::ColorWrites::ALL,
         })],
-        None,
     )
 }
 
@@ -726,14 +723,13 @@ fn create_spectral_shadow_pipeline(
             blend: Some(crate::EGUI_BLEND),
             write_mask: wgpu::ColorWrites::ALL,
         })],
-        None,
     )
 }
 
 /// A name's shadow into the scene pass, over the name's own box
 /// (`fs_shadow_box`).
 ///
-/// BOTH of the pass's attachments, under the premultiplied blend the multiply
+/// With bloom on, both attachments under the premultiplied blend the multiply
 /// rides on: the bloom reads the second, and a halo a name darkens has to bloom
 /// as darkened. The glyphs beside it write the first alone
 /// ([`create_text_pipeline`]), which is what keeps the name itself out of the
@@ -753,27 +749,27 @@ pub(crate) fn create_shadow_box_pipeline(
     atlas: &wgpu::BindGroupLayout,
     casters: &wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
-    depth: wgpu::TextureFormat,
+    bloom: bool,
 ) -> wgpu::RenderPipeline {
     let target = Some(wgpu::ColorTargetState {
         format: target_format,
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     });
+    let targets = [target.clone(), target];
     glyph_pipeline(
         device,
         shader,
         "fs_shadow_box",
         &[Some(layout), None, Some(atlas), Some(casters)],
-        ("vs_shadow_box", "fs_shadow_box"),
+        ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
-        &[target.clone(), target],
-        Some(depth),
+        &targets[..if bloom { 2 } else { 1 }],
     )
 }
 
 /// The shape every pipeline above shares: one shader module, a triangle strip,
-/// no multisampling, and a depth state only where the pass carries one.
+/// no multisampling and no depth state: every caller uses painter order.
 ///
 /// Spelled once because the four differ in nothing else, and the fields that
 /// look like they might — the primitive topology, the vertex step mode — are
@@ -791,7 +787,6 @@ fn glyph_pipeline(
     entries: (&str, &str),
     buffers: &[wgpu::VertexBufferLayout<'static>],
     targets: &[Option<wgpu::ColorTargetState>],
-    depth: Option<wgpu::TextureFormat>,
 ) -> wgpu::RenderPipeline {
     let (vertex, fragment) = entries;
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -818,13 +813,7 @@ fn glyph_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        depth_stencil: depth.map(|format| wgpu::DepthStencilState {
-            format,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Always),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
+        depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -903,7 +892,7 @@ impl TextResources {
             layout,
             None,
             ("vs_glyph", "fs_fill"),
-            None,
+            false,
             crate::EGUI_BLEND,
         );
         let (_, distance, pad) = create_glyph_cell_pipelines(device, &shader, layout);
@@ -1167,16 +1156,10 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// its own text, so a label composites over the picture identically to the
 /// stamped version it replaces.
 ///
-/// `scene_depth` says this pipeline draws in the lattice's scene pass, and
-/// carries that pass's depth format. A pipeline has to declare what its pass
-/// carries, and that is the whole of what this is for — twice over:
-///
-///   - the depth attachment, which glyphs neither test nor write; they take
-///     their place in the same back-to-front order the nodes are drawn in;
-///   - the second COLOUR attachment, which glyphs must not write. That one
-///     holds the picture without the labels, and it is what the bloom's
-///     bright pass reads, so leaving it unwritten here is the whole of how a
-///     name stays out of the bloom.
+/// `bloom` declares the scene pass's second colour attachment, with no writes
+/// from the glyph fill. That copy feeds the bright pass, so a name's ink
+/// neither glows nor cuts a hole in the node halo it covers. Both attachment
+/// choices are depthless and take their place in painter order.
 ///
 /// `blend` is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
 /// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
@@ -1203,7 +1186,7 @@ pub(crate) fn create_text_pipeline(
     layout: &wgpu::BindGroupLayout,
     glow: Option<&wgpu::BindGroupLayout>,
     entries: (&str, &str),
-    scene_depth: Option<wgpu::TextureFormat>,
+    bloom: bool,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let mut targets = vec![Some(wgpu::ColorTargetState {
@@ -1215,7 +1198,7 @@ pub(crate) fn create_text_pipeline(
     // write mask rather than a `None` target, which wgpu rejects: a pipeline's
     // formats have to match the pass's attachment for attachment, so the way
     // to write nothing is to say so in the mask.
-    if scene_depth.is_some() {
+    if bloom {
         targets.push(Some(wgpu::ColorTargetState {
             format: target_format,
             blend: None,
@@ -1230,7 +1213,6 @@ pub(crate) fn create_text_pipeline(
         entries,
         &[GlyphInstance::LAYOUT],
         &targets,
-        scene_depth,
     )
 }
 
