@@ -392,9 +392,10 @@ fn glow_wash() -> f32 {
 // so `n` notes over one another read at most `n^(1/p)` times one and a lone
 // note reads exactly itself at any exponent.
 //
-// ONE reader, spent by both the power and the root in [`fs_glow_gather`], and
-// that is the invariant the bar cannot be allowed to break: a fold raised to
-// one exponent and rooted at another is not a norm of anything.
+// ONE reader, spent by every power and every root in [`fs_glow_gather`] — the
+// light's and its three channels' — and that is the invariant the bar cannot be
+// allowed to break: a fold raised to one exponent and rooted at another is not
+// a norm of anything.
 //
 // The floor is what the root divides by, and it is 1 rather than the bar's own
 // bottom of 2: every exponent at or above 1 is a norm, so this repairs only the
@@ -2994,12 +2995,13 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the p-norm UNION at the Union bar's exponent. A note gives off the strength
 // it gives off whether it is alone or in a chord, and a chord only spreads that
 // light over a larger area: `n` halos over one another read at most `n^(1/p)`
-// times one, and a lone one reads exactly itself. The operator is commutative, so nothing about
-// the order it walks in reaches the picture. Screen — which this replaced — and
-// adding both make the COUNT of overlapping nodes, rather than any note, the
-// brightest thing on screen (#680). The colour is folded apart from the light,
-// as the coverage-weighted mean of the nodes' own, so a hue crosses the whole
-// overlap between two notes rather than switching at their bisector.
+// times one, and a lone one reads exactly itself. The operator is commutative,
+// so nothing about the order it walks in reaches the picture. Screen — which
+// this replaced — and adding both make the COUNT of overlapping nodes, rather
+// than any note, the brightest thing on screen (#680). The COLOUR is that same
+// union again, run PER CHANNEL over each node's premultiplied light, so a
+// second note can only ever add to a channel: two hues meet in both halos' own
+// light rather than in a mix of it, and neither is dimmed by the other.
 //
 // NOTHING in the target is subtractive, and that is what lets the sheets meld
 // into one layer rather than being assembled one at a time: it is light and
@@ -3432,11 +3434,11 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
 ///
 /// STRAIGHT and not premultiplied, which is the one place this parts company
 /// with every other layer here: `w` is the halo's own coverage and `xyz` is the
-/// colour that coverage is of, unmixed with it. The union the gather folds with
-/// needs the two apart — the alphas go into one norm and the colours into a
-/// mean weighted by those same alphas, unraised — and premultiplying here only
-/// to divide it back out inside the loop would be a rounding per node and a
-/// division by a coverage that can be nothing.
+/// colour that coverage is of, unmixed with it. The two arrive from different
+/// places — `w` off the falloff, `xyz` off the ink strip — and the gather is
+/// what puts them together: the four norms it folds are this coverage and the
+/// three channels of `w * xyz`. Premultiplying here would only move that one
+/// multiply across the call.
 ///
 /// `uv` is where the fragment stands in THIS node's own uv, which the gather
 /// inverts out of the node's screen frame. Every length below is in that uv, so
@@ -3537,6 +3539,46 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
     return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 
+/// ONE term into a running p-norm, held as a max and a sum with the LARGEST
+/// term so far factored out of the sum: `m` is that largest, `s` is the sum of
+/// `(v_i/m)^p`, and the norm is `m * s^(1/p)`.
+///
+/// Every term raised to the power is therefore in (0, 1] whatever the exponent,
+/// which is what lets `p` climb toward the true max without the sum overflowing
+/// or a small term's power underflowing to nothing before it can be compared.
+/// That underflow is what stopped #443's first design, which raised the raw
+/// coverage in an f16 target.
+///
+/// Rescaling when a new maximum arrives is the price: `s` is multiplied by
+/// `(m_old/m_new)^p`, which is exact arithmetic on what is already banked and
+/// leaves the fold COMMUTATIVE — the instance order [`fs_glow_gather`] walks in
+/// is not readable in the picture, the same reason the pass it replaces could
+/// draw every sheet at once.
+///
+/// Written once and spent four times a node, on the coverage and on each
+/// channel of the colour that coverage is of. A term can only ADD: a p-norm is
+/// at least its own largest term, so nothing folded in here takes anything back
+/// out of what is already banked.
+fn union_fold(m: ptr<function, f32>, s: ptr<function, f32>, v: f32, p: f32) {
+    if v <= 0.0 {
+        // Contributes nothing, and is what keeps a 0/0 out of the branches
+        // below: a channel no node has lit stays at exactly zero.
+        return;
+    }
+    if *m <= 0.0 {
+        // The first term IS the maximum, and its own share is exactly 1.
+        // Written out rather than left to the branch below, which would take
+        // `pow` of a zero base.
+        *m = v;
+        *s = 1.0;
+    } else if v > *m {
+        *s = *s * pow(*m / v, p) + 1.0;
+        *m = v;
+    } else {
+        *s = *s + pow(v / *m, p);
+    }
+}
+
 /// The light draw: every lit node's halo folded at this pixel, in one pass.
 ///
 /// No depth in it: this is a pass of its own ahead of the scene's, so every
@@ -3551,15 +3593,34 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
 /// fixed-function blend can express (#680). One note gives off the strength
 /// many do, and many only spread the light over a larger area.
 ///
-/// The COLOUR is folded on other terms than the light: a mean of the nodes'
-/// own colours weighted by their plain coverage, not by the norm's powers of
-/// it. Raised to the exponent, the weights hand the whole vote to whichever
-/// node is nearer by a hair, and two notes of different hue meet at a SEAM —
-/// the colour switching over a band a few pixels either side of the bisector,
-/// narrower the fuller the bar (#683's first build, rejected for it). Weighted
-/// by the coverage itself, a hue crosses the whole overlap the way it did
-/// under the screen blend, and the bar moves how bright a meeting is and
-/// nothing about what colour it is.
+/// The COLOUR is the SAME union run again, per channel, over each node's
+/// premultiplied light `a * halo.xyz`: three more maxima and three more sums
+/// through [`union_fold`], resolved by the same root. Being a norm rather than
+/// a mean is the whole of it, and both rules before it were means. Weighted by
+/// the norm's own terms, `(a_i/m)^p`, a node nearer by a hair took the whole
+/// vote, and two hues met at a SEAM — the colour switching over a band a few
+/// pixels either side of the bisector, narrower the fuller the bar (#683's
+/// first build). Weighted by the plain coverages the switch went, but a mean
+/// lands BETWEEN the two colours while the norm holds the light near the
+/// larger: a dim note crossing a bright one's halo kept the bright coverage
+/// and got a diluted colour, so a second note made an area DARKER. Measured
+/// over the shipped pitch ramp, whose two ends are 3.9x apart in luminance —
+/// meeting at equal coverage those two read 22% under the brighter note ALONE
+/// at a bar reading of +19%, 35% under at the fresh +9% and 42% under at the
+/// top, having crossed from brighter to darker somewhere above +30%. A p-norm
+/// is at least its own largest term, so per channel a second note can no
+/// longer take out what the first laid down.
+///
+/// What it can do is ADD, and only by the channels the two do not share: two
+/// hues read brighter than either, bounded by white rather than by the count.
+/// Over the shipped ramp that is worth at most +4.7% of luminance for a pair
+/// and +7.7% for a triple, and both of those are at the TOP of the bar, where
+/// the count's own `n^(1/p)` is smallest; at the fresh exponent and below it is
+/// worth nothing at all, a mixed pair never reading over the same pair in one
+/// hue. Where the two DO share a channel it is the light's own `2^(1/p)` ridge
+/// and nothing new, and where they share nothing there is no crest at all:
+/// pure red over pure blue reads `(a_1, 0, a_2)`, each channel a norm of one
+/// smooth halo.
 ///
 /// `u.glow.lit` and not `arrayLength(&glow_nodes)`: the buffer outlives the
 /// frames that grew it (see the binding).
@@ -3571,33 +3632,18 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let lit = u32(max(u.glow.lit, 0.0));
-    // Read ONCE, so the power below and the root at the end cannot come from
-    // two different numbers ([`glow_union`]).
+    // Read ONCE, so no power below and no root at the end can come from two
+    // different numbers ([`glow_union`]).
     let p = glow_union();
-    // The norm's two running terms, with the largest coverage so far FACTORED
-    // OUT of the other: `m` is that largest and `s` is the sum of `(a_i/m)^p`.
-    // Every term raised to the power is therefore in (0, 1] whatever the
-    // exponent, which is what lets `p` climb toward the true max without the
-    // sum overflowing or a small halo's power underflowing to nothing before it
-    // can be compared. That underflow is what stopped #443's first design,
-    // which raised the raw coverage in an f16 target.
-    //
-    // Rescaling when a new maximum arrives is the price: `s` is multiplied by
-    // `(m_old/m_new)^p`, which is exact arithmetic on what is already banked
-    // and leaves the fold commutative — the instance order this walks in is
-    // not readable in the light, the same reason the pass it replaces could
-    // draw every sheet at once.
-    //
-    // The colour's two terms stand apart from the norm's and never see the
-    // exponent: `t` is the plain sum of the coverages and `c` the same sum
-    // weighted onto the nodes' own colours, so `c/t` is the coverage-weighted
-    // mean colour whatever the bar says. Neither needs the maximum factored
-    // out — a coverage is in (0, 1] as it stands — so a new maximum rescales
-    // nothing of the colour's.
+    // FOUR running norms, each a max-and-sum pair for [`union_fold`] to carry:
+    // the LIGHT's, over the coverages, and one per CHANNEL, over the nodes'
+    // premultiplied colour. The channels are an array of three rather than a
+    // `vec3` because WGSL has no pointer into a vector component, and the fold
+    // takes its pair by pointer so it can be written once.
     var m = 0.0;
     var s = 0.0;
-    var t = 0.0;
-    var c = vec3<f32>(0.0);
+    var mc = array<f32, 3>(0.0, 0.0, 0.0);
+    var sc = array<f32, 3>(0.0, 0.0, 0.0);
     for (var i = 0u; i < lit; i = i + 1u) {
         let node = glow_nodes[i];
         // This pixel in the node's own uv. `pos.xy` is the glow target's own
@@ -3609,38 +3655,47 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let halo = glow_layer(node, uv);
         let a = halo.w;
         if a <= 0.0 {
-            // Lights nothing here, and the terms below would divide by it.
+            // Lights nothing here, and now skips four folds rather than one.
             continue;
         }
-        t = t + a;
-        c = c + a * halo.xyz;
-        if m <= 0.0 {
-            // The first light at this pixel IS the maximum, and its own term is
-            // exactly 1. Written out rather than left to the branch below, which
-            // would take `pow` of a zero base.
-            m = a;
-            s = 1.0;
-        } else if a > m {
-            s = s * pow(m / a, p) + 1.0;
-            m = a;
-        } else {
-            s = s + pow(a / m, p);
-        }
+        // FOUR `pow` a node a pixel where the light alone was one, and that is
+        // the price of the colour being the same operator as the light rather
+        // than a second rule beside it. #680 asked for this gather with effort
+        // disregarded, for generality, and this is what generality costs here.
+        //
+        // PREMULTIPLIED for the channels: `a * halo.xyz` is the light this node
+        // actually puts in each channel, and a union of channels is only
+        // meaningful on that. Straight colours would union to the brightest hue
+        // present rather than to the brightest light.
+        union_fold(&m, &s, a, p);
+        let v = a * halo.xyz;
+        union_fold(&mc[0], &sc[0], v.x, p);
+        union_fold(&mc[1], &sc[1], v.y, p);
+        union_fold(&mc[2], &sc[2], v.z, p);
     }
     if m <= 0.0 {
         // No node lit this pixel. The resolve below is well-defined only on
-        // `s >= 1` and `t > 0`, both of which hold exactly when something did.
+        // `s >= 1`, which holds exactly when something did.
         return vec4<f32>(0.0);
     }
-    // `m * (sum (a_i/m)^p)^(1/p)` — the p-norm of the coverages — and the colour
-    // the mean of the nodes' own, weighted by the coverages themselves. A LONE
-    // node is unchanged exactly: `s` is 1, its root is 1, and `t` is its own
-    // `a`, so the light is that node's own `a` and its own colour, to the bit.
+    // `m * (sum (a_i/m)^p)^(1/p)` — the p-norm of the coverages — and each
+    // channel the same root of its own. A LONE node is unchanged exactly: every
+    // sum is 1, every root of 1 is 1, so the light is that node's own `a` and
+    // the channels its own `a * colour`, to the bit.
     //
-    // Clamped at 1 because the norm of coverages that each reach full is above
-    // full, and the target is a coverage.
-    let alpha = min(m * pow(s, 1.0 / p), 1.0);
-    return vec4<f32>(c * (alpha / t), alpha);
+    // Clamped at 1 because a norm of terms that each reach full is above full,
+    // and the target is a coverage. The output stays valid premultiplied either
+    // side of the clamp: a colour is at most 1, so `a * colour_ch <= a` term by
+    // term and the norm is monotone in every term, and `min` of both at 1 keeps
+    // that order.
+    let root = 1.0 / p;
+    let alpha = min(m * pow(s, root), 1.0);
+    let peak = vec3<f32>(mc[0], mc[1], mc[2]);
+    let banked = vec3<f32>(sc[0], sc[1], sc[2]);
+    // A channel NO node lit has both terms at zero, which `pow` would take the
+    // log of; `select` answers it with the exact zero instead.
+    let colour = min(peak * pow(banked, vec3<f32>(root)), vec3<f32>(1.0));
+    return vec4<f32>(select(vec3<f32>(0.0), colour, peak > vec3<f32>(0.0)), alpha);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

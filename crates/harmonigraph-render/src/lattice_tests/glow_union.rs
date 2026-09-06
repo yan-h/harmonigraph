@@ -2,10 +2,11 @@
 //! the halos with.
 //!
 //! What a note gives off on its own, what two of them come to where they meet,
-//! what a cluster of them comes to, and what COLOUR two of them meet in — the
-//! four readings the Union bar is answerable for. The first of them is the one
-//! it must not move at all, and so is the last: the colour is folded apart from
-//! the norm and never sees the exponent.
+//! what a cluster of them comes to, and what two of them of different COLOUR
+//! come to per channel — the four readings the Union bar is answerable for. The
+//! first is the one it must not move at all; the last is the same norm as the
+//! others, run per channel on the nodes' premultiplied light, so the exponent
+//! reaches the colour as much as it reaches the brightness.
 //!
 //! The three readings that need more than one node are taken on a BARE part of
 //! the frame — outside every node's ink, over a black ground, with the Shadow
@@ -13,10 +14,10 @@
 //! assertion is that the reading really is zero without it. The two RATIOS are
 //! read off SUMS over many pixels rather than one, because the effect they
 //! measure is a few percent and a single 8-bit pixel is worth half a level
-//! either way; the colour is read off each pixel's own shares averaged over the
-//! run instead, which is what keeps that rounding from biasing a ratio of sums.
-//! The lone note is read the other way about, over every byte of the frame, for
-//! the reason its own doc gives.
+//! either way; the colour is read per channel off each pixel of a run and
+//! averaged, which is what keeps that rounding from biasing a norm of two
+//! readings taken separately. The lone note is read the other way about, over
+//! every byte of the frame, for the reason its own doc gives.
 
 use super::fixtures::*;
 use crate::*;
@@ -148,11 +149,12 @@ fn a_lone_halo_is_the_same_frame_at_every_bar_position() {
 ///
 /// Held against the MEAN of the two nodes read alone rather than against
 /// either. The two are equally far from the column but see it from opposite
-/// directions, so each lays down its own strip's colour at a different angle
-/// and the two readings differ in hue. What the union does with that is take
-/// the mean colour, weighted by the coverages — equal on this column, so the
-/// summed brightness is exactly the mean of the two, scaled by the norm's own
-/// gain, whatever either colour is.
+/// directions, so each could in principle lay down its own strip's colour at a
+/// different angle; on THIS fixture they do not, since the strip carries the
+/// lit slot's one colour at every angle and 22abb5c3 measured the two singles
+/// at 15829 against 15829. A per-channel norm of two equal readings is the
+/// scalar norm of one of them, so the summed brightness is that reading scaled
+/// by the norm's own gain, whatever the colour is.
 ///
 /// Read at the Union bar's two ends as well as at the fresh middle
 /// ([`SWEEP`]), which is the whole of what the bar is: the same two halos meet
@@ -359,41 +361,50 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
     );
 }
 
-/// Where two notes of different colour meet, the hue is the two halos' colours
-/// mixed in proportion to their COVERAGE — at every pixel of the overlap and
-/// at every position of the Union bar, which moves how bright a meeting is and
-/// nothing about what colour it is.
+/// A second note never takes light OUT of a channel: where two halos meet,
+/// every channel of the pair is at least what either node put there on its
+/// own, and is exactly the p-norm of the two — the light's own fold, run a
+/// second time on each channel of the nodes' premultiplied colour.
 ///
-/// The seam #683 was first rejected for. With the colour weighted by the
-/// norm's own terms, `(a_i/m)^p`, a node nearer by a hair took the whole vote,
-/// so two hues met at a switch a few pixels either side of the bisector, and
-/// the switch narrowed as the bar filled. Weighted by the coverage itself, the
-/// pair's colour at a pixel is `(a_1 c_1 + a_2 c_2) / (a_1 + a_2)`, and the
-/// two singles read `a_1 c_1` and `a_2 c_2` at the same pixel, so the pair's
-/// CHROMATICITY is exactly that of the singles' sum — with no coverage, no
-/// norm and no exponent left in the comparison, which is what lets it be read
-/// off 8-bit frames at all.
+/// The property both of #683's rejected colour rules lacked, and the one Yan
+/// asked for by name. Weighted by the norm's own terms, `(a_i/m)^p`, a node
+/// nearer by a hair took the whole vote and two hues met at a SEAM. Weighted
+/// by the plain coverages the colour is a MEAN, and a mean lands between the
+/// two colours while the norm holds the light near the larger: where a dim
+/// note's halo crossed a bright one's, the pixel kept the bright coverage and
+/// got a diluted colour, so adding a note made an area DARKER. The shipped
+/// pitch ramp's two ends are 3.9x apart in luminance, and meeting at equal
+/// coverage they read 22% under the brighter note ALONE at a bar reading of
+/// +19% and 35% under at the fresh +9%. A p-norm is at least its largest term
+/// at every exponent, so a per-channel fold cannot do that to any channel.
 ///
-/// The pair of `two_halos_meeting_read_the_norm_of_one_rather_than_their_sum`
+/// The fixture is `two_halos_meeting_read_the_norm_of_one_rather_than_their_sum`'s
 /// with the two nodes given different colours and stood a tenth further apart,
 /// read on a column a fifth of a uv to one side of the bisector: far enough
-/// over that the nearer node's coverage is well above the farther one's, so
-/// the two weightings disagree by most of the distance between the hues, near
-/// enough that every pixel of the run still sees both halos, and — with the
-/// extra spacing — clear of the nearer node's own rings, which end at 0.795
-/// uv and would otherwise put ink on the column. Chromaticity is averaged
-/// over the run pixel by pixel, so the frame's stochastic rounding averages
-/// out instead of biasing a ratio of sums.
+/// over that the nearer node's coverage is well above the farther one's (about
+/// 2 to 1), so a mean and a union disagree by most of the distance between the
+/// hues; near enough that every pixel of the run still sees both halos; and —
+/// with the extra spacing — clear of the nearer node's own rings, which end at
+/// 0.795 uv and would otherwise put ink on the column.
 ///
-/// Reach: the two singles' chromaticities have to differ by well over the
-/// tolerance, since a pair of one colour passes any weighting; and the nearer
-/// node's chromaticity alone has to be outside it by a margin, since that is
-/// what the old fold read here. Measured on it, with the coverages 2.03 to 1:
-/// 0.805 red at the bottom of the bar against the coverage-weighted 0.670,
-/// and at the fresh exponent 0.996, the nearer node's own red to within four
-/// tenths of a percent — thirteen and thirty-three tolerances out.
+/// The two hues SHARE channels, `(1, 0.25, 0.25)` against `(0.25, 0.25, 1)`,
+/// so all three channels carry two non-trivial terms and the norm is read
+/// where it is a norm rather than where it is a copy. A saturated pair would
+/// leave green at nothing in both nodes and red and blue with one term each,
+/// which is the fixture that passes for the wrong reason: a plain max reads
+/// the same there.
+///
+/// Reach against the fold this replaces: the pair's RED is what separates the
+/// two rules, since the nearer node holds almost all of it and a mean gives
+/// most of it away. Averaged over the run the mean fold reads red at 148.8,
+/// 133.5 and 133.4 over the sweep, against this one's 178.8, 177.5 and 177.5
+/// and against the 177.5 the nearer node lights on its own — 29, 44 and 44
+/// levels of light taken back out by the second note, so it misses the floor
+/// by 29 to 44 times the slack and the value by 60 to 88 tolerances. Its blue
+/// misses by 1.9 tolerances at the two higher exponents and its green passes
+/// everywhere; red is the channel that carries this fixture.
 #[test]
-fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
+fn a_second_note_never_takes_light_out_of_any_channel() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -401,28 +412,39 @@ fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
     const OFFSET: f32 = 0.2;
     /// Rows read either side of the middle one.
     const RUN: usize = 16;
-    /// The most a channel's share of the pixel may differ from the singles'
-    /// sum's by, averaged over the run. Slack for a driver and not for the
-    /// claim: the three readings land 0.0001, 0.0001 and 0.0002 off, and the
-    /// fold this replaces is thirteen of these out at its closest.
-    const TOLERANCE: f64 = 0.01;
+    /// One 8-bit level, which is what the floor below is allowed to give away:
+    /// the final write is dithered, so a channel that should land exactly on
+    /// its neighbour's reading can come out a level either side of it. Slack
+    /// for that alone — the shortfalls this test is against are tens of levels.
+    const SLACK: f64 = 1.0;
+    /// How far the pair's channel may stand off the norm of the two singles',
+    /// in 8-bit levels, averaged over the run. HALF a level, which is half of
+    /// what one pixel's rounding alone is worth: each single is a dithered byte
+    /// good to half a level, the norm carries at most their sum through (its
+    /// two derivatives are `(l/n)^(p-1)` and `(r/n)^(p-1)`, together at most
+    /// `2^(1/p)`), and the pair's own byte adds another half. Averaged over 33
+    /// pixels of a screen-fixed dither those cancel: the nine readings land
+    /// 0.04 off at worst, so this is a tenth of the per-pixel bound and slack
+    /// for a driver rather than for the claim.
+    const TOLERANCE: f64 = 0.5;
     // 1.1 uv each side of the bisector, so the column stands 0.9 uv from the
     // nearer node and 1.3 from the farther, both inside the light's 1.595.
     let half = single_marked_node(0, 0).node_radius * 1.8 * 1.1;
     let at = |lit: [f32; 2], p: f64| -> Scene {
         let mut scene = bare_lattice(1.5);
         scene.glow_union = p as f32;
-        // Two hues well apart: a node's light is its lit pitch's table entry,
-        // so the table is cut in two — saturated red up to the middle of it,
-        // saturated blue above — and the right node is pitched eleven
-        // semitones over the left, across the cut. The fixture's own table is
-        // a sweep with 0.4 of green under all of it, and these two pitches on
-        // it read 0.09 apart, under half the fifth the reach check asks for.
+        // Two hues that share every channel: a node's light is its lit pitch's
+        // table entry, so the table is cut in two — red over a quarter of the
+        // other two up to the middle of it, blue over the same quarter above —
+        // and the right node is pitched eleven semitones over the left, across
+        // the cut. The fixture's own table is a sweep with 0.4 of green under
+        // all of it, and these two pitches on it read 0.09 apart in chroma,
+        // which is no pair of hues at all.
         scene.pitch_lut = std::array::from_fn(|k| {
             if k * 2 < harmonigraph_scene::PITCH_LUT_N {
-                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+                glam::Vec4::new(1.0, 0.25, 0.25, 1.0)
             } else {
-                glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+                glam::Vec4::new(0.25, 0.25, 1.0, 1.0)
             }
         });
         let node = scene.nodes[0];
@@ -454,19 +476,14 @@ fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
             .collect()
     };
     let lit_throughout = |pixels: &[[f64; 3]]| pixels.iter().all(|px| px.iter().sum::<f64>() > 0.0);
-    // Each channel's share of its pixel, averaged over the run.
-    let chroma = |pixels: &[[f64; 3]]| -> [f64; 3] {
-        let mut mean = [0.0; 3];
-        for px in pixels {
-            let sum: f64 = px.iter().sum();
-            for (m, v) in mean.iter_mut().zip(px) {
-                *m += v / sum / pixels.len() as f64;
+    let means = |pixels: &[[f64; 3]]| -> [f64; 3] {
+        pixels.iter().fold([0.0; 3], |mut acc, px| {
+            for (a, v) in acc.iter_mut().zip(px) {
+                *a += v / pixels.len() as f64;
             }
-        }
-        mean
+            acc
+        })
     };
-    let apart =
-        |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
 
     let dark: f64 = run(&shooter.shot(&at([0.0, 0.0], P))).iter().flatten().sum();
     assert_eq!(dark, 0.0, "the read column is not bare: {dark} of something that is not the light");
@@ -477,28 +494,63 @@ fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
         "a pixel of the run gets no light from one of the nodes, so the column is outside its halo \
          and the fixture measures one light rather than two meeting",
     );
-    let (near, far) = (chroma(&left), chroma(&right));
+    // The two singles have to DIFFER, or the floor below is the pair's own
+    // reading and every fold clears it.
+    let apart = left
+        .iter()
+        .zip(&right)
+        .flat_map(|(l, r)| l.iter().zip(r).map(|(x, y)| (x - y).abs()))
+        .fold(0.0, f64::max);
     assert!(
-        apart(near, far) > 0.2,
-        "the two nodes read nearly one hue ({near:?} against {far:?}), so every weighting of the \
-         two agrees",
-    );
-    let summed: Vec<[f64; 3]> =
-        left.iter().zip(&right).map(|(a, b)| [a[0] + b[0], a[1] + b[1], a[2] + b[2]]).collect();
-    let want = chroma(&summed);
-    assert!(
-        apart(near, want) > TOLERANCE * 5.0,
-        "the nearer node's own hue {near:?} is within reach of the coverage-weighted {want:?}, so \
-         a fold that hands it the whole vote passes too",
+        apart > 64.0,
+        "the two nodes light the run almost identically (no channel more than {apart:.0}/255 \
+         apart), so a fold that drops either of them still clears the floor below",
     );
 
     for p in SWEEP {
-        let got = chroma(&run(&shooter.shot(&at([1.0, 1.0], p))));
-        assert!(
-            apart(got, want) < TOLERANCE,
-            "at an exponent of {p} the hue between the two reads {got:?} against the \
-             coverage-weighted {want:?} (the nearer node alone is {near:?}), off by {:.4}",
-            apart(got, want),
-        );
+        let both = run(&shooter.shot(&at([1.0, 1.0], p)));
+        // THE CLAIM, per pixel and per channel: nothing the second note does
+        // takes light out of what the first one laid down.
+        for (row, ((pair, l), r)) in both.iter().zip(&left).zip(&right).enumerate() {
+            for (ch, ((got, one), other)) in pair.iter().zip(l).zip(r).enumerate() {
+                let floor = one.max(*other);
+                assert!(
+                    *got >= floor - SLACK,
+                    "at an exponent of {p}, row {row} of the run reads {got} in channel {ch} \
+                     with both notes lit, under the {floor} one of them puts there alone \
+                     ({l:?} and {r:?} meeting as {pair:?})",
+                );
+            }
+        }
+        let (pair_mean, left_mean, right_mean) = (means(&both), means(&left), means(&right));
+        for (ch, ((got, one), other)) in
+            pair_mean.iter().zip(&left_mean).zip(&right_mean).enumerate()
+        {
+            assert!(
+                got >= one && got >= other,
+                "at an exponent of {p} channel {ch} averages {got} over the run with both notes \
+                 lit, under one note's own {one} or {other}",
+            );
+        }
+        // THE VALUE, which is what makes the claim above non-vacuous: the pair
+        // is not merely at least the larger of the two, it is the p-norm of
+        // them — read off the singles' own bytes, so no coverage, no colour and
+        // no clamp is left in the comparison.
+        let mut norm = [0.0; 3];
+        for (l, r) in left.iter().zip(&right) {
+            for ((n, one), other) in norm.iter_mut().zip(l).zip(r) {
+                *n += (one.powf(p) + other.powf(p)).powf(1.0 / p) / both.len() as f64;
+            }
+        }
+        for (ch, (got, want)) in pair_mean.iter().zip(norm).enumerate() {
+            assert!(
+                (got - want).abs() < TOLERANCE,
+                "at an exponent of {p} channel {ch} averages {got:.2}/255 over the run, against \
+                 the {want:.2} the two singles' own readings union to (one note averages {:.2} \
+                 and {:.2})",
+                left_mean[ch],
+                right_mean[ch],
+            );
+        }
     }
 }

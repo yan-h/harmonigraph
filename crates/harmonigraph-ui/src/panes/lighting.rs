@@ -99,9 +99,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // a second note standing in the same place adds. The stored value is
         // the union's exponent (`ViewConfig::glow_union`) and the readout is
         // what that exponent means — `2^(1/p) - 1`, the gain where two equal
-        // halos meet — so the number FALLS as the bar fills. Brightness only:
-        // the colour where notes overlap is the coverage-weighted mix of their
-        // own at every position of the bar (`fs_glow_gather`).
+        // halos meet — so the number FALLS as the bar fills. The colour where
+        // notes overlap is the same union run per channel, so this bar sets how
+        // much a meeting brightens and a second note never takes light out of a
+        // channel the first one lit (`fs_glow_gather`).
         //
         // Named for the OPERATOR and not for the reading, which is what makes
         // a falling number read forwards: a fuller bar is more of a union, two
