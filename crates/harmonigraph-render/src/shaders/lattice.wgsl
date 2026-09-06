@@ -139,6 +139,19 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
+// The exponent the node glow's halos are UNIONED at ([`fs_glow_gather`]): the
+// light at a pixel is the p-norm of every halo's coverage there, so `n` notes
+// over one another read at most `n^(1/p)` times one and a lone note reads
+// exactly itself.
+//
+// 8 puts two equal notes overlapping 9% above one, which is a visible spread
+// without a chord's centre climbing toward white — the failure the screen blend
+// this replaces had, where `n` notes read `1 - (1-a)^n` (#680).
+//
+// ONE place, read by both the power and the root, and that is the invariant to
+// keep when #680's stage 2 makes it a uniform: a fold raised to one exponent and
+// rooted at another is not a norm of anything.
+const GLOW_UNION: f32 = 8.0;
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -2973,16 +2986,19 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 //
 // ONE DRAW over the whole target, into one transparent texture.
 // `fs_glow_gather` walks every lit node at each pixel and folds their halos by
-// SCREEN — src + dst*(1-src), premultiplied. Two halos meld: an overlap is
-// brighter than either alone and still bounded by white however many nodes
-// reach the pixel, and the operator is commutative, so nothing about the order
-// it walks in reaches the picture. Adding instead makes the COUNT of
-// overlapping nodes, rather than any note, the brightest thing on screen.
+// the p-norm UNION at `GLOW_UNION`. A note gives off the strength it gives off
+// whether it is alone or in a chord, and a chord only spreads that light over a
+// larger area: `n` halos over one another read at most `n^(1/p)` times one, and
+// a lone one reads exactly itself. The operator is commutative, so nothing about
+// the order it walks in reaches the picture. Screen — which this replaced — and
+// adding both make the COUNT of overlapping nodes, rather than any note, the
+// brightest thing on screen (#680).
 //
 // NOTHING in the target is subtractive, and that is what lets the sheets meld
 // into one layer rather than being assembled one at a time: it is light and
 // light only, so a node hidden behind a nearer sheet has nothing to cut with —
-// what it may do to a node in front of it is BRIGHTEN it, and only that.
+// what it may do to a node in front of it is BRIGHTEN it, or leave it as it is
+// where the nearer node's own halo is already the larger.
 // What hides its SHAPE is the scene pass, which draws every node over the
 // finished light: a ring, a mark and a name are drawn whole there, and what
 // each takes back out of the light is its own shadow, multiplied in by its own
@@ -3404,8 +3420,16 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
     return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
 }
 
-/// ONE node's light at this fragment, premultiplied, exactly as every other
-/// layer here returns its ink — the gather's loop body ([`fs_glow_gather`]).
+/// ONE node's light at this fragment — the gather's loop body
+/// ([`fs_glow_gather`]).
+///
+/// STRAIGHT and not premultiplied, which is the one place this parts company
+/// with every other layer here: `w` is the halo's own coverage and `xyz` is the
+/// colour that coverage is of, unmixed with it. The union the gather folds with
+/// needs the two apart — the alphas go into one norm and the colours into a
+/// mean weighted by that norm's own terms — and premultiplying here only to
+/// divide it back out inside the loop would be a rounding per node and a
+/// division by a coverage that can be nothing.
 ///
 /// `uv` is where the fragment stands in THIS node's own uv, which the gather
 /// inverts out of the node's screen frame. Every length below is in that uv, so
@@ -3494,7 +3518,7 @@ fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
     if ink.w <= 0.0 {
         return vec4<f32>(0.0);
     }
-    return vec4<f32>(ink.xyz * alpha, alpha);
+    return vec4<f32>(ink.xyz, alpha);
 }
 
 /// The light's quad: the whole target, once, exactly as the blit pipelines
@@ -3515,20 +3539,10 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
 /// scene pass, and each item's own draw multiplies it along with the rest of
 /// the frame beneath.
 ///
-/// A GATHER rather than a billboard per node under a blend state. The two are
-/// the same picture here — the fold below is the screen blend that pass carried
-/// written out, `src + dst * (1 - src)` on the colour and the same on the
-/// alpha, which is one expression over the whole premultiplied vector — and the
-/// difference is that an operator in shader code is not restricted to what a
-/// fixed-function blend can express (#680). What it costs is the per-node
-/// guard, pixels x lit nodes, paid even where nothing lights the pixel.
-///
-/// The fold ROUNDS once. The blend state it replaces rounded the target to f16
-/// after every draw, dropping a halo whose contribution fell under half of the
-/// accumulator's own ULP; this keeps it. That is the one drift the goldens
-/// took, and it is why the frames carrying a thousand instances moved further
-/// than the rest — never past the DRAW ORDER those frames were already
-/// undefined to within.
+/// A GATHER rather than a billboard per node under a blend state, and this is
+/// what the gather is FOR: the fold below is a p-norm union, which no
+/// fixed-function blend can express (#680). One note gives off the strength
+/// many do, and many only spread the light over a larger area.
 ///
 /// `u.glow.lit` and not `arrayLength(&glow_nodes)`: the buffer outlives the
 /// frames that grew it (see the binding).
@@ -3540,21 +3554,69 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let lit = u32(max(u.glow.lit, 0.0));
-    var out = vec4<f32>(0.0);
+    // The union's three running terms, with the largest coverage so far FACTORED
+    // OUT of the other two: `m` is that largest, `s` is the sum of `(a_i/m)^p`
+    // and `c` the same sum weighted onto the nodes' own colours. Every term
+    // raised to the power is therefore in (0, 1] whatever the exponent, which is
+    // what lets `p` climb toward the true max without the sum overflowing or a
+    // small halo's power underflowing to nothing before it can be compared.
+    // That underflow is what stopped #443's first design, which raised the raw
+    // coverage in an f16 target.
+    //
+    // Rescaling when a new maximum arrives is the price: `s` and `c` are both
+    // multiplied by `(m_old/m_new)^p`, which is exact arithmetic on what is
+    // already banked and leaves the fold commutative — the instance order this
+    // walks in is not readable in the light, the same reason the pass it
+    // replaces could draw every sheet at once.
+    var m = 0.0;
+    var s = 0.0;
+    var c = vec3<f32>(0.0);
     for (var i = 0u; i < lit; i = i + 1u) {
         let node = glow_nodes[i];
         // This pixel in the node's own uv. `pos.xy` is the glow target's own
         // pixels, which is the space the frame was inverted in.
         let delta = pos.xy - node.centre;
         let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
+        // STRAIGHT, not premultiplied: `a` is this node's coverage and `halo.xyz`
+        // the colour it is a coverage of ([`glow_layer`]).
         let halo = glow_layer(node, uv);
-        // SCREEN, commutative and never subtractive, so the instance order this
-        // walks in is not readable in the light — the same reason the pass it
-        // replaces could draw every sheet at once. A halo of zero leaves `out`
-        // exactly as it was, which is what the discarded fragment did.
-        out = halo + out * (1.0 - halo);
+        let a = halo.w;
+        if a <= 0.0 {
+            // Lights nothing here, and the terms below would divide by it.
+            continue;
+        }
+        if m <= 0.0 {
+            // The first light at this pixel IS the maximum, and its own term is
+            // exactly 1. Written out rather than left to the branch below, which
+            // would take `pow` of a zero base.
+            m = a;
+            s = 1.0;
+            c = halo.xyz;
+        } else if a > m {
+            let k = pow(m / a, GLOW_UNION);
+            s = s * k + 1.0;
+            c = c * k + halo.xyz;
+            m = a;
+        } else {
+            let w = pow(a / m, GLOW_UNION);
+            s = s + w;
+            c = c + w * halo.xyz;
+        }
     }
-    return out;
+    if m <= 0.0 {
+        // No node lit this pixel. The resolve below is well-defined only on
+        // `s >= 1`, which holds exactly when something did.
+        return vec4<f32>(0.0);
+    }
+    // `m * (sum (a_i/m)^p)^(1/p)` — the p-norm of the coverages — and the colour
+    // the mean of the nodes' own, weighted by the same terms. A LONE node is
+    // unchanged exactly: `s` is 1, its root is 1, so the light is that node's
+    // own `a` and its own colour, to the bit.
+    //
+    // Clamped at 1 because the norm of coverages that each reach full is above
+    // full, and the target is a coverage.
+    let alpha = min(m * pow(s, 1.0 / GLOW_UNION), 1.0);
+    return vec4<f32>(c * (alpha / s), alpha);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

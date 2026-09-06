@@ -328,7 +328,7 @@ fn a_lattice_with_no_node_grows_no_glow() {
     assert_eq!(differing_pixels(&on, &off), 0, "the glow lit something no node drew",);
 }
 
-/// The MIDDLE of a node glows, and a SHEET behind it makes it glow more.
+/// The MIDDLE of a node glows, and a SHEET behind it does not take that away.
 ///
 /// Two halves, and the second is #435. The first: inside the innermost ring
 /// there is nothing painted at all — [`parity_scene`]'s octave band is an
@@ -338,13 +338,22 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// a neighbouring pixel, because the thing that must not happen is the middle
 /// going DARK: nothing else is drawn there to take the light's place.
 ///
-/// The second: a node on a sheet BEHIND adds its halo to the field, and the
-/// field is composited under every node (`fs_glow_over`), so the near node's
-/// middle comes out brighter than it is with nothing behind it. A nearer node's
-/// body taking the light of the sheets behind off itself is what inverts this —
-/// its middle would then hold its own light alone while the ground a few pixels
-/// away held everyone's, and the node would read as a hole rather than as a
-/// lamp.
+/// The second: a node on a sheet BEHIND joins the field, which is composited
+/// under every node (`fs_glow_over`), and the near node's middle must not come
+/// out DARKER for it. A nearer node's body taking the light of the sheets
+/// behind off itself is what this guards — its middle would then hold its own
+/// light alone while the ground a few pixels away held everyone's, and the node
+/// would read as a hole rather than as a lamp.
+///
+/// Not STRICTLY brighter, which is what it asked before #680's union replaced
+/// the screen fold, and the two readings are now equal to the byte. The near
+/// node's middle is its own halo at full coverage — the clamp in `glow_layer` —
+/// and a union takes the largest contributor's colour where it dominates, so a
+/// dimmer halo behind moves neither the coverage nor the hue there. Under the
+/// screen fold the far node's colour went on adding into the channels even at
+/// full coverage, which is exactly the wash #680 is about. What the sheet
+/// behind does now is light the GROUND around the node, which is where the
+/// union spreads it.
 #[test]
 fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     const SIZE: [u32; 2] = [256, 256];
@@ -397,8 +406,15 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 
     let one_sheet = shooter.shot(&flat);
     let two_sheets = shooter.shot(&sheets);
+    // The equality above is a pass, so the sheet behind has to be shown to
+    // reach the frame at all — otherwise a far node dropped before it ever
+    // lit anything would satisfy the claim by drawing nothing.
     assert!(
-        middle(&two_sheets) > middle(&one_sheet),
+        differing_pixels(&two_sheets, &one_sheet) > 0,
+        "the sheet behind changed no pixel; its light never reached the frame",
+    );
+    assert!(
+        middle(&two_sheets) >= middle(&one_sheet),
         "a sheet behind left the near node's middle at {} against {} with nothing behind it: \
          its light is being taken off its own body",
         middle(&two_sheets),

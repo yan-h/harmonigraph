@@ -2880,18 +2880,18 @@ fn create_cell_pipelines(
 /// **One quad and no instances.** The nodes arrive as a read-only storage
 /// buffer at group 2 ([`glow_node_buffer`]) and the fragment stage walks them
 /// at every pixel. That is the change #680 is built on: an operator written in
-/// shader code is not confined to what a fixed-function blend can express, and
-/// this stage keeps the blend's own operator so the picture does not move.
+/// shader code is not confined to what a fixed-function blend can express.
 ///
 /// **NO BLEND**, where a billboard per node needed one. The fold is
-/// `fs_glow_gather`'s: SCREEN, `src + dst * (1 - src)` premultiplied, which is
-/// what makes two neighbouring nodes' halos meld — an overlap brighter than
-/// either alone, bounded by white however many nodes reach the pixel, and
-/// commutative, so the order the loop walks in is not readable in the picture.
-/// Adding instead blows a chord's middle out to white and makes the count of
-/// overlapping nodes, rather than any note, the brightest thing on screen; a
-/// MAX is the same guarantee taken further and creases along every locus where
-/// two nodes light a pixel equally.
+/// `fs_glow_gather`'s: the p-norm UNION of every halo's coverage at the pixel,
+/// at `GLOW_UNION`. A lone note is unchanged exactly, `n` notes over one another
+/// read at most `n^(1/p)` times one, and it is commutative, so the order the
+/// loop walks in is not readable in the picture. The screen blend it replaces
+/// had that last guarantee and not the first two — `n` overlapping halos read
+/// `1 - (1-a)^n`, so a chord's middle climbed toward white and the count of
+/// nodes, rather than any note, was the brightest thing on screen (#680). A
+/// plain MAX is the union taken to its limit and creases along every locus where
+/// two nodes light a pixel equally, which is why the exponent is finite.
 ///
 /// **Every sheet at once**, which is what the fold's commutativity buys as it
 /// bought it for the blend. What occludes a node's halo is the scene pass,
