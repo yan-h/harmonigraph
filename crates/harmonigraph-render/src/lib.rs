@@ -59,6 +59,7 @@ mod dot_shadow;
 /// A halo alone, over marks a pane drew for itself — the third caller of
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
+mod glow_tiles;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 
@@ -326,8 +327,8 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
-/// `glow` four are the glow's own pass — a billboard and the light it lays
-/// down, once for the nodes and once for the resting markers; the `ink` four
+/// `glow_gather` pair is the light's own pass — one quad over the whole target
+/// and the fold that walks every lit node at each of its pixels; the `ink` four
 /// are the strip the nodes' light is coloured out of, read and then blurred
 /// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
 /// and the Gaussian's one marker cross into the shadow atlas (`shadow.rs`).
@@ -339,8 +340,8 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "vs_plus",
     "fs_plus",
     "fs_plus_scene",
-    "vs_glow",
-    "fs_glow",
+    "vs_glow_gather",
+    "fs_glow_gather",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -601,6 +602,13 @@ struct GpuInstance {
     /// in `from_scene`) so its light can go on leaving. So is the mark, and for
     /// the same reason: it is the light's SIZE, and a size that stepped when
     /// the marking voice was pruned snapped a halo still at full brightness.
+    ///
+    /// Only the first THREE cross as a vertex attribute. The mark is read by
+    /// the light alone, and the light is no longer drawn over this stream: it
+    /// reaches the gather through [`GpuGlowNode`], which this is the source
+    /// for ([`LatticeCallback::glow_nodes`]). Kept as four here because this
+    /// is where a node's light is assembled, and splitting one `GlowStep`
+    /// across two fields to save a float nobody uploads twice buys nothing.
     glow: [f32; 4],
 }
 
@@ -619,13 +627,64 @@ impl GpuInstance {
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
         // lattice.wgsl's `Instance` readable side by side.
+        //
+        // Location 12 is THREE of `glow`'s four floats, and the stride is still
+        // the struct's: the mark is spent on the CPU into the lit-node buffer
+        // and no vertex stage reads it (`GpuInstance::glow`). A narrower
+        // attribute over a wider field is well-formed — the offsets above it
+        // are already fixed and nothing is read past what is named.
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
-            12 => Float32x4
+            12 => Float32x3
         ],
     };
+}
+
+/// One lit node, as the light's own pass reads it: `GlowNode` in lattice.wgsl,
+/// which is where each field is argued.
+///
+/// A read-only storage buffer and not a vertex stream, because the gather has
+/// no geometry per node to expand — the pass is one quad over the whole target
+/// and this is the list its fragment stage walks (`shadow_casters` in
+/// common.wgsl is the same shape for the same reason).
+///
+/// Ten floats, so the WGSL struct's own alignment of 8 makes the array stride
+/// exactly this struct's size; nothing here is padded to a vec4 it does not
+/// fill.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuGlowNode {
+    inv_x: [f32; 2],
+    inv_y: [f32; 2],
+    centre: [f32; 2],
+    light: [f32; 2],
+    /// Mark envelope and conservative halo radius in target pixels (for tiling).
+    mark: [f32; 2],
+}
+
+/// What binds that list to the light's pass: one read-only storage buffer, at
+/// group 2.
+///
+/// FRAGMENT alone, unlike `shadow::caster_layout`'s pair — the gather's vertex
+/// stage is four corners and reads nothing.
+fn glow_node_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    shadow::storage_list_layout(device, "lattice_glow_nodes_layout", wgpu::ShaderStages::FRAGMENT)
+}
+
+/// A buffer for `capacity` lit nodes and the bind group naming it
+/// (`shadow::storage_list`, which holds why the two come as one).
+///
+/// Keyed on the CAPACITY and on nothing else — a frame writes its own nodes
+/// into the buffer it finds and rebuilds neither object, so lighting one more
+/// node than last frame costs an upload and not a bind group.
+fn glow_node_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    shadow::storage_list::<GpuGlowNode>(device, layout, capacity, "lattice_glow_nodes")
 }
 
 /// Pack a grid of per-bucket levels into the rows `spectrum_color_level()` in
@@ -1068,13 +1127,9 @@ impl LatticeCallback {
         // A node the projection cannot place — behind the eye, or collapsed to
         // nothing — casts no shadow rather than a box of infinities for the
         // packer to size.
-        let to_points = |p: glam::Vec3| {
-            let clip = view_proj * p.extend(1.0);
-            (clip.w > 1e-4).then(|| {
-                let ndc = clip / clip.w;
-                [(ndc.x * 0.5 + 0.5) * size_points.x, (0.5 - ndc.y * 0.5) * size_points.y]
-            })
-        };
+        let points = glam::vec2(size_points.x, size_points.y);
+        let to_points =
+            |p: glam::Vec3| project_onto(&view_proj, points, p).map(|(at, _)| at.to_array());
         let node_points = scene.node_radius * camera.points_per_world(size_points.y);
         // Each group's own σ in POINTS, read once: a caster carries it and the
         // packer needs no second conversion (`shadow::sigma_points`). A group
@@ -1295,7 +1350,10 @@ impl LatticeCallback {
                         curve: scene.glow_curve.shape(),
                         wash: scene.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,
-                        padding: Float2([0.0; 2]),
+                        // Settled by prepare, which is where the lit nodes are
+                        // mapped onto the target's pixels.
+                        lit: 0.0,
+                        accumulation: scene.glow_accumulation,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
@@ -1385,6 +1443,179 @@ impl LatticeCallback {
     fn glow_draws(&self) -> bool {
         self.uniforms.glow.reach > 0.0
     }
+
+    /// This frame's lit nodes, each carrying the map from a pixel of a `size`
+    /// target back into that node's own uv — the list `fs_glow_gather` walks.
+    ///
+    /// The set the billboard pass used to light, less the nodes whose halo
+    /// cannot reach the target at all. The pass drew every shipped instance
+    /// whose carried level is above zero and discarded the rest a fragment at a
+    /// time; a gather pays instead for a guard on every candidate it
+    /// carries, so a node the guard can only ever answer "no" for is dropped
+    /// here. Whether a node's CENTRE is on screen still decides nothing — a
+    /// halo reaches well past its node, and one whose middle sits off the pane
+    /// lights the pixels it reaches ([`halo_pixels`] is what says how far).
+    /// Sheets are not distinguished either; the fold is commutative, so this is
+    /// one list in instance order.
+    ///
+    /// The frame is inverted HERE, once per node, because the alternative is
+    /// three matrix multiplies per node per pixel inside the loop. It is exact:
+    /// a billboard lies in the camera's own right/up plane, so one projection
+    /// depth covers the whole of it and the projection restricted to that plane
+    /// is a scale and an offset — a 2x2 basis to invert, under perspective as
+    /// under an orthographic camera.
+    ///
+    /// Three kinds of node are dropped rather than mapped, and each is one the
+    /// rasterizer already dropped — a pass with no quads in it has to drop
+    /// them somewhere.
+    ///
+    /// A node the projection cannot place — at or behind the eye — had every
+    /// corner clipped away. So did a node the frustum excludes in DEPTH, which
+    /// is the one that is not obvious and the one that bit: the billboard lies
+    /// in the camera's right/up plane, so all four of its corners share one
+    /// depth and the primitive is clipped whole rather than trimmed. A node
+    /// nearer than the near plane therefore lit NOTHING, however much of the
+    /// pane its halo reached — and #680's own fixture holds one, a lattice
+    /// corner that the steeply pitched perspective camera puts 0.08 in front of
+    /// an eye whose near plane is at 0.1. Gathering it lights the whole frame
+    /// with a node the billboard pass never drew.
+    ///
+    /// And a node whose basis is degenerate had a quad of no area. Neither lit
+    /// anything, and a singular matrix has no inverse to write down.
+    ///
+    /// The fourth drop is the gather's own and is picture-identical rather than
+    /// inherited: a node whose halo disc misses the target rectangle. What the
+    /// shader would compute for it is exactly zero everywhere. The retained
+    /// discs also feed [`glow_tiles::pack`], so zooming out to thousands of lit
+    /// nodes does not make every pixel check the whole on-screen list either.
+    fn glow_nodes(&self, size: [u32; 2]) -> Vec<GpuGlowNode> {
+        let view_proj =
+            glam::Mat4::from_cols_array_2d(&self.uniforms.camera.view_proj.0.map(|c| c.0));
+        let axis = |v: Float4| glam::Vec3::new(v.0[0], v.0[1], v.0[2]);
+        let (right, up) = (axis(self.uniforms.camera.right), axis(self.uniforms.camera.up));
+        let pixels = glam::vec2(size[0] as f32, size[1] as f32);
+        // The viewport transform the fragment stage's `@builtin(position)` is
+        // on the far side of: the glow pass covers its whole attachment, so
+        // this is the target's own pixels with no offset in it.
+        let to_pixels = |p: glam::Vec3| project_onto(&view_proj, pixels, p);
+        self.instances
+            .iter()
+            .filter(|inst| inst.glow[0] > 0.0)
+            .filter_map(|inst| {
+                // One node uv in world units, as `node_vertex` spends it: the
+                // quad's own margin cancels against the uv it hands out, so the
+                // map is the same whatever margin sized the billboard.
+                //
+                // Off `u.node.radius`, which is what `node_vertex` reads, and
+                // not `u.marker.world_unit`: the two are one number out of
+                // `derive_scene` but a fixture that sets `Scene::node_radius`
+                // by hand moves only the first.
+                let uv_world = self.uniforms.node.radius * 1.8 * inst.scale.max(0.05);
+                let at = glam::Vec3::from(inst.world_pos);
+                let (centre, depth) = to_pixels(at)?;
+                // The frustum's depth range, asked once for the whole quad: its
+                // four corners share this node's depth, so the rasterizer either
+                // kept all of them or none.
+                if !(0.0..=1.0).contains(&depth) {
+                    return None;
+                }
+                let (r, u) = (
+                    to_pixels(at + right * uv_world)?.0 - centre,
+                    to_pixels(at + up * uv_world)?.0 - centre,
+                );
+                // Off the pane entirely: the halo's disc, at the largest radius
+                // this frame's bars can give it, does not touch the target.
+                // Measured against the rectangle rather than its corners so a
+                // node sitting off one EDGE with its light across the pane is
+                // kept — the nearest point of the target to the centre is the
+                // one the disc reaches first.
+                let closest = centre.clamp(glam::Vec2::ZERO, pixels);
+                let radius = halo_pixels(&self.uniforms, r, u);
+                if closest.distance_squared(centre) > radius.powi(2) {
+                    return None;
+                }
+                // `d = r * uv.x + u * uv.y` inverted: the columns are r and u,
+                // so this is the adjugate over the determinant.
+                let det = r.x * u.y - u.x * r.y;
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                Some(GpuGlowNode {
+                    inv_x: [u.y / det, -u.x / det],
+                    inv_y: [-r.y / det, r.x / det],
+                    centre: centre.to_array(),
+                    light: [inst.glow[0], inst.glow[1]],
+                    mark: [inst.glow[3], radius],
+                })
+            })
+            .collect()
+    }
+}
+
+/// One world point through `view_proj` onto a pane of `extent` — points or
+/// pixels, whichever the caller measures in — as the rasterizer would place
+/// it: x right, y DOWN from the top-left corner, and wgpu's clip depth (0 near,
+/// 1 far) beside it. The two places the CPU stands in for the rasterizer read
+/// this: the shadow packer's boxes (`from_scene`) and the light's lit-node map
+/// ([`LatticeCallback::glow_nodes`]), which have to agree with each other and
+/// with `node_vertex`.
+///
+/// `None` for a point at or behind the eye, which no pass can place and which
+/// each caller drops on its own terms.
+fn project_onto(
+    view_proj: &glam::Mat4,
+    extent: glam::Vec2,
+    p: glam::Vec3,
+) -> Option<(glam::Vec2, f32)> {
+    let clip = *view_proj * p.extend(1.0);
+    (clip.w > 1e-4).then(|| {
+        let ndc = clip / clip.w;
+        (glam::vec2((ndc.x * 0.5 + 0.5) * extent.x, (0.5 - ndc.y * 0.5) * extent.y), ndc.z)
+    })
+}
+
+/// An upper bound on how far one lit node's halo reaches from its centre, in
+/// the pixels of the target it is gathered into. `r` and `u` are the node's own
+/// uv axes as pixel vectors, which is the frame
+/// [`LatticeCallback::glow_nodes`] inverts.
+///
+/// A BOUND and not the exact extent, because the one thing it is read for is a
+/// cull: too large keeps a node that lights nothing, which costs a loop
+/// iteration, and too small drops a node that lights something, which is a hole
+/// in the picture. It is loose in the RIM, and loose toward keeping.
+///
+/// In uv the halo stops at `glow_layer`'s `span` — the rim the LIGHT is measured
+/// against plus the Reach, floored where the shader floors it. `glow_rim` eases
+/// that rim between `node_rim`'s two answers on the mark this node carries, and
+/// the marked answer is the larger of the two, so taking it once for the frame
+/// bounds every node whatever any of them carries. That is the whole of the
+/// slack: a frame with no marks in it is bounded by the mark's rim anyway.
+///
+/// From uv to pixels the halo's disc maps to an ELLIPSE, whose semi-major axis
+/// is the largest singular value of the 2x2 frame `[r u]`. Written out rather
+/// than bounded by `|r| + |u|` or the Frobenius norm, both of which are up to
+/// √2 too wide on the square frame an orthographic camera hands every node —
+/// and a bound √2 too wide in RADIUS keeps twice the area's worth of nodes off
+/// the pane, which is the cost this is here to remove.
+fn halo_pixels(uniforms: &Uniforms, r: glam::Vec2, u: glam::Vec2) -> f32 {
+    let node = &uniforms.node;
+    let bare = node.rings_outer.max(0.0);
+    let rim = if node.mark_thickness > 0.0 {
+        bare.max(node.mark_inner + node.mark_thickness)
+    } else {
+        bare
+    };
+    let span = (rim + uniforms.glow.reach.max(0.0)).max(0.1);
+    // The larger eigenvalue of `[r u]^T [r u]`, whose root is that singular
+    // value: half the trace plus the root of the discriminant. Both halves are
+    // non-negative, so no floor is wanted under the root — one at zero would
+    // fire on nothing but a NaN, and would turn it into a bound of zero, which
+    // is the DROP side. A NaN left alone fails the comparison at the call site
+    // instead and keeps the node, which is the side a bound is loose toward.
+    let (a, b, c) = (r.length_squared(), u.length_squared(), r.dot(u));
+    let half = (a + b) * 0.5;
+    let off = (a - b) * 0.5;
+    span * (half + (off * off + c * c).sqrt()).sqrt()
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -1396,9 +1627,13 @@ struct LatticeResources {
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
-    /// The node glow's own pass: one draw over the node instance buffer, into
-    /// a target of the glow's own (see [`create_glow_pipeline`]).
-    glow_pipeline: wgpu::RenderPipeline,
+    /// The node glow's own pass: one draw over the whole of a target of the
+    /// glow's own, folding every lit node at each pixel (see
+    /// [`create_glow_gather_pipeline`]).
+    glow_gather_pipeline: wgpu::RenderPipeline,
+    /// The lit-node list that pass walks, at its group 2 (see
+    /// [`glow_node_layout`]).
+    glow_node_layout: wgpu::BindGroupLayout,
     /// The colour it draws in, settled ahead of it: the ink read round every
     /// node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -1716,6 +1951,22 @@ struct PaneBuffers {
     caster_capacity: usize,
     caster_count: usize,
     caster_bind_group: wgpu::BindGroup,
+    /// Every lit node this frame, as the light's own pass reads them
+    /// ([`GpuGlowNode`]), and the bind group naming the buffer at group 2.
+    ///
+    /// Keyed on CAPACITY alone, exactly as the casters above are: the contents
+    /// are rewritten every frame and neither object is, so a frame that lights
+    /// one more node than the last rebuilds nothing (`glow_node_buffer`). How
+    /// many of the entries are this frame's is `u.glow.lit`, and never the
+    /// buffer's own length.
+    glow_node_buffer: wgpu::Buffer,
+    glow_node_capacity: usize,
+    glow_node_bind_group: wgpu::BindGroup,
+    /// Tile offsets and candidate indices, uploaded every frame. Allocation
+    /// depends only on capacity; camera, reach and node changes rewrite it.
+    glow_tile_buffer: wgpu::Buffer,
+    glow_tile_capacity: usize,
+    glow_tile_bind_group: wgpu::BindGroup,
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
     draws: Vec<Draw>,
@@ -1822,7 +2073,7 @@ struct LatticeBloom {
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
 /// picture (`node_paint`), and a pass cannot sample the attachment it writes.
-/// Every node's halo melds here first (`fs_glow`), across every sheet at once,
+/// Every node's halo melds here first (`fs_glow_gather`), across every sheet at once,
 /// and the scene pass then lays that one layer down at its bottom and reads it
 /// again per node.
 ///
@@ -2632,89 +2883,67 @@ fn create_cell_pipelines(
     )
 }
 
-/// The glow pass's one attachment and the blend the light melds under.
+/// The node glow's one pipeline: the light, gathered over the whole of the
+/// glow's own target (see [`GlowTarget`]).
 ///
-/// **SCREEN**: `src + dst * (1 - src)`, premultiplied on both channels, is what
-/// makes two neighbouring nodes' halos MELD: an overlap is brighter than either
-/// alone, it is bounded by white however many nodes reach the same pixel, and
-/// the operation is commutative, so nothing about the order inside a draw is
-/// readable in the picture. Adding instead blows a chord's middle out to white
-/// and makes the count of overlapping nodes, rather than any note, the
-/// brightest thing on screen.
+/// **One quad and no instances.** The nodes arrive as a read-only storage
+/// buffer at group 2 ([`glow_node_buffer`]); group 3 narrows the walk to each
+/// tile's candidates. That is the change #680 is built on: an operator written in
+/// shader code is not confined to what a fixed-function blend can express.
 ///
-/// A MAX blend is the same guarantee taken further — an overlap exactly as
-/// bright as the brighter node — and is not what the light wants: it is a
-/// `max` of two smooth fields, so it creases along every locus where two nodes
-/// light a pixel equally, and the lattice comes out gridded with the seams of
-/// its own Voronoi diagram.
-fn glow_targets(target_format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetState>; 1] {
-    let screen = wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrc,
-            operation: wgpu::BlendOperation::Add,
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-            operation: wgpu::BlendOperation::Add,
-        },
-    };
-    [Some(wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(screen),
-        write_mask: wgpu::ColorWrites::ALL,
-    })]
-}
-
-/// The node glow's one pipeline: the light, over the node instance buffer and
-/// into the glow's own target (see [`GlowTarget`]).
+/// **NO BLEND**, where a billboard per node needed one.
+/// `fs_glow_gather` combines luminance with peak-normalized screen and mixes
+/// colour separately. The fixed full-strength ceiling comes from Glow gain;
+/// notes and their fades never move it. A lone glow keeps its original colour
+/// and coverage. The light remains independent of instance order.
+/// Glow accumulation crossfades to the original per-channel screen in this
+/// same pass, deliberately relaxing the fixed ceiling as its share rises.
 ///
-/// **One attachment**, screen-blended ([`glow_targets`], which holds the
-/// argument for it). Commutative and never subtractive, so no draw order is
-/// readable in the light and the sheets meld in whatever order they are
-/// handed.
-///
-/// **One draw over every instance**, sheets and all, rather than a sheet at a
-/// time: nothing written here is subtractive, so there is nothing for the order
-/// to decide. What occludes a node's halo is the scene pass, which draws every
-/// node over the finished light — its SHAPE, at least: what the node's own ink
-/// then takes of the light under it is `node_paint`'s to say.
-///
-/// **Its own vertex entry point** (`vs_glow`), because the glow reaches past
-/// what a node paints: the billboard has to hold the whole halo, and growing
-/// `vs_main`'s quad to match would spend a ring of discarded fragments per node
-/// on every frame for a margin no other layer reads.
+/// **Every sheet at once**, which is what the fold's commutativity buys as it
+/// bought it for the blend. What occludes a node's halo is the scene pass,
+/// which draws every node over the finished light — its SHAPE, at least: what
+/// the node's own ink then takes of the light under it is `node_paint`'s to
+/// say.
 ///
 /// **No depth.** The pass this draws into carries none: it is the glow's own,
-/// ahead of the scene's, and a screen blend has no order to defend.
-fn create_glow_pipeline(
+/// ahead of the scene's, and one write per pixel has no order to defend.
+fn create_glow_gather_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
+    node_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let shader = lattice_module(device, shader_src);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
+        bind_group_layouts: &[
+            Some(bind_group_layout),
+            Some(strip_layout),
+            Some(node_layout),
+            Some(node_layout),
+        ],
         ..Default::default()
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("fs_glow"),
+        label: Some("fs_glow_gather"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_glow"),
+            entry_point: Some("vs_glow_gather"),
             compilation_options: Default::default(),
-            buffers: &[GpuInstance::LAYOUT],
+            buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_glow"),
+            entry_point: Some("fs_glow_gather"),
             compilation_options: Default::default(),
-            targets: &glow_targets(target_format),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -3024,12 +3253,14 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let glow_pipeline = create_glow_pipeline(
+        let glow_node_layout = glow_node_layout(device);
+        let glow_gather_pipeline = create_glow_gather_pipeline(
             device,
             &shader_src,
             LATTICE_COLOR_FORMAT,
             &bind_group_layout,
             &strip_layout,
+            &glow_node_layout,
         );
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, &shader_src, &bind_group_layout, &strip_layout);
@@ -3158,7 +3389,8 @@ impl LatticeResources {
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
-            glow_pipeline,
+            glow_gather_pipeline,
+            glow_node_layout,
             ink_strip_pipeline,
             ink_blur_pipeline,
             bind_group_layout,
@@ -3259,6 +3491,7 @@ impl LatticeResources {
     ) -> &mut PaneBuffers {
         let layout = &self.bind_group_layout;
         let caster_layout = &self.caster_layout;
+        let node_layout = &self.glow_node_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
         // this frame's font texture and mark sheet — `prepare` binds them
         // before it gets here.
@@ -3276,6 +3509,7 @@ impl LatticeResources {
             bloom_dummy: &self.bloom_dummy,
         };
         let want_casters = wants.casters;
+        let want_glow_nodes = wants.glow_nodes;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lattice_uniforms"),
@@ -3293,6 +3527,10 @@ impl LatticeResources {
             });
             let (caster_buffer, caster_bind_group) =
                 shadow::caster_buffer(device, caster_layout, INITIAL_BOX_CAPACITY);
+            let (glow_node_buffer, glow_node_bind_group) =
+                glow_node_buffer(device, node_layout, INITIAL_GLOW_NODE_CAPACITY);
+            let (glow_tile_buffer, glow_tile_bind_group) =
+                shadow::storage_list::<u32>(device, node_layout, 1, "lattice_glow_tiles");
             PaneBuffers {
                 uniform_buffer,
                 bind_group,
@@ -3339,6 +3577,12 @@ impl LatticeResources {
                 caster_capacity: INITIAL_BOX_CAPACITY,
                 caster_count: 0,
                 caster_bind_group,
+                glow_node_buffer,
+                glow_node_capacity: INITIAL_GLOW_NODE_CAPACITY,
+                glow_node_bind_group,
+                glow_tile_buffer,
+                glow_tile_capacity: 1,
+                glow_tile_bind_group,
                 draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
@@ -3409,6 +3653,26 @@ impl LatticeResources {
             pane.caster_buffer = buffer;
             pane.caster_bind_group = bind_group;
         }
+        // The lit nodes, on exactly the same terms: one object in two halves,
+        // grown when a frame lights more of them than the buffer holds and left
+        // alone otherwise. Never shrunk — a chord released is a chord about to
+        // be played again, and the light's own release outlives the notes.
+        if want_glow_nodes > pane.glow_node_capacity {
+            pane.glow_node_capacity = want_glow_nodes.next_power_of_two();
+            let (buffer, bind_group) =
+                glow_node_buffer(device, node_layout, pane.glow_node_capacity);
+            pane.glow_node_buffer = buffer;
+            pane.glow_node_bind_group = bind_group;
+        }
+        if wants.glow_tiles > pane.glow_tile_capacity {
+            pane.glow_tile_capacity = wants.glow_tiles.next_power_of_two();
+            (pane.glow_tile_buffer, pane.glow_tile_bind_group) = shadow::storage_list::<u32>(
+                device,
+                node_layout,
+                pane.glow_tile_capacity,
+                "lattice_glow_tiles",
+            );
+        }
         pane
     }
 }
@@ -3423,6 +3687,10 @@ const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// And for the names' shadow boxes: one per named node.
 const INITIAL_BOX_CAPACITY: usize = 64;
+
+/// And for the light's own node list: one per LIT node, which a chord's worth
+/// of release keeps well under the instance count.
+const INITIAL_GLOW_NODE_CAPACITY: usize = 64;
 
 /// Which of a pane's optional targets this frame wants, and how tall the ink
 /// strip has to be — the answers `pane_buffers` acts on that come off the
@@ -3451,6 +3719,11 @@ struct PaneTargets {
     /// buffers below, because a storage buffer's bind group has to be rebuilt
     /// with it and this is where the layout is in scope.
     casters: usize,
+    /// And how many lit nodes the light's own pass walks — the storage buffer
+    /// at its group 2 and the bind group naming it, which grow together
+    /// ([`glow_node_buffer`]), here for the same reason the casters are.
+    glow_nodes: usize,
+    glow_tiles: usize,
 }
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.
@@ -3583,12 +3856,13 @@ impl CallbackTrait for LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let glow_pipeline = create_glow_pipeline(
+                    let glow_gather_pipeline = create_glow_gather_pipeline(
                         device,
                         source,
                         LATTICE_COLOR_FORMAT,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
+                        &resources.glow_node_layout,
                     );
                     // ...and the strip the light is coloured out of, on the
                     // same argument one step further back: an edit to what a
@@ -3601,7 +3875,7 @@ impl CallbackTrait for LatticeCallback {
                     );
                     resources.node_cell_pipeline = node_cell_pipeline;
                     resources.plus_cell_pipeline = plus_cell_pipeline;
-                    resources.glow_pipeline = glow_pipeline;
+                    resources.glow_gather_pipeline = glow_gather_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
 
@@ -3695,6 +3969,12 @@ impl CallbackTrait for LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
+        // Every lit node, mapped onto the pixels of the target the light is
+        // gathered into. Here rather than in `from_scene` because that is the
+        // one thing the map needs which the callback is not built with: the
+        // render-scaled size, settled just above.
+        let lit_nodes = if glow { self.glow_nodes(size) } else { Vec::new() };
+        let tile_nodes = glow_tiles::pack(&lit_nodes, size);
         // Every caster's cell, packed for this frame (`shadow::pack`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group has either
@@ -3739,6 +4019,11 @@ impl CallbackTrait for LatticeCallback {
                 // pipeline's layout — one zeroed entry, which is a caster with
                 // no cells and a multiply of 1.
                 casters: packed.casters.len().max(1),
+                // And at least one lit node, on the same rule: a frame with the
+                // light on and nothing lit still binds the list, and the pass
+                // that would read it is skipped.
+                glow_nodes: lit_nodes.len().max(1),
+                glow_tiles: tile_nodes.len().max(1),
             },
             shared_sdf.texture.as_ref(),
         );
@@ -3754,6 +4039,14 @@ impl CallbackTrait for LatticeCallback {
         pane.instance_count = self.instances.len() as u32;
         if !self.instances.is_empty() {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+        }
+
+        // This frame's lit nodes, into a buffer that may be larger than they
+        // are. Nothing zeroes the tail: this frame's tile lists reference only
+        // its live nodes, so entries a wider frame left behind are never walked.
+        if !lit_nodes.is_empty() {
+            queue.write_buffer(&pane.glow_node_buffer, 0, bytemuck::cast_slice(&lit_nodes));
+            queue.write_buffer(&pane.glow_tile_buffer, 0, bytemuck::cast_slice(&tile_nodes));
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -3916,6 +4209,10 @@ impl CallbackTrait for LatticeCallback {
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
+        // How far into the lit-node list this frame's own entries run, which is
+        // settled here for the same reason the atlas's texels are: the map that
+        // fills it needs the target's pixels, and this is where they are known.
+        uniforms.glow.lit = lit_nodes.len() as f32;
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
         }
@@ -4101,8 +4398,9 @@ impl CallbackTrait for LatticeCallback {
                     pass.draw(0..4, 0..pane.instance_count);
                 }
 
-                // Cleared to transparent, which is the screen blend's own
-                // identity: a screen over nothing is the source.
+                // Cleared to transparent, which is what the gather writes where
+                // no node reaches — so the clear is the answer for the frames
+                // that skip the draw below, and agrees with it everywhere else.
                 let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("lattice_glow_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4119,17 +4417,22 @@ impl CallbackTrait for LatticeCallback {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                // Every node at once, in whatever order the instance buffer
-                // holds them. The blend is commutative and never subtracts, so
-                // this target is one field of light with no depth in it at all
-                // — which is what makes it safe to lay under every sheet as a
-                // single layer.
-                if pane.instance_count > 0 {
+                // ONE quad over the target, each pixel folding its tile's
+                // candidates from group 2. The fold is commutative,
+                // so this target is one field of light with no depth in it
+                // at all — which is what makes it safe to lay under
+                // every sheet as a single layer.
+                //
+                // Skipped with nothing lit, where the clear above has already
+                // written what the pass would: the light is over, or the frame
+                // ships only markers and names.
+                if !lit_nodes.is_empty() {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
-                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    pass.set_pipeline(&resources.glow_pipeline);
-                    pass.draw(0..4, 0..pane.instance_count);
+                    pass.set_bind_group(2, &pane.glow_node_bind_group, &[]);
+                    pass.set_bind_group(3, &pane.glow_tile_bind_group, &[]);
+                    pass.set_pipeline(&resources.glow_gather_pipeline);
+                    pass.draw(0..4, 0..1);
                 }
             }
 

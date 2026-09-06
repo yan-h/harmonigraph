@@ -545,8 +545,8 @@ pub fn derive_scene(
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
         // Clamped here as well as in `sanitize`, for the shells that never come
-        // through that door: the reach sizes the billboard the glow's draw
-        // uses, so a number from outside the bar is a quad it cannot fill.
+        // through that door: reach sizes the halo's analytic span and its CPU
+        // culling bound, which must describe the same supported range.
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_curve: view.glow_curve.sanitized(),
@@ -557,6 +557,9 @@ pub fn derive_scene(
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
+        // Shells may bypass `sanitize`; a mix factor outside this range would
+        // extrapolate beyond the two glow treatments instead of blending them.
+        glow_accumulation: view.glow_accumulation.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
         // this to their high-water mark.

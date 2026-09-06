@@ -10,6 +10,7 @@ mod fixtures;
 mod glow_colour;
 mod glow_markers;
 mod glow_reach;
+mod glow_union;
 mod golden;
 mod labels;
 mod marks;

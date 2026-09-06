@@ -234,6 +234,7 @@ pub(super) fn parity_scene() -> Scene {
         // every glow bar is dialled in.
         marker_unit: 0.34 * 1.8,
         glow_blend: 0.5,
+        glow_accumulation: 0.0,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
     }

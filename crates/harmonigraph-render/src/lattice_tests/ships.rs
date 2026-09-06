@@ -98,16 +98,23 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
-    // The LIGHT drawn at all, which is the only way `fs_glow`'s own early-out
-    // reaches the comparison: no fixture above has a reach, and there is no
-    // light draw to compare without a glow target for it to write into.
+    // The one fixture whose Glow block reaches the shader with anything in it.
+    // `from_scene` zeroes the whole block with the light off, so on every
+    // fixture above `glow_wash` reads 0 and a LIT slice takes none of the field
+    // — which is one arm of the `mix` in `node_paint`, on the far side of the
+    // early-out that decides whether a fragment gets there at all.
+    //
+    // The light's OWN pass is not compared here, and no longer has anything to
+    // compare: the gather has no `EARLY_OUT` branch at all where the billboard
+    // had one. A node with no light is not in `glow_nodes` to begin with, and
+    // past a halo's span `glow_layer` returns zero by the arithmetic either
+    // path would run.
     let lit_field = || {
         let mut scene = wide_shadow();
         scene.glow_reach = 0.8;
-        // One node with INK and no light of its own, which is exactly what that
-        // early-out tests: a fixture whose every node is lit never once takes
-        // the branch. Shipped for its ink (`paints`), it draws its own layers
-        // while emitting nothing.
+        // One node with INK and no light of its own, which is what the cull
+        // ships for its ink alone (`paints`): it draws its layers, takes the
+        // wash under them, and emits nothing.
         let mut dark = scene.nodes[0];
         dark.glow.level = 0.0;
         dark.glow.row = scene.glow_rows;
@@ -324,108 +331,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 "the node cell changed when the early-outs were enabled: texel {differing:?}",
             );
         }
-
-        // The LIGHT's own draw, compared the same way and for the same reason.
-        // `fs_glow`'s own early-out is reachable here and nowhere else — the
-        // scene pass never runs it — so without this it would be compiled and
-        // never once compared.
-        let Some(strip) = pane.ink_history.as_ref() else {
-            continue;
-        };
-        let glow_draw = |src: &str| {
-            let pipeline = create_glow_pipeline(
-                &device,
-                &with_common(src),
-                format,
-                &res.bind_group_layout,
-                &res.strip_layout,
-            );
-            let target = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("parity_glow"),
-                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let view = target.create_view(&Default::default());
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("parity_glow_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, 0..pane.instance_count);
-            }
-            queue.submit([encoder.finish()]);
-            // `readback`'s copy with its one assumption widened: a 256-wide row
-            // is 1024 bytes of light, and that is aligned.
-            let read = |target: &wgpu::Texture, bytes: u32| {
-                let bytes_per_row = SIZE[0] * bytes;
-                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("parity_glow_readback"),
-                    size: (bytes_per_row * SIZE[1]) as u64,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-                let mut encoder = device.create_command_encoder(&Default::default());
-                encoder.copy_texture_to_buffer(
-                    target.as_image_copy(),
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(bytes_per_row),
-                            rows_per_image: None,
-                        },
-                    },
-                    wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                );
-                queue.submit([encoder.finish()]);
-                let slice = buffer.slice(..);
-                slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-                device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-                slice.get_mapped_range().to_vec()
-            };
-            read(&target, 4)
-        };
-        assert!(pane.instance_count > 0, "the {name} scene ships no node to compare");
-        let light_fast = glow_draw(SHADER_SRC);
-        let light_slow = glow_draw(&reference_src);
-
-        // Vacuous unless the pass actually wrote it: every fixture that reaches
-        // here carries a reach, so a layer of zeroes means the dials stopped
-        // arriving rather than that the skips are sound.
-        assert!(
-            light_slow.iter().any(|&b| b != 0),
-            "the {name} scene's light pass lit nothing; the comparison is vacuous",
-        );
-
-        let differing =
-            light_fast.iter().zip(light_slow.iter()).enumerate().find(|(_, (a, b))| a != b);
-        assert!(
-            differing.is_none(),
-            "the {name} scene's light changed when the early-outs were enabled: byte {:?}",
-            differing.map(|(i, (a, b))| (i, *a, *b)),
-        );
     }
 }
 
@@ -897,5 +802,196 @@ fn a_resting_lattice_ships_one_marker_draw() {
         call.draws,
         vec![Draw::Pluses(0, call.pluses.len() as u32)],
         "every cross is one run, the same batch the field used to be",
+    );
+}
+
+/// The light's own list is the billboard pass's set less the two drops
+/// `glow_nodes` makes on the CPU, and the one under test here is the DEPTH
+/// clip: a node the frustum excludes in depth had its whole quad clipped, every
+/// corner sharing the one depth, so it lit nothing. The steeply pitched
+/// perspective fixture is the one that holds such a node, a lattice corner in
+/// front of the near plane, so it is the fixture that reaches the drop at all.
+///
+/// And the map on every node that does ship is checked against the billboard
+/// it stands in for: the pixel `node_vertex` put uv (1, 0) at has to invert
+/// back to (1, 0), and (0, 1) likewise. That is the check a transposed or
+/// mis-signed adjugate fails, which the goldens cannot see — the halo stays
+/// round either way and only its colour turns.
+#[test]
+fn the_lit_node_list_is_the_billboard_set_under_the_billboard_map() {
+    const SIZE: [u32; 2] = [256, 256];
+    let shot = super::golden::names_overlapping_on_one_sheet();
+    let call = LatticeCallback::from_scene(
+        &shot.scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        7,
+        None,
+    );
+    let view_proj = glam::Mat4::from_cols_array_2d(&call.uniforms.camera.view_proj.0.map(|c| c.0));
+    let pixels = glam::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let axis = |v: Float4| glam::Vec3::new(v.0[0], v.0[1], v.0[2]);
+    let (right, up) = (axis(call.uniforms.camera.right), axis(call.uniforms.camera.up));
+
+    let lit: Vec<&GpuInstance> = call.instances.iter().filter(|i| i.glow[0] > 0.0).collect();
+    assert!(lit.len() > 1, "the fixture lights nothing; the list is vacuous");
+    let placed = |inst: &GpuInstance| {
+        project_onto(&view_proj, pixels, glam::Vec3::from(inst.world_pos))
+            .filter(|(_, depth)| (0.0..=1.0).contains(depth))
+    };
+    let dropped = lit.iter().filter(|inst| placed(inst).is_none()).count();
+    assert!(
+        dropped > 0,
+        "the fixture lost its node in front of the near plane; the drop is unreached"
+    );
+
+    // The gather's OTHER drop, which this fixture reaches in bulk: a lattice
+    // this wide runs far off a 256px pane, and a halo that cannot touch the
+    // target is dropped on the CPU rather than guarded at every pixel
+    // (`a_lit_node_whose_halo_misses_the_pane_is_not_shipped` is that claim's
+    // own test). Asked of the production bound rather than re-derived, because
+    // what this test is pinning is the near-plane drop above: a node 0.08 in
+    // front of the eye has an enormous frame and would sail through the cull,
+    // so the equality below is what fails if the depth filter goes.
+    let reaches = |inst: &GpuInstance| -> bool {
+        let Some((centre, _)) = placed(inst) else {
+            return false;
+        };
+        let at = glam::Vec3::from(inst.world_pos);
+        let uv_world = call.uniforms.node.radius * 1.8 * inst.scale.max(0.05);
+        let axis_px = |a: glam::Vec3| {
+            project_onto(&view_proj, pixels, at + a * uv_world).map(|p| p.0 - centre)
+        };
+        let (Some(r), Some(u)) = (axis_px(right), axis_px(up)) else {
+            return false;
+        };
+        // Squared on both sides, as `glow_nodes` compares them: a node landing
+        // on the bound would otherwise be kept here and dropped there, or the
+        // other way about, on a rounding neither side is asking about.
+        centre.clamp(glam::Vec2::ZERO, pixels).distance_squared(centre)
+            <= halo_pixels(&call.uniforms, r, u).powi(2)
+    };
+    let kept: Vec<&&GpuInstance> = lit.iter().filter(|inst| reaches(inst)).collect();
+    assert!(
+        kept.len() < lit.len() - dropped,
+        "every lit node's halo reaches this pane; the off-pane cull is unreached",
+    );
+
+    let nodes = call.glow_nodes(SIZE);
+    assert_eq!(
+        nodes.len(),
+        kept.len(),
+        "the list is the lit set less the clipped and the off-pane",
+    );
+
+    // Instance order on both sides, so the two zip.
+    for (inst, node) in kept.iter().zip(&nodes) {
+        let at = glam::Vec3::from(inst.world_pos);
+        let uv_world = call.uniforms.node.radius * 1.8 * inst.scale.max(0.05);
+        let centre = glam::Vec2::from(node.centre);
+        let uv_of = |corner: glam::Vec3| {
+            let (px, _) = project_onto(&view_proj, pixels, corner).expect("a placed corner");
+            let d = px - centre;
+            glam::vec2(glam::Vec2::from(node.inv_x).dot(d), glam::Vec2::from(node.inv_y).dot(d))
+        };
+        let (r, u) = (uv_of(at + right * uv_world), uv_of(at + up * uv_world));
+        assert!(r.abs_diff_eq(glam::vec2(1.0, 0.0), 1e-3), "right corner inverts to {r}");
+        assert!(u.abs_diff_eq(glam::vec2(0.0, 1.0), 1e-3), "up corner inverts to {u}");
+    }
+}
+
+/// A lit node whose halo cannot touch the pane is not shipped to the gather,
+/// and one whose halo can is — however far off the pane its own centre sits.
+///
+/// The billboard pass paid NOTHING for a node the rasterizer never covered a
+/// pixel of; the gather pays its per-node guard at every pixel of the frame for
+/// every entry in the list, and the reachable length of that list is
+/// `glow_fade::MAX_ROWS`. Without the cull, zooming IN — which carries nodes off
+/// the pane and leaves fewer of them on it — makes the light more expensive,
+/// which is backwards. `halo_pixels` is the bound the cull is taken against.
+///
+/// One roaming node beside a node at the frame's centre, at three placements,
+/// all of them clear of the pane by more than the node's own ink:
+///
+/// - close enough for the halo to cross the pane's edge,
+/// - past the bound,
+/// - and further still.
+///
+/// The first ships and the other two do not, which is the claim. What keeps
+/// that from being a claim about `halo_pixels` talking to itself is the pair of
+/// SHOTS: the near placement has to change the picture, since its light is on
+/// the pane and dropping it would be a hole, and the two far placements have to
+/// draw the same frame as each other, which is what says the light past the
+/// bound is nothing rather than merely dim.
+///
+/// The Shadow is off in the fixture. It is the one other layer a node this far
+/// out could reach the pane with, and it would answer for the light in both
+/// shots.
+#[test]
+fn a_lit_node_whose_halo_misses_the_pane_is_not_shipped() {
+    const SIZE: [u32; 2] = [256, 256];
+    let pane = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    // The pane's own scale, read off the projection rather than restated. World
+    // x runs along the screen's x alone under this fixture's camera, so a
+    // placement below is a pixel column and the reader can size it against the
+    // 256 the pane is wide.
+    let scale = {
+        let scene = single_marked_node(0, 0);
+        let origin = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+        (origin.x, on_screen(&scene, SIZE, glam::Vec3::X).x - origin.x)
+    };
+    let at = |centre_x: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+        let mut roamer = scene.nodes[0];
+        roamer.world_pos = glam::Vec3::new((centre_x - scale.0) / scale.1, 0.0, 0.0);
+        roamer.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
+        scene.nodes.push(roamer);
+        rows_per_node(&mut scene);
+        scene
+    };
+    // The node's ink stops 41px out and its halo 81px, against a bound of 92:
+    // 328 is off the pane with light on it — 464 pixels of it, columns 247 to
+    // 255 — and 380 and 420 are past every one of those numbers. The two shots
+    // below are what hold the fixture to that reading rather than this comment.
+    const NEAR: f32 = 328.0;
+    const FAR: f32 = 380.0;
+    const FURTHER: f32 = 420.0;
+    let shipped = |centre_x: f32| -> usize {
+        let call = LatticeCallback::from_scene(
+            &at(centre_x),
+            LatticeLabels::default(),
+            pane,
+            wgpu::TextureFormat::Rgba8Unorm,
+            11,
+            None,
+        );
+        assert_eq!(
+            call.instances.iter().filter(|i| i.glow[0] > 0.0).count(),
+            2,
+            "the fixture must light both nodes at {centre_x}, or there is nothing to cull",
+        );
+        call.glow_nodes(SIZE).len()
+    };
+    assert_eq!(shipped(NEAR), 2, "a halo that crosses the pane's edge must be gathered");
+    assert_eq!(shipped(FAR), 1, "a halo that stops short of the pane must not be");
+    assert_eq!(shipped(FURTHER), 1, "nor one further out still");
+
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let (near, far, further) =
+        (shooter.shot(&at(NEAR)), shooter.shot(&at(FAR)), shooter.shot(&at(FURTHER)));
+    assert_eq!(
+        differing_pixels(&far, &further),
+        0,
+        "the light past the bound is not nothing; the cull drops a node that draws",
+    );
+    assert!(
+        differing_pixels(&near, &far) > 0,
+        "the near placement lights no pixel either; it is not the branch it claims",
     );
 }

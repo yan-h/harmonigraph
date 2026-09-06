@@ -1268,6 +1268,9 @@ pub struct ViewConfig {
     /// heading, beside a Reach that is a distance, a "spread" reads as how far
     /// the light goes, and this moves no light at all — only what colour it is.
     pub glow_blend: f32,
+    /// Blend from the fixed-peak glow (0) to the original per-channel screen
+    /// accumulation (1). Only overlapping halos change; a lone glow is identical.
+    pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
     /// one while the light is coming up, [`glow_release`](Self::glow_release)
@@ -2214,6 +2217,8 @@ impl ViewConfig {
         // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
+        self.glow_accumulation =
+            finite_or(self.glow_accumulation, fresh.glow_accumulation).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -2527,6 +2532,7 @@ impl Default for ViewConfig {
             // Each octave keeps its own arc of colour around the node instead
             // of averaging with the opposite side.
             glow_blend: 0.0,
+            glow_accumulation: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of

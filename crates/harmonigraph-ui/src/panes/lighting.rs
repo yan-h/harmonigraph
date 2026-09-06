@@ -46,7 +46,18 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow gain")
         .unit(1.0, "×")
             .show(ui)
-            .on_hover_text("Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.");
+            .on_hover_text(
+                "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.",
+            );
+        ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Glow accumulation")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Controls how light builds up where note glows overlap. \
+                 0% caps their combined brightness at the level set by Glow gain. \
+                 100% lets their light build up where they overlap. \
+                 A single note's glow stays unchanged.",
+            );
         ValueBar::new(
             &mut view.glow_curve.shape,
             GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
