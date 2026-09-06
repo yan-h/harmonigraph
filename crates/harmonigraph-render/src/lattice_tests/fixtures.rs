@@ -14,7 +14,7 @@ pub(super) fn one_shadow(
     depth: f32,
     kernel: harmonigraph_scene::ShadowKernel,
 ) -> harmonigraph_scene::ShadowSettings {
-    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth };
+    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth, ..Default::default() };
     harmonigraph_scene::ShadowSettings {
         lattice_geometry: style,
         lattice_text: style,

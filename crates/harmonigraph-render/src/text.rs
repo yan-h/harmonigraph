@@ -1272,6 +1272,8 @@ impl CallbackTrait for TextCallback {
         let sigma =
             style.filter(|style| style.casts()).map_or(0.0, crate::shadow::spectral_sigma_points);
         let kernel = style.map_or(harmonigraph_scene::ShadowKernel::Distance, |s| s.kernel);
+        let falloff =
+            style.map_or(harmonigraph_scene::ShadowStyle::default().falloff, |s| s.falloff);
         let casters: Vec<crate::shadow::Caster> = self
             .glyphs
             .iter()
@@ -1280,6 +1282,7 @@ impl CallbackTrait for TextCallback {
                 level: f32::from(glyph.rim[3] > 0),
                 sigma_points: sigma,
                 kernel,
+                falloff,
                 direct_distance: false,
             })
             .collect();
@@ -1520,11 +1523,13 @@ pub(crate) mod tests {
                 width: 0.0,
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
             harmonigraph_scene::ShadowStyle {
                 width: 1.0,
                 depth: 0.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
         ] {
             let cb = TextCallback {
@@ -1925,6 +1930,7 @@ pub(crate) mod tests {
             width: 0.5,
             depth: 1.0,
             kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..Default::default()
         };
         let frame = draw(&device, &queue, glyph(), Some(shadow));
         assert_eq!(pixel(&frame, 28, 28), [255, 255, 255, 255], "the glyph itself");
@@ -2271,7 +2277,12 @@ pub(crate) mod tests {
             [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
         {
             for ppp in [1.0f32, 1.5, 2.0, 4.0] {
-                let style = harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, kernel };
+                let style = harmonigraph_scene::ShadowStyle {
+                    width: 1.0,
+                    depth: 1.0,
+                    kernel,
+                    ..Default::default()
+                };
                 let (frame, size) = draw_from_scaled(
                     &device,
                     &queue,
@@ -2322,6 +2333,7 @@ pub(crate) mod tests {
             width: 0.5,
             depth: 1.0,
             kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..Default::default()
         };
         // The shadow's own pass, with no fill over it: a pixel beside the
         // letter reads only the Distance profile.

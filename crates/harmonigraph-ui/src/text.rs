@@ -1689,8 +1689,12 @@ mod tests {
         {
             let surface = spectral_shadow_surface(slot);
             let mut state = crate::SharedState::new(FORMAT);
-            state.view.shadow.spectral_text =
-                harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, kernel };
+            state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+                width: 1.0,
+                depth: 1.0,
+                kernel,
+                ..Default::default()
+            };
             let mut k_rect = None;
             let mut batch_sdf_near = [0.0; 4];
             let mut batch_sdf_coarse = [0.0; 4];

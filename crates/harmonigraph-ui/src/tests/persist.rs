@@ -42,6 +42,11 @@ fn persist_round_trips_camera_and_view() {
     for (index, group) in state.view.shadow.groups_mut().into_iter().enumerate() {
         group.width = 0.1 + index as f32 * 0.1;
         group.depth = 0.2 + index as f32 * 0.1;
+        // Off the fresh 1.0 and different per group, on the rule the head of
+        // this test states: `groups()` compares whole styles, so a falloff left
+        // at its default would round-trip by matching the default rather than
+        // by being carried.
+        group.falloff = 0.8 + index as f32 * 0.4;
         group.kernel = if index % 2 == 0 {
             harmonigraph_scene::ShadowKernel::Distance
         } else {

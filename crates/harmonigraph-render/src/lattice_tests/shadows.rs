@@ -15,15 +15,6 @@ const SIZE: [u32; 2] = [256, 256];
 /// lands on. Bright, so one multiply has the range of a channel to move in.
 const GROUND: f64 = 0.8;
 
-/// The shader's own `INK_FLOOR`: the least a caster may darken the frame by
-/// before its fragment is discarded rather than drawn, and so where every
-/// shadow read here ENDS, whatever the quad around it reaches.
-///
-/// Pinned to the shader's own declaration by
-/// [`the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar`], the
-/// one reading it bounds.
-const INK_FLOOR: f64 = 0.01;
-
 fn over_ground() -> wgpu::Color {
     wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 }
 }
@@ -1009,6 +1000,10 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
 
     const SHADOW: f32 = 0.6;
     const SUBFLOOR: f32 = 1.0 / 255.0;
+    let ink_floor: f32 = shadow::tests::shader_const(SHADER_SRC, "INK_FLOOR")
+        .parse()
+        .expect("the shader's ink floor is a number");
+    assert!(SUBFLOOR < ink_floor, "the mark must reach the shader's subfloor path");
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1039,7 +1034,7 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
         .unwrap_or(0);
     assert!(
         lifted.abs() <= 2,
-        "a {SUBFLOOR:.4} mark below the {INK_FLOOR:.2} ink floor lifted its Gaussian shadow by \
+        "a {SUBFLOOR:.4} mark below the {ink_floor:.2} ink floor lifted its Gaussian shadow by \
          {lifted} brightness levels",
     );
 }
@@ -1153,11 +1148,6 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         scene.camera.distance *= PULL_BACK;
         scene
     };
-    assert!(
-        SHADER_SRC.contains(&format!("const INK_FLOOR: f32 = {INK_FLOOR};")),
-        "lattice.wgsl must declare INK_FLOOR as {INK_FLOOR}, which is what the tail below is \
-         read against"
-    );
     shooter.clear = over_ground();
     // A node's rings and a cross, each with its own ink radius on the pane:
     // the two quads are built by different code and each has to hold its own
@@ -1214,8 +1204,8 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // `profile[0]` starts two points past the ink, so its index alone is
         // two points short of the physical reach being tested.
         let reach = last as f32 + 2.0;
-        // A DECADE above the floor the walk has to arrive at, so that `last`
-        // is the end of a descent rather than the one column a faint caster
+        // A substantial shadow, so that `last` is the end of a descent
+        // rather than the one column a faint caster
         // wrote. Not a fixed half of the ground: the two casters here are
         // deliberately different thicknesses against σ, and at the top of the
         // bar a cross an arm wide is thin enough that the gain leaves its
@@ -1224,7 +1214,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // what this fixture stands on; a bound that ruled it out would be
         // asking the cross to be a node.
         assert!(
-            profile[0] > 10.0 * INK_FLOOR && reach > 2.0 * sigma(&deep_scene),
+            profile[0] > 0.1 && reach > 2.0 * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -1237,15 +1227,11 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
                 pair[1],
             );
         }
-        // What ends a shadow is the shader's own `INK_FLOOR`: a fragment
-        // darkening under a hundredth of the frame is discarded rather than
-        // drawn, so the last column a caster writes stands just above that
-        // floor whatever the quad does. The bound is twice it — the floor,
-        // plus one column of this profile's own slope, plus the code value an
-        // 8-bit frame quantizes the reading to. A quad cut short leaves the
-        // blur's own value there, which is an order up on any of the three.
+        // Reach the final output's smallest step before disappearing. The old
+        // one-percent cutoff stopped at several codes and the old two-percent
+        // tolerance accepted exactly the contour this reading should catch.
         assert!(
-            profile[last] < 2.0 * INK_FLOOR,
+            profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
             "{what}'s shadow stops at {:.4} of the ground {last} px out: the quad ended inside \
              the blur",
             profile[last],
@@ -1721,8 +1707,18 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
 fn a_marker_inherits_the_text_groups_whole_shadow() {
     use harmonigraph_scene::{ShadowKernel, ShadowStyle};
 
-    let geometry = ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.12, depth: 0.2 };
-    let text = ShadowStyle { kernel: ShadowKernel::Distance, width: 0.62, depth: 0.85 };
+    let geometry = ShadowStyle {
+        kernel: ShadowKernel::Gaussian,
+        width: 0.12,
+        depth: 0.2,
+        ..Default::default()
+    };
+    let text = ShadowStyle {
+        kernel: ShadowKernel::Distance,
+        width: 0.62,
+        depth: 0.85,
+        ..Default::default()
+    };
     let scene_of = |geometry: ShadowStyle, text: ShadowStyle| {
         let mut scene = crosses_on_ground(&[(0.0, 1.0)], 0.5, text.width, text.depth);
         scene.shadow.lattice_geometry = geometry;
@@ -1752,7 +1748,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (text.width, text.kernel.reach_sigmas(), text.depth),
+        (text.width, text.kernel.reach_sigmas(text.falloff), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 
@@ -1769,6 +1765,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
         kernel: ShadowKernel::Distance,
         width: harmonigraph_scene::GLOW_SHADOW_MAX,
         depth: 1.0,
+        ..Default::default()
     };
     let geometry_moved = shooter.shot(&scene_of(other_geometry, text));
     assert_eq!(
@@ -1948,6 +1945,82 @@ fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
         0,
         "Distance drew something with the Shadow shut, so a renderer is packing cells the bar \
          said not to",
+    );
+}
+
+/// The Shadow falloff moves the darkness INSIDE the width, and leaves the
+/// width's own edge where it was.
+///
+/// Read on the ground beside one node, at two distances along the same row: a
+/// half width out, where the bar has all its travel, and a whole width out,
+/// where `pow(u, f)` fixes the level because `1^f` is 1. The pair is the claim
+/// — a bar that only rescaled the profile, which is what an exponent on the
+/// finished coverage comes to, would move both.
+///
+/// At the top of the depth bar so both readings are off the floor: one width
+/// out the decay is a fiftieth, and a fiftieth of half a dozen stops is a
+/// darkening of a few percent rather than of nothing.
+#[test]
+fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
+    use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
+    const SHADOW: f32 = 0.6;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let mut shot = |falloff| {
+        let mut scene = on_ground(SHADOW, 1.0);
+        for style in scene.shadow.groups_mut() {
+            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+            style.falloff = falloff;
+        }
+        shooter.shot(&scene)
+    };
+    let scene = on_ground(SHADOW, 1.0);
+    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
+    let row = centre.y.round() as u32;
+    // One Shadow width is 2σ, and the ink's own edge is where `u` is 0.
+    let width = 2.0 * sigma(&scene);
+    let at = |u: f32| (centre.x + ink_radius(&scene) + u * width).round() as u32;
+    let (half, whole) = (at(0.5), at(1.0));
+    // The GROUND reading below is the widest of the three, and `bright_at`
+    // indexes a flat buffer: an x past the row wraps into the next row and
+    // reads a plausible number rather than panicking, so the guard is on the
+    // furthest sample and not on the pair.
+    assert!(at(1.9) < SIZE[0], "the readings run off the pane at {}", at(1.9));
+
+    let (sharp, plateau) = (shot(SHADOW_FALLOFF_MIN), shot(SHADOW_FALLOFF_MAX));
+    let ground = bright_at(&shot(SHADOW_FALLOFF_MIN), at(1.9), row);
+    assert!(ground > 40, "the fixture's ground reads {ground}, too dark to take a share of");
+
+    // A whole width out: the same level at both ends of the bar, so the width
+    // still means what it meant. The discriminating claim, so it is read first
+    // — an exponent on the finished coverage passes everything below this and
+    // fails here. Loose enough for the atlas's own bilinear tap, and tight
+    // against a reading that has moved with the bar.
+    let (sharp_whole, plateau_whole) =
+        (bright_at(&sharp, whole, row), bright_at(&plateau, whole, row));
+    let drift = (sharp_whole - plateau_whole).abs();
+    assert!(
+        drift * 12 < ground,
+        "one width out the bar moved the ground by {drift} of {ground}, so the Shadow width bar \
+         means something different at each end of the falloff",
+    );
+    // And that reading is a shadow rather than bare ground, or the invariant
+    // above would hold for a picture with nothing drawn in it.
+    assert!(
+        sharp_whole < ground - 3,
+        "one width out reads {sharp_whole} against a ground of {ground}, so there is no shadow \
+         at the width the bar names and the invariant above is vacuous",
+    );
+
+    // Half a width out: the whole travel of the bar. The plateau end holds the
+    // darkness out to here; the sharp end has spent it against the ink.
+    let (sharp_half, plateau_half) = (bright_at(&sharp, half, row), bright_at(&plateau, half, row));
+    assert!(
+        sharp_half > 3 * plateau_half.max(1),
+        "half a width out the whole falloff bar moves the ground from {sharp_half} to \
+         {plateau_half}, which is not a bar that redistributes anything",
     );
 }
 

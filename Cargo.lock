@@ -1362,7 +1362,6 @@ version = "0.3.0"
 dependencies = [
  "egui",
  "egui-wgpu",
- "glam",
  "harmonigraph-core",
  "harmonigraph-golden",
  "harmonigraph-render",
