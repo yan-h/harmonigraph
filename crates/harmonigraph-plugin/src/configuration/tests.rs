@@ -416,6 +416,7 @@ fn plain(state: &PluginState, key: ParamKey) -> f32 {
 
 #[test]
 fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adoption() {
+    let _scope = crate::test_scope::enter();
     for gui in [false, true] {
         let mut device = Device::new();
         device.activate();
@@ -457,6 +458,7 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
 
 #[test]
 fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.flush(vec![device.param(ParamKey::Three, 690.0, 23)]);
     let mailbox = device.mailbox();
@@ -497,6 +499,7 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
 
 #[test]
 fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -533,6 +536,7 @@ fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
 
 #[test]
 fn control_budget_retains_original_ui_boundary_and_host_offsets() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -562,6 +566,7 @@ fn control_budget_retains_original_ui_boundary_and_host_offsets() {
 
 #[test]
 fn required_marker_capacity_is_independent_of_a_drained_command_queue() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -594,6 +599,7 @@ fn required_marker_capacity_is_independent_of_a_drained_command_queue() {
 
 #[test]
 fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -621,6 +627,7 @@ fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
 
 #[test]
 fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     let mailbox = device.mailbox();
     device.load(restored(&device, 690.0), false);
@@ -643,10 +650,31 @@ fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
         "applied restore slots are reusable off audio"
     );
     assert_eq!(plain(&device.save(), ParamKey::Three), 705.0);
+    // The assertions deliberately leave accepted commands unfinished. Reset
+    // clears the bounded timeline before draining them through real callbacks.
+    let accepted_command = mailbox.accepted_command.load(Ordering::Acquire);
+    unsafe {
+        ((*device.plugin).reset.unwrap())(device.plugin);
+    }
+    for block in 1..=32 {
+        device.run(block * 64, vec![], false);
+        if !mailbox.visible().1 {
+            break;
+        }
+    }
+    assert!(!mailbox.visible().1);
+    assert_eq!(mailbox.visible().0.applied_id, accepted_command);
+    assert_eq!(mailbox.visible().0.raw[1], 705.0);
+    assert_eq!(
+        mailbox.visible().0.status,
+        8,
+        "the deliberately rejected submission remains visible"
+    );
 }
 
 #[test]
 fn one_owned_input_pool_reaches_2048_and_refuses_growth_while_work_is_retained() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let events = (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect();
@@ -655,6 +683,13 @@ fn one_owned_input_pool_reaches_2048_and_refuses_growth_while_work_is_retained()
     let (status, _) = device.run_status(64, vec![device.param(ParamKey::Three, 695.0, 0)], false);
     assert_eq!(status, CLAP_PROCESS_ERROR);
     assert_eq!(device.mailbox().visible().0.status & 2, 2);
+    // Exercise the host's recovery boundary after proving retained-input
+    // exhaustion, so this fixture does not leave an unresolved global owner.
+    unsafe {
+        ((*device.plugin).reset.unwrap())(device.plugin);
+    }
+    device.run(128, vec![], false);
+    assert_eq!(device.mailbox().visible().0.status, 0);
 }
 
 #[derive(Default)]
@@ -691,6 +726,7 @@ impl ClapPlugin for Legacy {
 }
 #[test]
 fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner() {
+    let _scope = crate::test_scope::enter();
     let device = Device::new();
     let legacy = unsafe { nice_plug::wrapper::clap::Wrapper::<Legacy>::new(&*device._host) };
     assert!(legacy.configuration_handle().is_none());
@@ -708,6 +744,7 @@ unsafe impl Sync for Device {}
 
 #[test]
 fn newly_observed_ui_behind_retained_input_keeps_its_first_callback_boundary() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -726,6 +763,7 @@ fn newly_observed_ui_behind_retained_input_keeps_its_first_callback_boundary() {
 
 #[test]
 fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
+    let _scope = crate::test_scope::enter();
     for gui in [false, true] {
         let mut device = Device::new();
         device.activate();
@@ -758,6 +796,7 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
 
 #[test]
 fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
+    let _scope = crate::test_scope::enter();
     let device = Device::new();
     let mailbox = device.mailbox();
     device.load(restored(&device, 690.0), false);
@@ -774,6 +813,7 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
 
 #[test]
 fn suspended_gui_restore_requests_main_thread_without_processing() {
+    let _scope = crate::test_scope::enter();
     let device = Device::new();
     let before = device.stats.callbacks.load(Ordering::Relaxed);
     device.load(restored(&device, 690.0), true);
@@ -786,6 +826,7 @@ fn suspended_gui_restore_requests_main_thread_without_processing() {
 
 #[test]
 fn successful_old_notification_after_restore_rescan_retains_another_rescan() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -820,6 +861,7 @@ fn successful_old_notification_after_restore_rescan_retains_another_rescan() {
 
 #[test]
 fn rejected_gesture_end_is_retried_before_another_begin() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -882,6 +924,7 @@ fn id_tuning(id: i32, value: f64) -> Input {
 }
 #[test]
 fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -905,6 +948,7 @@ fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
 }
 #[test]
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let mailbox = device.mailbox();
@@ -964,6 +1008,7 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
 
 #[test]
 fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for_completion() {
+    let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
     capture.arm_audio();
@@ -1022,6 +1067,7 @@ fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for
 
 #[test]
 fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
+    let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
     let events = (0..9).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, 8)).collect();
@@ -1043,6 +1089,7 @@ fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
 
 #[test]
 fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
+    let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
     capture.arm_audio();
@@ -1119,6 +1166,7 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
 
 #[test]
 fn retried_gesture_closure_merges_before_earlier_timed_learning() {
+    let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     device.run(
@@ -1163,6 +1211,7 @@ fn retried_gesture_closure_merges_before_earlier_timed_learning() {
 
 #[test]
 fn canonical_publication_slots_and_loss_are_allocation_free() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_core::canonical::*;
     use harmonigraph_record::publication::*;
     let (mut publisher, mut consumer) = channel();
@@ -1229,6 +1278,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 
 #[test]
 fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_take::CanonicalRecord;
     let (mut device, mut capture) = recorded_device();
@@ -1305,6 +1355,7 @@ fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
 
 #[test]
 fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::CanonicalRecord;
     let (mut device, mut capture) = recorded_device();
     device.activate();

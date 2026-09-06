@@ -139,7 +139,8 @@ Tests are in `crates/harmonigraph-plugin/src/performance/tests.rs` and its focus
 | Publication | Real display overflow and mid-publication repair race across two Tune sources, including Off, plus DIRECT; complete baselines restore current state without synthetic attacks |
 | Primary recording pressure | Two Tune sources, including Off, plus DIRECT hold 192 credits and overfill the actual primary queue; all 192 real releases and credits settle before any file/display drain; the file's incomplete range matches the primary loss descriptor |
 | Full held rejoin | 64 Off-held voices rejoin with a complete baseline between retained tuning and later releases; an actual complete take contains exactly 192 original on/tuning/off records with unchanged lifetimes and samples |
-| Transport Stop | Repeated enclosing stopped callbacks retain a new live phrase; an actual Stop releases old held/pedal state, retries host-rejected release debt and preserves new phrase timing and canonical identity |
+| Transport Stop | An old held voice plus a new pre-Stop attack, expression and controller retain offsets 4/8/10 before an offset-16 Stop; terminations and three pedal neutralizations use offset 16 or a legal later retry; the new stopped phrase retains its timing and canonical identity |
+| Unpaired Reset | A malformed-input fault and 1,024 queued pedal messages keep Reset unapplied across its actual local cut; a genuinely later controller survives that pending cut and appears exactly once after recovery, with no old pedal replay |
 | Pairing and inhibition | 512 actual expressions exhaust ordinary output before a retained onset; duplicate UUIDs preserve its old obligation; malformed unpaired input stays inhibited through ordinary adoption and recovers after an explicit settled Reset |
 | Occupied baseline payloads | A third snapshot encounters two undrained payloads; actual release credit and journal retire before any consumer drain, an actual take records the exact one-serial loss, and later reconstruction is empty and participating |
 | Open settings editors | The real egui Session menu stays open across prepared restore, drag and Apply; the exported native CLAP/AppKit editor refreshes existing-candidate selection and calibration across restore, applies calibration only, and submits Reset independently of invalid or unapplied drafts |
@@ -149,10 +150,21 @@ they do not claim to execute `2^64` historical outputs.
 The stale-completion fixture is an explicit defensive duplicate injection;
 CLAP host acceptance and completion remain synchronous.
 The no-registry-drainer attachment fixture runs in a separate process because any other instance's main-thread setup legitimately services the process-wide registry.
-The corrective checkpoint passed 119 guarded plugin tests with the separately coordinated callback timing fixture excluded, plus workspace all-target Clippy with warnings denied.
+Exported-factory fixtures share a whole-fixture guard through recorder injection, construction and teardown so independent tests cannot consume the four-Hub production limit.
+Concurrency deliberately created inside a fixture remains active.
+The two configuration-capacity fixtures invoke actual host Reset after their assertions, with accepted commands drained through bounded callbacks;
+scratch occupancy measurements confirmed every ordinary fixture returns registry counts to zero.
+Fixtures that intentionally retain unresolved owners remain isolated in child processes.
+This fixture cleanup does not repair the production destruction case:
+[issue #672](https://github.com/yan-h/harmonigraph/issues/672) records a retired Hub pinned by configuration work whose wrapper has already been destroyed.
+Its ownership/disposition repair remains required before final aggregation retirement clearance.
+The Stop/Reset correction passed 120 guarded plugin tests with the separately coordinated callback timing fixture excluded.
+Stop markers share the existing 8,192 pending cells and use constant-time unlinking during the existing retirement cleanup phase;
+they add no retirement handshake or pool beyond the established 1,422-round bound.
+The full 16-owner event/reference retirement fixture and actual four-session factory retirement passed again.
 Native interaction checks used an isolated local CLAP host and actual AppKit controls, with saved state and host-callback receipts confirming the action;
 they did not load or modify Bitwig.
-These corrections address the six first-checkpoint review findings and await committed-head re-review;
+These corrections address the first-checkpoint findings and the follow-up Stop sample-boundary and unpaired Reset-cut findings, and await committed-head re-review;
 they do not complete the remaining integration below.
 
 ## Remaining integration boundary

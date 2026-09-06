@@ -18,6 +18,8 @@ mod editor;
 mod performance;
 #[cfg(feature = "tuning-probe")]
 mod probe;
+#[cfg(test)]
+mod test_scope;
 #[cfg(not(feature = "tuning-probe"))]
 use performance::tune::HarmonigraphTune;
 #[cfg(feature = "tuning-probe")]

@@ -39,8 +39,10 @@ Observed DIRECT input additionally owns its distinct rich State and 2,048-cell h
 The 16 receiver Rows each hold another rich State and a complete cached baseline.
 These are actual separate allocations/copies despite the session's 256-voice musical credit limit.
 
-One Source Box is 25,208 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel dependencies, permits and pool headers.
-Its eight backing allocations plus its Box total 2,761,848 bytes.
+One Source Box is 25,216 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel dependencies, permits and pool headers.
+Its eight backing allocations plus its Box total 2,761,856 bytes.
+The retained Stop queue adds eight inline bytes per Source and uses existing pending envelopes;
+it adds no backing allocation or larger pool cell.
 A Hub Box is 864 bytes;
 each of its 16 Rows is 30,944 bytes, with 15,240 State bytes, 15,312 cached-baseline bytes and 392 remaining bytes.
 
@@ -56,21 +58,21 @@ each ring's measured Arc/header allocation is 512 bytes.
 
 | Actual constructor/factory measurement | Calling-thread retained bytes |
 | --- | ---: |
-| One Tune constructor | 2,763,005 |
-| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,714,856 |
+| One Tune constructor | 2,763,013 |
+| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,714,864 |
 | Actual 16 endpoint triples and controls | 5,894,848 |
-| Ordinary constructor subtotal | 57,817,784 |
-| Full-HG exported factory | 28,153,741 |
+| Ordinary constructor subtotal | 57,817,920 |
+| Full-HG exported factory | 28,153,749 |
 | Full-HG activation | 760 |
-| Sixteen exported Tune factories plus activation | 55,008,683 |
-| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 331,862,046 |
-| Refused sixty-fifth Tune factory | 3,429,793 |
+| Sixteen exported Tune factories plus activation | 55,008,811 |
+| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 331,862,590 |
+| Refused sixty-fifth Tune factory | 3,429,801 |
 
 Factory and constructor rows overlap and must not be added together.
 Each fixture host adds 96 measured bytes outside the plugin.
 Refused instances still construct their own owner/wrapper;
 the counted registry limit is not a claim that creating arbitrary refused instances allocates nothing.
-The four-session retirement interval allocated 9,024 and deallocated 284,766,728 bytes on the measured thread, returning registry counts to zero.
+The four-session retirement interval allocated 9,024 and deallocated 284,767,272 bytes on the measured thread, returning registry counts to zero.
 Other-thread ownership remains outside that counter.
 
 The sixteen new companion wrappers have 2,635,739 bytes of measured additional owners and generic queues after subtracting their constructors, performance boundary arrays/ready indices and fixture hosts.
@@ -106,7 +108,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 
 | Remaining owner/metadata reservation | Bytes charged |
 | --- | ---: |
-| Seventeen Source residual owners after State/emergency cells | 38,896 |
+| Seventeen Source residual owners after State/emergency cells | 39,032 |
 | State flags/padding for 17 source and 16 receiver copies | 264 |
 | Sixteen Tune parameter allocations | 2,384 |
 | Sixteen Row residual owners | 6,272 |
@@ -133,7 +135,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 | Future cohort ready/degree/traversal indices | 32,768 |
 | Future remaining fixed plan/history/source metadata | 65,536 |
 
-The complete specified plan is 150,581,899 bytes, leaving 413,045 bytes below the unchanged 144 MiB cap.
+The complete specified plan is 150,582,035 bytes, leaving 412,909 bytes below the unchanged 144 MiB cap.
 That remainder is an allowance, not measured allocator-private overhead.
 The attachment payload/metadata rows conservatively charge the whole process ceiling once in this single-session account;
 HubBridge's 16-byte shrink therefore does not reduce those reserved ceilings.

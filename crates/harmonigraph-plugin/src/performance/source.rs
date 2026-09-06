@@ -22,6 +22,7 @@ use std::sync::Arc;
 mod channel;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
+mod stop;
 mod work;
 
 const NONE: u16 = u16::MAX;
@@ -174,6 +175,7 @@ pub struct Source {
     wave_shift: i64,
     stopping: bool,
     transport_playing: bool,
+    stops: stop::Stops,
     setup_pending: [Option<super::slots::Retained<setup::Update>>; 2],
     manifest: Queue<Manifest, 64>,
     input_complete: bool,
@@ -281,6 +283,7 @@ impl Source {
             wave_shift: 0,
             stopping: false,
             transport_playing: false,
+            stops: stop::Stops::default(),
             setup_pending: [None, None],
             manifest: Queue::default(),
             input_complete: false,
@@ -469,6 +472,7 @@ impl Source {
 
     pub fn begin(&mut self, callback: api::Callback) {
         self.callback = Some(callback);
+        self.stops.emergency_start = 0;
         self.visits = 0;
         self.input_complete = false;
         self.attachment_attempted = false;
@@ -525,8 +529,13 @@ impl Source {
             // flag cannot move the cancellation cut ahead of retained input.
             let playing = transport.flags & (1 << 4) != 0;
             if self.transport_playing && !playing {
-                self.cancel_unsounded();
-                self.arm_release_debt();
+                let Some(sample) = input.sample else {
+                    self.fault(INPUT_FAULT);
+                    return api::Consumption::Consumed;
+                };
+                if self.capture_stop(sample) == api::Consumption::Pending {
+                    return api::Consumption::Pending;
+                }
             }
             self.transport_playing = playing;
             return api::Consumption::Consumed;
@@ -759,7 +768,7 @@ impl Source {
             {
                 break;
             }
-            if update.reset && !self.lease_settled() {
+            if update.reset && (!self.lease_settled() || !self.local_cancel_cut_settled()) {
                 // Explicit recovery clears local inhibition only after the
                 // old cancellation/release obligations have really settled.
                 // Ordinary offer adoption cannot provide that authority.
@@ -825,9 +834,18 @@ impl Source {
     }
 
     fn cancel_unsounded(&mut self) {
+        self.cancel_unsounded_through(self.next_event);
+    }
+    fn cancel_unsounded_through(&mut self, cut: u64) {
         self.stopping = true;
         self.cancel_cursor = self.pending.front_position();
-        self.cancel_cut = self.next_event;
+        self.cancel_cut = self.cancel_cut.max(cut);
+    }
+    fn local_cancel_cut_settled(&self) -> bool {
+        self.pending
+            .front_position()
+            .and_then(|head| self.pending.at(head))
+            .is_none_or(|pending| pending.serial > self.cancel_cut)
     }
     pub fn stop(&mut self) {
         self.cancel_unsounded();
@@ -979,7 +997,6 @@ impl Source {
         self.emergency[slot] = Some(Release { life, staged: false, accepted: None });
     }
     pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
-        self.schedule_emergency(output);
         let Some(start) = block.callback.steady_time.checked_add(i64::from(block.start)) else {
             self.fault(CLOCK_FAULT);
             return;
@@ -988,6 +1005,8 @@ impl Source {
             self.fault(CLOCK_FAULT);
             return;
         };
+        self.advance_stops(block.start.max(output.cursor()));
+        self.schedule_emergency(output);
         // At most 64 indexed established releases; blocked unsounded attacks
         // cannot hide these behind the 8,192-event ordinary queue.
         for index in self.reserved {
@@ -1050,6 +1069,9 @@ impl Source {
         let Some(parent) = self.pending.at(position) else {
             return true;
         };
+        if parent.event == Event::Stop {
+            return false;
+        }
         if parent.inline_done && parent.work_remaining == 0 {
             self.remove_finished(position);
             return true;
@@ -1139,7 +1161,7 @@ impl Source {
             return false;
         };
         due = due.max(start);
-        if due >= end {
+        if due >= end || self.next_stop_sample().is_some_and(|stop| due >= stop) {
             return false;
         }
         let callback = self.callback.unwrap();
@@ -1219,6 +1241,10 @@ impl Source {
             return false;
         };
         let pending = self.resolved(position, child);
+        let actual = self.callback.unwrap().steady_time.checked_add(i64::from(group.time));
+        if actual.is_none_or(|actual| self.next_stop_sample().is_some_and(|stop| actual >= stop)) {
+            return false;
+        }
         // A fault may arrive after staging. Do not let an already staged
         // controller restore pedal-down after emergency neutralization.
         if self.faults != 0 && !pending.event.release() {
@@ -1561,9 +1587,12 @@ impl Source {
             } else {
                 Event::terminate(life.id, life.channel, life.key)
             };
-            let Ok(group) =
-                api::Group::single(token, api::Lane::Emergency, output.cursor(), event.input())
-            else {
+            let Ok(group) = api::Group::single(
+                token,
+                api::Lane::Emergency,
+                output.cursor().max(self.stops.emergency_start),
+                event.input(),
+            ) else {
                 continue;
             };
             if output.stage(group).is_err() {
@@ -1582,7 +1611,7 @@ impl Source {
                 let group = api::Group::single(
                     api::Token([0, channel as u64, bit as u64, 2]),
                     api::Lane::Emergency,
-                    output.cursor(),
+                    output.cursor().max(self.stops.emergency_start),
                     event.input(),
                 )
                 .unwrap();

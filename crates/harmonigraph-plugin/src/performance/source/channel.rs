@@ -17,6 +17,10 @@ impl Default for Reference {
 pub(super) enum Role {
     #[default]
     Wire,
+    Stop {
+        previous: u16,
+        next: u16,
+    },
     Header {
         first_waiter: u16,
         last_waiter: u16,
@@ -254,6 +258,10 @@ impl Source {
         }
     }
     pub(super) fn channel_done(&mut self, position: usize, pending: Pending) {
+        if let Role::Stop { previous, next } = pending.channel.role {
+            self.unlink_stop(previous, next);
+            return;
+        }
         // Unlink a canceled/accepted waiter before its envelope can be reused.
         if self.reference_pending(pending.channel.dependency) {
             let dependency = pending.channel.dependency;

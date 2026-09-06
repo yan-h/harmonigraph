@@ -15,6 +15,7 @@ fn lease(source: &Device) -> Option<protocol::Lease> {
 
 #[test]
 fn actual_adoption_and_detached_endpoint_fill_both_return_slots_without_main_service() {
+    let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_RETURN_SLOTS_CHILD").is_none() {
         // Any other factory's main-thread setup collects the process registry.
         // Isolate the explicit no-registry-drainer interval from other tests.
@@ -75,6 +76,7 @@ fn actual_adoption_and_detached_endpoint_fill_both_return_slots_without_main_ser
 
 #[test]
 fn pairing_change_after_actual_offer_take_returns_the_whole_stale_bundle() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);

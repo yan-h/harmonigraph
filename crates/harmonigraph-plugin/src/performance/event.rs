@@ -1,12 +1,34 @@
-//! Fixed performance values. Unlike the wrapper's input envelope this cannot
-//! contain transport, a host pointer, or an allocation.
+//! Fixed performance values and an internal Stop boundary marker. These cannot
+//! contain full transport, a host pointer, or an allocation.
 use nice_plug::wrapper::clap::configuration::InputValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    Note { kind: u16, id: i32, port: i16, channel: i16, key: i16, velocity: f64, flags: u32 },
-    Expression { kind: i32, id: i32, port: i16, channel: i16, key: i16, value: f64, flags: u32 },
-    Midi { port: u16, data: [u8; 3], flags: u32 },
+    /// Retained and consumed by Source at its original sample, never sent to a host.
+    Stop,
+    Note {
+        kind: u16,
+        id: i32,
+        port: i16,
+        channel: i16,
+        key: i16,
+        velocity: f64,
+        flags: u32,
+    },
+    Expression {
+        kind: i32,
+        id: i32,
+        port: i16,
+        channel: i16,
+        key: i16,
+        value: f64,
+        flags: u32,
+    },
+    Midi {
+        port: u16,
+        data: [u8; 3],
+        flags: u32,
+    },
 }
 
 impl Event {
@@ -29,6 +51,7 @@ impl Event {
 
     pub fn input(self) -> InputValue {
         match self {
+            Self::Stop => unreachable!("Stop boundaries are not wire output"),
             Self::Note { kind, id, port, channel, key, velocity, flags } => {
                 InputValue::Note { kind, note_id: id, port, channel, key, velocity, flags }
             }

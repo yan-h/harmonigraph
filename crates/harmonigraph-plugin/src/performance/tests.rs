@@ -435,6 +435,7 @@ unsafe extern "C" fn write(stream: *const clap_ostream, input: *const c_void, si
 
 #[test]
 fn production_factory_exports_two_clap_classes_and_lightweight_tune_ports() {
+    let _scope = crate::test_scope::enter();
     assert_eq!(unsafe { factory().get_plugin_count.unwrap()(factory()) }, 2);
     let descriptor = unsafe { &*factory().get_plugin_descriptor.unwrap()(factory(), 1) };
     assert_eq!(unsafe { CStr::from_ptr(descriptor.name) }, c"Harmonigraph Tune");
@@ -462,6 +463,7 @@ fn production_factory_exports_two_clap_classes_and_lightweight_tune_ports() {
 
 #[test]
 fn tuner_before_hub_retains_a_phrase_and_preserves_spacing_after_real_admission() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut source = Device::new(true);
     source.configure(uuid, true);
@@ -503,6 +505,7 @@ fn tuner_before_hub_retains_a_phrase_and_preserves_spacing_after_real_admission(
 
 #[test]
 fn repeated_stopped_callbacks_preserve_new_live_input_but_a_real_stop_edge_cancels_older_input() {
+    let _scope = crate::test_scope::enter();
     let observation = |playing: bool, time| {
         let Input::Transport(mut value) = transport(time, 120.0) else { unreachable!() };
         if !playing {
@@ -583,6 +586,7 @@ fn repeated_stopped_callbacks_preserve_new_live_input_but_a_real_stop_edge_cance
 
 #[test]
 fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_notes() {
+    let _scope = crate::test_scope::enter();
     let observation = |playing: bool, time| {
         let Input::Transport(mut value) = transport(time, 120.0) else { unreachable!() };
         if !playing {
@@ -622,6 +626,13 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
         );
         hub.run(64, vec![], None);
         let events = vec![
+            note(3, 0, 62, 4, true),
+            expression(1, 0.123456789, 8),
+            Input::Midi(clap_event_midi {
+                header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 10),
+                port_index: 0,
+                data: [0xb0, 11, 90],
+            }),
             Input::Transport(observation(false, 16)),
             note(2, 0, 64, 20, true),
             expression(2, 0.4567890123, 32),
@@ -634,9 +645,42 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
             (64, false),
             Some(observation(true, 0)),
         );
+        assert!(first.values.iter().any(|(time, event)| {
+            *time == 8 && matches!(event, Event::Expression { id: 1, value, .. } if *value == 0.123456789)
+        }), "the established expression precedes the actual Stop boundary");
+        assert!(first.values.iter().any(|(time, event)| *time == 4
+            && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 3, .. })));
+        assert!(first.values.iter().any(|(time, event)| *time == 10
+            && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })));
+        let pre_stop_voice: Vec<_> = first
+            .values
+            .iter()
+            .filter(|(_, event)| {
+                matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 3, .. })
+            })
+            .collect();
+        assert_eq!(pre_stop_voice.len(), usize::from(!reject_release));
+        assert!(pre_stop_voice.iter().all(|(time, _)| *time == 16));
+        let neutral: Vec<_> = first
+            .values
+            .iter()
+            .filter_map(|(time, event)| match event {
+                Event::Midi { data: [0xb0, controller, 0], .. }
+                    if [64, 66, 69].contains(controller) =>
+                {
+                    Some((*time, *controller))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            neutral,
+            [(16, 64), (16, 66), (16, 69)],
+            "Stop pedal neutralization is never early"
+        );
         assert_eq!(
             first.values.iter().filter(|(_, event)| event.release()).count(),
-            if reject_release { 0 } else { 2 },
+            if reject_release { 0 } else { 3 },
             "one Stop terminates the old actual voice without waiting for a host Note-Off"
         );
         assert_eq!(
@@ -669,6 +713,11 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
             })
             .collect();
         assert_eq!(old.len(), 1);
+        assert_eq!(
+            old[0].0,
+            if reject_release { 192 } else { 144 },
+            "actual Stop or first legal retry sample"
+        );
         let new: Vec<_> = all
             .iter()
             .filter(|(_, event)| {
@@ -687,13 +736,82 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
         assert_eq!(source.source_snapshot().faults, 0);
         assert_eq!(session.credits.load(Ordering::Acquire), 0);
         let records = capture.drain_canonical();
-        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On {..}))).count(),2);
-        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::Off))).count(),2);
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On {..}))).count(),3);
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::Off))).count(),3);
     }
 }
 
 #[test]
+fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input() {
+    let _scope = crate::test_scope::enter();
+    if std::env::var_os("HARMONIGRAPH_RESET_CUT_CHILD").is_none() {
+        // The final unpaired controller has actual history with no receiving
+        // lease. Its intentionally retained owner belongs to this process only.
+        assert!(std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "performance::tests::unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input", "--nocapture", "--test-threads=1"])
+            .env("HARMONIGRAPH_RESET_CUT_CHILD", "1").status().unwrap().success());
+        return;
+    }
+    let uuid = SavedUuid::default();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    let malformed = Input::Midi(clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_header>() as u32,
+            ..header::<clap_event_midi>(CLAP_EVENT_MIDI, 0)
+        },
+        port_index: 0,
+        data: [0xf8, 0, 0],
+    });
+    source.run_status(0, vec![malformed], None, None, 64, true);
+    let pedal = |value, time| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, time),
+            port_index: 0,
+            data: [0xb0, 64, value],
+        })
+    };
+    assert!(source.run(64, (0..1024).map(|_| pedal(127, 5)).collect(), None).values.is_empty());
+    assert_eq!(source.source_snapshot().pending, 1024);
+    assert_eq!(source.source_snapshot().input_cut, 1024);
+    assert_eq!(source.source_snapshot().faults, source::INPUT_FAULT);
+    let shared = source.shared();
+    shared.apply(shared.value().routing, true).unwrap();
+    let reset = source.run(128, vec![], None);
+    assert!(reset.values.is_empty(), "Reset must not forward a pre-Reset buffered pedal");
+    assert!(
+        source.source_snapshot().pending > 0,
+        "the fixture reaches a still-unsettled local cut"
+    );
+    assert_eq!(source.source_snapshot().input_cut, 1024);
+    assert!(shared.applied.load(Ordering::Acquire) < shared.value().generation);
+    // The setup hook cuts future input after the observation callback's input
+    // batch. This is a genuinely later callback while that cut is still pending.
+    assert!(source.run(192, vec![pedal(100, 7)], None).values.is_empty());
+    assert!(source.source_snapshot().pending > 1, "new input arrives before the old cut settles");
+    assert_eq!(source.source_snapshot().input_cut, 1025);
+    assert!(shared.applied.load(Ordering::Acquire) < shared.value().generation);
+    let mut accepted = Vec::new();
+    for block in 4..=12 {
+        let output = source.run(block * 64, vec![], None);
+        if shared.applied.load(Ordering::Acquire) < shared.value().generation {
+            assert!(output.values.is_empty(), "recovery is inhibited while pre-cut work remains");
+            assert!(source.source_snapshot().pending > 0, "the new controller remains owned");
+        }
+        accepted.extend(output.values);
+    }
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert_eq!(shared.applied.load(Ordering::Acquire), shared.value().generation);
+    assert_eq!(accepted, [(0, Event::Midi { port: 0, data: [0xb0, 64, 100], flags: 0 })]);
+    assert_eq!(source.source_snapshot().pending, 0);
+    assert!(source.run(13 * 64, vec![], None).values.is_empty());
+    source.run(14 * 64, vec![pedal(0, 0)], None);
+}
+
+#[test]
 fn attached_off_source_transfers_more_than_a_journal_of_actual_output() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -720,6 +838,7 @@ fn attached_off_source_transfers_more_than_a_journal_of_actual_output() {
 
 #[test]
 fn off_restore_with_missing_parameter_keeps_actual_get_value_and_saved_value_off() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut source = Device::new(true);
     source.configure(uuid, false);
@@ -772,6 +891,7 @@ fn off_restore_with_missing_parameter_keeps_actual_get_value_and_saved_value_off
 
 #[test]
 fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservations() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -785,10 +905,6 @@ fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservati
             source
         })
         .collect();
-    for source in &sources {
-        source.run(0, vec![], None);
-    }
-    hub.run(0, vec![], None);
     let mut seventeenth = Device::new(true);
     seventeenth.configure(uuid, true);
     seventeenth.activate();
@@ -796,6 +912,10 @@ fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservati
         seventeenth.shared().source.as_ref().unwrap().status.load(Ordering::Acquire),
         registry::OVERCAPACITY
     );
+    for source in &sources {
+        source.run(0, vec![], None);
+    }
+    hub.run(0, vec![], None);
     assert!(seventeenth
         .run(0, vec![note(700, 0, 60, 1, true), note(700, 0, 60, 11, false)], None)
         .values
@@ -847,6 +967,7 @@ fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservati
 
 #[test]
 fn actual_host_rejection_retains_release_debt_and_never_returns_credit_early() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -876,6 +997,7 @@ fn actual_host_rejection_retains_release_debt_and_never_returns_credit_early() {
 
 #[test]
 fn duplicate_saved_uuid_before_adoption_keeps_pending_phrase_until_unique_again() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -902,6 +1024,7 @@ fn duplicate_saved_uuid_before_adoption_keeps_pending_phrase_until_unique_again(
 
 #[test]
 fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.configure(uuid, true);
@@ -955,6 +1078,7 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
 
 #[test]
 fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -1004,6 +1128,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
 
 #[test]
 fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut source = Device::new(true);
     source.configure(uuid, true);
@@ -1047,6 +1172,7 @@ fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset
 
 #[test]
 fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callbacks() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -1087,6 +1213,7 @@ fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callback
 
 #[test]
 fn full_unpaired_pending_pool_is_retained_and_retired_without_a_peer_wakeup() {
+    let _scope = crate::test_scope::enter();
     let mut source = Device::new(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
@@ -1106,6 +1233,7 @@ fn full_unpaired_pending_pool_is_retained_and_retired_without_a_peer_wakeup() {
 
 #[test]
 fn repeated_emergency_rejection_keeps_one_exact_release_and_its_credit() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -1155,6 +1283,7 @@ fn repeated_emergency_rejection_keeps_one_exact_release_and_its_credit() {
 
 #[test]
 fn active_restore_cannot_reuse_either_retained_setup_slot_or_mutate_on_refusal() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -1197,6 +1326,7 @@ fn active_restore_cannot_reuse_either_retained_setup_slot_or_mutate_on_refusal()
 
 #[test]
 fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_pairing_mutation() {
+    let _scope = crate::test_scope::enter();
     use nice_plug::wrapper::clap::setup::Setup;
     let uuid = SavedUuid::default();
     let mut source = Device::new(true);
@@ -1253,6 +1383,7 @@ fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_
 
 #[test]
 fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_eviction() {
+    let _scope = crate::test_scope::enter();
     const CHILD: &str = "HARMONIGRAPH_RETIRED_CAPACITY_CHILD";
     if std::env::var_os(CHILD).is_none() {
         // This fixture intentionally leaves all counted retired owners pinned.
@@ -1312,6 +1443,7 @@ fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_evicti
 
 #[test]
 fn hub_reinitialize_waits_for_differently_timed_source_seals_and_preserves_the_take() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -1405,6 +1537,7 @@ fn hub_reinitialize_waits_for_differently_timed_source_seals_and_preserves_the_t
 
 #[test]
 fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substitution() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -1460,6 +1593,7 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
 
 #[test]
 fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let directory =
@@ -1557,6 +1691,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
 
 #[test]
 fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_old_ack() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -1716,6 +1851,7 @@ fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_ol
 
 #[test]
 fn display_resync_arriving_during_hub_publication_repairs_every_source_without_poisoning_take() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -1836,6 +1972,7 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
 #[cfg(debug_assertions)]
 #[test]
 fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
+    let _scope = crate::test_scope::enter();
     use nice_plug::wrapper::allocation_probe::measure_allocations;
     if std::env::var_os("HARMONIGRAPH_MEMORY_CHILD").is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1973,6 +2110,7 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
 
 #[test]
 fn sealed_source_does_not_rearm_neutral_pedals_when_retirement_adds_a_stronger_fault() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -2024,6 +2162,7 @@ fn sealed_source_does_not_rearm_neutral_pedals_when_retirement_adds_a_stronger_f
 
 #[test]
 fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -2090,6 +2229,7 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
 
 #[test]
 fn observed_callback_cost_at_empty_and_full_session_state() {
+    let _scope = crate::test_scope::enter();
     fn report(name: &str, mut times: Vec<u128>) {
         times.sort_unstable();
         let mean = times.iter().sum::<u128>() as f64 / times.len() as f64;
@@ -2178,6 +2318,7 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
 
 #[test]
 fn session_reservation_257_waits_for_real_retention_including_direct_and_off() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -2257,6 +2398,7 @@ fn session_reservation_257_waits_for_real_retention_including_direct_and_off() {
 
 #[test]
 fn source_65th_held_attack_is_contained_without_releasing_unacknowledged_credits() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -2299,6 +2441,7 @@ fn source_65th_held_attack_is_contained_without_releasing_unacknowledged_credits
 
 #[test]
 fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -2396,6 +2539,7 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
 
 #[test]
 fn one_actual_all_notes_off_targets_original_lifetimes_before_same_key_retrigger() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -2470,6 +2614,7 @@ fn one_actual_all_notes_off_targets_original_lifetimes_before_same_key_retrigger
 
 #[test]
 fn channel_references_leave_all_8192_original_event_slots_available() {
+    let _scope = crate::test_scope::enter();
     let mut source = Device::new(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
@@ -2517,6 +2662,7 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
 
 #[test]
 fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
+    let _scope = crate::test_scope::enter();
     let mut source = Device::new(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
@@ -2550,6 +2696,7 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
 
 #[test]
 fn partial_wildcard_acceptance_keeps_one_input_until_remaining_child_disposition() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -2621,6 +2768,7 @@ fn partial_wildcard_acceptance_keeps_one_input_until_remaining_child_disposition
 
 #[test]
 fn sixty_four_channel_terminals_keep_pedals_and_original_sound_off_wire_obligations() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     for controller in [120, 123] {
         let uuid = SavedUuid::default();
@@ -2706,6 +2854,7 @@ fn sixty_four_channel_terminals_keep_pedals_and_original_sound_off_wire_obligati
 
 #[test]
 fn direct_channel_termination_observes_original_lifetimes_independently_of_forwarding() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.configure(SavedUuid::default(), true);
@@ -2746,6 +2895,7 @@ fn direct_channel_termination_observes_original_lifetimes_independently_of_forwa
 
 #[test]
 fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_without_callbacks() {
+    let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_RETIRED_REFERENCES_CHILD").is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "performance::tests::all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_without_callbacks", "--nocapture", "--test-threads=1"])
@@ -2840,6 +2990,7 @@ fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_wi
 
 #[test]
 fn future_progress_does_not_hide_an_earlier_complete_output_interval() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -2907,6 +3058,7 @@ fn future_progress_does_not_hide_an_earlier_complete_output_interval() {
 
 #[test]
 fn progress_spanning_more_than_the_output_window_releases_only_complete_timestamp_prefixes() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -2981,6 +3133,7 @@ fn progress_spanning_more_than_the_output_window_releases_only_complete_timestam
 
 #[test]
 fn clock_calibration_preserves_enclosing_wire_offsets_across_transport_subblocks() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -3031,6 +3184,7 @@ fn clock_calibration_preserves_enclosing_wire_offsets_across_transport_subblocks
 
 #[test]
 fn clock_missing_silent_member_blocks_canonical_output_until_actual_coverage_arrives() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::CanonicalRecord;
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -3082,6 +3236,7 @@ fn clock_missing_silent_member_blocks_canonical_output_until_actual_coverage_arr
 
 #[test]
 fn clock_reinitialize_keeps_an_absent_held_member_until_it_resumes_contiguous_callbacks() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -3135,6 +3290,7 @@ fn clock_reinitialize_keeps_an_absent_held_member_until_it_resumes_contiguous_ca
 
 #[test]
 fn channel_terminal_journal_preflight_reserves_only_the_facts_the_wire_can_create() {
+    let _scope = crate::test_scope::enter();
     for (already_terminated, free) in [(true, 64), (false, 64), (false, 65)] {
         let uuid = SavedUuid::default();
         let mut hub = Device::new(false);
@@ -3242,6 +3398,7 @@ fn channel_terminal_journal_preflight_reserves_only_the_facts_the_wire_can_creat
 
 #[test]
 fn channel_terminal_sequence_preflight_checks_the_whole_actual_outcome_group() {
+    let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_SEQUENCE_LIMIT_CHILD").is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "performance::tests::channel_terminal_sequence_preflight_checks_the_whole_actual_outcome_group", "--nocapture", "--test-threads=1"])
@@ -3318,6 +3475,7 @@ fn channel_terminal_sequence_preflight_checks_the_whole_actual_outcome_group() {
 
 #[test]
 fn sequence_reserve_preserves_real_emergency_history_and_acknowledged_credits() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
@@ -3408,6 +3566,7 @@ fn sequence_reserve_preserves_real_emergency_history_and_acknowledged_credits() 
 
 #[test]
 fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_sealed_streams() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     for mapped in [true, false] {
         let uuid = SavedUuid::default();
@@ -3534,6 +3693,7 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
 
 #[test]
 fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_available() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -3628,6 +3788,7 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
 
 #[test]
 fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_obligation() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -3696,6 +3857,7 @@ fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_
 #[cfg(debug_assertions)]
 #[test]
 fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit() {
+    let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();

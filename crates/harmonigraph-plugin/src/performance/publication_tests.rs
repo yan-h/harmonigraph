@@ -10,6 +10,7 @@ fn tunings(time: u32) -> Vec<Input> {
 
 #[test]
 fn full_primary_publication_does_not_block_three_sources_actual_releases_and_credit_retirement() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.configure(uuid, true);
@@ -95,6 +96,7 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
 
 #[test]
 fn occupied_baseline_payloads_do_not_pin_later_actual_releases_or_hide_reporting_loss() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.configure(uuid, true);
@@ -185,6 +187,7 @@ fn occupied_baseline_payloads_do_not_pin_later_actual_releases_or_hide_reporting
 
 #[test]
 fn off_rejoin_full_held_baseline_preserves_the_complete_original_take_lifetimes() {
+    let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();
     hub.configure(uuid, true);
