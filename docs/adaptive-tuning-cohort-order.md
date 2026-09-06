@@ -35,8 +35,8 @@ Their chain can be noncontiguous and in any order;
 the module sorts only one event's targets into its own 64-element scratch array.
 Empty captured wildcard sets stay empty, and later sounding state is never consulted.
 
-The borrow must cover a frozen input owner, separate from mutable prospective context/history.
-It pins both the event metadata and target view across construction, partial traversal, offered events and reset.
+Each ephemeral borrow covers a frozen input owner, separate from mutable prospective context/history.
+The owner pins both event metadata and target view across construction, partial traversal, offered events, callback returns and reset.
 It must not borrow a tuner's concurrently mutable `Source` or its current held set.
 The current aggregation source owns linked `source/work.rs` cells and mutable lifetime records, while its `Intent` protocol currently carries coverage/disposition messages rather than these sequencing inputs.
 Those cells are not already an immutable Hub target view.
@@ -48,10 +48,25 @@ This stage provides no such transport and does not prove its whole-session memor
 In particular, copying 1,024 arrays of 64 `Target` values would require 1,048,576 bytes before wrappers and would exceed the remaining session headroom.
 The test's large frozen capture owner is fixture setup, not an approved production allocation.
 
-Construct `Scratch` once outside processing, then call `Cohort::begin(sample, events, target_view, scratch)`.
+Construct `Scratch` once outside processing and retain it in the central owner.
+It owns every graph cursor, work counter, binding and offered/committed bit with no borrowed fields, so a serialized owner can move between callback threads.
+Call `Cohort::begin(frozen_id, sample, events, target_view, scratch)` once, then drop this ephemeral view when the callback returns.
+The next callback calls `Cohort::resume` with those same arguments to reborrow the persistent state, including an event that was offered but not yet committed.
+No self-reference, leaked allocation or `Sync` requirement on a callback-local target view is needed.
+
+The caller supplies `FrozenInputId`, a nonzero freeze generation scoped to that `Scratch` owner.
+Each new `begin` requires a strictly greater generation, and changed event/target metadata requires a new generation.
+Use checked generations and reinitialize the owner off-thread on exhaustion;
+never wrap or reuse a previous binding.
+The module does not mint this identity or treat it as membership, lease or clock proof.
+`resume` checks the generation, mapped sample and original-input count before touching state.
+A mismatch preserves the correct cursor, work and offered event so the owner can retry with its proper frozen view.
+The caller still must keep every event and target link immutable while using that generation;
+matching a supplied ID cannot prove the caller kept its data unchanged.
+
 `advance(work_budget)` performs at most that many structural work units and returns one of:
 
-- `Pending`: retain all borrows, configuration and traversal state for the next slice.
+- `Pending`: retain the frozen input owner, configuration and persistent scratch for the next slice.
 - `Event(Selected)`: inspect `event_index`, original `id`, `phase`, `role` and optional exact `initial_tuning`.
 - `Complete { original_inputs, vertices }`: every offered phase has been committed and its successor edges retired.
 
@@ -68,7 +83,10 @@ the total phase count becomes final during construction, before the first event 
 `reset()` restarts the same immutable cohort and incrementally clears/rebuilds graph state on subsequent `advance` calls.
 It cannot roll back external assignments or accepted output;
 the owner must separately discard or revoke prospective effects before replaying the graph.
-Dropping the traversal releases borrows and performs no allocation or deallocation.
+Dropping the view releases borrows and performs no allocation or deallocation, and the cursor remains in `Scratch`.
+`begin` refuses to overwrite an unfinished traversal with `CohortInProgress`.
+After handling its external prospective effects, an owner may call `Scratch::discard()` to release that traversal state explicitly;
+it retains the last generation and requires a newer binding for the next cohort.
 
 ## Dependencies and replacement phases
 
@@ -119,15 +137,16 @@ The approved internal split keeps the previous total cohort reserve of 294,912 b
 
 The 73,728-byte metadata reduction pays exactly for the larger phase graph.
 Compile-time assertions cover the actual `Option<Event>` cell, full `Scratch`, traversal wrapper, and aligned composite layout.
-Executed aarch64 sizes are `Event = Option<Event> = 56`, `Target = 16`, `Scratch = 226816`, `Cohort = 256`, and scratch alignment 16 bytes.
-The complete aligned metadata/scratch/traversal composite is 284,416 bytes, leaving 10,496 bytes within the existing cohort reserve.
+Executed aarch64 sizes are `Event = Option<Event> = 56`, `Target = 16`, `Scratch = 227056`, ephemeral `Cohort = 40`, and scratch alignment 16 bytes.
+The complete aligned metadata/scratch/traversal composite is 284,448 bytes, leaving 10,464 bytes within the existing cohort reserve.
 The session's planned 150,581,899-byte total and 413,045-byte remaining headroom to 144 MiB therefore do not increase.
 Later integration must reconcile this internal split in its full owner ledger and account for all additional captured-target transport owners.
 
 The 1,025th original input fails `begin` with `TooManyEvents`.
 The 257th onset fails incremental preparation with `TooManyOnsets`, before graph construction can offer any event.
 Target count, malformed/truncated chains, invalid source/sequence/sample/channel/key/host-ID metadata, duplicate original input IDs, duplicate target lifetimes, conflicting lifetime addresses, duplicate onsets and capture of a lifetime before its own onset produce explicit errors.
-Errors latch for that traversal and never report partial completion.
+Construction/traversal errors latch and never report partial completion.
+A rejected begin/resume binding instead leaves existing traversal state unchanged.
 The module cannot detect omitted physical inputs, omitted captured effects or invalid lease/clock provenance without the caller's upstream evidence.
 
 ## Executed work and verification
@@ -138,17 +157,19 @@ edge insertion and commit totals are also exposed.
 One unit includes a bounded amount of scalar work, at most one target-provider lookup, and fixed bookkeeping such as clearing a 16-entry channel/key mask.
 Construction retains its row, linked-target, insertion and binary-search cursors.
 Traversal retains its ready-scan position and edge word/bit cursor.
-Commit, stable-offer inspection and reset are constant work and use no target lookup.
+Begin/resume binding checks, commit, stable-offer inspection, reset and discard are constant work and use no target lookup.
 
 Before any event is offered, all input/target validation and all graph construction complete.
-The one-unit resume fixture produces the same order and exact work counters as an unrestricted traversal.
+The one-unit resume fixture actually returns from its callback function and recreates the borrow for each slice, producing the same order and exact work counters as an unrestricted traversal.
+It also returns with an offered event, rejects incorrect generation/sample/count bindings without mutation, and resumes to commit that same event exactly once.
+A compile-time check proves the fixture's persistent owner is `Send`, and generation exhaustion cannot reuse an old binding.
 Every fixture slice also checks that its `Work::units()` delta is no greater than the supplied budget.
 The caller still needs a measured conversion from structural work units to its enclosing callback budget;
 `HUB_EVENT_WORK = 1024` is not permission to build this entire graph in a callback.
 
 The maximum replacement fixture has 1,024 physical inputs, 256 replacement onsets and 1,280 visited phases, using four source-held sets of 64. Its 768 shared-channel controls create 393,088 real dependency edges.
 It executes 818,560 node pairs, 1,638,400 ready-scan visits, 25,600 retired words and exactly 393,088 retired edges.
-It builds, traverses, resets and traverses again under an allocation/reallocation/deallocation guard, and exercises 1,025-input and 257-onset refusal with no offered or committed event.
+It builds, traverses, resets and traverses again while dropping/reborrowing the view between slices and offers under an allocation/reallocation/deallocation guard, and exercises 1,025-input and 257-onset refusal with no offered or committed event.
 
 The maximum-target fixture has 1,024 messages targeting 64 held lifetimes each through reverse-ordered, noncontiguous chains.
 Every event depends on every preceding event, producing all 523,776 possible forward edges.

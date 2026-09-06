@@ -26,6 +26,13 @@ pub struct InputId {
     pub sequence: u64,
 }
 
+/// Caller-issued freeze generation scoped to one persistent Scratch owner.
+/// Begin requires a nonzero generation greater than its previous binding. The
+/// owner uses checked generations and never changes metadata/targets under one
+/// binding. This is not a membership, lease or clock-completeness proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrozenInputId(pub u64);
+
 /// Identity within the event's already validated source lease and clock binding.
 /// Host ID is original address metadata, never the lifetime identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +120,8 @@ pub struct Event {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
+    InvalidBinding,
+    CohortInProgress,
     TooManyEvents,
     TooManyOnsets,
     TooManyTargets { event: usize },
@@ -210,9 +219,11 @@ impl Work {
     }
 }
 
-/// Preallocate once outside processing. No owning heap handles or destructors.
+/// Persistent owned graph AND cursor. Preallocate once outside processing.
+/// No borrowed fields, owning heap handles or destructors.
 /// Inactive adjacency rows are never read; each build clears every active row.
 pub struct Scratch {
+    state: Cursor,
     edges: [[u64; WORDS]; COHORT_PHASES],
     degree: [u16; COHORT_PHASES],
     tuning: [u16; COHORT_PHASES],
@@ -230,6 +241,7 @@ pub struct Scratch {
 impl Default for Scratch {
     fn default() -> Self {
         Self {
+            state: Cursor::unbound(FrozenInputId(0)),
             edges: [[0; WORDS]; COHORT_PHASES],
             degree: [0; COHORT_PHASES],
             tuning: [NONE; COHORT_PHASES],
@@ -250,6 +262,7 @@ const EMPTY_TARGET: Target = Target { lifetime: 0, host_note_id: -1, channel: 0,
 
 #[derive(Clone, Copy)]
 enum Phase {
+    Unbound,
     Prepare(usize),
     Clear(usize),
     Validate { node: usize, target: Option<(usize, TargetHandle)> },
@@ -266,15 +279,9 @@ enum Phase {
     Failed(Error),
 }
 
-/// Holds both borrows across work slices. No output/policy call is automatic.
-/// Incorporate the selected event into prospective context/history, then commit
-/// it, before asking for another. On failure no event has been offered during
-/// construction. On an owner failure after evaluation starts, retain or revoke
-/// its actual prospective work; reset is not a rollback of those external facts.
-pub struct Cohort<'events, 'scratch> {
-    events: &'events [Event],
-    targets: &'events dyn TargetAccess,
-    scratch: &'scratch mut Scratch,
+struct Cursor {
+    binding: FrozenInputId,
+    inputs: usize,
     sample: i64,
     phase: Phase,
     onsets: usize,
@@ -283,8 +290,48 @@ pub struct Cohort<'events, 'scratch> {
     work: Work,
 }
 
+impl Cursor {
+    fn unbound(binding: FrozenInputId) -> Self {
+        Self {
+            binding,
+            inputs: 0,
+            sample: 0,
+            phase: Phase::Unbound,
+            onsets: 0,
+            vertices: 0,
+            committed: 0,
+            work: Work::default(),
+        }
+    }
+}
+
+impl Scratch {
+    /// Explicitly discard persistent traversal state after the owner has handled
+    /// its external prospective effects. The last generation remains reserved;
+    /// the next begin needs a strictly newer caller-issued binding. Matrix clear
+    /// is charged incrementally by the next build, not hidden in this operation.
+    pub fn discard(&mut self) {
+        self.state = Cursor::unbound(self.state.binding);
+    }
+}
+
+/// Ephemeral access to persistent traversal state. Drop at callback return and
+/// use resume next callback: all cursors, work and offered/committed ownership
+/// live in Scratch, which can move with its serialized owner between threads.
+/// The caller pins its immutable input subowner across these ephemeral borrows.
+/// Incorporate each selected event into prospective context/history before
+/// commit. None of these operations acknowledges actual downstream output.
+/// No output/policy call is automatic, and reset/discard cannot roll back the
+/// external effects the caller already incorporated.
+pub struct Cohort<'events, 'scratch> {
+    events: &'events [Event],
+    targets: &'events dyn TargetAccess,
+    scratch: &'scratch mut Scratch,
+}
+
 impl<'events, 'scratch> Cohort<'events, 'scratch> {
     pub fn begin(
+        binding: FrozenInputId,
         sample: i64,
         events: &'events [Event],
         targets: &'events dyn TargetAccess,
@@ -293,44 +340,77 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
         if events.len() > COHORT_EVENTS {
             return Err(Error::TooManyEvents);
         }
-        Ok(Self {
-            events,
-            targets,
-            scratch,
+        let replaceable = match scratch.state.phase {
+            Phase::Unbound | Phase::Complete => true,
+            Phase::Failed(_) => scratch.state.committed == 0,
+            _ => false,
+        };
+        if !replaceable {
+            return Err(Error::CohortInProgress);
+        }
+        if binding.0 == 0 || binding.0 <= scratch.state.binding.0 {
+            return Err(Error::InvalidBinding);
+        }
+        scratch.state = Cursor {
+            binding,
+            inputs: events.len(),
             sample,
             phase: if events.is_empty() { Phase::Complete } else { Phase::Prepare(0) },
             onsets: 0,
             vertices: events.len(),
             committed: 0,
             work: Work::default(),
-        })
+        };
+        Ok(Self { events, targets, scratch })
+    }
+
+    /// Reborrow the SAME frozen input owner after a callback return. The owner
+    /// must keep every metadata cell/target link immutable under this generation;
+    /// changing data while reusing a matching ID violates the caller contract.
+    /// Mismatches leave cursor, work and any offered event completely intact.
+    pub fn resume(
+        binding: FrozenInputId,
+        sample: i64,
+        events: &'events [Event],
+        targets: &'events dyn TargetAccess,
+        scratch: &'scratch mut Scratch,
+    ) -> Result<Self, Error> {
+        if matches!(scratch.state.phase, Phase::Unbound)
+            || binding != scratch.state.binding
+            || sample != scratch.state.sample
+            || events.len() != scratch.state.inputs
+        {
+            return Err(Error::InvalidBinding);
+        }
+        Ok(Self { events, targets, scratch })
     }
 
     pub fn work(&self) -> Work {
-        self.work
+        self.scratch.state.work
     }
     pub fn committed(&self) -> usize {
-        self.committed
+        self.scratch.state.committed
     }
     /// Phase count is final only after construction has offered its first event.
     pub fn remaining(&self) -> usize {
-        self.vertices - self.committed
+        self.scratch.state.vertices - self.scratch.state.committed
     }
     pub fn was_committed(&self, index: usize) -> Option<bool> {
         (index < self.events.len()).then(|| {
             // Old scratch bits have no meaning until this build reaches traversal.
-            self.committed != 0 && self.scratch.visited[index]
+            self.scratch.state.committed != 0 && self.scratch.visited[index]
         })
     }
 
     /// Restart this same immutable cohort, for an owner that has separately
     /// discarded/rebuilt its prospective effects. Clearing remains incremental.
     pub fn reset(&mut self) {
-        self.phase = if self.events.is_empty() { Phase::Complete } else { Phase::Prepare(0) };
-        self.onsets = 0;
-        self.vertices = self.events.len();
-        self.committed = 0;
-        self.work = Work::default();
+        self.scratch.state.phase =
+            if self.events.is_empty() { Phase::Complete } else { Phase::Prepare(0) };
+        self.scratch.state.onsets = 0;
+        self.scratch.state.vertices = self.events.len();
+        self.scratch.state.committed = 0;
+        self.scratch.state.work = Work::default();
     }
 
     pub fn advance(&mut self, budget: usize) -> Result<Progress, Error> {
@@ -339,7 +419,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 return result;
             }
             if let Err(error) = self.tick() {
-                self.phase = Phase::Failed(error);
+                self.scratch.state.phase = Phase::Failed(error);
                 return Err(error);
             }
         }
@@ -349,21 +429,21 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
     /// Acknowledge exactly the offered event after incorporating its effects.
     /// Retirement of successor degrees is charged by subsequent advance calls.
     pub fn commit(&mut self) -> Result<(), Error> {
-        let Phase::Offered(node) = self.phase else {
+        let Phase::Offered(node) = self.scratch.state.phase else {
             return Err(Error::NoSelectedEvent);
         };
         self.scratch.visited[node] = true;
-        self.committed += 1;
-        self.work.committed_nodes += 1;
-        self.phase = Phase::Retire { node, word: 0, bits: 0 };
+        self.scratch.state.committed += 1;
+        self.scratch.state.work.committed_nodes += 1;
+        self.scratch.state.phase = Phase::Retire { node, word: 0, bits: 0 };
         Ok(())
     }
 
     fn progress(&self) -> Option<Result<Progress, Error>> {
-        Some(match self.phase {
+        Some(match self.scratch.state.phase {
             Phase::Offered(index) => Ok(Progress::Event(self.selected(index))),
             Phase::Complete => Ok(Progress::Complete {
-                vertices: self.vertices,
+                vertices: self.scratch.state.vertices,
                 original_inputs: self.events.len(),
             }),
             Phase::Failed(error) => Err(error),
@@ -428,15 +508,15 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
             return None;
         }
         Some(
-            self.committed != 0
+            self.scratch.state.committed != 0
                 && self.scratch.visited[usize::from(self.scratch.release_vertex[index])],
         )
     }
 
     fn next_pair(&mut self, i: usize, j: usize) {
-        self.phase = if j + 1 < self.vertices {
+        self.scratch.state.phase = if j + 1 < self.scratch.state.vertices {
             Phase::Pair { i, j: j + 1 }
-        } else if i + 1 < self.vertices {
+        } else if i + 1 < self.scratch.state.vertices {
             self.start_row(i + 1)
         } else {
             Phase::Finalize(0)
@@ -449,8 +529,11 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
     }
 
     fn row_done(&mut self, i: usize) {
-        self.phase =
-            if i + 1 < self.vertices { Phase::Pair { i, j: i + 1 } } else { Phase::Finalize(0) };
+        self.scratch.state.phase = if i + 1 < self.scratch.state.vertices {
+            Phase::Pair { i, j: i + 1 }
+        } else {
+            Phase::Finalize(0)
+        };
     }
 
     fn finish_pair(&mut self, i: usize, j: usize, edge: bool) {
@@ -484,7 +567,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
     fn edge(&mut self, early: usize, late: usize) {
         self.scratch.edges[early][late / 64] |= 1 << (late % 64);
         self.scratch.degree[late] += 1;
-        self.work.built_edges += 1;
+        self.scratch.state.work.built_edges += 1;
     }
 
     fn earliest(&self, previous: u16, next: usize) -> u16 {
@@ -508,14 +591,14 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
     }
 
     fn tick(&mut self) -> Result<(), Error> {
-        let n = self.vertices;
-        match self.phase {
+        let n = self.scratch.state.vertices;
+        match self.scratch.state.phase {
             Phase::Prepare(index) => {
-                self.work.prepared_inputs += 1;
+                self.scratch.state.work.prepared_inputs += 1;
                 let event = self.events[index];
                 if event.kind == Kind::Onset {
-                    self.onsets += 1;
-                    if self.onsets > COHORT_ONSETS {
+                    self.scratch.state.onsets += 1;
+                    if self.scratch.state.onsets > COHORT_ONSETS {
                         return Err(Error::TooManyOnsets);
                     }
                 }
@@ -526,23 +609,24 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     return Err(Error::InvalidReplacement { event: index });
                 }
                 if event.replaced.len != 0 {
-                    self.scratch.release_parent[self.vertices - self.events.len()] = index as u16;
-                    self.scratch.release_vertex[index] = self.vertices as u16;
-                    self.vertices += 1;
+                    self.scratch.release_parent[self.scratch.state.vertices - self.events.len()] =
+                        index as u16;
+                    self.scratch.release_vertex[index] = self.scratch.state.vertices as u16;
+                    self.scratch.state.vertices += 1;
                 } else {
                     self.scratch.release_vertex[index] = NONE;
                 }
-                self.phase = if index + 1 < self.events.len() {
+                self.scratch.state.phase = if index + 1 < self.events.len() {
                     Phase::Prepare(index + 1)
                 } else {
-                    self.onsets = 0;
+                    self.scratch.state.onsets = 0;
                     Phase::Clear(0)
                 };
             }
             Phase::Clear(index) => {
                 self.scratch.edges[index / WORDS][index % WORDS] = 0;
-                self.work.cleared_words += 1;
-                self.phase = if index + 1 == n * WORDS {
+                self.scratch.state.work.cleared_words += 1;
+                self.scratch.state.phase = if index + 1 == n * WORDS {
                     Phase::Validate { node: 0, target: None }
                 } else {
                     Phase::Clear(index + 1)
@@ -551,7 +635,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
             Phase::Validate { node, target } => {
                 let event = self.event(node);
                 if let Some((index, handle)) = target {
-                    self.work.validated_targets += 1;
+                    self.scratch.state.work.validated_targets += 1;
                     let link = self.target(node, handle, index)?;
                     let value = link.target;
                     if value.lifetime == 0
@@ -579,11 +663,12 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     }
                     if link.next != NO_TARGET {
                         let next = link.next;
-                        self.phase = Phase::Validate { node, target: Some((index + 1, next)) };
+                        self.scratch.state.phase =
+                            Phase::Validate { node, target: Some((index + 1, next)) };
                         return Ok(());
                     }
                 } else {
-                    self.work.validated_nodes += 1;
+                    self.scratch.state.work.validated_nodes += 1;
                     self.scratch.degree[node] = 0;
                     self.scratch.tuning[node] = NONE;
                     self.scratch.terminal[node] = NONE;
@@ -592,7 +677,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     self.scratch.onset_slot[node] = NONE;
                     if event.id.source >= SOURCE_ORDINALS
                         || event.id.sequence == 0
-                        || event.sample != self.sample
+                        || event.sample != self.scratch.state.sample
                         || (event.kind == Kind::Onset && event.targets.len != 1)
                         || (event.kind == Kind::Independent && event.targets.len != 0)
                         || matches!(event.kind, Kind::Channel { channel, .. } if channel >= 16)
@@ -607,9 +692,9 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                         return Err(Error::InvalidTargetSpan { event: node });
                     }
                     if event.kind == Kind::Onset {
-                        self.scratch.onset_slot[node] = self.onsets as u16;
-                        self.onsets += 1;
-                        if self.onsets > COHORT_ONSETS {
+                        self.scratch.onset_slot[node] = self.scratch.state.onsets as u16;
+                        self.scratch.state.onsets += 1;
+                        if self.scratch.state.onsets > COHORT_ONSETS {
                             return Err(Error::TooManyOnsets);
                         }
                     }
@@ -618,22 +703,23 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     }
                     if event.targets.first != NO_TARGET {
                         let first = event.targets.first;
-                        self.phase = Phase::Validate { node, target: Some((0, first)) };
+                        self.scratch.state.phase =
+                            Phase::Validate { node, target: Some((0, first)) };
                         return Ok(());
                     }
                 }
-                self.phase = if node + 1 < n {
+                self.scratch.state.phase = if node + 1 < n {
                     Phase::Validate { node: node + 1, target: None }
                 } else {
                     self.start_row(0)
                 };
             }
             Phase::Row { i, handle, loaded } => {
-                self.work.target_reads += 1;
+                self.scratch.state.work.target_reads += 1;
                 if handle != NO_TARGET {
                     let link = self.target(i, handle, loaded)?;
                     self.scratch.keys[usize::from(link.target.channel)] |= 1 << link.target.key;
-                    self.phase = Phase::Insert {
+                    self.scratch.state.phase = Phase::Insert {
                         i,
                         value: link.target,
                         next: link.next,
@@ -645,7 +731,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 }
             }
             Phase::Insert { i, value, next, loaded, position } => {
-                self.work.target_steps += 1;
+                self.scratch.state.work.target_steps += 1;
                 if position > 0 {
                     let previous = self.scratch.sorted[position - 1];
                     if previous.lifetime == value.lifetime {
@@ -653,20 +739,20 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     }
                     if previous.lifetime > value.lifetime {
                         self.scratch.sorted[position] = previous;
-                        self.phase =
+                        self.scratch.state.phase =
                             Phase::Insert { i, value, next, loaded, position: position - 1 };
                         return Ok(());
                     }
                 }
                 self.scratch.sorted[position] = value;
                 if next != NO_TARGET {
-                    self.phase = Phase::Row { i, handle: next, loaded: loaded + 1 };
+                    self.scratch.state.phase = Phase::Row { i, handle: next, loaded: loaded + 1 };
                 } else {
                     self.row_done(i);
                 }
             }
             Phase::Pair { i, j } => {
-                self.work.node_pairs += 1;
+                self.scratch.state.work.node_pairs += 1;
                 let (early, late) = self.ordered_pair(i, j);
                 let a = self.event(early);
                 let b = self.event(late);
@@ -689,7 +775,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     && a.targets.len != 0
                     && a.targets == b.targets
                 {
-                    self.work.identical_target_pairs += 1;
+                    self.scratch.state.work.identical_target_pairs += 1;
                     self.finish_pair(i, j, true);
                     return Ok(());
                 }
@@ -706,13 +792,13 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 }
                 if self.event(j).targets.first != NO_TARGET {
                     let handle = self.event(j).targets.first;
-                    self.phase = Phase::Targets { i, j, handle, read: 0, edge };
+                    self.scratch.state.phase = Phase::Targets { i, j, handle, read: 0, edge };
                 } else {
                     self.finish_pair(i, j, edge);
                 }
             }
             Phase::Targets { i, j, handle, read, mut edge } => {
-                self.work.target_reads += 1;
+                self.scratch.state.work.target_reads += 1;
                 let link = self.target(j, handle, read)?;
                 let (early, late) = self.ordered_pair(i, j);
                 if early == j
@@ -722,7 +808,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     let onset = self.scratch.onset[usize::from(self.scratch.onset_slot[late])];
                     edge |= link.target.channel == onset.channel && link.target.key == onset.key;
                 }
-                self.phase = Phase::Search {
+                self.scratch.state.phase = Phase::Search {
                     i,
                     j,
                     link,
@@ -733,7 +819,7 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 };
             }
             Phase::Search { i, j, link, read, mut lo, mut hi, mut edge } => {
-                self.work.target_steps += 1;
+                self.scratch.state.work.target_steps += 1;
                 let (early, late) = self.ordered_pair(i, j);
                 if lo < hi {
                     let mid = lo + (hi - lo) / 2;
@@ -772,19 +858,20 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                         }
                     }
                     if lo < hi {
-                        self.phase = Phase::Search { i, j, link, read, lo, hi, edge };
+                        self.scratch.state.phase = Phase::Search { i, j, link, read, lo, hi, edge };
                         return Ok(());
                     }
                 }
                 if link.next != NO_TARGET {
                     let handle = link.next;
-                    self.phase = Phase::Targets { i, j, handle, read: read + 1, edge };
+                    self.scratch.state.phase =
+                        Phase::Targets { i, j, handle, read: read + 1, edge };
                 } else {
                     self.finish_pair(i, j, edge);
                 }
             }
             Phase::Finalize(index) => {
-                self.work.finalized_nodes += 1;
+                self.scratch.state.work.finalized_nodes += 1;
                 let tuning = self.scratch.tuning[index];
                 let terminal = self.scratch.terminal[index];
                 if tuning != NONE
@@ -793,21 +880,21 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 {
                     self.scratch.tuning[index] = NONE;
                 }
-                self.phase = if index + 1 < n {
+                self.scratch.state.phase = if index + 1 < n {
                     Phase::Finalize(index + 1)
                 } else {
                     Phase::Select { cursor: 0, best: None }
                 };
             }
             Phase::Select { cursor, mut best } => {
-                self.work.selection_visits += 1;
+                self.scratch.state.work.selection_visits += 1;
                 if !self.scratch.visited[cursor]
                     && self.scratch.degree[cursor] == 0
                     && best.is_none_or(|old| self.order(cursor) < self.order(old))
                 {
                     best = Some(cursor);
                 }
-                self.phase = if cursor + 1 < n {
+                self.scratch.state.phase = if cursor + 1 < n {
                     Phase::Select { cursor: cursor + 1, best }
                 } else if let Some(node) = best {
                     Phase::Offered(node)
@@ -819,16 +906,17 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                 if bits != 0 {
                     let successor = (word - 1) * 64 + bits.trailing_zeros() as usize;
                     self.scratch.degree[successor] -= 1;
-                    self.work.retired_edges += 1;
-                    self.phase = Phase::Retire { node, word, bits: bits & (bits - 1) };
+                    self.scratch.state.work.retired_edges += 1;
+                    self.scratch.state.phase =
+                        Phase::Retire { node, word, bits: bits & (bits - 1) };
                 } else {
-                    self.work.retired_words += 1;
+                    self.scratch.state.work.retired_words += 1;
                     let bits = self.scratch.edges[node][word];
-                    self.phase = Phase::Retire { node, word: word + 1, bits };
+                    self.scratch.state.phase = Phase::Retire { node, word: word + 1, bits };
                 }
-                if let Phase::Retire { word, bits: 0, .. } = self.phase {
+                if let Phase::Retire { word, bits: 0, .. } = self.scratch.state.phase {
                     if word == n.div_ceil(64) {
-                        self.phase = if self.committed == n {
+                        self.scratch.state.phase = if self.scratch.state.committed == n {
                             Phase::Complete
                         } else {
                             Phase::Select { cursor: 0, best: None }
@@ -836,7 +924,9 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     }
                 }
             }
-            Phase::Offered(_) | Phase::Complete | Phase::Failed(_) => unreachable!(),
+            Phase::Unbound | Phase::Offered(_) | Phase::Complete | Phase::Failed(_) => {
+                unreachable!()
+            }
         }
         Ok(())
     }

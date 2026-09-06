@@ -1,5 +1,10 @@
 use super::*;
 
+fn binding() -> FrozenInputId {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    FrozenInputId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
 #[derive(Default)]
 struct Capture(Vec<TargetLink>);
 
@@ -83,7 +88,7 @@ fn all_six_arrivals_use_one_assignment_chain() {
     let mut scratch = Scratch::default();
     for permutation in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
         let permuted = permutation.map(|i| events[i]);
-        let mut cohort = Cohort::begin(50, &permuted, &capture, &mut scratch).unwrap();
+        let mut cohort = Cohort::begin(binding(), 50, &permuted, &capture, &mut scratch).unwrap();
         let mut history = [0_u64; 3];
         let mut context = 0;
         let mut order = Vec::new();
@@ -127,7 +132,7 @@ fn replacement_phases_preserve_identity_and_release_before_independent_context()
     let old_off = capture.event(1, 12, Kind::Terminal, &[old]);
     let events = [independent, old_off, replacement, pitch];
     let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
     let mut context = vec![old.lifetime];
     let mut visited = Vec::new();
     loop {
@@ -188,7 +193,7 @@ fn zero_duration_and_old_release_are_dependencies_not_a_global_source_chain() {
         capture.event(3, 1, Kind::Terminal, &[voice(99, 0, 91)]),
     ];
     let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
     assert_eq!(
         run(&mut cohort, 1).iter().map(|s| s.event_index).collect::<Vec<_>>(),
         [4, 5, 3, 0, 1, 2]
@@ -213,7 +218,7 @@ fn shared_channel_pedal_and_captured_wildcards_leave_other_channels_independent(
         capture.event(1, 7, tuning(-0.25), &[a]),
     ];
     let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
     let order = run(&mut cohort, 11);
     assert_eq!(order.iter().map(|s| s.event_index).collect::<Vec<_>>(), [5, 0, 1, 2, 3, 6, 4]);
     assert!(order.last().unwrap().initial_tuning.is_none());
@@ -242,7 +247,7 @@ fn initial_tuning_is_first_exact_own_lifetime_value_before_terminal() {
         capture.event(0, 1, Kind::Onset, &[c]),
     ];
     let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
     let out = run(&mut cohort, 9);
     assert_eq!(
         out[0].initial_tuning,
@@ -259,7 +264,7 @@ fn initial_tuning_is_first_exact_own_lifetime_value_before_terminal() {
     // A later sample cannot be slipped into a same-sample cohort at all.
     let mut later = events;
     later[2].sample += 1;
-    let mut invalid = Cohort::begin(50, &later, &capture, &mut scratch).unwrap();
+    let mut invalid = Cohort::begin(binding(), 50, &later, &capture, &mut scratch).unwrap();
     assert_eq!(invalid.advance(usize::MAX), Err(Error::InvalidMetadata { event: 2 }));
     assert_eq!(invalid.committed(), 0);
 }
@@ -275,29 +280,114 @@ fn resume_and_reset_preserve_stable_offers_and_owned_remaining_events() {
         capture.event(2, 1, Kind::Onset, &[voice(1, 0, 40)]),
         capture.event(1, 6, tuning(0.25), &[voice(2, 0, 60)]),
     ];
-    let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
-    let full = run(&mut cohort, usize::MAX);
-    let full_work = cohort.work();
-    cohort.reset();
-    assert_eq!(cohort.was_committed(0), Some(false));
-    assert_eq!(cohort.was_replacement_committed(0), Some(false));
-    assert_eq!(cohort.commit(), Err(Error::NoSelectedEvent));
-    let first = loop {
-        if let Progress::Event(selected) = cohort.advance(1).unwrap() {
-            break selected;
-        }
+    struct Owner {
+        scratch: Scratch,
+        events: [Event; 3],
+        capture: Capture,
+        frozen: FrozenInputId,
+    }
+    fn assert_send<T: Send>() {}
+    assert_send::<Owner>();
+    // These functions actually return, destroying the ephemeral borrow. The
+    // next callback resumes the owned cursor, including an uncommitted offer.
+    fn callback(owner: &mut Owner) -> (Progress, Work) {
+        let mut view =
+            Cohort::resume(owner.frozen, 50, &owner.events, &owner.capture, &mut owner.scratch)
+                .unwrap();
+        let before = view.work().units();
+        let progress = view.advance(1).unwrap();
+        assert!(view.work().units() - before <= 1);
+        (progress, view.work())
+    }
+    let mut owner = Owner { scratch: Scratch::default(), events, capture, frozen: binding() };
+    let (full, full_work) = {
+        let mut view =
+            Cohort::begin(owner.frozen, 50, &owner.events, &owner.capture, &mut owner.scratch)
+                .unwrap();
+        let full = run(&mut view, usize::MAX);
+        let work = view.work();
+        view.reset();
+        assert_eq!(view.was_committed(0), Some(false));
+        assert_eq!(view.was_replacement_committed(0), Some(false));
+        assert_eq!(view.commit(), Err(Error::NoSelectedEvent));
+        (full, work)
     };
-    assert_eq!(first, full[0]);
-    assert_eq!(cohort.remaining(), 4);
-    cohort.commit().unwrap();
-    assert_eq!(cohort.was_committed(0), Some(false));
-    assert_eq!(cohort.was_replacement_committed(0), Some(true));
-    assert_eq!(cohort.remaining(), 3);
-    let mut resumed = vec![first];
-    resumed.extend(run(&mut cohort, 1));
+    let mut resumed = Vec::new();
+    loop {
+        let (progress, work) = callback(&mut owner);
+        match progress {
+            Progress::Pending => {}
+            Progress::Event(selected) => {
+                for (id, sample, count) in [
+                    (FrozenInputId(0), 50, 3),
+                    (FrozenInputId(owner.frozen.0 + 1), 50, 3),
+                    (owner.frozen, 51, 3),
+                    (owner.frozen, 50, 2),
+                ] {
+                    assert!(matches!(
+                        Cohort::resume(
+                            id,
+                            sample,
+                            &owner.events[..count],
+                            &owner.capture,
+                            &mut owner.scratch
+                        ),
+                        Err(Error::InvalidBinding)
+                    ));
+                }
+                assert!(matches!(
+                    Cohort::begin(binding(), 50, &owner.events, &owner.capture, &mut owner.scratch),
+                    Err(Error::CohortInProgress)
+                ));
+                let mut view = Cohort::resume(
+                    owner.frozen,
+                    50,
+                    &owner.events,
+                    &owner.capture,
+                    &mut owner.scratch,
+                )
+                .unwrap();
+                assert_eq!(view.work(), work, "rejected bindings leave cursor/work unchanged");
+                assert_eq!(view.advance(0), Ok(progress), "offer survives callback return");
+                assert_eq!(view.remaining(), 4 - resumed.len());
+                if selected.phase == EventPhase::ReplacedRelease {
+                    assert_eq!(view.was_committed(selected.event_index), Some(false));
+                }
+                resumed.push(selected);
+                view.commit().unwrap();
+                assert_eq!(view.commit(), Err(Error::NoSelectedEvent), "commit exactly once");
+                if selected.phase == EventPhase::ReplacedRelease {
+                    assert_eq!(view.was_committed(selected.event_index), Some(false));
+                    assert_eq!(view.was_replacement_committed(selected.event_index), Some(true));
+                }
+            }
+            Progress::Complete { .. } => {
+                assert_eq!(work, full_work);
+                break;
+            }
+        }
+    }
     assert_eq!(resumed, full);
-    assert_eq!(cohort.work(), full_work);
+    assert!(
+        matches!(
+            Cohort::begin(owner.frozen, 50, &owner.events, &owner.capture, &mut owner.scratch),
+            Err(Error::InvalidBinding)
+        ),
+        "begin cannot reuse a freeze generation"
+    );
+    owner.scratch.discard();
+    assert!(matches!(
+        Cohort::resume(owner.frozen, 50, &owner.events, &owner.capture, &mut owner.scratch),
+        Err(Error::InvalidBinding)
+    ));
+    // Exhaustion cannot wrap a generation back to an old binding.
+    let _ = Cohort::begin(FrozenInputId(u64::MAX), 50, &[], &owner.capture, &mut owner.scratch)
+        .unwrap();
+    owner.scratch.discard();
+    assert!(matches!(
+        Cohort::begin(FrozenInputId(1), 50, &[], &owner.capture, &mut owner.scratch),
+        Err(Error::InvalidBinding)
+    ));
 }
 
 #[test]
@@ -307,7 +397,7 @@ fn malformed_metadata_is_rejected_before_any_selection() {
     let a = capture.event(1, 1, Kind::Onset, &[target]);
     let mut scratch = Scratch::default();
     let error = |events: &[Event], scratch: &mut Scratch| {
-        let mut cohort = Cohort::begin(50, events, &capture, scratch).unwrap();
+        let mut cohort = Cohort::begin(binding(), 50, events, &capture, scratch).unwrap();
         let result = cohort.advance(usize::MAX);
         assert_eq!(cohort.committed(), 0);
         assert_eq!(cohort.advance(0), result, "error is latched");
@@ -334,11 +424,12 @@ fn malformed_metadata_is_rejected_before_any_selection() {
     changed.key = 61;
     let expression = capture.event(1, 2, tuning(0.2), &[changed]);
     let changed_events = [a, expression];
-    let mut cohort = Cohort::begin(50, &changed_events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &changed_events, &capture, &mut scratch).unwrap();
     assert!(matches!(cohort.advance(usize::MAX), Err(Error::InconsistentLifetime { .. })));
     let duplicate = capture.event(1, 1, Kind::Terminal, &[target, target]);
     let duplicate_events = [duplicate];
-    let mut cohort = Cohort::begin(50, &duplicate_events, &capture, &mut scratch).unwrap();
+    let mut cohort =
+        Cohort::begin(binding(), 50, &duplicate_events, &capture, &mut scratch).unwrap();
     assert_eq!(cohort.advance(usize::MAX), Err(Error::DuplicateTarget { event: 0 }));
 }
 
@@ -350,7 +441,7 @@ fn all_seventeen_source_ties_include_direct_without_a_plan() {
         .map(|source| capture.event(source, 1, Kind::Onset, &[voice(1, 0, 60)]))
         .collect();
     let mut scratch = Scratch::default();
-    let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+    let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
     let out = run(&mut cohort, 13);
     assert_eq!(out.iter().map(|s| s.id.source).collect::<Vec<_>>(), (0..17).collect::<Vec<_>>());
     assert_eq!(out[0].role, Role::ObservedDirectOnset);
@@ -383,11 +474,11 @@ fn bad_captured_chains_addresses_and_replacements_are_explicit_errors() {
         (short_chain, Error::InvalidTargetSpan { event: 0 }),
     ] {
         let events = [event];
-        let mut cohort = Cohort::begin(50, &events, &capture, &mut scratch).unwrap();
+        let mut cohort = Cohort::begin(binding(), 50, &events, &capture, &mut scratch).unwrap();
         assert_eq!(cohort.advance(usize::MAX), Err(expected));
         assert_eq!(cohort.committed(), 0);
     }
-    let mut empty = Cohort::begin(50, &[], &capture, &mut scratch).unwrap();
+    let mut empty = Cohort::begin(binding(), 50, &[], &capture, &mut scratch).unwrap();
     assert_eq!(empty.advance(0), Ok(Progress::Complete { vertices: 0, original_inputs: 0 }));
     assert_eq!(empty.work().units(), 0);
 }
