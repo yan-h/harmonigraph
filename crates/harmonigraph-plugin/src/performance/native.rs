@@ -131,23 +131,29 @@ impl Actions {
         let status = vars.shared.status.load(Ordering::Acquire);
         let delay = vars.shared.extra_delay.load(Ordering::Relaxed);
         let value = vars.shared.value();
-        let fault = match status {
-            0 => "Ready",
-            status if status & super::source::CLOCK_FAULT != 0 => "Clock recovery required",
-            status if status & super::source::INPUT_FAULT != 0 => "Input recovery required",
-            status if status & super::source::OUTPUT_FAULT != 0 => "Output recovery required",
-            _ => "Retention capacity reached",
+        let diagnostics = setup::diagnostics_text(status, delay);
+        let pending = if value.generation > vars.shared.applied.load(Ordering::Acquire) {
+            " · setup pending: old output must settle"
+        } else {
+            ""
         };
         if let Some(adopted) = vars.shared.adopted() {
             let calibration = adopted.calibration;
-            let pending =
-                if value.generation > adopted.generation { " · setup pending" } else { "" };
-            w.status.setStringValue(&NSString::from_str(&format!("{name} · {fault}{pending}\nAdopted {}: offset {} · {} Hz · ≤{} frames\n{} · extra delay {delay} samples",
-                adopted.generation, calibration.offset, calibration.sample_rate, calibration.max_frames,
-                if adopted.valid { "Clock validated" } else { "Clock not valid for current processing" })));
+            w.status.setStringValue(&NSString::from_str(&format!(
+                "{name}{pending}\n{diagnostics}\nAdopted {}: offset {} · {} Hz · ≤{} frames\n{}",
+                adopted.generation,
+                calibration.offset,
+                calibration.sample_rate,
+                calibration.max_frames,
+                if adopted.valid {
+                    "Clock validated"
+                } else {
+                    "Clock not valid for current processing"
+                }
+            )));
         } else {
             w.status.setStringValue(&NSString::from_str(&format!(
-                "{name} · {fault}\nWaiting for the first audio clock boundary"
+                "{name}{pending}\n{diagnostics}\nWaiting for the first audio clock boundary"
             )));
         }
         let available = registry::global().lock().unwrap().candidates();
@@ -212,14 +218,14 @@ impl Editor for NativeEditor {
             widgets: OnceCell::new(),
         });
         let actions: Retained<Actions> = unsafe { msg_send![super(actions), init] };
-        let view = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 520.0, 320.0));
+        let view = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 520.0, 460.0));
         let label = |text: &str, y: f64| {
             let field = NSTextField::labelWithString(&NSString::from_str(text), mtm);
             field.setFrame(rect(16.0, y, 485.0, 26.0));
             view.addSubview(&field);
             field
         };
-        label("Harmonigraph Tune", 282.0);
+        label("Harmonigraph Tune", 422.0);
         let participation = unsafe {
             NSButton::checkboxWithTitle_target_action(
                 &NSString::from_str("Participating"),
@@ -228,11 +234,11 @@ impl Editor for NativeEditor {
                 mtm,
             )
         };
-        participation.setFrame(rect(16.0, 250.0, 180.0, 26.0));
+        participation.setFrame(rect(16.0, 390.0, 180.0, 26.0));
         view.addSubview(&participation);
         let pairing = NSPopUpButton::initWithFrame_pullsDown(
             NSPopUpButton::alloc(mtm),
-            rect(16.0, 214.0, 485.0, 28.0),
+            rect(16.0, 354.0, 485.0, 28.0),
             false,
         );
         view.addSubview(&pairing);
@@ -242,13 +248,13 @@ impl Editor for NativeEditor {
             ("Max. buffer (frames)", 346.0),
         ] {
             let field = NSTextField::labelWithString(&NSString::from_str(title), mtm);
-            field.setFrame(rect(x, 186.0, 145.0, 26.0));
+            field.setFrame(rect(x, 326.0, 145.0, 26.0));
             view.addSubview(&field);
         }
         let value = self.shared.value().routing.calibration();
         let field = |text: String, x: f64| {
             let field = NSTextField::textFieldWithString(&NSString::from_str(&text), mtm);
-            field.setFrame(rect(x, 158.0, 145.0, 24.0));
+            field.setFrame(rect(x, 298.0, 145.0, 24.0));
             view.addSubview(&field);
             field
         };
@@ -264,7 +270,7 @@ impl Editor for NativeEditor {
             )
         };
         validated.setState(if value.validated { 1 } else { 0 });
-        validated.setFrame(rect(16.0, 124.0, 485.0, 26.0));
+        validated.setFrame(rect(16.0, 264.0, 485.0, 26.0));
         view.addSubview(&validated);
         for (title, action, x, width) in [
             ("Apply / Reinitialize", sel!(apply:), 16.0, 200.0),
@@ -278,15 +284,15 @@ impl Editor for NativeEditor {
                     mtm,
                 )
             };
-            button.setFrame(rect(x, 88.0, width, 28.0));
+            button.setFrame(rect(x, 228.0, width, 28.0));
             view.addSubview(&button);
         }
         let status = NSTextField::wrappingLabelWithString(
             &NSString::from_str("Waiting for audio state"),
             mtm,
         );
-        status.setFrame(rect(16.0, 25.0, 485.0, 60.0));
-        status.setMaximumNumberOfLines(3);
+        status.setFrame(rect(16.0, 25.0, 485.0, 200.0));
+        status.setMaximumNumberOfLines(0);
         view.addSubview(&status);
         label(harmonigraph_perf::BUILD_TAG, 5.0);
         actions
@@ -321,7 +327,7 @@ impl Editor for NativeEditor {
         Box::new(Handle { actions, timer })
     }
     fn size(&self) -> (u32, u32) {
-        (520, 320)
+        (520, 460)
     }
     fn set_scale_factor(&self, _: f32) -> bool {
         true

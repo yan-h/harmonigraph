@@ -15,6 +15,40 @@ use super::{
 pub const HUB_FIELD: &str = "harmonigraph-session";
 pub const SOURCE_FIELD: &str = "harmonigraph-tune-pairing";
 pub const PARTICIPATING: &str = "participating";
+/// Noncanceling timing summary, separate from the emergency fault bits.
+pub const TIMING_FAILURE: u32 = 1 << 5;
+
+/// Cosmetic UI text only. Reads published values without clearing them or
+/// interpreting a setup request as acknowledged recovery. Never called on audio.
+pub fn diagnostics_text(status: u32, extra_delay: u64) -> String {
+    use super::source::{CLOCK_FAULT, INPUT_FAULT, OUTPUT_FAULT, REFERENCE_FAULT, STORAGE_FAULT};
+    let mut lines = Vec::new();
+    if status == 0 {
+        lines.push("No timing or emergency fault reported".to_owned());
+    }
+    if status & TIMING_FAILURE != 0 {
+        // The latch can outlive the delayed attack, so do not claim it is pending.
+        lines.push("Timing failure: notes delayed".to_owned());
+    }
+    let faults = [
+        (STORAGE_FAULT, "retention capacity reached"),
+        (OUTPUT_FAULT, "output failure"),
+        (CLOCK_FAULT, "clock failure"),
+        (INPUT_FAULT, "input failure"),
+        (REFERENCE_FAULT, "reference/session capacity reached"),
+    ];
+    let reasons: Vec<_> =
+        faults.iter().filter(|(bit, _)| status & bit != 0).map(|(_, reason)| *reason).collect();
+    if !reasons.is_empty() {
+        lines.push(format!("Emergency: {}. Reset / valid recovery required.", reasons.join(", ")));
+    }
+    let known = faults.iter().fold(TIMING_FAILURE, |mask, (bit, _)| mask | bit);
+    if status & !known != 0 {
+        lines.push("Unrecognized recovery status".to_owned());
+    }
+    lines.push(format!("Current extra delay: {extra_delay} samples (above fixed tuner latency)"));
+    lines.join("\n")
+}
 
 #[cfg(test)]
 #[derive(Default)]

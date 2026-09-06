@@ -1041,7 +1041,7 @@ fn session_controls(
     shared: &Arc<crate::performance::setup::Shared>,
     draft: &mut Option<(u64, crate::performance::clock::Calibration)>,
 ) {
-    use crate::performance::setup::Routing;
+    use crate::performance::setup::{diagnostics_text, Routing};
     egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
         .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
         .show(ctx, |ui| {
@@ -1104,6 +1104,11 @@ fn session_controls(
                 } else {
                     "Setup pending: old output must settle"
                 });
+                ui.separator();
+                ui.label(diagnostics_text(
+                    shared.status.load(Ordering::Acquire),
+                    shared.extra_delay.load(Ordering::Relaxed),
+                ));
                 ui.label(harmonigraph_perf::BUILD_TAG);
             });
         });
