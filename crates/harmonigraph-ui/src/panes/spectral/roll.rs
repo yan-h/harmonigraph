@@ -875,9 +875,11 @@ mod tests {
                         width: 1.0,
                         depth: 1.0,
                         kernel: harmonigraph_scene::ShadowKernel::Distance,
+                        ..Default::default()
                     }),
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Distance,
+                ..Default::default()
             },
             range,
         )
@@ -1020,6 +1022,7 @@ mod tests {
             width: 1.0,
             depth,
             kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..Default::default()
         };
         let shut = ribbon_with_style(style(0.0), 12.0);
         assert_eq!(one(&shut).outline_reach, 0.0, "the instance kept transparent reach");

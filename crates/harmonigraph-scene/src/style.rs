@@ -529,6 +529,70 @@ pub const SHADOW_STOP: f32 = 2.0;
 /// shader's copy.
 pub const SHADOW_TAIL: f32 = 4.0;
 
+/// The bottom of [`ShadowStyle::falloff`], and what the shader floors a
+/// caster's own at (`SHADOW_FALLOFF_FLOOR` in common.wgsl).
+///
+/// Set by the window rather than by taste. The decay reaches
+/// `exp(-SHADOW_TAIL · SHADOW_STOP^p)` where the window shuts, and a falloff
+/// under 1 carries it there HIGHER — so the bottom of the bar is the smallest
+/// exponent that still lands under the half code value [`SHADOW_STOP`] was
+/// chosen for. That works out at 0.640; the bar stops at 0.7, where the value
+/// is 1.5e-3 against the 1.96e-3 the criterion allows.
+///
+/// Below it the window would close on a shadow the eye can still see, which is
+/// the closed contour at a fixed radius that the whole family exists to not
+/// draw. `the_falloff_bar_cannot_reopen_the_window` is what holds the bar to
+/// it, so retuning this is a change that test has to agree to.
+///
+/// This exponent is not new. `glow_shadow_shape` was the same `pow(u, ·)`,
+/// removed in #563 as redundant with the Shadow curve — which #582 then removed
+/// in turn on finding it was the identity at its own fresh value, so what the
+/// pair left behind was no falloff control at all. Two things are deliberately
+/// different here. That bar ran 0.25..=1, the SHARPENING half only, and its own
+/// [`SHADOW_STOP`] doc conceded the bottom of it: the raw tail at 0.25 needs
+/// seventeen Shadow widths of cell, so the window cut a shadow still standing
+/// at 0.9% and drew the contour. This one starts where that stops being true
+/// and opens the half that bar never had, the plateau above 1.
+pub const SHADOW_FALLOFF_MIN: f32 = 0.7;
+
+/// The top of [`ShadowStyle::falloff`]: the shadow at its most plateaued
+/// before the fall becomes a step.
+///
+/// Three, where half a width out still holds 61% of the depth and the whole
+/// fall is spent in the outer half. Past that the profile stops being a
+/// gradient at all — a plateau ending in a cliff is the closed contour again,
+/// arrived at from the other side.
+pub const SHADOW_FALLOFF_MAX: f32 = 3.0;
+
+/// How much of a distance shadow stands `u` Shadow widths out from the ink,
+/// 0..=1, at a given [`ShadowStyle::falloff`] — `standoff_coverage` in
+/// common.wgsl, in Rust.
+///
+/// The bar's own preview runs on this, so what the Lighting pane draws is the
+/// profile and not a drawing of one. A second spelling of arithmetic that also
+/// lives in a shader is a thing to keep honest rather than to avoid: WGSL is a
+/// string here and Rust cannot call into it, and the alternative — a preview
+/// with a formula of its own — is the copy that drifts silently.
+/// `the_falloff_preview_is_the_shaders_profile` is what pins the two together.
+///
+/// `u` beyond [`SHADOW_STOP`] is past the window and reads 0, which is also
+/// where the cell stops being padded.
+pub fn standoff_level(falloff: f32, u: f32) -> f32 {
+    let falloff = if falloff.is_finite() {
+        falloff.clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX)
+    } else {
+        1.0
+    };
+    let u = if u.is_finite() { u.max(0.0) } else { 0.0 };
+    // The shader's own branch at the neutral value, kept here so the two are
+    // one function rather than two that agree to a rounding.
+    let t = if falloff == 1.0 { u } else { u.powf(falloff) };
+    // The window, as a smoothstep between one width and the stop — spelled out
+    // rather than reached for because `f32` has no smoothstep of its own.
+    let w = ((u - 1.0) / (SHADOW_STOP - 1.0)).clamp(0.0, 1.0);
+    (-SHADOW_TAIL * t).exp() * (1.0 - w * w * (3.0 - 2.0 * w))
+}
+
 /// What a shadow is MADE of: which of the two renderers turns a caster's ink
 /// into the number its draw multiplies the frame by.
 ///
@@ -593,14 +657,14 @@ impl ShadowKernel {
     }
 }
 
-/// One GROUP of casters' shadow: which renderer draws it, how far it reaches
-/// and how dark it lands.
+/// One GROUP of casters' shadow: which renderer draws it, how far it reaches,
+/// how dark it lands and where inside that reach the darkness sits.
 ///
-/// Three values and no more. Which kernel a group is drawn by is a look; how
-/// wide and how dark it is are what a person dials against that look. Anything
-/// that only calibrates one renderer against the other — the Gaussian's gain,
-/// the standoff's decay and window — is a renderer constant and lives at the
-/// consumer, so switching a group's kernel does not move its two bars.
+/// Four values and no more. Which kernel a group is drawn by is a look; the
+/// other three are what a person dials against that look. Anything that only
+/// calibrates one renderer against the other — the Gaussian's gain, the
+/// standoff's window — is a renderer constant and lives at the consumer, so
+/// switching a group's kernel does not move its bars.
 ///
 /// The groups are explicit ([`ShadowSettings`]) rather than one style with
 /// per-group overrides: an override needs a sentinel for "not set", and a
@@ -629,6 +693,35 @@ pub struct ShadowStyle {
     /// hairline lands short of it. 1 takes the frame under wide ink to black; 0
     /// is this group's second off switch.
     pub depth: f32,
+    /// Where inside the width the shadow spends its darkness:
+    /// [`SHADOW_FALLOFF_MIN`]..=[`SHADOW_FALLOFF_MAX`], the exponent the
+    /// standoff's decay takes on the DISTANCE rather than on the coverage —
+    /// `exp(-SHADOW_TAIL · u^falloff)` at `u` widths out.
+    ///
+    /// On the distance because the exponential family is closed under powers:
+    /// an exponent on the finished coverage is `exp(-TAIL · f · u)`, which is
+    /// the same curve at `width / f` and so a second spelling of the bar above
+    /// — the shape #533's Shadow curve turned out to have, and half of why
+    /// #582 could drop it without moving a pixel. An exponent on `u` bends the
+    /// profile instead of rescaling it.
+    ///
+    /// The width keeps its exact meaning at every value, because `1^f` is 1
+    /// whatever `f` is: one Shadow width out the decay stands at
+    /// `exp(-SHADOW_TAIL)` — the fiftieth [`SHADOW_TAIL`] names — and the
+    /// window still shuts at [`SHADOW_STOP`] widths on a cell padded for
+    /// exactly that. So this bar redistributes a reach it never changes, and
+    /// costs neither an atlas texel nor a fragment more.
+    ///
+    /// 1 is the plain exponential, and below it a sharp edge against the ink
+    /// paid for with a long low tail; above it the shadow holds most of its
+    /// depth out to a plateau and spends the fall late.
+    ///
+    /// A DISTANCE value. A Gaussian's coverage is not an exponential in the
+    /// distance and has a saturation plateau of its own, so this is floored
+    /// out of that renderer's arithmetic entirely rather than meaning
+    /// something different there ([`ShadowKernel::Gaussian`], and the bar is
+    /// disabled on a group dialled to it).
+    pub falloff: f32,
 }
 
 impl Default for ShadowStyle {
@@ -643,6 +736,11 @@ impl Default for ShadowStyle {
             // Just under half depth leaves the shadow legible without cutting
             // the shared field back to the ground.
             depth: 0.477_784_4,
+            // The plain exponential the standoff has always decayed on, so a
+            // fresh view is the picture from before the bar existed to the
+            // last bit (`pow` is skipped outright at 1, see
+            // `standoff_coverage`).
+            falloff: 1.0,
         }
     }
 }
@@ -662,13 +760,16 @@ impl ShadowStyle {
     /// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) is the blob's.
     ///
     /// Every caster's quad is grown by the width, so a number from outside the
-    /// bar is a quad nothing can fill. The kernel takes no clamp: an enum is in
+    /// bar is a quad nothing can fill. The falloff's own bottom is the window's
+    /// ([`SHADOW_FALLOFF_MIN`]) rather than a taste, so a number under it is a
+    /// visible edge at a fixed radius. The kernel takes no clamp: an enum is in
     /// range or the blob did not parse.
     pub fn clamped(self) -> ShadowStyle {
         ShadowStyle {
             kernel: self.kernel,
             width: self.width.clamp(0.0, crate::GLOW_SHADOW_MAX),
             depth: self.depth.clamp(0.0, 1.0),
+            falloff: self.falloff.clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
         }
     }
 }

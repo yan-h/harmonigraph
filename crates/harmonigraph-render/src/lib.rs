@@ -1112,6 +1112,7 @@ impl LatticeCallback {
                 level: 0.0,
                 sigma_points: geometry_sigma,
                 kernel: geometry.kernel,
+                falloff: geometry.falloff,
                 direct_distance: false,
             };
             let (Some(c), Some(x), Some(y)) = (
@@ -1176,6 +1177,7 @@ impl LatticeCallback {
                 level: 1.0,
                 sigma_points: text_sigma,
                 kernel: text.kernel,
+                falloff: text.falloff,
                 direct_distance: true,
             });
         }
@@ -1211,7 +1213,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run, text_sigma, text.kernel));
+                casters.push(shadow::caster_of(run, text_sigma, text.kernel, text.falloff));
             }
         }
         // The home run can be empty and can run to the end of the order, in
