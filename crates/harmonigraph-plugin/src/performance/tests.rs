@@ -344,6 +344,18 @@ impl Device {
         frames: u32,
         expect_error: bool,
     ) -> Sink {
+        self.run_callback(raw, events, (reject_kind, reject_attempt), (frames, expect_error), None)
+    }
+    fn run_callback(
+        &self,
+        raw: i64,
+        events: Vec<Input>,
+        rejection: (Option<u16>, Option<usize>),
+        format: (u32, bool),
+        transport: Option<clap_event_transport>,
+    ) -> Sink {
+        let (reject_kind, reject_attempt) = rejection;
+        let (frames, expect_error) = format;
         assert!(frames > 0 && frames <= 512);
         let input = clap_input_events {
             ctx: (&events as *const Vec<Input>).cast_mut().cast(),
@@ -377,7 +389,7 @@ impl Device {
         let process = clap_process {
             steady_time: raw,
             frames_count: frames,
-            transport: ptr::null(),
+            transport: transport.as_ref().map_or(ptr::null(), |value| value as *const _),
             audio_inputs: if self.tuner { ptr::null() } else { inputs.as_ptr() },
             audio_outputs: if self.tuner { ptr::null_mut() } else { &mut out_audio },
             audio_inputs_count: if self.tuner { 0 } else { 2 },
@@ -487,6 +499,197 @@ fn tuner_before_hub_retains_a_phrase_and_preserves_spacing_after_real_admission(
     hub.run(192, vec![], None);
     source.main();
     hub.main();
+}
+
+#[test]
+fn repeated_stopped_callbacks_preserve_new_live_input_but_a_real_stop_edge_cancels_older_input() {
+    let observation = |playing: bool, time| {
+        let Input::Transport(mut value) = transport(time, 120.0) else { unreachable!() };
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        value
+    };
+    for real_stop in [false, true] {
+        let uuid = SavedUuid::default();
+        let mut source = Device::new(true);
+        source.configure(uuid, true);
+        source.activate();
+        source.run_callback(
+            0,
+            if real_stop {
+                vec![note(1, 2, 60, 7, true), note(1, 2, 60, 39, false)]
+            } else {
+                vec![]
+            },
+            (None, None),
+            (64, false),
+            Some(observation(real_stop, 0)),
+        );
+        let mut events = Vec::new();
+        if real_stop {
+            events.push(Input::Transport(observation(false, 16)));
+        }
+        events.extend([
+            note(2, 2, 64, 20, true),
+            expression(2, 0.34567890123, 32),
+            note(2, 2, 64, 52, false),
+        ]);
+        assert!(source
+            .run_callback(64, events, (None, None), (64, false), Some(observation(real_stop, 0)))
+            .values
+            .is_empty());
+        for block in 2..=3 {
+            assert!(source
+                .run_callback(
+                    block * 64,
+                    vec![],
+                    (None, None),
+                    (64, false),
+                    Some(observation(false, 0))
+                )
+                .values
+                .is_empty());
+        }
+        assert_eq!(source.source_snapshot().pending, 3, "new stopped-live input survives repeated stopped observations; only a real earlier Stop edge cancels the old phrase");
+        let mut hub = Device::new(false);
+        hub.configure(uuid, true);
+        hub.activate();
+        hub.run(192, vec![], None);
+        source.run_callback(256, vec![], (None, None), (64, false), Some(observation(false, 0)));
+        hub.run(256, vec![], None);
+        let played = source.run_callback(
+            320,
+            vec![],
+            (None, None),
+            (64, false),
+            Some(observation(false, 0)),
+        );
+        assert_eq!(played.values.iter().map(|(time, _)| *time).collect::<Vec<_>>(), [0, 12, 32]);
+        assert!(matches!(played.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, .. }));
+        assert!(
+            matches!(played.values[1].1, Event::Expression { id: 2, value, .. } if value == 0.34567890123)
+        );
+        assert!(matches!(played.values[2].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 2, .. }));
+        hub.run(320, vec![], None);
+        source.run_callback(384, vec![], (None, None), (64, false), Some(observation(false, 0)));
+        hub.run(384, vec![], None);
+        assert_eq!(
+            registry::global().lock().unwrap().test_session(uuid).credits.load(Ordering::Acquire),
+            0
+        );
+    }
+}
+
+#[test]
+fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_notes() {
+    let observation = |playing: bool, time| {
+        let Input::Transport(mut value) = transport(time, 120.0) else { unreachable!() };
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        value
+    };
+    for reject_release in [false, true] {
+        let uuid = SavedUuid::default();
+        let (mut hub, mut capture) = Device::recorded_hub();
+        hub.configure(uuid, true);
+        hub.activate();
+        let mut source = Device::new(true);
+        source.configure(uuid, true);
+        source.activate();
+        let session = registry::global().lock().unwrap().test_session(uuid);
+        source.run_callback(0, vec![], (None, None), (64, false), Some(observation(true, 0)));
+        hub.run(0, vec![], None);
+        capture.drain_canonical();
+        let pedal = Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 1),
+            port_index: 0,
+            data: [0xb0, 64, 127],
+        });
+        assert_eq!(
+            source
+                .run_callback(
+                    64,
+                    vec![pedal, note(1, 0, 60, 5, true)],
+                    (None, None),
+                    (64, false),
+                    Some(observation(true, 0))
+                )
+                .values
+                .len(),
+            2
+        );
+        hub.run(64, vec![], None);
+        let events = vec![
+            Input::Transport(observation(false, 16)),
+            note(2, 0, 64, 20, true),
+            expression(2, 0.4567890123, 32),
+            note(2, 0, 64, 52, false),
+        ];
+        let first = source.run_callback(
+            128,
+            events,
+            (reject_release.then_some(CLAP_EVENT_NOTE_CHOKE), None),
+            (64, false),
+            Some(observation(true, 0)),
+        );
+        assert_eq!(
+            first.values.iter().filter(|(_, event)| event.release()).count(),
+            if reject_release { 0 } else { 2 },
+            "one Stop terminates the old actual voice without waiting for a host Note-Off"
+        );
+        assert_eq!(
+            source.source_snapshot().faults,
+            0,
+            "a transport Stop is not a permanent output fault"
+        );
+        assert!(!source.source_snapshot().pedals_held);
+        if reject_release {
+            assert_eq!(source.source_snapshot().pending, 3);
+        }
+        hub.run(128, vec![], None); // hub need not have observed the source's Stop yet
+        let second = source.run_callback(
+            192,
+            vec![],
+            (None, None),
+            (64, false),
+            Some(observation(false, 0)),
+        );
+        let all: Vec<_> = first
+            .values
+            .into_iter()
+            .map(|(time, event)| (128 + i64::from(time), event))
+            .chain(second.values.into_iter().map(|(time, event)| (192 + i64::from(time), event)))
+            .collect();
+        let old: Vec<_> = all
+            .iter()
+            .filter(|(_, event)| {
+                matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, .. })
+            })
+            .collect();
+        assert_eq!(old.len(), 1);
+        let new: Vec<_> = all
+            .iter()
+            .filter(|(_, event)| {
+                matches!(event, Event::Note { id: 2, .. } | Event::Expression { id: 2, .. })
+            })
+            .collect();
+        let onset = if reject_release { 192 } else { 148 };
+        assert_eq!(
+            new.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
+            [onset, onset + 12, onset + 32]
+        );
+        assert!(old[0].0 <= onset);
+        hub.run_callback(192, vec![], (None, None), (64, false), Some(observation(false, 0)));
+        source.run_callback(256, vec![], (None, None), (64, false), Some(observation(false, 0)));
+        hub.run(256, vec![], None);
+        assert_eq!(source.source_snapshot().faults, 0);
+        assert_eq!(session.credits.load(Ordering::Acquire), 0);
+        let records = capture.drain_canonical();
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On {..}))).count(),2);
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::Off))).count(),2);
+    }
 }
 
 #[test]
@@ -748,6 +951,98 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
         2,
         "old replies and ring entries cannot cross the new source identity"
     );
+}
+
+#[test]
+fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset() {
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    source.run(64, vec![note(1, 0, 60, 0, true)], None);
+    hub.run(64, vec![], None);
+    let mut events: Vec<_> = (0..512).map(|_| expression(1, 0.25, 0)).collect();
+    events.push(note(2, 0, 62, 63, true));
+    let full = source.run(128, events, None);
+    assert_eq!(full.attempts, 512);
+    assert!(full.values.iter().all(|(_, event)| matches!(event, Event::Expression { .. })));
+    let before = source.source_snapshot();
+    assert_eq!(before.pending, 1, "the old lease owns an onset awaiting output budget");
+    assert_eq!(before.old_obligations, 1);
+    hub.run(128, vec![], None);
+    let duplicate = Device::new(false);
+    duplicate.configure(uuid, true);
+    for block in 3..=6 {
+        let output = source.run(block * 64, vec![], None);
+        assert!(output.values.is_empty());
+        hub.run(block * 64, vec![], None);
+        let retained = source.source_snapshot();
+        assert_eq!(retained.faults, 0);
+        assert_eq!(retained.pending, 1, "ambiguity is no cancellation authority");
+        assert_eq!(retained.old_obligations, 1);
+        assert_eq!(retained.lives, 2);
+    }
+    // Explicit recovery is a real cancellation boundary and can retire the
+    // old lease once its actual held release and disposition are retained.
+    let shared = source.shared();
+    shared.apply(shared.value().routing, true).unwrap();
+    drop(duplicate);
+    for block in 7..=18 {
+        source.run(block * 64, vec![], None);
+        hub.run(block * 64, vec![], None);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(source.source_snapshot().pending, 0);
+    assert_eq!(source.source_snapshot().held, 0);
+}
+
+#[test]
+fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset() {
+    let uuid = SavedUuid::default();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    let malformed = Input::Midi(clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_header>() as u32,
+            ..header::<clap_event_midi>(CLAP_EVENT_MIDI, 0)
+        },
+        port_index: 0,
+        data: [0xf8, 0, 0],
+    });
+    source.run_status(0, vec![malformed], None, None, 64, true);
+    source.run(64, vec![], None);
+    assert_eq!(source.source_snapshot().faults, source::INPUT_FAULT);
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    source.run(128, vec![], None);
+    assert_eq!(source.source_snapshot().faults, source::INPUT_FAULT);
+    hub.run(128, vec![], None);
+    let output = source.run(192, vec![note(1, 0, 60, 2, true)], None);
+    assert!(output.values.is_empty(), "joining a hub does not authorize recovery");
+    hub.run(192, vec![], None);
+    let shared = source.shared();
+    assert_eq!(shared.status.load(Ordering::Acquire), source::INPUT_FAULT);
+    shared.apply(shared.value().routing, true).unwrap();
+    for block in 4..=16 {
+        source.run(block * 64, vec![], None);
+        hub.run(block * 64, vec![], None);
+        source.main();
+        hub.main();
+    }
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert_eq!(shared.status.load(Ordering::Acquire), 0);
+    let recovered =
+        source.run(1088, vec![note(2, 0, 62, 3, true), note(2, 0, 62, 23, false)], None);
+    assert_eq!(recovered.values.len(), 2, "explicit settled reset restores forwarding");
+    assert_eq!(recovered.values[1].0 - recovered.values[0].0, 20);
 }
 
 #[test]

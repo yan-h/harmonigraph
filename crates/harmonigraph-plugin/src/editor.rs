@@ -817,7 +817,7 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
 struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
-    session_draft: Option<crate::performance::routing::HubSetup>,
+    session_draft: Option<(u64, crate::performance::clock::Calibration)>,
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
@@ -1039,7 +1039,7 @@ impl Drop for LatticeEditorHandle {
 fn session_controls(
     ctx: &egui::Context,
     shared: &Arc<crate::performance::setup::Shared>,
-    draft: &mut Option<crate::performance::routing::HubSetup>,
+    draft: &mut Option<(u64, crate::performance::clock::Calibration)>,
 ) {
     use crate::performance::setup::Routing;
     egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
@@ -1050,34 +1050,37 @@ fn session_controls(
                 let Routing::Hub(saved) = accepted.routing else {
                     return;
                 };
-                let value = draft.get_or_insert(saved);
+                if draft.as_ref().is_none_or(|(generation, _)| *generation != accepted.generation) {
+                    *draft = Some((accepted.generation, saved.calibration));
+                }
+                let (_, calibration) = draft.as_mut().unwrap();
                 ui.label(format!("Hub {}", saved.uuid));
                 ui.label("Clock configuration for this routing");
                 ui.horizontal(|ui| {
                     ui.label("Signed sample offset");
-                    ui.add(egui::DragValue::new(&mut value.calibration.offset));
+                    ui.add(egui::DragValue::new(&mut calibration.offset));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Sample rate (Hz)");
                     ui.add(
-                        egui::DragValue::new(&mut value.calibration.sample_rate)
-                            .range(1.0..=768000.0),
+                        egui::DragValue::new(&mut calibration.sample_rate).range(1.0..=768000.0),
                     );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Maximum buffer (frames)");
-                    ui.add(
-                        egui::DragValue::new(&mut value.calibration.max_frames)
-                            .range(1..=1_048_576),
-                    );
+                    ui.add(egui::DragValue::new(&mut calibration.max_frames).range(1..=1_048_576));
                 });
                 ui.checkbox(
-                    &mut value.calibration.validated,
+                    &mut calibration.validated,
                     "I validated this routing and clock configuration",
                 );
                 ui.label("Revalidate after routing, delay compensation, rate or buffer changes.");
                 if ui.button("Apply / Reinitialize").clicked() {
-                    if let Err(error) = shared.apply(Routing::Hub(*value), true) {
+                    let value = crate::performance::routing::HubSetup {
+                        calibration: *calibration,
+                        ..saved
+                    };
+                    if let Err(error) = shared.apply(Routing::Hub(value), true) {
                         ui.label(error);
                     }
                 }
@@ -1114,6 +1117,82 @@ mod tests {
     };
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
+
+    #[test]
+    fn an_open_session_menu_rebinds_restored_setup_before_calibration_only_apply() {
+        use crate::performance::{routing::HubSetup, setup};
+        use nice_plug::wrapper::clap::setup::Setup;
+        let ctx = egui::Context::default();
+        let shared = setup::Shared::hub();
+        let mut draft = None;
+        let mut draw = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| super::session_controls(ui.ctx(), &shared, &mut draft),
+            )
+        };
+        fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("visible menu text {label:?}"))
+        }
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw(vec![]);
+        let output = draw(vec![]);
+        let session = text_position(&output, "Session");
+        draw(vec![egui::Event::PointerMoved(session), pointer(session, true)]);
+        draw(vec![pointer(session, false)]);
+        let output = draw(vec![]);
+        let setup::Routing::Hub(original) = shared.value().routing else { unreachable!() };
+        text_position(&output, &format!("Hub {}", original.uuid));
+        let mut restored = HubSetup::default();
+        restored.calibration.offset = 37;
+        restored.calibration.sample_rate = 48000.0;
+        restored.calibration.max_frames = 64;
+        let mut state = nice_plug::plugin::PluginState {
+            version: String::new(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        state.fields.insert(setup::HUB_FIELD.into(), serde_json::to_string(&restored).unwrap());
+        setup::Adapter(shared.clone()).prepare(&state).unwrap().commit();
+        let output = draw(vec![]);
+        text_position(&output, &format!("Hub {}", restored.uuid));
+        let offset = text_position(&output, "37");
+        draw(vec![egui::Event::PointerMoved(offset), pointer(offset, true)]);
+        let moved = offset + egui::vec2(10.0, 0.0);
+        draw(vec![egui::Event::PointerMoved(moved)]);
+        draw(vec![pointer(moved, false)]);
+        let output = draw(vec![]);
+        let apply = text_position(&output, "Apply / Reinitialize");
+        draw(vec![egui::Event::PointerMoved(apply), pointer(apply, true)]);
+        draw(vec![pointer(apply, false)]);
+        let setup::Routing::Hub(applied) = shared.value().routing else { unreachable!() };
+        assert_eq!(applied.uuid, restored.uuid);
+        assert_ne!(applied.calibration.offset, restored.calibration.offset);
+        assert_eq!(applied.calibration.sample_rate, restored.calibration.sample_rate);
+        assert_eq!(applied.calibration.max_frames, restored.calibration.max_frames);
+        assert_eq!(applied.calibration.validated, restored.calibration.validated);
+    }
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could

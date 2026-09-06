@@ -1024,25 +1024,27 @@ impl Hub {
                         recorder.fail_configuration();
                         Default::default()
                     });
-                    match recorder.publish_baseline(index + 1, &frame, observation, route) {
-                        Err(PublishError::BaselineBusy) => continue,
-                        result => {
-                            row.repair |= result.is_err();
-                            row.state.replace(&frame);
-                            row.participating = frame.participating;
-                            row.baseline_id = row.baseline_id.max(frame.id);
-                            Self::confirm(row, &mut owner.confirmed);
-                            ack.publish(Reply::Baseline {
-                                incarnation: lease.incarnation,
-                                epoch: row.epoch,
-                                transaction,
-                                cut: frame.output_cut,
-                                membership: self.membership,
-                                start,
-                            });
-                            row.baseline = None;
-                        }
+                    let result = recorder.publish_baseline(index + 1, &frame, observation, route);
+                    if result == Err(PublishError::BaselineBusy) {
+                        // This incoming historical cut is being settled, not
+                        // retained for retry. Declare that reporting loss at
+                        // its actual route before allowing subsequent output.
+                        recorder.discard_publication(frame.time, route);
                     }
+                    row.repair |= result.is_err();
+                    row.state.replace(&frame);
+                    row.participating = frame.participating;
+                    row.baseline_id = row.baseline_id.max(frame.id);
+                    Self::confirm(row, &mut owner.confirmed);
+                    ack.publish(Reply::Baseline {
+                        incarnation: lease.incarnation,
+                        epoch: row.epoch,
+                        transaction,
+                        cut: frame.output_cut,
+                        membership: self.membership,
+                        start,
+                    });
+                    row.baseline = None;
                 }
             }
             if selected.is_none()

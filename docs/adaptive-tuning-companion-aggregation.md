@@ -1,7 +1,7 @@
 # Companion aggregation for #617
 
 This branch implements the production companion and session side of [#617](https://github.com/yan-h/harmonigraph/issues/617), on the canonical consumer foundation at `5ebe666b6eae6e29cd5e24d9468132047b2c217f`.
-Its branch is `codex/617-companion-aggregation` and its draft PR will stack on `codex/617-canonical-recovery`.
+Its branch is `codex/617-companion-aggregation` and [draft PR #669](https://github.com/yan-h/harmonigraph/pull/669) stacks on `codex/617-canonical-recovery`.
 The implementation remains in progress:
 ordinary delayed shared-channel waves and setup replay, final measurements, independent committed-head review and the final release handoff are outstanding.
 No adaptive correction or artificial delay is applied in this aggregation intermediate.
@@ -67,6 +67,12 @@ Sequence exhaustion cannot wrap into a new identity namespace.
 
 Stop/Reset cancels unsounded ordinary obligations through bounded per-child manifests;
 held state alone is not their disposition proof.
+A transport Stop is the actual playing-to-stopped edge in retained original input order.
+It arms retryable old voice and pedal-release debt without permanently inhibiting new stopped-live input;
+repeated stopped callbacks do not cancel the newer phrase.
+Pairing-generation changes preserve old unsounded ownership until a real cancellation authority arrives.
+Ordinary offer adoption preserves local fault inhibition;
+an explicitly accepted Reset can clear it after the old lease obligations settle.
 The all-retired service loop owns the actual stopped Source and Hub objects and drains their available history and dispositions without inventing a callback or time coverage.
 Its conservative aggregate phase bound includes all 16 full pending/reference pools and is below its 2,048-round limit.
 Unknown held output remains pinned until actual termination and the required acknowledgement.
@@ -99,6 +105,9 @@ Available actual output through a baseline cut is published once before that com
 Original input/actual onset, player expression, source incarnation, epoch and lifetime survive late collection.
 The audio owner confirms musical state and acknowledges output independently of display and disk consumers.
 A full publication queue produces a sequence gap and incomplete recording without blocking actual releases or credit retirement.
+The same independence holds when both complete baseline payloads remain owned by a stopped drainer.
+An incoming baseline that cannot be kept for reporting consumes a real loss serial at its original recording route, while musical state and baseline acknowledgement advance.
+Later authoritative reconstruction repairs the display without removing the recording's historical gap.
 
 Recording routes use the original runtime/epoch/pass and mapped session sample, with the adopted hub offset removed once for raw-span lookup.
 A host reset freezes old route ownership until available old history and the actual terminal boundary settle.
@@ -130,12 +139,21 @@ Tests are in `crates/harmonigraph-plugin/src/performance/tests.rs` and its focus
 | Publication | Real display overflow and mid-publication repair race across two Tune sources, including Off, plus DIRECT; complete baselines restore current state without synthetic attacks |
 | Primary recording pressure | Two Tune sources, including Off, plus DIRECT hold 192 credits and overfill the actual primary queue; all 192 real releases and credits settle before any file/display drain; the file's incomplete range matches the primary loss descriptor |
 | Full held rejoin | 64 Off-held voices rejoin with a complete baseline between retained tuning and later releases; an actual complete take contains exactly 192 original on/tuning/off records with unchanged lifetimes and samples |
+| Transport Stop | Repeated enclosing stopped callbacks retain a new live phrase; an actual Stop releases old held/pedal state, retries host-rejected release debt and preserves new phrase timing and canonical identity |
+| Pairing and inhibition | 512 actual expressions exhaust ordinary output before a retained onset; duplicate UUIDs preserve its old obligation; malformed unpaired input stays inhibited through ordinary adoption and recovers after an explicit settled Reset |
+| Occupied baseline payloads | A third snapshot encounters two undrained payloads; actual release credit and journal retire before any consumer drain, an actual take records the exact one-serial loss, and later reconstruction is empty and participating |
+| Open settings editors | The real egui Session menu stays open across prepared restore, drag and Apply; the exported native CLAP/AppKit editor refreshes existing-candidate selection and calibration across restore, applies calibration only, and submits Reset independently of invalid or unapplied drafts |
 
 The counter-prefix fixtures seed internally consistent already-retained prefixes to reach exhaustion in finite time;
 they do not claim to execute `2^64` historical outputs.
 The stale-completion fixture is an explicit defensive duplicate injection;
 CLAP host acceptance and completion remain synchronous.
 The no-registry-drainer attachment fixture runs in a separate process because any other instance's main-thread setup legitimately services the process-wide registry.
+The corrective checkpoint passed 119 guarded plugin tests with the separately coordinated callback timing fixture excluded, plus workspace all-target Clippy with warnings denied.
+Native interaction checks used an isolated local CLAP host and actual AppKit controls, with saved state and host-callback receipts confirming the action;
+they did not load or modify Bitwig.
+These corrections address the six first-checkpoint review findings and await committed-head re-review;
+they do not complete the remaining integration below.
 
 ## Remaining integration boundary
 

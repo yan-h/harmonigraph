@@ -33,7 +33,7 @@ struct Widgets {
     validated: Retained<NSButton>,
     choices: RefCell<Vec<SavedUuid>>,
     available: RefCell<Vec<SavedUuid>>,
-    menu_initialized: Cell<bool>,
+    accepted_generation: Cell<Option<u64>>,
 }
 struct Ivars {
     shared: Arc<setup::Shared>,
@@ -60,13 +60,23 @@ define_class!(
         #[unsafe(method(apply:))]
         fn apply(&self, _: &NSButton) { self.apply_value(true); }
         #[unsafe(method(reset:))]
-        fn reset(&self, _: &NSButton) { self.apply_value(true); }
+        fn reset(&self, _: &NSButton) {
+            let shared = &self.ivars().shared;
+            if let Err(error) = shared.apply(shared.value().routing, true) {
+                self.ivars().widgets.get().unwrap().status.setStringValue(&NSString::from_str(error));
+            } else {
+                self.refresh_status();
+            }
+        }
         #[unsafe(method(refresh:))]
         fn refresh(&self, _: &NSTimer) { self.refresh_status(); }
     }
 );
 impl Actions {
     fn apply_value(&self, reset: bool) {
+        // A host restore can arrive between cosmetic timer ticks and a click.
+        // Rebind all draft controls before interpreting them as an edit.
+        self.refresh_status();
         let vars = self.ivars();
         let w = vars.widgets.get().unwrap();
         let Routing::Source(mut value) = vars.shared.value().routing else {
@@ -135,21 +145,34 @@ impl Actions {
             w.status.setStringValue(&NSString::from_str(&format!("{name} · {fault}{pending}\nAdopted {}: offset {} · {} Hz · ≤{} frames\n{} · extra delay {delay} samples",
                 adopted.generation, calibration.offset, calibration.sample_rate, calibration.max_frames,
                 if adopted.valid { "Clock validated" } else { "Clock not valid for current processing" })));
+        } else {
+            w.status.setStringValue(&NSString::from_str(&format!(
+                "{name} · {fault}\nWaiting for the first audio clock boundary"
+            )));
         }
         let available = registry::global().lock().unwrap().candidates();
         let Routing::Source(source) = value.routing else {
             return;
         };
+        let restored = w.accepted_generation.get() != Some(value.generation);
+        let selected = if restored {
+            let calibration = source.calibration;
+            w.offset.setStringValue(&NSString::from_str(&calibration.offset.to_string()));
+            w.rate.setStringValue(&NSString::from_str(&calibration.sample_rate.to_string()));
+            w.frames.setStringValue(&NSString::from_str(&calibration.max_frames.to_string()));
+            w.validated.setState(if calibration.validated { 1 } else { 0 });
+            source.selected
+        } else {
+            let index = w.pairing.indexOfSelectedItem();
+            (index > 0).then(|| w.choices.borrow().get(index as usize - 1).copied()).flatten()
+        };
         let mut choices = available.clone();
-        if let Some(uuid) = source.selected {
+        if let Some(uuid) = selected {
             if !choices.contains(&uuid) {
                 choices.push(uuid);
             }
         }
-        if !w.menu_initialized.get()
-            || *w.available.borrow() != available
-            || *w.choices.borrow() != choices
-        {
+        if restored || *w.available.borrow() != available || *w.choices.borrow() != choices {
             w.pairing.removeAllItems();
             w.pairing.addItemWithTitle(&NSString::from_str("Automatic: exactly one hub"));
             for uuid in &choices {
@@ -160,14 +183,12 @@ impl Actions {
                 };
                 w.pairing.addItemWithTitle(&NSString::from_str(&title));
             }
-            let selected = source
-                .selected
-                .and_then(|u| choices.iter().position(|v| *v == u))
-                .map_or(0, |i| i + 1);
+            let selected =
+                selected.and_then(|u| choices.iter().position(|v| *v == u)).map_or(0, |i| i + 1);
             w.pairing.selectItemAtIndex(selected as isize);
             *w.choices.borrow_mut() = choices;
             *w.available.borrow_mut() = available;
-            w.menu_initialized.set(true);
+            w.accepted_generation.set(Some(value.generation));
         }
     }
 }
@@ -215,7 +236,15 @@ impl Editor for NativeEditor {
             false,
         );
         view.addSubview(&pairing);
-        label("Signed sample offset       Sample rate (Hz)        Max. buffer (frames)", 186.0);
+        for (title, x) in [
+            ("Signed sample offset", 16.0),
+            ("Sample rate (Hz)", 181.0),
+            ("Max. buffer (frames)", 346.0),
+        ] {
+            let field = NSTextField::labelWithString(&NSString::from_str(title), mtm);
+            field.setFrame(rect(x, 186.0, 145.0, 26.0));
+            view.addSubview(&field);
+        }
         let value = self.shared.value().routing.calibration();
         let field = |text: String, x: f64| {
             let field = NSTextField::textFieldWithString(&NSString::from_str(&text), mtm);
@@ -274,7 +303,7 @@ impl Editor for NativeEditor {
                 validated,
                 choices: RefCell::new(Vec::new()),
                 available: RefCell::new(Vec::new()),
-                menu_initialized: Cell::new(false),
+                accepted_generation: Cell::new(None),
             })
             .unwrap_or_else(|_| unreachable!());
         actions.refresh_status();

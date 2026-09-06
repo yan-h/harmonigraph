@@ -1,4 +1,4 @@
-mod clock;
+pub(crate) mod clock;
 pub mod direct;
 pub mod event;
 pub(crate) mod hub;

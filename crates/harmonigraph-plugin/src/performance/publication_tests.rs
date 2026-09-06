@@ -94,6 +94,96 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
 }
 
 #[test]
+fn occupied_baseline_payloads_do_not_pin_later_actual_releases_or_hide_reporting_loss() {
+    let uuid = SavedUuid::default();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.configure(uuid, true);
+    hub.activate();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-baseline-payloads-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("payloads.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    // Enrollment owns the first payload. Turning participation off with one
+    // actual held voice owns the second; no consumer has drained either.
+    source.run(64, vec![source.participation(false, 0), note(1, 2, 60, 5, true)], None);
+    hub.run(64, vec![], None);
+    source.run(128, vec![source.participation(true, 0)], None);
+    hub.run(128, vec![], None);
+    let released = source.run(192, vec![note(1, 2, 60, 7, false)], None);
+    assert_eq!(released.values.len(), 1);
+    assert!(released.values[0].1.release());
+    for block in 3..=6 {
+        hub.run(block * 64, vec![], None);
+        source.run((block + 1) * 64, vec![], None);
+    }
+    assert_eq!(
+        session.credits.load(Ordering::Acquire),
+        0,
+        "the third snapshot cannot make actual retention depend on a file/display drain"
+    );
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.journal, settled.faults), (0, 0, 0));
+    let (loss, route) = capture.publication_loss().expect("the skipped baseline is real loss");
+    assert!(route.address.is_some(), "loss keeps the skipped baseline's recording route");
+    assert_eq!(loss.first, loss.last, "retrying reconstruction does not lose history again");
+    writer.drain(&mut capture);
+    // Once payloads are returned, the audio owner's current state repairs the
+    // display without making a fresh note attack or waiting to retire credit.
+    hub.run(7 * 64, vec![], None);
+    source.run(8 * 64, vec![], None);
+    hub.run(8 * 64, vec![], None);
+    writer.drain(&mut capture);
+    let repair = writer.display_events().into_iter().rev().find_map(|record| match record {
+        CanonicalRecord::Baseline(frame)
+            if frame.source != harmonigraph_core::notes::SourceId::DIRECT.0 =>
+        {
+            Some(frame)
+        }
+        _ => None,
+    });
+    let repair = repair.expect("eventual authoritative source baseline");
+    repair.baseline().expect("complete valid reconstructive state");
+    assert!(repair.participating);
+    assert!(repair.voices.is_empty());
+    capture.stop();
+    writer.stop();
+    source.run(9 * 64, vec![], None);
+    hub.run(9 * 64, vec![], None);
+    writer.drain(&mut capture);
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let incomplete = take.incomplete.as_ref().expect("skipped baseline marks the file incomplete");
+    assert_eq!(incomplete.reason, harmonigraph_take::canonical::GapReasonRecord::PublicationFull);
+    assert_eq!(
+        (incomplete.first_publication, incomplete.last_publication),
+        (loss.first, loss.last)
+    );
+    let notes: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Delta(delta) => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), 2, "available chronological output survives reporting loss");
+    assert!(matches!(notes[0].event.kind, NoteKind::On { .. }));
+    assert!(matches!(notes[1].event.kind, NoteKind::Off));
+    assert_eq!(notes[0].lifetime, notes[1].lifetime);
+    drop(writer);
+    drop(source);
+    drop(hub);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn off_rejoin_full_held_baseline_preserves_the_complete_original_take_lifetimes() {
     let uuid = SavedUuid::default();
     let (mut hub, mut capture) = Device::recorded_hub();

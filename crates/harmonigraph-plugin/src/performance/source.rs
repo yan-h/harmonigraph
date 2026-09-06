@@ -173,6 +173,7 @@ pub struct Source {
     sealed_ack: Option<u64>,
     wave_shift: i64,
     stopping: bool,
+    transport_playing: bool,
     setup_pending: [Option<super::slots::Retained<setup::Update>>; 2],
     manifest: Queue<Manifest, 64>,
     input_complete: bool,
@@ -279,6 +280,7 @@ impl Source {
             sealed_ack: None,
             wave_shift: 0,
             stopping: false,
+            transport_playing: false,
             setup_pending: [None, None],
             manifest: Queue::default(),
             input_complete: false,
@@ -450,8 +452,6 @@ impl Source {
             self.epoch = offer.session.epoch.load(Ordering::Acquire);
             self.generation = offer.generation;
             self.old_pending = self.obligations;
-            self.faults = 0;
-            self.shared.status.store(0, Ordering::Release);
             self.baseline_needed = true;
             self.baseline_acked = false;
             self.adopt_sent = false;
@@ -506,12 +506,6 @@ impl Source {
         if self.session().is_some_and(|s| s.epoch.load(Ordering::Acquire) != self.epoch) {
             self.fault(CLOCK_FAULT);
         }
-        if let Some(transport) = callback.transport {
-            // CLAP_TRANSPORT_IS_PLAYING, the actual raw observation.
-            if transport.flags & (1 << 4) == 0 {
-                self.cancel_unsounded();
-            }
-        }
         self.cancel_slice();
     }
 
@@ -526,9 +520,15 @@ impl Source {
             return api::Consumption::Consumed;
         }
         if let InputValue::Transport(transport) = input.value {
-            if transport.flags & (1 << 4) == 0 {
+            // The wrapper retains enclosing transport in the same input pool.
+            // Observe it only here, in original order: a newer callback's raw
+            // flag cannot move the cancellation cut ahead of retained input.
+            let playing = transport.flags & (1 << 4) != 0;
+            if self.transport_playing && !playing {
                 self.cancel_unsounded();
+                self.arm_release_debt();
             }
+            self.transport_playing = playing;
             return api::Consumption::Consumed;
         }
         let Some(event) = Event::from_input(input.value) else {
@@ -705,9 +705,8 @@ impl Source {
             .map_or(self.generation, |b| b.generation.load(Ordering::Acquire));
         if desired > self.generation {
             self.generation = desired;
-            if self.offer.is_some() {
-                self.cancel_unsounded();
-            }
+            // A new pairing generation classifies future input; it is not
+            // authority to dispose requests already owned by the old lease.
         }
         // Called only after the wrapper's retained input cursor reaches the
         // captured callback boundary. Already retained events keep generation.
@@ -760,10 +759,20 @@ impl Source {
             {
                 break;
             }
+            if update.reset && !self.lease_settled() {
+                // Explicit recovery clears local inhibition only after the
+                // old cancellation/release obligations have really settled.
+                // Ordinary offer adoption cannot provide that authority.
+                break;
+            }
             if changes_clock {
                 self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
                 self.coverage = None;
                 self.baseline_needed = true;
+            }
+            if update.reset {
+                self.faults = 0;
+                self.shared.status.store(0, Ordering::Release);
             }
             self.shared.applied.store(update.generation, Ordering::Release);
             self.shared.publish_clock(&self.clock);
@@ -910,6 +919,10 @@ impl Source {
                 .faults
                 .fetch_or(fault, Ordering::AcqRel);
         }
+        self.arm_release_debt();
+    }
+
+    fn arm_release_debt(&mut self) {
         // The immutable final cut already proves actual old-stream release
         // and neutralization. Outstanding credits are acknowledgement debt;
         // a stronger fault cannot create fresh output behind that seal.
@@ -942,6 +955,15 @@ impl Source {
             }
         }
         self.baseline_needed = true;
+    }
+
+    fn channel_has_release_debt(&self, channel: u8) -> bool {
+        self.channel_reset[usize::from(channel)] != 0
+            || self.emergency.iter().flatten().any(|release| {
+                release.accepted.is_none()
+                    && self.lives[usize::from(release.life)]
+                        .is_some_and(|life| life.channel == channel)
+            })
     }
 
     fn ensure_emergency(&mut self, life: u16) {
@@ -989,6 +1011,11 @@ impl Source {
                 }
             }
         }
+        self.schedule_pending(start, end, output);
+        self.compact();
+    }
+
+    fn schedule_pending(&mut self, start: i64, end: i64, output: &mut api::Output<'_>) {
         let mut next = self.pending.front_position();
         while self.visits < 2048 {
             let Some(position) = next else {
@@ -1004,7 +1031,6 @@ impl Source {
                 break;
             }
         }
-        self.compact();
     }
 
     fn charge(&mut self, count: usize) -> bool {
@@ -1076,6 +1102,11 @@ impl Source {
             return true;
         }
         if self.faults != 0 && !pending.event.release() {
+            return false;
+        }
+        if !pending.event.release()
+            && pending.event.channel().is_some_and(|channel| self.channel_has_release_debt(channel))
+        {
             return false;
         }
         if !self.channel_ready(pending) {
@@ -1193,6 +1224,11 @@ impl Source {
         if self.faults != 0 && !pending.event.release() {
             return false;
         }
+        if !pending.event.release()
+            && pending.event.channel().is_some_and(|channel| self.channel_has_release_debt(channel))
+        {
+            return false;
+        }
         // Reserve all post-acceptance target visits, pin release and cell cleanup
         // before the host can accept a multi-terminal physical wire message.
         let completion_work = if matches!(parent.channel.role, channel::Role::Header { .. }) {
@@ -1298,6 +1334,16 @@ impl Source {
         if matches!(completion.group.token.0[3], 1 | 2) {
             self.complete_emergency(completion);
             self.schedule_emergency(output);
+            if self.faults == 0 {
+                // Accepted Stop debt can unblock post-Stop live input in this
+                // same callback. Retention acknowledgement may arrive later.
+                let callback = self.callback.unwrap();
+                self.schedule_pending(
+                    callback.steady_time + i64::from(completion.group.time),
+                    callback.steady_time + i64::from(callback.frames),
+                    output,
+                );
+            }
             return;
         }
         let position = completion.group.token.0[1] as usize;
