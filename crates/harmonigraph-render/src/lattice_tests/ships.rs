@@ -98,16 +98,23 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
-    // The LIGHT drawn at all, which is the only way `fs_glow`'s own early-out
-    // reaches the comparison: no fixture above has a reach, and there is no
-    // light draw to compare without a glow target for it to write into.
+    // The one fixture whose Glow block reaches the shader with anything in it.
+    // `from_scene` zeroes the whole block with the light off, so on every
+    // fixture above `glow_wash` reads 0 and a LIT slice takes none of the field
+    // — which is one arm of the `mix` in `node_paint`, on the far side of the
+    // early-out that decides whether a fragment gets there at all.
+    //
+    // The light's OWN pass is not compared here, and no longer has anything to
+    // compare: the gather has no `EARLY_OUT` branch at all where the billboard
+    // had one. A node with no light is not in `glow_nodes` to begin with, and
+    // past a halo's span `glow_layer` returns zero by the arithmetic either
+    // path would run.
     let lit_field = || {
         let mut scene = wide_shadow();
         scene.glow_reach = 0.8;
-        // One node with INK and no light of its own, which is exactly what that
-        // early-out tests: a fixture whose every node is lit never once takes
-        // the branch. Shipped for its ink (`paints`), it draws its own layers
-        // while emitting nothing.
+        // One node with INK and no light of its own, which is what the cull
+        // ships for its ink alone (`paints`): it draws its layers, takes the
+        // wash under them, and emits nothing.
         let mut dark = scene.nodes[0];
         dark.glow.level = 0.0;
         dark.glow.row = scene.glow_rows;
@@ -324,108 +331,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 "the node cell changed when the early-outs were enabled: texel {differing:?}",
             );
         }
-
-        // The LIGHT's own draw, compared the same way and for the same reason.
-        // `fs_glow`'s own early-out is reachable here and nowhere else — the
-        // scene pass never runs it — so without this it would be compiled and
-        // never once compared.
-        let Some(strip) = pane.ink_history.as_ref() else {
-            continue;
-        };
-        let glow_draw = |src: &str| {
-            let pipeline = create_glow_pipeline(
-                &device,
-                &with_common(src),
-                format,
-                &res.bind_group_layout,
-                &res.strip_layout,
-            );
-            let target = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("parity_glow"),
-                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let view = target.create_view(&Default::default());
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("parity_glow_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, 0..pane.instance_count);
-            }
-            queue.submit([encoder.finish()]);
-            // `readback`'s copy with its one assumption widened: a 256-wide row
-            // is 1024 bytes of light, and that is aligned.
-            let read = |target: &wgpu::Texture, bytes: u32| {
-                let bytes_per_row = SIZE[0] * bytes;
-                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("parity_glow_readback"),
-                    size: (bytes_per_row * SIZE[1]) as u64,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-                let mut encoder = device.create_command_encoder(&Default::default());
-                encoder.copy_texture_to_buffer(
-                    target.as_image_copy(),
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(bytes_per_row),
-                            rows_per_image: None,
-                        },
-                    },
-                    wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                );
-                queue.submit([encoder.finish()]);
-                let slice = buffer.slice(..);
-                slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-                device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-                slice.get_mapped_range().to_vec()
-            };
-            read(&target, 4)
-        };
-        assert!(pane.instance_count > 0, "the {name} scene ships no node to compare");
-        let light_fast = glow_draw(SHADER_SRC);
-        let light_slow = glow_draw(&reference_src);
-
-        // Vacuous unless the pass actually wrote it: every fixture that reaches
-        // here carries a reach, so a layer of zeroes means the dials stopped
-        // arriving rather than that the skips are sound.
-        assert!(
-            light_slow.iter().any(|&b| b != 0),
-            "the {name} scene's light pass lit nothing; the comparison is vacuous",
-        );
-
-        let differing =
-            light_fast.iter().zip(light_slow.iter()).enumerate().find(|(_, (a, b))| a != b);
-        assert!(
-            differing.is_none(),
-            "the {name} scene's light changed when the early-outs were enabled: byte {:?}",
-            differing.map(|(i, (a, b))| (i, *a, *b)),
-        );
     }
 }
 

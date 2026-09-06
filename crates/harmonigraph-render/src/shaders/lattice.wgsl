@@ -70,7 +70,8 @@ struct GlowParams {
     curve: f32,
     wash: f32,
     row_capacity: f32,
-    padding: vec2<f32>,
+    lit: f32,
+    padding: f32,
 };
 
 struct ShadowParams {
@@ -179,6 +180,48 @@ const INK_STRIP_N: u32 = 64u;
 // the light is the node and marker draws' — so the node pipelines carry no
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
+
+// One lit node, as the light's own pass reads it — the CPU's `GpuGlowNode`.
+//
+// The gather has no billboard and no instance stream: it is one quad over the
+// whole target, so what a node IS arrives here instead, and the map back from
+// a pixel to that node's uv arrives with it (see [`fs_glow_gather`]).
+struct GlowNode {
+    // This node's screen frame INVERTED, a row each: a fragment `d` pixels from
+    // `centre` stands at uv `vec2(dot(inv_x, d), dot(inv_y, d))`.
+    //
+    // Exact rather than an approximation of the billboard it replaces. Every
+    // node's quad lies in the camera's own right/up plane, so its plane is
+    // parallel to the image plane and one projection depth covers all of it —
+    // which leaves the projection restricted to that plane a scale and an
+    // offset under perspective as readily as under an orthographic camera, and
+    // a 2x2 inverse is the whole of it. Spent on the CPU, once per node per
+    // frame (`LatticeCallback::glow_nodes`), because the alternative is three
+    // matrix multiplies per node per PIXEL.
+    inv_x: vec2<f32>,
+    inv_y: vec2<f32>,
+    // Where the node's uv origin lands, in the glow target's own pixels — the
+    // space `@builtin(position)` hands the fragment stage.
+    centre: vec2<f32>,
+    // x: the node's carried light level (`Instance::glow` x). y: its ROW of the
+    // ink strip, which is where its colour is (`Instance::glow` y).
+    light: vec2<f32>,
+    // x: how much of a MARK the light still has this node wearing, which is
+    // what sizes its halo (`glow_rim`). y: unused.
+    mark: vec2<f32>,
+};
+
+// Every lit node this frame, in the order the instance buffer holds them.
+//
+// Group 2's slot, shared with common.wgsl's `shadow_atlas` on exactly the terms
+// the strip shares group 1 with `glow_tex`: a binding collision is diagnosed
+// per entry point, and the light's own pass reads no atlas while nothing that
+// reads the atlas gathers.
+//
+// The buffer is allocated at a capacity this frame's count may be well under
+// (`PaneTargets::glow_nodes`), so `arrayLength` is NOT the bound to walk —
+// past the count sit entries some earlier frame wrote. `u.glow.lit` is.
+@group(2) @binding(0) var<storage, read> glow_nodes: array<GlowNode>;
 
 // The geometry group's Shadow: how wide a node's shadow is, as a share of its
 // radius. A resting marker takes the same units from `u.marker_shadow`, inherited
@@ -364,8 +407,8 @@ fn node_rim(marked: bool) -> f32 {
 }
 
 // The rim a node's LIGHT is measured against: the same two answers `node_rim`
-// chooses between, with the mark's share of the choice CARRIED (Instance::glow
-// w, `panes::glow_fade` in harmonigraph-ui) rather than switched by the bit.
+// chooses between, with the mark's share of the choice CARRIED (`GlowNode::mark`
+// x, `panes::glow_fade` in harmonigraph-ui) rather than switched by the bit.
 //
 // The light's whole span is this plus the Reach, so reading the bit put a step
 // in it: the bit is set while the marking voice exists and clear the frame it
@@ -379,8 +422,8 @@ fn node_rim(marked: bool) -> f32 {
 // wedge: its width is a direction the node reaches in, not a circle it fills.
 // The pair are the circle with the mark and the circle without, and the light
 // eases between them.
-fn glow_rim(inst: Instance) -> f32 {
-    return mix(node_rim(false), node_rim(true), clamp(inst.glow.w, 0.0, 1.0));
+fn glow_rim(marked: f32) -> f32 {
+    return mix(node_rim(false), node_rim(true), clamp(marked, 0.0, 1.0));
 }
 
 // How far the billboard has to reach, in uv, for a shape reaching `g` past a
@@ -488,19 +531,22 @@ struct Instance {
     @location(11) ring: f32,
     // The node's own light: x how bright it is, y which ROW of the ink strip
     // keeps its colour, z how much of this frame's reading the two of them
-    // take, w how much of a MARK the light still has this node wearing. All
-    // four are settled on the CPU, where a node has an identity that outlives a
-    // frame (`panes::glow_fade` in harmonigraph-ui).
+    // take. All three are settled on the CPU, where a node has an identity that
+    // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
     //
     // The level is CARRIED and not the largest envelope on the node, which is
     // the whole point of it: a light runs on a clock of its own, so it is above
     // zero on a node whose every layer has gone silent, and such a node is
     // shipped for exactly that reason. The mix is 1 where the row is new — a
     // strip just built, or a row just handed over — and there is nothing to
-    // carry from. The mark is carried for the same reason the level is: it is
-    // the light's SIZE (`glow_rim`), and the bit it is carried from steps the
-    // frame the marking voice is pruned.
-    @location(12) glow: vec4<f32>,
+    // carry from.
+    //
+    // The MARK the light is still wearing is a fourth of the same set and is
+    // deliberately not here: it sizes the halo alone (`glow_rim`), and the halo
+    // is no longer drawn over a billboard, so the only stage that reads it
+    // takes it off `GlowNode` instead. `GpuInstance::glow` still carries it,
+    // that being where the CPU assembles the light; this stream stops at three.
+    @location(12) glow: vec3<f32>,
 };
 
 // One node's cell of the shadow atlas, as a second instance-step vertex buffer
@@ -553,15 +599,14 @@ struct VsOut {
     // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
-    // The node's light: x how bright it is, y how much of this frame's ink its
-    // row takes (see Instance::glow), z the rim the LIGHT is drawn against in
-    // this node's uv (`glow_rim`). Read by the ink strip and the light's own
-    // draw, and by nothing else on the node.
+    // How much of this frame's ink this node's ROW takes, against the ink that
+    // row already held (see Instance::glow z). The ink strip's reading pass is
+    // the one stage that reads it, and nothing else on the node does.
     //
-    // The rim rides here rather than in a location of its own because it
-    // belongs with these two: all three are what the light carries, and `rim`
-    // beside them is what the NODE is measured against.
-    @location(15) @interpolate(flat) glow: vec3<f32>,
+    // The level and the light's own rim used to ride beside it, for the halo's
+    // billboard. That billboard is gone — the light is gathered over the whole
+    // target off `glow_nodes` — so what is left here is the strip's alone.
+    @location(15) @interpolate(flat) ink_carry: f32,
     // The atlas's two ends in one row, and a draw is only ever at one of them.
     // On a draw that FILLS a cell ([`vs_node_cell`]), that cell's own rect in
     // texels, which the fragment is clipped to. On a draw that READS the atlas
@@ -587,7 +632,7 @@ struct VsOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: ShadowCell) -> VsOut {
-    var out = node_vertex(vertex_index, inst, 0.0, false);
+    var out = node_vertex(vertex_index, inst);
     out.shadow_box = vec4<f32>(box.who.x, 0.0, 0.0, 0.0);
     out.shadow_at = vec4<f32>(pane_points(out.clip_pos), box.cell_map.z, 1.0);
     return out;
@@ -606,7 +651,7 @@ fn vs_node_cell(
     inst: Instance,
     box: ShadowCell,
 ) -> VsOut {
-    var out = node_vertex(vertex_index, inst, 0.0, false);
+    var out = node_vertex(vertex_index, inst);
     let centre_clip = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
     let uv_world = u.node.radius * 0.90 * 2.0 * max(inst.scale, 0.05);
     let right_clip =
@@ -655,29 +700,16 @@ fn vs_node_cell(
     return out;
 }
 
-/// The GLOW's billboard: the same node, on a quad grown to hold the light —
-/// `glow_layer` shuts the window at the light's own rim ([`glow_rim`]) plus the
-/// Reach, and the margin below is that with room to spare.
+/// One node's billboard: the quad every draw over the instance stream is cut
+/// from. It holds what the node itself paints, plus the Shadow's own reach,
+/// since a shadow lands past the ink on both PANE draws alike. The cell draw
+/// replaces this position with the packed cell's corners (`vs_node_cell`).
 ///
-/// A second entry point rather than a wider `vs_main`, because the margin is
-/// what every fragment of the node draw is measured against: growing that quad
-/// would spend one more ring of discarded fragments per node for a reach only
-/// the glow paints in. The uv is scaled with the quad, so uv 1.0 is the same
-/// world distance either way and nothing inside the node moves.
-@vertex
-fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, max(u.glow.reach, 0.0), true);
-}
-
-/// One node's billboard, with `extra` uv of headroom past what the node itself
-/// needs — 0 for the node draw and the Reach for the glow draw (see
-/// [`vs_glow`]). The margin below grows the quad by whichever of `extra` and
-/// the Shadow's own reach is the larger, for both PANE draws alike, since a
-/// shadow lands past the ink whichever one is drawing. The cell draw replaces
-/// this position with the packed cell's corners (`vs_node_cell`). `light` says
-/// which of the two rims sizes the quad ([`glow_rim`]); both are handed on
-/// either way, since the fragment stages of one draw never read the other's.
-fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> VsOut {
+/// The LIGHT is no longer one of them. It had a second entry point and a wider
+/// margin of its own here, and now has neither: it is gathered over the whole
+/// target from `glow_nodes`, so nothing sizes a halo any more and the quad is
+/// back to being the node's.
+fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -693,29 +725,22 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     // so sheets off it draw smaller — in both directions, since that is
     // distance from the ground and not depth toward the eye. The uv is
     // deliberately NOT scaled with it, so every layer inside the node keeps
-    // its proportions and only the node's size on screen changes. (The quad
-    // is twice the disc radius to leave room for the glow, plus QUAD_MARGIN
-    // for the outer glyphs' soft edge — see QUAD_MARGIN.)
+    // its proportions and only the node's size on screen changes. (The 2.0
+    // below is what makes uv 1.0 the disc's diameter rather than its radius —
+    // one uv in world units, which `Scene::marker_unit` is the CPU's copy of —
+    // and QUAD_MARGIN is the outer glyphs' soft edge on top of it.)
     let scale = max(inst.scale, 0.05);
     let rim = node_rim((inst.marks.x | inst.marks.y) != 0u);
-    let lit_rim = glow_rim(inst);
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
     // content moves.
-    // The glow's quad is sized off the wider of the two rims. Its light is
-    // measured against the one the LIGHT carries; taking the max with the
-    // node's own is what keeps the quad a bound whichever way round the two
-    // are, and a mark arriving on a node already lit puts the node's rim
-    // ahead of the light's for the whole of the light's attack. What that
-    // costs while it lasts is the ring of discarded fragments between them,
-    // which is what a bound is for.
-    // The SHADOW's own reach is in every pane quad, the node draw's included: a
-    // node multiplies the frame by its blurred ink out to `SHADOW_REACH_SIGMAS` σ
-    // past its rings (`shadow_reach_uv`), and a quad that stopped at the ink
-    // would cut that Gaussian off in a straight line. `extra` is the glow's on
-    // top of it. The cell draw writes the packer's one-texel sampling guard too.
-    let margin = quad_margin(select(rim, max(rim, lit_rim), light), max(shadow_reach_uv(scale), extra));
+    // The SHADOW's own reach is in every pane quad: a node multiplies the frame
+    // by its blurred ink out to `SHADOW_REACH_SIGMAS` σ past its rings
+    // (`shadow_reach_uv`), and a quad that stopped at the ink would cut that
+    // Gaussian off in a straight line. The cell draw writes the packer's
+    // one-texel sampling guard too.
+    let margin = quad_margin(rim, shadow_reach_uv(scale));
     let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
@@ -729,17 +754,16 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.octaves = inst.octaves;
     out.cents = inst.cents;
     out.strip_row = inst.glow.y;
-    out.glow = vec3<f32>(inst.glow.x, inst.glow.z, lit_rim);
+    out.ink_carry = inst.glow.z;
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
     out.rim = rim;
     out.ring = inst.ring;
     // Neither end of the atlas, which is the answer for every draw but the two
-    // that cast a shadow ([`vs_main`], [`vs_node_cell`]) — the glow's and the
-    // ink strip's pass neither read the atlas nor write one. The scale beside
-    // it is the PANE's, which is where every draw that gets no further than
-    // here lands.
+    // that cast a shadow ([`vs_main`], [`vs_node_cell`]) — the ink strip's pass
+    // neither reads the atlas nor writes one. The scale beside it is the
+    // PANE's, which is where every draw that gets no further than here lands.
     out.shadow_box = vec4<f32>(0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
@@ -2947,13 +2971,13 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// ONE DRAW over the whole instance buffer, into one transparent target.
-// `fs_glow` lays every node's light down, SCREEN-blended — src + dst*(1-src),
-// premultiplied. Two halos meld: an overlap is brighter than either alone and
-// still bounded by white however many nodes reach the pixel, and the blend is
-// commutative, so nothing about the order inside the call reaches the picture.
-// Adding instead makes the COUNT of overlapping nodes, rather than any note,
-// the brightest thing on screen.
+// ONE DRAW over the whole target, into one transparent texture.
+// `fs_glow_gather` walks every lit node at each pixel and folds their halos by
+// SCREEN — src + dst*(1-src), premultiplied. Two halos meld: an overlap is
+// brighter than either alone and still bounded by white however many nodes
+// reach the pixel, and the operator is commutative, so nothing about the order
+// it walks in reaches the picture. Adding instead makes the COUNT of
+// overlapping nodes, rather than any note, the brightest thing on screen.
 //
 // NOTHING in the target is subtractive, and that is what lets the sheets meld
 // into one layer rather than being assembled one at a time: it is light and
@@ -2981,8 +3005,8 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 /// Settled on the CPU because that is where a node has an identity that
 /// outlives a frame (`panes::glow_fade` in harmonigraph-ui). A shader has this
 /// frame's instances and nothing else.
-fn glow_level(in: VsOut) -> f32 {
-    return clamp(in.glow.x, 0.0, 1.0);
+fn glow_level(carried: f32) -> f32 {
+    return clamp(carried, 0.0, 1.0);
 }
 
 /// Where in the glow's target one fragment of the scene pass stands: the pixel
@@ -3198,7 +3222,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 /// [`glow_ink`] reads it back at.
 @vertex
 fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    var out = node_vertex(vertex_index, inst, 0.0, false);
+    var out = node_vertex(vertex_index, inst);
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
     let rows = max(u.glow.row_capacity, 1.0);
     let v = (out.strip_row + corner.y) / rows;
@@ -3245,7 +3269,7 @@ fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsO
 @fragment
 fn fs_ink_strip(in: VsOut) -> @location(0) vec4<f32> {
     let ink = ink_at(in, oct_ring(in.cents), in.uv.x * TAU);
-    let carry = clamp(in.glow.y, 0.0, 1.0);
+    let carry = clamp(in.ink_carry, 0.0, 1.0);
     if carry >= 1.0 {
         return ink;
     }
@@ -3346,8 +3370,8 @@ fn strip_texel(col: i32, row: i32) -> vec4<f32> {
 /// above zero for a node lighting any part of itself. There is no colour to be
 /// had there and none is invented — see [`glow_layer`], which stops rather than
 /// lighting a black halo.
-fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
-    let row = i32(in.strip_row);
+fn glow_ink(strip_row: f32, angle: f32, mix_out: f32) -> vec4<f32> {
+    let row = i32(strip_row);
     // The column this angle falls between, in the strip's own coordinate:
     // column i sits at angle (i + 0.5) * TAU / N.
     let x = angle / TAU * f32(INK_STRIP_N) - 0.5;
@@ -3380,25 +3404,35 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
     return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
 }
 
-/// The node's light at this fragment, premultiplied, exactly as every other
-/// layer here returns its ink.
-fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
-    let level = glow_level(in);
+/// ONE node's light at this fragment, premultiplied, exactly as every other
+/// layer here returns its ink — the gather's loop body ([`fs_glow_gather`]).
+///
+/// `uv` is where the fragment stands in THIS node's own uv, which the gather
+/// inverts out of the node's screen frame. Every length below is in that uv, so
+/// the arithmetic is the billboard's unchanged: what moved is where the uv
+/// comes from, not what is done with it.
+fn glow_layer(node: GlowNode, uv: vec2<f32>) -> vec4<f32> {
+    let level = glow_level(node.light.x);
     let reach = max(u.glow.reach, 0.0);
     let strength = max(u.glow.strength, 0.0);
+    // The rim the LIGHT is measured against, which both lengths below are cut
+    // from. Read here rather than carried on `GlowNode`: it is `node_rim`'s two
+    // frame-wide answers eased by the one thing that IS per node, so spending
+    // it on the CPU would be `node_rim` written a second time in Rust.
+    let lit_rim = glow_rim(node.mark.x);
+    let d = length(uv);
     // ONE length under the whole layer: the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
     // its edge, and it is where the curve reaches zero, so the Reach bar says
     // exactly how far the light goes.
     //
-    // Not the quad's own margin, which is the tempting reading of "window it at
-    // the edge": `quad_margin` floors at QUAD_MARGIN, so on a small reach the
-    // billboard is wider than the light has any business being and every reach
-    // under that floor would draw one width of halo. The guarantee runs the
-    // other way instead — the quad is SIZED to hold this, with room to spare
-    // (`node_vertex`), so the light is never clipped square at the corners.
-    let span = max(in.glow.z + reach, 0.1);
+    // Not any quad's margin, which was the tempting reading of "window it at
+    // the edge" while there was a quad: `quad_margin` floors at QUAD_MARGIN, so
+    // on a small reach the billboard was wider than the light had any business
+    // being. There is no billboard now — this is the only thing that says where
+    // a node's light stops, and nothing can clip it square at a corner.
+    let span = max(lit_rim + reach, 0.1);
     // Past the curve's zero endpoint there is no light. Not an early-out, and
     // so needing no `EARLY_OUT` of its own — `glow_curve_at` is exactly 0 at
     // the span, which carries `skirt` and the coverage below it to 0 by the
@@ -3432,7 +3466,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // almost nothing has almost no rim, and a ramp measured against that is
     // full direction at every radius it has — which is the cusp back again,
     // this time on the one node too small to hide it under its own ink.
-    let seam = max(in.glow.z, 0.1);
+    let seam = max(lit_rim, 0.1);
     let mix_out = min(1.0, (d * d) / (seam * seam));
 
     // The level scales the COVERAGE, once, and not the blend as well: a note
@@ -3450,7 +3484,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // The colour: this node's own strip, read in this direction. Not a hue
     // assembled out of the voices — see `ink_at`, which is where a layer states
     // what it is putting on the node and how much of the node that is.
-    let ink = glow_ink(in, atan2(in.uv.y, in.uv.x), mix_out);
+    let ink = glow_ink(node.light.y, atan2(uv.y, uv.x), mix_out);
     // A node lighting NOTHING gives off nothing, and the level above does not
     // say so: it is the largest envelope on the node, and a view with every
     // layer dialled off leaves a held note a full envelope with no ink under
@@ -3463,30 +3497,64 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     return vec4<f32>(ink.xyz * alpha, alpha);
 }
 
-/// The light draw. No depth in it: this is a pass of its own ahead of the
-/// scene's, so every node's halo melds into one layer before any node is drawn
-/// over it, and no sheet's light is legible as having come first. It is also
-/// what puts the light UNDER every shadow — the composite lays it down at the
-/// bottom of the scene pass, and each item's own draw multiplies it along with
-/// the rest of the frame beneath.
+/// The light's quad: the whole target, once, exactly as the blit pipelines
+/// cover theirs (`vs_blit` in blit.wgsl). Nothing per node reaches the vertex
+/// stage any more — the nodes are a buffer the fragment stage walks.
+@vertex
+fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
+    return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+
+/// The light draw: every lit node's halo folded at this pixel, in one pass.
 ///
-/// Its own early-out rather than `node_geom`'s, and this is the reason it does
-/// not share that function: `paint_reach` bounds what a node PAINTS, which the
-/// glow reaches past by the whole Reach, and the idle branch keeps fragments
-/// this layer has no colour for. What the glow needs is narrower on both counts
-/// — a node doing nothing at all emits no light, and neither does anything past
-/// where its own window has shut.
+/// No depth in it: this is a pass of its own ahead of the scene's, so every
+/// node's halo melds into one layer before any node is drawn over it, and no
+/// sheet's light is legible as having come first. It is also what puts the
+/// light UNDER every shadow — the composite lays it down at the bottom of the
+/// scene pass, and each item's own draw multiplies it along with the rest of
+/// the frame beneath.
+///
+/// A GATHER rather than a billboard per node under a blend state. The two are
+/// the same picture here — the fold below is the screen blend that pass carried
+/// written out, `src + dst * (1 - src)` on the colour and the same on the
+/// alpha, which is one expression over the whole premultiplied vector — and the
+/// difference is that an operator in shader code is not restricted to what a
+/// fixed-function blend can express (#680). What it costs is the per-node
+/// guard, pixels x lit nodes, paid even where nothing lights the pixel.
+///
+/// The fold ROUNDS once. The blend state it replaces rounded the target to f16
+/// after every draw, dropping a halo whose contribution fell under half of the
+/// accumulator's own ULP; this keeps it. That is the one drift the goldens
+/// took, and it is why the frames carrying a thousand instances moved further
+/// than the rest — never past the DRAW ORDER those frames were already
+/// undefined to within.
+///
+/// `u.glow.lit` and not `arrayLength(&glow_nodes)`: the buffer outlives the
+/// frames that grew it (see the binding).
 ///
 /// No derivative anywhere in it, unlike every other fragment entry point here,
 /// and that is the strip's doing: the shapes the light is coloured out of are
 /// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
-/// stage asks how big the node is on screen.
+/// stage asks how big any node is on screen.
 @fragment
-fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
-    if EARLY_OUT && glow_level(in) <= 0.0 {
-        discard;
+fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let lit = u32(max(u.glow.lit, 0.0));
+    var out = vec4<f32>(0.0);
+    for (var i = 0u; i < lit; i = i + 1u) {
+        let node = glow_nodes[i];
+        // This pixel in the node's own uv. `pos.xy` is the glow target's own
+        // pixels, which is the space the frame was inverted in.
+        let delta = pos.xy - node.centre;
+        let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
+        let halo = glow_layer(node, uv);
+        // SCREEN, commutative and never subtractive, so the instance order this
+        // walks in is not readable in the light — the same reason the pass it
+        // replaces could draw every sheet at once. A halo of zero leaves `out`
+        // exactly as it was, which is what the discarded fragment did.
+        out = halo + out * (1.0 - halo);
     }
-    return glow_layer(in, length(in.uv));
+    return out;
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

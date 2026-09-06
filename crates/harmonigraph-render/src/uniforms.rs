@@ -122,7 +122,12 @@ uniform_group! {
         wash: f32,
         /// Allocated row capacity, independent of this frame's instance count.
         row_capacity: f32,
-        padding: Float2,
+        /// How many entries of the lit-node buffer the gather walks. Settled in
+        /// `prepare`, where the frame is mapped onto the target's pixels, and
+        /// at or under that buffer's capacity — which is why `arrayLength` is
+        /// not the bound (`fs_glow_gather`).
+        lit: f32,
+        padding: f32,
     }
 }
 uniform_group! {
