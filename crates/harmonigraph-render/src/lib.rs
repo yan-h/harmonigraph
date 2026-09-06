@@ -1443,13 +1443,16 @@ impl LatticeCallback {
     /// This frame's lit nodes, each carrying the map from a pixel of a `size`
     /// target back into that node's own uv — the list [`fs_glow_gather`] walks.
     ///
-    /// EXACTLY the set the billboard pass used to light, which is every shipped
-    /// instance whose carried level is above zero: the pass drew them all and
-    /// discarded the rest a fragment at a time, on this same test. Whether a
-    /// node's CENTRE is on screen decides nothing — a halo reaches well past
-    /// its node, and one whose middle sits off the pane still lit the pixels it
-    /// reached. Sheets are not distinguished either; the fold is commutative,
-    /// so this is one list in instance order.
+    /// The set the billboard pass used to light, less the nodes whose halo
+    /// cannot reach the target at all. The pass drew every shipped instance
+    /// whose carried level is above zero and discarded the rest a fragment at a
+    /// time; a gather pays instead for a per-pixel guard on every node it
+    /// carries, so a node the guard can only ever answer "no" for is dropped
+    /// here. Whether a node's CENTRE is on screen still decides nothing — a
+    /// halo reaches well past its node, and one whose middle sits off the pane
+    /// lights the pixels it reaches ([`halo_pixels`] is what says how far).
+    /// Sheets are not distinguished either; the fold is commutative, so this is
+    /// one list in instance order.
     ///
     /// The frame is inverted HERE, once per node, because the alternative is
     /// three matrix multiplies per node per pixel inside the loop. It is exact:
@@ -1475,6 +1478,16 @@ impl LatticeCallback {
     ///
     /// And a node whose basis is degenerate had a quad of no area. Neither lit
     /// anything, and a singular matrix has no inverse to write down.
+    ///
+    /// The fourth drop is the gather's own and is picture-identical rather than
+    /// inherited: a node whose halo disc misses the target rectangle. The
+    /// billboard pass paid nothing for those — no quad of theirs was rasterized
+    /// — where the loop pays the guard at every pixel of the frame for every
+    /// entry in the list, and the reachable length of that list is
+    /// `glow_fade::MAX_ROWS`. Without this, zooming IN makes the light more
+    /// expensive, not less. What the shader would compute for such a node is
+    /// exactly `vec4(0)` at every pixel, and zero is the fold's identity, so
+    /// dropping it moves no byte.
     fn glow_nodes(&self, size: [u32; 2]) -> Vec<GpuGlowNode> {
         let view_proj =
             glam::Mat4::from_cols_array_2d(&self.uniforms.camera.view_proj.0.map(|c| c.0));
@@ -1510,6 +1523,16 @@ impl LatticeCallback {
                     to_pixels(at + right * uv_world)?.0 - centre,
                     to_pixels(at + up * uv_world)?.0 - centre,
                 );
+                // Off the pane entirely: the halo's disc, at the largest radius
+                // this frame's bars can give it, does not touch the target.
+                // Measured against the rectangle rather than its corners so a
+                // node sitting off one EDGE with its light across the pane is
+                // kept — the nearest point of the target to the centre is the
+                // one the disc reaches first.
+                let closest = centre.clamp(glam::Vec2::ZERO, pixels);
+                if closest.distance_squared(centre) > halo_pixels(&self.uniforms, r, u).powi(2) {
+                    return None;
+                }
                 // `d = r * uv.x + u * uv.y` inverted: the columns are r and u,
                 // so this is the adjugate over the determinant.
                 let det = r.x * u.y - u.x * r.y;
@@ -1548,6 +1571,47 @@ fn project_onto(
         let ndc = clip / clip.w;
         (glam::vec2((ndc.x * 0.5 + 0.5) * extent.x, (0.5 - ndc.y * 0.5) * extent.y), ndc.z)
     })
+}
+
+/// An upper bound on how far one lit node's halo reaches from its centre, in
+/// the pixels of the target it is gathered into. `r` and `u` are the node's own
+/// uv axes as pixel vectors, which is the frame
+/// [`LatticeCallback::glow_nodes`] inverts.
+///
+/// A BOUND and not the exact extent, because the one thing it is read for is a
+/// cull: too large keeps a node that lights nothing, which costs a loop
+/// iteration, and too small drops a node that lights something, which is a hole
+/// in the picture. It is loose in the RIM, and loose toward keeping.
+///
+/// In uv the halo stops at `glow_layer`'s `span` — the rim the LIGHT is measured
+/// against plus the Reach, floored where the shader floors it. `glow_rim` eases
+/// that rim between `node_rim`'s two answers on the mark this node carries, and
+/// the marked answer is the larger of the two, so taking it once for the frame
+/// bounds every node whatever any of them carries. That is the whole of the
+/// slack: a frame with no marks in it is bounded by the mark's rim anyway.
+///
+/// From uv to pixels the halo's disc maps to an ELLIPSE, whose semi-major axis
+/// is the largest singular value of the 2x2 frame `[r u]`. Written out rather
+/// than bounded by `|r| + |u|` or the Frobenius norm, both of which are up to
+/// √2 too wide on the square frame an orthographic camera hands every node —
+/// and a bound √2 too wide in RADIUS keeps twice the area's worth of nodes off
+/// the pane, which is the cost this is here to remove.
+fn halo_pixels(uniforms: &Uniforms, r: glam::Vec2, u: glam::Vec2) -> f32 {
+    let node = &uniforms.node;
+    let bare = node.rings_outer.max(0.0);
+    let rim = if node.mark_thickness > 0.0 {
+        bare.max(node.mark_inner + node.mark_thickness)
+    } else {
+        bare
+    };
+    let span = (rim + uniforms.glow.reach.max(0.0)).max(0.1);
+    // The larger eigenvalue of `[r u]^T [r u]`, whose root is that singular
+    // value. Half the trace plus the root of the discriminant, floored at zero
+    // where the difference of two nearly equal squares can round below it.
+    let (a, b, c) = (r.length_squared(), u.length_squared(), r.dot(u));
+    let half = (a + b) * 0.5;
+    let off = (a - b) * 0.5;
+    span * (half + (off * off + c * c).sqrt()).max(0.0).sqrt()
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
