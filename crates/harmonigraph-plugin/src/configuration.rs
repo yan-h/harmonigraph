@@ -7,10 +7,8 @@ use harmonigraph_core::configuration::timeline::{
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::confirmed::{
-    ConfirmedPitch, ConfirmedPitches, LearningState, PitchProvenance,
-};
-use harmonigraph_core::{LearnedTuning, NoteEvent as CoreEvent, SourceId, Tempered, Tuning};
+use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
+use harmonigraph_core::{LearnedTuning, SourceId, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
 use nice_plug::prelude::*;
@@ -171,14 +169,16 @@ pub fn save(snapshot: ConfigurationSnapshot, state: &mut PluginState) {
 mod recording;
 
 pub struct Owner {
+    pub frozen: bool,
     pub timeline: ConfigTimeline,
-    confirmed: ConfirmedPitches,
+    pub(crate) confirmed: ConfirmedPitches,
+    pub direct: crate::performance::direct::Direct,
     learning: LearningState,
     budget: ControlBudget,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
-    recording: recording::Recording,
+    pub(crate) recording: recording::Recording,
 }
 impl Owner {
     pub fn new(params: &super::HarmonigraphParams) -> Self {
@@ -197,9 +197,11 @@ impl Owner {
         };
 
         Self {
+            frozen: false,
             timeline,
             recording: recording::Recording::default(),
             confirmed: ConfirmedPitches::default(),
+            direct: crate::performance::direct::Direct::default(),
             learning: LearningState::default(),
             budget: ControlBudget::default(),
             learned: None,
@@ -217,7 +219,17 @@ impl Owner {
         &mut self,
         boundary: ConfigurationBoundary,
         recorder: &harmonigraph_record::Recorder,
+        presentation_time: f64,
     ) {
+        if self.frozen {
+            return;
+        }
+        self.direct.begin(
+            self.recording.clock,
+            boundary.steady_time,
+            presentation_time,
+            f64::from(boundary.sample_rate),
+        );
         self.boundary = boundary;
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
@@ -225,12 +237,29 @@ impl Owner {
         self.budget = ControlBudget::default();
     }
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
+        self.frozen = false;
+        if self.direct.pending().is_some() {
+            recorder.fail_configuration();
+        }
+        self.direct.reset();
         self.confirmed.reset();
         self.learning = LearningState::default();
         self.learned = None;
         self.timeline = ConfigTimeline::new(self.timeline.reducer().clone());
         self.snapshot.status = 0;
         self.recording.reset(recorder);
+    }
+    pub fn resume_clock(&mut self, offset: i64, discontinuous: bool) {
+        if discontinuous {
+            self.direct.reset();
+        }
+        self.direct.reanchor(offset);
+        self.confirmed.reset();
+        self.learning = LearningState::default();
+        self.learned = None;
+        self.timeline = ConfigTimeline::new(self.timeline.reducer().clone());
+        self.snapshot.status = 0;
+        self.frozen = false;
     }
     pub fn fault(&mut self) {
         self.snapshot.status |= 2;
@@ -241,7 +270,7 @@ impl Owner {
         commit: ConfigurationCommit,
         recorder: &harmonigraph_record::Recorder,
     ) -> Option<ConfigurationSnapshot> {
-        if self.snapshot.status & 2 != 0 || self.budget.remaining() < 2 {
+        if self.frozen || self.snapshot.status & 2 != 0 || self.budget.remaining() < 2 {
             return None;
         }
         let previous = self.timeline.reducer().resolved();
@@ -331,9 +360,15 @@ impl Owner {
         Some(self.snapshot)
     }
     pub fn prefix(&mut self, through: i64) {
+        if self.frozen {
+            return;
+        }
         self.recording.prefix = through;
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
+        if self.frozen {
+            return;
+        }
         self.recording.block_start = self.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
@@ -351,16 +386,94 @@ impl Owner {
         })
     }
 
-    /// Current direct observations are all published by this sub-block's end.
-    /// The later session producer must replace this call with its complete
-    /// merged OUTPUT publication frontier, in the adopted mapped clock.
-    pub fn direct_publication_complete(&mut self, recorder: &harmonigraph_record::Recorder) {
-        let end = self.recording.block_start.checked_add(i64::from(self.recording.block_frames));
-        if end
-            .and_then(|end| end.checked_add(self.recording.hub_offset))
-            .is_none_or(|end| self.recording.source_frontier(self.recording.clock, end).is_err())
-        {
+    pub fn publish_direct(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        observation_time: f64,
+    ) {
+        use harmonigraph_record::publication::PublishError;
+        let Some(end) =
+            self.recording.block_start.checked_add(i64::from(self.recording.block_frames))
+        else {
             recorder.fail_configuration();
+            return;
+        };
+        // The Hub is the sole dispatcher of aggregation resync requests. A
+        // later hint must remain pending for its next all-source collection.
+        for _ in 0..crate::performance::direct::OUTPUT_WINDOW {
+            let Some(delta) = self.direct.pending() else {
+                break;
+            };
+            let Some(timing) = delta.timing else {
+                recorder.fail_configuration();
+                break;
+            };
+            if timing.sample >= end {
+                break;
+            }
+            let route = match self.recording_route(timing, delta.event.time) {
+                Ok(route) => route,
+                Err(()) => {
+                    recorder.fail_configuration();
+                    Default::default()
+                }
+            };
+            if recorder.publish_note(delta, observation_time, route).is_err() {
+                self.direct.recovery = true;
+            }
+            self.direct.published();
+        }
+        // All available earlier history precedes this complete current-state
+        // frame. Old onset metadata carries its original exact clock already;
+        // only the baseline's present cut is routed through the current segment.
+        if self.direct.pending().is_some() || (!self.direct.lost && !self.direct.recovery) {
+            return;
+        }
+        let offset = self.recording.block_frames.saturating_sub(1);
+        let Some(timing) = self.direct_timing(offset) else {
+            return;
+        };
+        let time = observation_time - 1.0 / f64::from(self.boundary.sample_rate);
+        let route = match self.recording_route(timing, time) {
+            Ok(route) => route,
+            Err(()) => {
+                // A display-only repair has no new recording history. The old
+                // map may correctly have retired after its complete frontier.
+                if self.direct.lost {
+                    recorder.fail_configuration();
+                }
+                Default::default()
+            }
+        };
+        if self.direct.lost {
+            recorder.publication_lost(time, route);
+            self.direct.lost = false;
+            self.direct.recovery = true;
+        }
+        if !self.direct.recovery || recorder.publication_free() < 2 {
+            return;
+        }
+        let Some(id) = self.direct.baseline_id.checked_add(1) else {
+            self.fault();
+            return;
+        };
+        let Some(frame) = self.direct.state.baseline(
+            SourceId::DIRECT,
+            id,
+            self.direct.sequence,
+            time,
+            self.direct.coverage_start,
+            true,
+        ) else {
+            return;
+        };
+        match recorder.publish_baseline(0, &frame, observation_time, route) {
+            Ok(()) => {
+                self.direct.baseline_id = id;
+                self.direct.recovery = false;
+            }
+            Err(PublishError::BaselineBusy | PublishError::Lost) => {}
+            Err(PublishError::Invalid) => self.fault(),
         }
     }
     pub fn recording_route(
@@ -385,6 +498,9 @@ impl Owner {
         origin: Option<f64>,
         observation_time: f64,
     ) {
+        if self.frozen {
+            return;
+        }
         self.recording.observation_time = observation_time;
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
@@ -398,118 +514,18 @@ impl Owner {
     }
 
     pub fn observe(&mut self, event: OwnedInput) {
-        let Some(sample) = event.sample else {
-            self.fault();
+        if self.frozen {
             return;
-        };
-        let time = sample as f64 / f64::from(self.boundary.sample_rate);
-        match event.value {
-            InputValue::Note { kind: 0, port: 0, channel, key, note_id, .. }
-                if (0..16).contains(&channel) && (0..128).contains(&key) =>
-            {
-                let row = ConfirmedPitch {
-                    key: harmonigraph_core::VoiceKey {
-                        source: SourceId::DIRECT,
-                        channel: channel as u8,
-                        note: key as u8,
-                    },
-                    lifetime: None,
-                    host_note_id: (note_id >= 0).then_some(note_id),
-                    pitch_microcents: i64::from(key) * 100_000_000,
-                    onset_sample: sample,
-                    provenance: PitchProvenance::ObservedDirect,
-                };
-                if self.confirmed.on(row).is_err() {
-                    self.snapshot.status |= 1;
-                }
-            }
-            InputValue::Note { kind: 1 | 2, port: 0 | -1, channel, key, note_id, .. } => {
-                let mut keys = [None; 64];
-                for (i, row) in self
-                    .confirmed
-                    .rows()
-                    .filter(|row| {
-                        (note_id == -1 || row.host_note_id == Some(note_id))
-                            && (channel == -1 || channel == i16::from(row.key.channel))
-                            && (key == -1 || key == i16::from(row.key.note))
-                    })
-                    .enumerate()
-                {
-                    keys[i] = Some(row.key);
-                }
-                for key in keys.into_iter().flatten() {
-                    self.confirmed.release(key, None);
-                }
-            }
-            InputValue::Expression {
-                expression: 2,
-                port: 0 | -1,
-                channel,
-                key,
-                value,
-                note_id,
-                ..
-            } => {
-                if !value.is_finite() {
-                    self.fault();
-                    return;
-                }
-                let mut keys = [None; 64];
-                for (i, row) in self
-                    .confirmed
-                    .rows()
-                    .filter(|row| {
-                        (note_id == -1 || row.host_note_id == Some(note_id))
-                            && (channel == -1 || channel == i16::from(row.key.channel))
-                            && (key == -1 || key == i16::from(row.key.note))
-                    })
-                    .enumerate()
-                {
-                    keys[i] = Some(row.key);
-                }
-                for key in keys.into_iter().flatten() {
-                    self.confirmed.pitch(
-                        key,
-                        None,
-                        ((f64::from(key.note) + value) * 100_000_000.0).round() as i64,
-                    );
-                }
-            }
-            InputValue::Midi { port: 0, data, .. } => {
-                let channel = data[0] & 15;
-                let kind = data[0] & 0xf0;
-                if kind == 0x90 && data[2] != 0 {
-                    if self
-                        .confirmed
-                        .observe_direct(
-                            CoreEvent::on(
-                                time,
-                                SourceId::DIRECT,
-                                channel,
-                                data[1],
-                                f32::from(data[2]) / 127.0,
-                            ),
-                            sample,
-                        )
-                        .is_err()
-                    {
-                        self.snapshot.status |= 1;
-                    }
-                } else if kind == 0x80 || kind == 0x90 {
-                    self.confirmed.release(
-                        harmonigraph_core::VoiceKey {
-                            source: SourceId::DIRECT,
-                            channel,
-                            note: data[1],
-                        },
-                        None,
-                    );
-                }
-            }
-            _ => {}
         }
+        self.direct.observe(event);
     }
     pub fn group_end(&mut self) -> Option<ConfigurationEdit> {
+        if self.frozen {
+            return None;
+        }
+        if !self.direct.sync_learning(&mut self.confirmed) {
+            self.snapshot.status |= 1;
+        }
         if self.snapshot.status != 0 {
             return None;
         }
@@ -539,6 +555,29 @@ impl Owner {
 pub(crate) fn injected_recorder() -> Option<harmonigraph_record::Recorder> {
     tests::take_recorder()
 }
+#[cfg(test)]
+pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
+    tests::install_recorder(recorder);
+}
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+impl Owner {
+    pub fn print_test_memory_layout(&self) {
+        use std::mem::size_of;
+        println!(
+            "LEDGER configuration [owner,timeline,confirmed,learning,recording,direct] {:?}",
+            [
+                size_of::<Self>(),
+                size_of::<ConfigTimeline>(),
+                size_of::<ConfirmedPitches>(),
+                size_of::<LearningState>(),
+                size_of::<recording::Recording>(),
+                size_of::<crate::performance::direct::Direct>()
+            ]
+        );
+        self.direct.print_test_memory_layout();
+    }
+}

@@ -134,6 +134,8 @@ use crate::wrapper::util::{
 const OUTPUT_EVENT_QUEUE_CAPACITY: usize = 2048;
 
 pub struct Wrapper<P: ClapPlugin> {
+    setup: Option<Arc<dyn super::setup::Setup>>,
+    setup_pending: AtomicBool,
     configuration: Mutex<Option<configuration_adapter::Runtime>>,
     owned_input: Mutex<Option<input_adapter::Runtime>>,
     performance: Mutex<Option<performance::Scheduler>>,
@@ -512,6 +514,22 @@ impl<P: ClapPlugin> MainThreadExecutor<Task<P>> for Wrapper<P> {
 impl<P: ClapPlugin> Wrapper<P> {
     #[cfg(feature = "clap-boundary-tests")]
     #[doc(hidden)]
+    pub fn test_inspect_plugin<R>(&self, inspect: impl FnOnce(&P) -> R) -> R {
+        // Fixtures call this outside process, after the serialized callback
+        // joined. It observes the production owner without replacing its path.
+        inspect(&self.plugin.lock())
+    }
+
+    #[cfg(feature = "clap-boundary-tests")]
+    #[doc(hidden)]
+    pub fn test_with_plugin<R>(&self, visit: impl FnOnce(&mut P) -> R) -> R {
+        // Counter-exhaustion fixtures establish otherwise unreachable limits
+        // between callbacks, under the same exclusive production owner lock.
+        visit(&mut self.plugin.lock())
+    }
+
+    #[cfg(feature = "clap-boundary-tests")]
+    #[doc(hidden)]
     pub fn test_on_deferred_gui_observation(&self, observe: impl Fn() + Send + Sync + 'static) {
         assert!(self.deferred_gui_observation.set(Box::new(observe)).is_ok());
     }
@@ -629,6 +647,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         );
 
         let wrapper = Self {
+            setup: plugin.clap_setup(),
+            setup_pending: AtomicBool::new(false),
             configuration: Mutex::new(None),
             owned_input: Mutex::new((P::CLAP_CONFIGURATION || P::CLAP_PERFORMANCE).then(input_adapter::Runtime::default)),
             performance: Mutex::new(P::CLAP_PERFORMANCE.then(performance::Scheduler::default)),
@@ -801,6 +821,12 @@ impl<P: ClapPlugin> Wrapper<P> {
         // when opening plugin editors
         let wrapper = Arc::new(wrapper);
         *wrapper.this.borrow_mut() = Arc::downgrade(&wrapper);
+        if let Some(setup) = &wrapper.setup {
+            let weak = Arc::downgrade(&wrapper);
+            setup.install_wakeup(Box::new(move || {
+                if let Some(wrapper) = weak.upgrade() { wrapper.wake_setup(); }
+            }));
+        }
         if P::CLAP_CONFIGURATION { wrapper.install_configuration(); }
 
         // The `clap_plugin::plugin_data` field needs to point to this wrapper so we can access it
@@ -1859,6 +1885,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             )
         };
         self.overlay_configuration_state(&mut state);
+        if let Some(setup) = &self.setup { setup.save(&mut state); }
         state
     }
 
@@ -1866,6 +1893,10 @@ impl<P: ClapPlugin> Wrapper<P> {
     /// prevent corrupting data and changing parameters during processing the actual state is only
     /// updated at the end of the audio processing cycle.
     pub fn set_state_object_from_gui(&self, mut state: PluginState) {
+        if self.setup.is_some() {
+            if !self.restore_setup(&mut state) { crate::nice_error!("Prepared setup restore refused: invalid or full"); }
+            return;
+        }
         if P::CLAP_CONFIGURATION {
             if !self.restore_configuration(&mut state) {
                 crate::nice_error!("Prepared configuration restore refused: invalid or full");
@@ -1912,6 +1943,36 @@ impl<P: ClapPlugin> Wrapper<P> {
         // After the state has been updated, notify the host about the new parameter values
         let task_posted = self.schedule_gui(Task::RescanParamValues);
         crate::nice_debug_assert!(task_posted, "The task queue is full, dropping task...");
+    }
+
+    fn wake_setup(&self) {
+        self.setup_pending.store(true, Ordering::Release);
+        if P::CLAP_PERFORMANCE && self.performance_audio.load(Ordering::Acquire) {
+            self.deferred_host_callback.swap(true, Ordering::AcqRel);
+            if self.performance_audio.load(Ordering::Acquire) { return; }
+        }
+        // No plugin/runtime borrow or setup/registry mutex is held by callers.
+        let host = &self.host_callback;
+        unsafe_clap_call! { host=>request_callback(&**host) };
+    }
+
+    fn restore_setup(&self, state: &mut PluginState) -> bool {
+        let Some(setup) = &self.setup else { return false; };
+        let prepared = match setup.prepare(state) {
+            Ok(prepared) => prepared,
+            Err(reason) => { crate::nice_error!("Prepared setup restore refused: {reason}"); return false; }
+        };
+        let success = if P::CLAP_CONFIGURATION { self.restore_configuration(state) }
+        else { unsafe {
+            state::deserialize_object::<P>(state, self.params.clone(),
+                state::make_params_getter(&self.param_by_hash, &self.param_id_to_hash),
+                self.current_buffer_config.load().as_ref())
+        }};
+        if success {
+            prepared.commit();
+            let _ = self.schedule_gui(Task::ParameterValuesChanged);
+        }
+        success
     }
 
     pub fn set_latency_samples(&self, samples: u32) {
@@ -2033,7 +2094,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 query_host_extension::<clap_host_latency>(&wrapper.host_callback, CLAP_EXT_LATENCY);
             *wrapper.host_params.borrow_mut() =
                 query_host_extension::<clap_host_params>(&wrapper.host_callback, CLAP_EXT_PARAMS);
-            if P::CLAP_CONFIGURATION {
+            if P::CLAP_CONFIGURATION || wrapper.setup.is_some() {
                 *wrapper.host_state.borrow_mut() = query_host_extension::<clap_host_state>(&wrapper.host_callback, CLAP_EXT_STATE);
             }
             *wrapper.host_voice_info.borrow_mut() = query_host_extension::<clap_host_voice_info>(
@@ -2701,6 +2762,17 @@ impl<P: ClapPlugin> Wrapper<P> {
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
         if P::CLAP_CONFIGURATION { wrapper.configuration_main_thread(); }
+        if wrapper.setup_pending.swap(false, Ordering::AcqRel) {
+            let dirty = wrapper.setup.as_ref().is_some_and(|setup| setup.service());
+            if dirty {
+                if let Some(params) = wrapper.host_params.borrow().as_ref() {
+                    unsafe_clap_call! { params=>rescan(&*wrapper.host_callback, CLAP_PARAM_RESCAN_VALUES) };
+                }
+                if let Some(state) = wrapper.host_state.borrow().as_ref() {
+                    unsafe_clap_call! { state=>mark_dirty(&*wrapper.host_callback) };
+                }
+            }
+        }
 
         // [Self::schedule_gui] posts a task to the queue and asks the host to call this function
         // on the main thread, so once that's done we can just handle all requests here
@@ -3574,7 +3646,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data }, stream);
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        let serialized = if P::CLAP_CONFIGURATION {
+        let serialized = if P::CLAP_CONFIGURATION || wrapper.setup.is_some() {
             state::serialize_state_json(&wrapper.get_state_object())
         } else { unsafe {
             state::serialize_json::<P>(
@@ -3642,7 +3714,8 @@ impl<P: ClapPlugin> Wrapper<P> {
 
         match unsafe { state::deserialize_json(&read_buffer) } {
             Some(mut state) => {
-                let success = if P::CLAP_CONFIGURATION { wrapper.restore_configuration(&mut state) }
+                let success = if wrapper.setup.is_some() { wrapper.restore_setup(&mut state) }
+                    else if P::CLAP_CONFIGURATION { wrapper.restore_configuration(&mut state) }
                     else { wrapper.set_state_inner(&mut state) };
                 if success {
                     crate::nice_trace!("Loaded state ({} bytes)", read_buffer.len());

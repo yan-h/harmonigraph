@@ -943,6 +943,9 @@ std::thread_local! {
 pub(super) fn take_recorder() -> Option<harmonigraph_record::Recorder> {
     RECORDER.with(|r| r.borrow_mut().take())
 }
+pub(super) fn install_recorder(recorder: harmonigraph_record::Recorder) {
+    RECORDER.with(|r| assert!(r.borrow_mut().replace(recorder).is_none()));
+}
 fn recorded_device() -> (Device, harmonigraph_record::testing::Capture) {
     let (recorder, capture) = harmonigraph_record::testing::channel();
     RECORDER.with(|r| {
@@ -1139,7 +1142,7 @@ fn retried_gesture_closure_merges_before_earlier_timed_learning() {
         accepted.iter().any(|e| e.0 == CLAP_EVENT_PARAM_VALUE
             && e.1 == 20
             && e.2 == device.id(ParamKey::Three)),
-        "fixture must actually reach timed learning at20"
+        "fixture must actually reach timed learning at20: {accepted:?}"
     );
     assert!(accepted.windows(2).all(|events| events[0].1 <= events[1].1), "{accepted:?}");
     let at20: Vec<_> = accepted
@@ -1222,4 +1225,154 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     });
     consumer.drain(|_, _, _| true);
     eprintln!("canonical guarded fill: 2 complete 64-voice payloads + 4094 notes + Busy/Lost = {duration:?}; no allocation/deallocation");
+}
+
+#[test]
+fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
+    use harmonigraph_core::confirmed::PitchProvenance;
+    use harmonigraph_take::CanonicalRecord;
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-direct-repair-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    device.run(
+        0,
+        (0..64).map(|key| note(1000 + key, key as i16, 0, CLAP_EVENT_NOTE_ON)).collect(),
+        false,
+    );
+    // The REAL 4096-cell primary ring, while every one of the 64 rich voices
+    // remains held. Distinct f64 expression values must survive the legacy f32
+    // forwarding adapter, and an ID-only wildcard must resolve on exact ingress.
+    for block in 1..=65 {
+        device.run(
+            block * 64,
+            (0..64)
+                .map(|key| id_tuning(1000 + key, f64::from(key) / 1000.0 + 0.000000123))
+                .collect(),
+            false,
+        );
+    }
+    writer.drain(&mut capture);
+    assert!(writer.failed(), "a real lost publication durably fails this take");
+    let mut tracker = harmonigraph_core::NoteTracker::default();
+    for record in writer.display_events() {
+        record.apply(&mut tracker).unwrap();
+    }
+    writer.drain(&mut capture);
+    for record in writer.display_events() {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert!(!tracker.publication_gaps().is_empty());
+    device.run(66 * 64, vec![], false);
+    writer.drain(&mut capture);
+    let recovered = writer.display_events();
+    let frame = recovered
+        .iter()
+        .find_map(|record| match record {
+            CanonicalRecord::Baseline(frame) => Some(frame.baseline().unwrap()),
+            _ => None,
+        })
+        .expect("silent production callback repairs current state");
+    assert_eq!(frame.voices().len(), 64);
+    for voice in frame.voices() {
+        assert_eq!(voice.host_note_id, 1000 + i32::from(voice.note));
+        assert_ne!(voice.lifetime, 0);
+        assert_eq!(voice.player_tuning, f64::from(voice.note) / 1000.0 + 0.000000123);
+        assert_eq!(
+            voice.pitch_microcents,
+            ((f64::from(voice.note) + voice.player_tuning) * 100_000_000.0).round() as i64
+        );
+        assert_eq!(voice.onset.unwrap().input, 0);
+        assert_eq!(voice.actual_onset, 0.0);
+        assert_eq!(voice.provenance, PitchProvenance::ObservedDirect);
+    }
+    assert!(!recovered.iter().any(|record| matches!(record,
+        CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))));
+    for record in recovered {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert_eq!(tracker.held_count(), 64);
+    assert!(!tracker.publication_gaps().is_empty(), "repair never erases missing history");
+    assert!(harmonigraph_take::Take::read(path).unwrap().incomplete.is_some());
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns() {
+    use harmonigraph_take::CanonicalRecord;
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir = std::env::temp_dir()
+        .join(format!("harmonigraph-direct-display-repair-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    device.run(0, vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)], false);
+    writer.drain(&mut capture);
+    for block in 1..=65 {
+        device.run(block * 64, (0..64).map(|_| id_tuning(10, 0.123456789)).collect(), false);
+        writer.drain(&mut capture);
+    }
+    // Replacement after display loss belongs to a new original lifetime, even
+    // though its key/channel are identical. The disk fanout has kept up.
+    device.run(
+        66 * 64,
+        vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF), note(20, 60, 1, CLAP_EVENT_NOTE_ON)],
+        false,
+    );
+    writer.drain(&mut capture);
+    let mut tracker = harmonigraph_core::NoteTracker::default();
+    for record in writer.display_events() {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert!(!tracker.publication_gaps().is_empty());
+    assert!(!writer.failed(), "display loss cannot turn retained disk history into loss");
+    writer.drain(&mut capture); // capacity has returned; emit one reporting hint
+    device.run(67 * 64, vec![], false);
+    writer.drain(&mut capture);
+    let recovered = writer.display_events();
+    let frames: Vec<_> = recovered
+        .iter()
+        .filter_map(|r| match r {
+            CanonicalRecord::Baseline(b) => Some(b.baseline().unwrap()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].voices().len(), 1);
+    assert_eq!(frames[0].voices()[0].host_note_id, 20);
+    assert_eq!(frames[0].voices()[0].onset.unwrap().input, 66 * 64 + 1);
+    for record in recovered {
+        record.apply(&mut tracker).unwrap();
+    }
+    assert_eq!(tracker.held_count(), 1);
+    device.run(68 * 64, vec![id_tuning(20, 0.987654321)], false);
+    writer.drain(&mut capture);
+    let later = writer.display_events();
+    assert!(
+        !later.iter().any(|r| matches!(r, CanonicalRecord::Baseline(_))),
+        "no repeated repair after a successful copy"
+    );
+    for record in later {
+        record.apply(&mut tracker).unwrap();
+    }
+    capture.stop();
+    writer.stop();
+    device.run(69 * 64, vec![], false);
+    writer.drain(&mut capture);
+    assert!(writer.finished.is_some());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(take.incomplete.is_none());
+    assert_eq!(take.events.iter().filter(|r| matches!(r,
+        CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))).count(), 2);
+    drop(writer);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
 }

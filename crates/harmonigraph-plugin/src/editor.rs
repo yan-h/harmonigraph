@@ -513,6 +513,11 @@ fn frame(
     let fps_cap = shared.ui.fps_cap;
     let display_max_fps = queue.display_max_fps();
     drop(guard);
+    if state.params.configuration.get().is_some() {
+        if let Some(session) = state.params.session.get() {
+            session_controls(ui.ctx(), session, &mut state.session_draft);
+        }
+    }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
         queue.set_frame_interval(interval);
     }
@@ -812,6 +817,7 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
 struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
+    session_draft: Option<crate::performance::routing::HubSetup>,
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
@@ -829,7 +835,7 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params, frame_interval: None }
+        WindowState { shared, params, frame_interval: None, session_draft: None }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -1026,6 +1032,78 @@ impl Drop for LatticeEditorHandle {
         self.egui_state.set_open(false);
         self.window.close();
     }
+}
+
+/// Host-shell setup, intentionally outside the picture shared with video export.
+/// A draft is local to this open menu; applying it uses the prepared setup path.
+fn session_controls(
+    ctx: &egui::Context,
+    shared: &Arc<crate::performance::setup::Shared>,
+    draft: &mut Option<crate::performance::routing::HubSetup>,
+) {
+    use crate::performance::setup::Routing;
+    egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
+        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+        .show(ctx, |ui| {
+            ui.menu_button("Session", |ui| {
+                let accepted = shared.value();
+                let Routing::Hub(saved) = accepted.routing else {
+                    return;
+                };
+                let value = draft.get_or_insert(saved);
+                ui.label(format!("Hub {}", saved.uuid));
+                ui.label("Clock configuration for this routing");
+                ui.horizontal(|ui| {
+                    ui.label("Signed sample offset");
+                    ui.add(egui::DragValue::new(&mut value.calibration.offset));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Sample rate (Hz)");
+                    ui.add(
+                        egui::DragValue::new(&mut value.calibration.sample_rate)
+                            .range(1.0..=768000.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Maximum buffer (frames)");
+                    ui.add(
+                        egui::DragValue::new(&mut value.calibration.max_frames)
+                            .range(1..=1_048_576),
+                    );
+                });
+                ui.checkbox(
+                    &mut value.calibration.validated,
+                    "I validated this routing and clock configuration",
+                );
+                ui.label("Revalidate after routing, delay compensation, rate or buffer changes.");
+                if ui.button("Apply / Reinitialize").clicked() {
+                    if let Err(error) = shared.apply(Routing::Hub(*value), true) {
+                        ui.label(error);
+                    }
+                }
+                if ui.button("Reset voices").clicked() {
+                    if let Err(error) = shared.apply(Routing::Hub(saved), true) {
+                        ui.label(error);
+                    }
+                }
+                let applied = shared.applied.load(Ordering::Acquire);
+                if let Some(adopted) = shared.adopted() {
+                    ui.label(format!(
+                        "Active clock: {:+} samples, {} Hz, up to {} frames — {}",
+                        adopted.calibration.offset,
+                        adopted.calibration.sample_rate,
+                        adopted.calibration.max_frames,
+                        if adopted.valid { "valid" } else { "reinitialization required" },
+                    ));
+                }
+                ui.label(if applied == accepted.generation {
+                    "Setup adopted"
+                } else {
+                    "Setup pending: old output must settle"
+                });
+                ui.label(harmonigraph_perf::BUILD_TAG);
+            });
+        });
 }
 
 #[cfg(test)]

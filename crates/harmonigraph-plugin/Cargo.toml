@@ -37,8 +37,15 @@ serde = { workspace = true }
 clap-sys = { version = "0.5.0", optional = true }
 libc = { version = "0.2", optional = true }
 serde_json = { version = "1" }
+getrandom = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder", "NSControl", "NSButton", "NSPopUpButton", "NSTextField", "NSCell", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSTimer"] }
 
 [dev-dependencies]
+nice-plug = { workspace = true, features = ["clap-boundary-tests"] }
 nice-assert-no-alloc = "1.0"
 harmonigraph-take = { workspace = true }
 clap-sys = "0.5.0"

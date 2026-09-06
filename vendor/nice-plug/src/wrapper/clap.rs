@@ -6,6 +6,7 @@ mod context;
 mod descriptor;
 pub mod features;
 pub mod performance;
+pub mod setup;
 mod wrapper;
 
 use crate::wrapper::clap::features::ClapFeature;
@@ -53,6 +54,9 @@ pub enum ProcessTrace<'a> {
 /// Provides auxiliary metadata needed for a CLAP plugin.
 #[allow(unused_variables)]
 pub trait ClapPlugin: Plugin {
+    /// Prepared nonmusical setup without allocating a configuration mailbox.
+    /// Obtained off audio once, then used independently of the plugin mutex.
+    fn clap_setup(&self) -> Option<std::sync::Arc<dyn setup::Setup>> { None }
     /// Default-disabled semantic configuration ownership. The parameter list
     /// names up to five float parameters; other plugins retain the legacy path.
     const CLAP_CONFIGURATION: bool = false;
@@ -142,6 +146,10 @@ pub trait ClapPlugin: Plugin {
     ) -> performance::Consumption {
         performance::Consumption::Pending
     }
+    /// Every value captured before this boundary has been delivered exactly
+    /// once. A nonautomatable prepared setup may now cut FUTURE input without
+    /// overtaking an older retained wrapper cell.
+    fn clap_performance_input_boundary(&mut self) {}
     fn clap_performance_process(
         &mut self,
         buffer: &mut nice_plug_core::buffer::Buffer,

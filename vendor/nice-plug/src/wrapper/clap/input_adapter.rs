@@ -207,6 +207,9 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
             input.performed += 1;
         }
+        if input.performed == input.storage.len() {
+            plugin.clap_performance_input_boundary();
+        }
         input.reclaim();
     }
     /// Wrapper consumption is a third short cursor in the SAME pool. Retain

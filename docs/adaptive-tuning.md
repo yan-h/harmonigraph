@@ -5,7 +5,11 @@
 This is the decided design for a planned feature.
 The [source-identity foundation](adaptive-tuning-source-identity.md) implements source-aware display/roll/take/replay and scoped resets;
 the [effective-configuration foundation](adaptive-tuning-effective-configuration.md) adds CLAP audio ownership, bounded learning, prepared restore and resolved take replay.
-Aggregation, session recovery, companion output and adaptive assignment remain unimplemented.
+The [canonical consumer foundation](adaptive-tuning-canonical-recovery.md) implements complete baselines, publication gaps and independent recording closure.
+The [companion aggregation implementation](adaptive-tuning-companion-aggregation.md) now wires the real Tune class, session ownership and actual accepted-output history.
+That aggregation milestone is still in progress;
+delayed shared-channel replay, final review and host validation remain before it is complete.
+Adaptive assignment and the integrated musical policy remain subsequent work.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
@@ -15,7 +19,8 @@ Yan has accepted the latency target, late-track behavior, stop/Off rules, emerge
 The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
 those mechanics must satisfy these product decisions before adaptive output is complete.
 The [stage 2 engineering contracts](adaptive-tuning-contracts.md) now select those mechanics, capacities and production verification obligations before plugin wiring.
-They are a specification, not implemented or measured production behavior.
+They remain the specification;
+the implementation handoffs distinguish executed production fixtures from outstanding contracts.
 An ordinary late assignment retains its attack and reports the failure;
 explicit cancellation and the visible emergency stop are the documented exceptions.
 

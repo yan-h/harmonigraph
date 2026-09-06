@@ -276,6 +276,9 @@ pub fn default_renderer_path() -> std::path::PathBuf {
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
+    /// Pins the writer independently from all GUI Control clones. A retired
+    /// producer may still receive actual remote history after editor teardown.
+    _writer_lifetime: Option<mpsc::Sender<Command>>,
     fence: Arc<RecordFence>,
     publication: publication::Publisher,
     record_epoch: u64,
@@ -327,6 +330,16 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    pub fn take_resync_request(&self) -> bool {
+        self.publication.take_resync_request()
+    }
+    pub fn publication_free(&self) -> usize {
+        self.publication.free()
+    }
+    pub fn publication_lost(&mut self, time: f64, route: publication::Route) {
+        self.publication.discarded(time, route);
+        self.publication_result(Err(publication::PublishError::Lost), route);
+    }
     pub fn publish_clock(&self, time: f64) {
         self.publication.observe_clock(time);
     }
@@ -819,7 +832,7 @@ impl Control {
             return;
         }
         let dir = take_dir();
-        #[cfg(all(test, feature = "test-support"))]
+        #[cfg(feature = "test-support")]
         let dir = self.fence.test_directory.lock().clone().unwrap_or(dir);
         if let Err(err) = std::fs::create_dir_all(&dir) {
             *self.status.lock() = format!("cannot create {}: {err}", dir.display());
@@ -1090,8 +1103,11 @@ pub fn channel() -> (Recorder, Control) {
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    #[cfg(all(test, feature = "test-support"))]
-                    thread_fence.worker_after_empty.reach();
+                    #[cfg(feature = "test-support")]
+                    {
+                        thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
+                        thread_fence.worker_after_empty.reach();
+                    }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
             }
@@ -1108,7 +1124,7 @@ pub fn channel() -> (Recorder, Control) {
             let had_publications = fanout.drain(
                 &mut publications, Some(&mut display), &mut open, &thread_fence, &failure,
             ) != 0;
-            #[cfg(all(test, feature = "test-support"))]
+            #[cfg(feature = "test-support")]
             if pending_stop.is_some() { thread_fence.worker_after_stop.reach(); }
 
             // Failure is pending until both lanes, including the independent
@@ -1159,7 +1175,7 @@ pub fn channel() -> (Recorder, Control) {
                             });
                         *thread_status.lock() = "recording incomplete: producer disconnected before finalization".into();
                     }
-                    #[cfg(all(test, feature = "test-support"))]
+                    #[cfg(feature = "test-support")]
                     thread_fence.worker_finished.store(true, Ordering::Release);
                     return;
                 }
@@ -1181,6 +1197,7 @@ pub fn channel() -> (Recorder, Control) {
 
     (
         Recorder {
+            _writer_lifetime: Some(commands.clone()),
             publication,
             fence: fence.clone(),
             record_epoch: 0,
@@ -1230,6 +1247,27 @@ pub fn channel() -> (Recorder, Control) {
 pub mod testing {
     use super::*;
 
+    /// Only fence/status observation. This deliberately retains neither a
+    /// Control nor a command sender, so teardown fixtures cannot pin the writer.
+    pub struct WorkerProbe {
+        fence: Arc<RecordFence>,
+    }
+    pub fn worker_probe(control: &Control, directory: std::path::PathBuf) -> WorkerProbe {
+        *control.fence.test_directory.lock() = Some(directory);
+        WorkerProbe { fence: control.fence.clone() }
+    }
+    impl WorkerProbe {
+        pub fn empty_visits(&self) -> u64 {
+            self.fence.worker_empty_visits.load(Ordering::Acquire)
+        }
+        pub fn finished(&self) -> bool {
+            self.fence.worker_finished.load(Ordering::Acquire)
+        }
+        pub fn failed(&self) -> bool {
+            self.fence.failed.load(Ordering::Acquire)
+        }
+    }
+
     pub struct Capture {
         publications: publication::Consumer,
         fence: Arc<RecordFence>,
@@ -1240,6 +1278,11 @@ pub mod testing {
     }
 
     impl Capture {
+        pub fn publication_loss(
+            &self,
+        ) -> Option<(harmonigraph_core::canonical::PublicationGap, publication::Route)> {
+            self.publications.test_loss()
+        }
         pub fn pause_boundary(&self, enabled: bool) {
             self.fence.boundary_pause.enabled.store(enabled, Ordering::Release);
         }
@@ -1265,6 +1308,16 @@ pub mod testing {
         }
         pub fn drain_entries(&mut self) -> Vec<Entry> {
             std::iter::from_fn(|| self._records.pop().ok()).collect()
+        }
+        pub fn drain_canonical(&mut self) -> Vec<harmonigraph_take::CanonicalRecord> {
+            let mut events = Vec::new();
+            self.publications.drain(|delivery, _, _| {
+                if let publication::Delivery::Event(event) = delivery {
+                    events.push(harmonigraph_take::CanonicalRecord::from_event(event));
+                }
+                true
+            });
+            events
         }
         pub fn arm_audio(&self) {
             self.arm();
@@ -1395,6 +1448,7 @@ pub mod testing {
         let hit_rewind = Arc::new(AtomicBool::new(false));
         let fence = Arc::new(RecordFence::default());
         let recorder = Recorder {
+            _writer_lifetime: None,
             publication,
             fence: fence.clone(),
             record_epoch: 0,
@@ -1465,6 +1519,8 @@ struct CanonicalFanout {
     waiting_file: bool,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
+    repair_needed: std::collections::BTreeSet<SourceId>,
+    repair_requested: std::collections::BTreeSet<SourceId>,
 }
 
 impl CanonicalFanout {
@@ -1481,7 +1537,7 @@ impl CanonicalFanout {
         if let (Some(clock), Some(display)) = (publications.clock(), display.as_deref_mut()) {
             display.observe_clock(clock);
         }
-        publications.drain(|delivery, observation_time, route| {
+        let drained = publications.drain(|delivery, observation_time, route| {
             // A record can reach this lane before its independently queued
             // Start/NewPass control has drained. Retain its whole payload.
             let address = match delivery {
@@ -1626,11 +1682,34 @@ impl CanonicalFanout {
                         if result == Err(publication::PublishError::BaselineBusy) {
                             display.discarded(event.time(), publication::Route::default());
                         }
+                        if let CanonicalEvent::Baseline(frame) = event {
+                            self.repair_requested.remove(&frame.source);
+                            if result.is_ok() {
+                                self.repair_needed.remove(&frame.source);
+                            }
+                        }
+                        if result.is_err() {
+                            // Publication overflow emits a global gap, even
+                            // when the item that could not be copied belonged
+                            // to one source. Every previously observed source
+                            // therefore needs its own successful repair.
+                            self.repair_needed.extend(self.cursors.keys().copied());
+                        }
                     }
                 }
             }
             true
-        })
+        });
+        // Coalesce an outage until the display has room again. Requesting a new
+        // baseline for every failed copy would fill the primary ring with repair
+        // traffic while the display is still stalled. This never delays music.
+        if !self.repair_needed.is_subset(&self.repair_requested)
+            && display.as_ref().is_some_and(|p| p.free() >= publication::PUBLICATION_RING / 2)
+        {
+            publications.request_resync();
+            self.repair_requested.extend(self.repair_needed.iter().copied());
+        }
+        drained
     }
 }
 
@@ -2628,6 +2707,7 @@ mod tests {
             let dropped = Arc::new(AtomicU64::new(0));
             Bench {
                 rec: Recorder {
+                    _writer_lifetime: None,
                     publication: publication::channel().0,
                     fence: Arc::new(RecordFence::default()),
                     record_epoch: 0,

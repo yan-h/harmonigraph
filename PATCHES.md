@@ -16,7 +16,17 @@ The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifi
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics and activation notification ordering.
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,input_adapter,performance,performance_adapter,setup,wrapper}.rs` and `src/wrapper/clap.rs`): the effective-configuration and performance opt-ins share one acknowledged host-input pool.
+The ordinary processing walker, configuration owner and performance owner must all finish an input before its owned cell is reused.
+The fixed 512-normal/128-emergency scheduler exposes prepare, actual accepted-prefix completion and finalization;
+an opted-in plugin cannot infer acceptance from legacy `send_event`.
+Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
+Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
+Tune's performance-only opt-in creates no configuration mailbox.
+`allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
+it does not measure RSS or other threads.
+See the [configuration](docs/adaptive-tuning-effective-configuration.md), [performance boundary](docs/adaptive-tuning-clap-performance.md) and [aggregation](docs/adaptive-tuning-companion-aggregation.md) handoffs for the contracts and measured limits.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`

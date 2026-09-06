@@ -23,6 +23,7 @@ pub(super) struct Runtime {
     callback_cut: u64,
     notification_sequence: u64,
     notification_blocked: [bool; CONFIG_PARAMETERS],
+    notification_blocked_at: [u32; CONFIG_PARAMETERS],
 }
 struct Group {
     sample: i64,
@@ -93,6 +94,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             callback_cut: 0,
             notification_sequence: 0,
             notification_blocked: [false; CONFIG_PARAMETERS],
+            notification_blocked_at: [0; CONFIG_PARAMETERS],
         });
     }
 
@@ -766,6 +768,18 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) -> Option<NotificationAttempt> {
         let mut guard = self.configuration.lock();
         let r = guard.as_mut()?;
+        // A rejected closure may retry at the next distinct timed value for
+        // that parameter. Blocking it for the whole performance callback lets
+        // a later note advance the shared cursor past that value. One retry per
+        // original timestamp remains bounded by the shared output allowance.
+        for parameter in 0..CONFIG_PARAMETERS {
+            if r.notification_blocked[parameter] && r.notifications.iter().flatten().any(|n| {
+                if n.parameter != parameter { return false; }
+                let time = r.output_boundary.map_or(0, |(start, frames)| n.sample.saturating_sub(start)
+                    .max(0).min(i64::from(frames.saturating_sub(1))) as u32).max(cursor);
+                time > r.notification_blocked_at[parameter] && time <= through
+            }) { r.notification_blocked[parameter] = false; }
+        }
         // Finite cleanup of completed or superseded cells; a started gesture
         // still closes even if a newer accepted restore shadows its value.
         let restore = r.mailbox.accepted_restore.load(Ordering::Acquire);
@@ -844,6 +858,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         let mut guard = self.configuration.lock();
         let r = guard.as_mut().unwrap();
         if !accepted {
+            r.notification_blocked_at[attempt.parameter] = attempt.time;
             r.mailbox.notification_rejected.store(true, Ordering::Release);
             r.mailbox.dirty.store(true, Ordering::Release);
         }

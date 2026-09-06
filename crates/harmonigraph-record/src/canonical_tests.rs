@@ -430,3 +430,53 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     assert!(!fence.failed.load(Ordering::Acquire));
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() {
+    let directory = path("retired-producer").parent().unwrap().to_path_buf();
+    let (mut recorder, control) = channel();
+    recorder.enable_configuration();
+    recorder.enable_canonical();
+    *control.fence.test_directory.lock() = Some(directory.clone());
+    let fence = control.fence.clone();
+    let _resume_on_panic = WorkerPause(fence.clone());
+    fence.worker_after_empty.enabled.store(true, Ordering::Release);
+    wait_for(&fence.worker_after_empty.entered);
+    control.start(48000.0, String::new(), false);
+    assert!(recorder.is_armed());
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    recorder.configuration_at(
+        address,
+        0.0,
+        harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+    );
+    fence.worker_after_stop.enabled.store(true, Ordering::Release);
+    control.stop(None);
+    assert!(!recorder.is_armed());
+    recorder.configuration_pass_complete(address);
+    recorder.configuration_epoch_complete(1);
+    drop(control); // No UI, Control or external command sender survives.
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_after_stop.entered);
+    fence.worker_after_empty.entered.store(false, Ordering::Release);
+    fence.worker_after_empty.enabled.store(true, Ordering::Release);
+    fence.worker_after_stop.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_after_empty.entered);
+    assert!(!fence.worker_finished.load(Ordering::Acquire));
+    let route = publication::Route { address: Some(address), time_offset: 0.0 };
+    recorder
+        .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), 1.0, route)
+        .unwrap();
+    recorder
+        .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), 1.0, route)
+        .unwrap();
+    recorder.source_pass_complete(address, 1.0);
+    recorder.source_epoch_complete(1, 1.0);
+    drop(recorder);
+    fence.worker_after_empty.enabled.store(false, Ordering::Release);
+    wait_for(&fence.worker_finished);
+    let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
+    assert!(take.incomplete.is_none());
+    assert_eq!(take.notes().count(), 2);
+    std::fs::remove_dir_all(directory).unwrap();
+}

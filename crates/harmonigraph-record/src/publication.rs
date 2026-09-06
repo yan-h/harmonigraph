@@ -1,7 +1,7 @@
 //! Single-producer canonical publication. Musical retention acknowledgement is
 //! the caller's audio-owned responsibility and never waits for these consumers.
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::canonical::{
@@ -140,6 +140,9 @@ struct Shared {
     slots: Box<[BaselineSlot]>,
     loss: Loss,
     clock: AtomicU64,
+    // Reporting-only hint: no state, cut, epoch, termination or musical credit
+    // is selected by a display/worker. The serialized audio owner supplies facts.
+    resync_requested: AtomicBool,
 }
 
 pub struct Publisher {
@@ -179,6 +182,7 @@ pub fn channel() -> (Publisher, Consumer) {
         slots: (0..BASELINES).map(|_| BaselineSlot::default()).collect(),
         loss: Loss::default(),
         clock: AtomicU64::new(f64::NAN.to_bits()),
+        resync_requested: AtomicBool::new(false),
     });
     (
         Publisher { ring: producer, shared: shared.clone(), serial: 0, pending_gap: None },
@@ -187,6 +191,9 @@ pub fn channel() -> (Publisher, Consumer) {
 }
 
 impl Publisher {
+    pub fn take_resync_request(&self) -> bool {
+        self.shared.resync_requested.swap(false, Ordering::AcqRel)
+    }
     #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn bank_observer(&self) -> impl Fn() -> bool + use<> {
         let shared = self.shared.clone();
@@ -358,6 +365,13 @@ impl Publisher {
 }
 
 impl Consumer {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn test_loss(&self) -> Option<(PublicationGap, Route)> {
+        self.shared.loss.read()
+    }
+    pub(crate) fn request_resync(&self) {
+        self.shared.resync_requested.store(true, Ordering::Release);
+    }
     /// No retained payload or unconsumed loss snapshot remains. An unstable
     /// snapshot is pending work, never evidence that failure may be finalized.
     pub(crate) fn settled(&self) -> bool {
@@ -659,4 +673,19 @@ mod tests {
             .all(|slot| slot.state.load(Ordering::Acquire) == EMPTY));
         eprintln!("canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} slot={} ring_payload={} baseline_bank={}", std::mem::size_of::<NoteDelta>(), std::mem::size_of::<Item>(), std::mem::size_of::<VoiceBaseline>(), std::mem::size_of::<SourceBaseline>(), std::mem::size_of::<BaselineSlot>(), PUBLICATION_RING * std::mem::size_of::<Item>(), BASELINES * std::mem::size_of::<BaselineSlot>());
     }
+}
+
+#[cfg(feature = "test-support")]
+pub fn print_test_memory_layout() {
+    use std::mem::size_of;
+    println!(
+        "LEDGER publication [item,baseline_slot,shared,publisher,consumer] {:?}",
+        [
+            size_of::<Item>(),
+            size_of::<BaselineSlot>(),
+            size_of::<Shared>(),
+            size_of::<Publisher>(),
+            size_of::<Consumer>()
+        ]
+    );
 }

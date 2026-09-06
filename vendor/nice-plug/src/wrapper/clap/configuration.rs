@@ -487,3 +487,14 @@ impl InputStorage {
 const _: () = assert!(std::mem::size_of::<ConfigurationCommand>() <= 256);
 const _: () = assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
 const _: () = assert!(std::mem::align_of::<OwnedInput>() <= 8);
+
+#[cfg(feature = "clap-boundary-tests")]
+pub fn print_test_memory_layout() {
+    println!("LEDGER configuration mailbox [queued,restore_slot,owner] {:?}",
+        [std::mem::size_of::<QueuedConfiguration>(), std::mem::size_of::<RestoreSlot>(),
+         std::mem::size_of::<ConfigurationMailbox>()]);
+}
+#[cfg(feature = "clap-boundary-tests")]
+pub fn test_memory_mailbox() -> (Arc<ConfigurationMailbox>, impl Sized) {
+    ConfigurationMailbox::new(Box::new(|| {}))
+}
