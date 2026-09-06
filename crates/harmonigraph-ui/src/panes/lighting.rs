@@ -46,9 +46,16 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
-                "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain. \
-                 Overlapping glows join smoothly under a fixed full-strength brightness ceiling. \
-                 Note arrivals and fades do not change the ceiling.",
+                "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.",
+            );
+        ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Glow accumulation")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How overlapping glows combine. \
+                 0% joins them under a fixed full-strength brightness ceiling. \
+                 100% restores the original accumulating glow, including its color mixing. \
+                 Values between blend the two looks. A lone glow stays unchanged.",
             );
         ValueBar::new(
             &mut view.glow_curve.shape,

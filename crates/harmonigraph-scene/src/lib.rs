@@ -933,6 +933,9 @@ pub struct Scene {
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,
+    /// Share of the original accumulating glow blend, clamped to 0..=1
+    /// (see [`ViewConfig::glow_accumulation`]).
+    pub glow_accumulation: f32,
     /// How many rows the frame's ink strip has to hold — the ceiling on every
     /// [`GlowStep::row`] in `nodes`, plus one.
     ///

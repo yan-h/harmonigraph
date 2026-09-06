@@ -71,7 +71,7 @@ struct GlowParams {
     wash: f32,
     row_capacity: f32,
     lit: f32,
-    padding: f32,
+    accumulation: f32,
 };
 
 struct ShadowParams {
@@ -2971,8 +2971,8 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// ONE DRAW over the whole target. `fs_glow_gather` combines the halos' linear
-// luminance using screen normalized to a FIXED full-strength peak. An overlap
+// ONE DRAW over the whole target. At zero accumulation, `fs_glow_gather`
+// combines linear luminance using screen normalized to a FIXED full-strength peak. An overlap
 // may rise above either tail, but not above that ceiling. Unlike the p-norm,
 // this does not preserve a narrow valley between neighbouring notes.
 //
@@ -2980,6 +2980,8 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // luminance. No winning node or channel changes ownership at the bisector.
 // The fixed ceiling follows Glow gain, not the active notes or their fades.
 // A lone contribution keeps its original gamma-space RGB and coverage.
+// Accumulation crossfades to the original per-channel screen, restoring its
+// brighter buildup and colour mixing without another pass or target.
 //
 // What hides its SHAPE is the scene pass, which draws every node over the
 // finished light: a ring, a mark and a name are drawn whole there, and what
@@ -3549,8 +3551,14 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
 /// gain. Raise it only when needed to contain the resulting gamma RGB, since
 /// every reader expects a valid premultiplied texture. Bloom is downstream
 /// and can add its own light; this ceiling belongs to the node-glow layer.
+///
+/// Accumulation crossfades this result with the original gamma-space RGBA
+/// screen. Both endpoints are premultiplied, so their mix remains valid.
+/// The old endpoint intentionally permits buildup above the fixed peak and
+/// restores its per-channel colour mixing. Skip the unused fold at either end.
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let accumulation = clamp(u.glow.accumulation, 0.0, 1.0);
     let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
     if peak <= 0.0 {
         return vec4<f32>(0.0);
@@ -3562,6 +3570,7 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     var screen = 0.0;
     var coverage = 0.0;
     var rgb = vec3<f32>(0.0);
+    var accumulated = vec4<f32>(0.0);
     var sole = vec4<f32>(0.0);
     var count = 0u;
     let lit = u32(max(u.glow.lit, 0.0));
@@ -3576,21 +3585,29 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let incoming = vec4<f32>(halo.xyz * halo.w, halo.w);
         sole = incoming;
         count = count + 1u;
-        let linear = glow_linear(incoming.xyz);
-        let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
-        screen = screen + share * (1.0 - screen);
-        coverage = coverage + (halo.w / peak) * (1.0 - coverage);
-        rgb = rgb + linear;
+        if accumulation > 0.0 {
+            accumulated = incoming + accumulated * (1.0 - incoming);
+        }
+        if accumulation < 1.0 {
+            let linear = glow_linear(incoming.xyz);
+            let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
+            screen = screen + share * (1.0 - screen);
+            coverage = coverage + (halo.w / peak) * (1.0 - coverage);
+            rgb = rgb + linear;
+        }
     }
     // Also preserves lone glows byte-for-byte through the nonlinear colour
     // round trip, including a node whose neighbours have completely faded.
     if count <= 1u {
         return sole;
     }
+    if accumulation >= 1.0 {
+        return accumulated;
+    }
     let total = dot(rgb, GLOW_LUMINANCE);
     let light = min(screen, 1.0) * peak_luminance;
     if total <= 0.0 {
-        return vec4<f32>(0.0, 0.0, 0.0, peak * coverage);
+        return mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation);
     }
     var linear = rgb * (light / total);
     let largest = max(max(linear.x, linear.y), linear.z);
@@ -3600,7 +3617,7 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     let colour = min(glow_gamma(max(linear, vec3<f32>(0.0))), vec3<f32>(peak));
     let alpha = max(peak * coverage, max(max(colour.x, colour.y), colour.z));
-    return vec4<f32>(colour, min(alpha, peak));
+    return mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

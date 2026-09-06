@@ -1349,7 +1349,7 @@ impl LatticeCallback {
                         // Settled by prepare, which is where the lit nodes are
                         // mapped onto the target's pixels.
                         lit: 0.0,
-                        padding: 0.0,
+                        accumulation: scene.glow_accumulation,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
@@ -2890,6 +2890,8 @@ fn create_cell_pipelines(
 /// colour separately. The fixed full-strength ceiling comes from Glow gain;
 /// notes and their fades never move it. A lone glow keeps its original colour
 /// and coverage. The light remains independent of instance order.
+/// Glow accumulation crossfades to the original per-channel screen in this
+/// same pass, deliberately relaxing the fixed ceiling as its share rises.
 ///
 /// **Every sheet at once**, which is what the fold's commutativity buys as it
 /// bought it for the blend. What occludes a node's halo is the scene pass,

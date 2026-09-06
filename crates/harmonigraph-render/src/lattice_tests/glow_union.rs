@@ -95,6 +95,10 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];
         let pixels = glow(&mut shooter, &scene);
+        for accumulation in [0.5, 1.0] {
+            scene.glow_accumulation = accumulation;
+            assert_eq!(glow(&mut shooter, &scene), pixels, "a lone glow cannot change");
+        }
         let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
         let mut visible = 0;
         for (index, pixel) in pixels.chunks_exact(4).enumerate() {
@@ -206,4 +210,55 @@ fn a_fading_neighbour_returns_to_the_lone_glow_without_moving_the_ceiling() {
     assert_eq!(glow(&mut shooter, &distant), lone, "an unrelated note cannot reset the ceiling");
     distant.glow_strength = 0.0;
     assert!(glow(&mut shooter, &distant).iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let at = |levels: &[f32], accumulation| {
+        let mut scene = scene(levels, 0.35, false);
+        scene.glow_accumulation = accumulation;
+        scene.pitch_lut = std::array::from_fn(|i| {
+            if i * 2 < harmonigraph_scene::PITCH_LUT_N {
+                glam::Vec4::new(0.8, 0.5, 0.2, 1.0)
+            } else {
+                glam::Vec4::new(0.2, 1.0, 0.4, 1.0)
+            }
+        });
+        scene
+    };
+    let levels = [1.0, 0.65, 0.85];
+    let singles: Vec<_> = (0..3)
+        .map(|i| {
+            let mut alone = [0.0; 3];
+            alone[i] = levels[i];
+            glow(&mut shooter, &at(&alone, 0.0))
+        })
+        .collect();
+    let bounded = glow(&mut shooter, &at(&levels, 0.0));
+    let original = glow(&mut shooter, &at(&levels, 1.0));
+    for (i, actual) in original.iter().enumerate() {
+        // The old gather screened gamma-encoded premultiplied RGBA, including
+        // alpha. Three quantized singles incur at most 1.5 bytes of input error.
+        let expected =
+            255.0 * (1.0 - singles.iter().map(|s| 1.0 - f64::from(s[i]) / 255.0).product::<f64>());
+        assert!((f64::from(*actual) - expected).abs() < 2.1, "byte {i}: {actual} != {expected}");
+    }
+    let peak = linear(0.8 * 0.35);
+    let brightest = original.chunks_exact(4).map(luminance).fold(0.0f64, f64::max);
+    assert!(brightest > peak + 0.02, "the old endpoint must actually exceed the fixed ceiling");
+    for accumulation in [0.25, 0.5, 0.75] {
+        let mut scene = at(&levels, accumulation);
+        let mixed = glow(&mut shooter, &scene);
+        for ((a, b), actual) in bounded.iter().zip(&original).zip(&mixed) {
+            let expected = f32::from(*a) * (1.0 - accumulation) + f32::from(*b) * accumulation;
+            assert!(
+                (f32::from(*actual) - expected).abs() < 1.5,
+                "the sweep must blend the endpoints"
+            );
+        }
+        assert!(mixed.chunks_exact(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
+        scene.nodes.reverse();
+        assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
+    }
 }

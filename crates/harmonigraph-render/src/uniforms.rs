@@ -127,7 +127,7 @@ uniform_group! {
         /// at or under that buffer's capacity — which is why `arrayLength` is
         /// not the bound (`fs_glow_gather`).
         lit: f32,
-        padding: f32,
+        accumulation: f32,
     }
 }
 uniform_group! {
