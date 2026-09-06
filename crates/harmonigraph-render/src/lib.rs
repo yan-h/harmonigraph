@@ -1092,7 +1092,7 @@ impl LatticeCallback {
         let (geometry_sigma, text_sigma) = (sigma_of(geometry), sigma_of(text));
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
-        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas();
+        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas(geometry.falloff);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
@@ -1304,13 +1304,13 @@ impl LatticeCallback {
                 // inherit notation's style even though this pipeline draws them.
                 geometry_shadow: ShadowParams {
                     width: geometry.width,
-                    reach_sigmas: geometry.kernel.reach_sigmas(),
+                    reach_sigmas: geometry.kernel.reach_sigmas(geometry.falloff),
                     depth: geometry.depth,
                     padding: 0.0,
                 },
                 marker_shadow: ShadowParams {
                     width: text.width,
-                    reach_sigmas: text.kernel.reach_sigmas(),
+                    reach_sigmas: text.kernel.reach_sigmas(text.falloff),
                     depth: text.depth,
                     padding: 0.0,
                 },

@@ -1762,7 +1762,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (text.width, text.kernel.reach_sigmas(), text.depth),
+        (text.width, text.kernel.reach_sigmas(text.falloff), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 

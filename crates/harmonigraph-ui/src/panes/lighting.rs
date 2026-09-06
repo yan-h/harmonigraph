@@ -192,6 +192,8 @@ fn shadow_group(
              Low values keep a sharp edge against the shape and trail off; \
              high values hold the darkness out to a plateau and drop late. \
              The width and darkness both keep their meaning at every setting. \
+             Below 0.64 the shadow is drawn on a larger surface to hold its \
+             longer tail, which costs memory and speed for this group. \
              Contour shadows only.",
         );
     });

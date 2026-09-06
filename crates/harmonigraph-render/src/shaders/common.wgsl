@@ -230,20 +230,39 @@ fn standoff_coverage(d: f32, w: f32, falloff: f32) -> f32 {
     // rounding, so the fresh bar takes the decay it took before this parameter
     // existed rather than a near copy of it — which is what keeps every golden
     // byte-identical while nothing is dialled.
+    let f = max(falloff, SHADOW_FALLOFF_FLOOR);
     var t = u;
-    if falloff != 1.0 {
-        t = pow(u, max(falloff, SHADOW_FALLOFF_FLOOR));
+    if f != 1.0 {
+        t = pow(u, f);
     }
     return exp(-SHADOW_TAIL * t)
-        * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
+        * (1.0 - smoothstep(1.0, shadow_stop(f), u));
 }
+
+// How many Shadow widths out this falloff's cell was padded, and so where its
+// window shuts — `shadow_stop` in harmonigraph_scene, pinned by
+// `the_shaders_falloff_stop_is_the_packers`.
+//
+// Derived from the falloff rather than sent beside it: the packer solves the
+// same equation to size the cell, and one number on the wire cannot drift from
+// itself. `SHADOW_STOP` is the floor, so every falloff at or above 0.64 shuts
+// exactly where it always did.
+fn shadow_stop(falloff: f32) -> f32 {
+    return max(SHADOW_STOP, pow(SHADOW_INVISIBLE_FOLDS, 1.0 / falloff));
+}
+
+// `ln(1 / SHADOW_INVISIBLE) / SHADOW_TAIL` — where the plain exponential
+// reaches the threshold, and the base `shadow_stop` raises. A constant because
+// both of its terms are, and `log` of a constant per fragment is a term the
+// compiler is not obliged to fold.
+const SHADOW_INVISIBLE_FOLDS: f32 = 1.5586027;
 
 // The bottom of the Shadow falloff bar (`SHADOW_FALLOFF_MIN` in
 // harmonigraph_scene, pinned by `the_falloff_floor_is_the_scenes`), held here
 // against a caster row that never went through `ShadowStyle::clamped` — a
 // zeroed row would otherwise read as `pow(u, 0)`, a flat shadow over the whole
 // padded box.
-const SHADOW_FALLOFF_FLOOR: f32 = 0.7;
+const SHADOW_FALLOFF_FLOOR: f32 = 0.35;
 
 // How many e-folds the decay has spent by one Shadow width, and how many widths
 // out its window has shut — `SHADOW_TAIL` and `SHADOW_STOP` in

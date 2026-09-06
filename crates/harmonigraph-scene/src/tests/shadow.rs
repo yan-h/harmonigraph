@@ -107,43 +107,52 @@ fn one_shadow_width_holds_the_same_level_at_every_falloff() {
     );
 }
 
-/// The bottom of the falloff bar still lands under the window on a shadow the
-/// eye cannot see, so no setting of it draws the closed contour at a fixed
-/// radius that [`SHADOW_STOP`] exists to prevent.
+/// Every falloff on the bar shuts its window on a shadow the eye cannot see,
+/// because the CELL follows the exponent rather than the exponent being held to
+/// the cell.
 ///
-/// What SETS [`SHADOW_FALLOFF_MIN`] rather than a check on it: a falloff under
-/// 1 carries the decay further out, and the stop is a CELL's padding — it
-/// cannot widen to follow. The predecessor bar took this trade the other way
-/// and cut a tail still standing at 0.9%.
+/// The claim that lets the bar reach 0.35 at all. A falloff under 1 carries the
+/// decay further out; the predecessor bar left the pad fixed and cut a tail
+/// still standing at 0.9%, drawing the closed contour at a fixed radius that
+/// the whole family exists to avoid. Here [`shadow_stop`] solves for the radius
+/// instead, so what a low falloff costs is atlas rather than a ring.
 #[test]
-fn the_falloff_bar_cannot_reopen_the_window() {
-    // Half a code value of the deepest shadow: the threshold `SHADOW_STOP`'s
-    // own doc is written against.
-    let invisible = 0.5 / 255.0;
-    let raw = |falloff: f32| (-SHADOW_TAIL * SHADOW_STOP.powf(falloff)).exp();
-    assert!(
-        raw(SHADOW_FALLOFF_MIN) < invisible,
-        "at the bottom of the bar the decay is {} where the window shuts, against the {} that is \
-         invisible — so the window would cut a contour the eye can see",
-        raw(SHADOW_FALLOFF_MIN),
-        invisible,
-    );
-    // And it stops close to that edge rather than well inside it, so the sharp
-    // half of the bar is as long as the window allows it to be.
-    assert!(
-        raw(SHADOW_FALLOFF_MIN - 0.1) > 0.5 * invisible,
-        "the bar could start below {SHADOW_FALLOFF_MIN} and still shut on nothing",
-    );
-    // The window itself, which is what the picture spends: exactly zero at the
-    // stop whatever the falloff, because it is measured in widths and the
-    // exponent does not reach it.
-    for step in 0..=4 {
+fn every_falloff_shuts_its_window_on_nothing() {
+    for step in 0..=12 {
         let falloff =
-            SHADOW_FALLOFF_MIN + (SHADOW_FALLOFF_MAX - SHADOW_FALLOFF_MIN) * step as f32 / 4.0;
+            SHADOW_FALLOFF_MIN + (SHADOW_FALLOFF_MAX - SHADOW_FALLOFF_MIN) * step as f32 / 12.0;
+        let stop = shadow_stop(falloff);
+        // The raw decay where this falloff's cell stops, against the threshold
+        // the stop was solved for.
+        let raw = (-SHADOW_TAIL * stop.powf(falloff)).exp();
+        assert!(
+            raw <= SHADOW_INVISIBLE * 1.01,
+            "at falloff {falloff} the decay is still {raw} at its own stop of {stop}, against \
+             the {SHADOW_INVISIBLE} that is invisible",
+        );
+        // And the window really does end there, exactly.
         assert_eq!(
-            standoff_level(falloff, SHADOW_STOP),
+            standoff_level(falloff, stop),
             0.0,
             "at falloff {falloff} the shadow is still standing where its cell stops",
         );
     }
+    // The fixed stop is a FLOOR and holds wherever it is already generous, so
+    // a fresh picture is padded and windowed exactly as it was before the bar
+    // existed. Everything from the crossover up pays nothing.
+    for falloff in [0.65, 0.8, 1.0, 2.0, SHADOW_FALLOFF_MAX] {
+        assert_eq!(
+            shadow_stop(falloff),
+            SHADOW_STOP,
+            "falloff {falloff} moved the stop off its floor, so it pads cells for nothing",
+        );
+    }
+    // And below the crossover it grows, or the bottom of the bar is the old
+    // cut-off tail wearing a new number.
+    assert!(
+        shadow_stop(SHADOW_FALLOFF_MIN) > 1.7 * SHADOW_STOP,
+        "the bottom of the bar pads to {} against the fixed {SHADOW_STOP}, which is not a cell \
+         following its exponent",
+        shadow_stop(SHADOW_FALLOFF_MIN),
+    );
 }

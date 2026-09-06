@@ -529,31 +529,39 @@ pub const SHADOW_STOP: f32 = 2.0;
 /// shader's copy.
 pub const SHADOW_TAIL: f32 = 4.0;
 
+/// What counts as gone: the share of the deepest shadow under which a decay is
+/// half a code value on an 8-bit target, and so the value a cell may be cut off
+/// at without the cut being visible.
+///
+/// The threshold [`SHADOW_STOP`] was chosen against, named here because
+/// [`shadow_stop`] now solves for a radius rather than checking a fixed one.
+pub const SHADOW_INVISIBLE: f32 = 0.5 / 255.0;
+
 /// The bottom of [`ShadowStyle::falloff`], and what the shader floors a
 /// caster's own at (`SHADOW_FALLOFF_FLOOR` in common.wgsl).
 ///
-/// Set by the window rather than by taste. The decay reaches
-/// `exp(-SHADOW_TAIL · SHADOW_STOP^p)` where the window shuts, and a falloff
-/// under 1 carries it there HIGHER — so the bottom of the bar is the smallest
-/// exponent that still lands under the half code value [`SHADOW_STOP`] was
-/// chosen for. That works out at 0.640; the bar stops at 0.7, where the value
-/// is 1.5e-3 against the 1.96e-3 the criterion allows.
+/// Set by DIMINISHING RETURNS against the padding, which is the honest reason
+/// once [`shadow_stop`] makes the cell follow the exponent. A falloff under
+/// 0.64 carries the decay past the fixed [`SHADOW_STOP`], so the cell grows to
+/// hold it: 1.5× the pad at 0.5, 1.8× at 0.35, and 3.0× by 0.25. What that buys
+/// stops growing long before the cost does — the bar's whole point is the near
+/// field, and a tenth of a width out the decay moves 0.45 → 0.20 over
+/// 0.7..=0.4 and only 0.20 → 0.11 over the whole of 0.4..=0.25, for four times
+/// the atlas.
 ///
-/// Below it the window would close on a shadow the eye can still see, which is
-/// the closed contour at a fixed radius that the whole family exists to not
-/// draw. `the_falloff_bar_cannot_reopen_the_window` is what holds the bar to
-/// it, so retuning this is a change that test has to agree to.
+/// 0.35, which is past the useful travel rather than short of it, at 1.8× the
+/// pad and 3.2× the cell AREA for a group dialled all the way down. Nothing
+/// above 0.64 pays anything at all.
 ///
 /// This exponent is not new. `glow_shadow_shape` was the same `pow(u, ·)`,
 /// removed in #563 as redundant with the Shadow curve — which #582 then removed
 /// in turn on finding it was the identity at its own fresh value, so what the
-/// pair left behind was no falloff control at all. Two things are deliberately
-/// different here. That bar ran 0.25..=1, the SHARPENING half only, and its own
-/// [`SHADOW_STOP`] doc conceded the bottom of it: the raw tail at 0.25 needs
-/// seventeen Shadow widths of cell, so the window cut a shadow still standing
-/// at 0.9% and drew the contour. This one starts where that stops being true
-/// and opens the half that bar never had, the plateau above 1.
-pub const SHADOW_FALLOFF_MIN: f32 = 0.7;
+/// pair left behind was no falloff control at all. That bar also ran down to
+/// 0.25, and its own [`SHADOW_STOP`] doc conceded what it cost: the cell did
+/// NOT follow, so the window cut a tail still standing at 0.9% and drew the
+/// closed contour the family exists to avoid. The difference here is
+/// [`shadow_stop`], not a braver floor.
+pub const SHADOW_FALLOFF_MIN: f32 = 0.35;
 
 /// The top of [`ShadowStyle::falloff`]: the shadow at its most plateaued
 /// before the fall becomes a step.
@@ -563,6 +571,31 @@ pub const SHADOW_FALLOFF_MIN: f32 = 0.7;
 /// gradient at all — a plateau ending in a cliff is the closed contour again,
 /// arrived at from the other side.
 pub const SHADOW_FALLOFF_MAX: f32 = 3.0;
+
+/// How many Shadow widths out a distance cell is padded, and where its window
+/// shuts, at a given [`ShadowStyle::falloff`] — the radius at which that
+/// falloff's decay has reached [`SHADOW_INVISIBLE`].
+///
+/// [`SHADOW_STOP`] is the FLOOR and not the answer. A falloff of 1 reaches the
+/// threshold at 1.56 widths and every falloff above it sooner, so the fixed
+/// stop is already generous there and holding it fixed is what keeps a fresh
+/// picture the picture it was. Under 0.64 the decay reaches the threshold later
+/// than the fixed stop, and the cell follows rather than cutting the tail off:
+/// that is the whole of what lets the bar go below the 0.7 a fixed pad allowed.
+///
+/// The padding is the cost of the setting and lands only where it is dialled.
+/// Both sides compute it — `shadow_stop` in common.wgsl is the shader's copy,
+/// pinned by `the_shaders_falloff_stop_is_the_packers` — because a cell padded
+/// to one radius and windowed at another is the straight-line cut that the pin
+/// on [`SHADOW_STOP`] has always been there to prevent.
+pub fn shadow_stop(falloff: f32) -> f32 {
+    let falloff = if falloff.is_finite() {
+        falloff.clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX)
+    } else {
+        1.0
+    };
+    SHADOW_STOP.max(((1.0 / SHADOW_INVISIBLE).ln() / SHADOW_TAIL).powf(1.0 / falloff))
+}
 
 /// How much of a distance shadow stands `u` Shadow widths out from the ink,
 /// 0..=1, at a given [`ShadowStyle::falloff`] — `standoff_coverage` in
@@ -575,7 +608,7 @@ pub const SHADOW_FALLOFF_MAX: f32 = 3.0;
 /// with a formula of its own — is the copy that drifts silently.
 /// `the_falloff_preview_is_the_shaders_profile` is what pins the two together.
 ///
-/// `u` beyond [`SHADOW_STOP`] is past the window and reads 0, which is also
+/// `u` beyond [`shadow_stop`] is past the window and reads 0, which is also
 /// where the cell stops being padded.
 pub fn standoff_level(falloff: f32, u: f32) -> f32 {
     let falloff = if falloff.is_finite() {
@@ -587,9 +620,10 @@ pub fn standoff_level(falloff: f32, u: f32) -> f32 {
     // The shader's own branch at the neutral value, kept here so the two are
     // one function rather than two that agree to a rounding.
     let t = if falloff == 1.0 { u } else { u.powf(falloff) };
-    // The window, as a smoothstep between one width and the stop — spelled out
-    // rather than reached for because `f32` has no smoothstep of its own.
-    let w = ((u - 1.0) / (SHADOW_STOP - 1.0)).clamp(0.0, 1.0);
+    // The window, as a smoothstep between one width and this falloff's own
+    // stop — spelled out rather than reached for because `f32` has no
+    // smoothstep of its own.
+    let w = ((u - 1.0) / (shadow_stop(falloff) - 1.0)).clamp(0.0, 1.0);
     (-SHADOW_TAIL * t).exp() * (1.0 - w * w * (3.0 - 2.0 * w))
 }
 
@@ -642,10 +676,16 @@ impl ShadowKernel {
     ///
     /// In σ and not in Shadow widths because that is the unit `sigma_points`
     /// hands out — one conversion, at one site.
-    pub fn reach_sigmas(self) -> f32 {
+    ///
+    /// The `falloff` is the group's ([`ShadowStyle::falloff`]) and is what a
+    /// distance's stop is solved from ([`shadow_stop`]), so a group dialled
+    /// under 0.64 pads its cells and grows its quads to hold the longer tail it
+    /// asked for. A Gaussian ignores it: its own reach is a number of σ and the
+    /// exponent never enters that renderer.
+    pub fn reach_sigmas(self, falloff: f32) -> f32 {
         match self {
             ShadowKernel::Gaussian => REACH_SIGMAS,
-            ShadowKernel::Distance => 2.0 * SHADOW_STOP,
+            ShadowKernel::Distance => 2.0 * shadow_stop(falloff),
         }
     }
 

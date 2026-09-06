@@ -52,8 +52,9 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    standoff_level, Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel, ShadowSettings,
-    ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN, SHADOW_STOP, SHADOW_TAIL,
+    shadow_stop, standoff_level, Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel,
+    ShadowSettings, ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
+    SHADOW_INVISIBLE, SHADOW_STOP, SHADOW_TAIL,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
