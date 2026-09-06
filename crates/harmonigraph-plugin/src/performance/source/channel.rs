@@ -24,6 +24,12 @@ pub(super) enum Role {
     Stop {
         previous: u16,
         next: u16,
+        owners: u16,
+    },
+    ReachedStop {
+        known: u16,
+        waiting: u16,
+        owners: u16,
     },
     Header {
         first_waiter: u16,
@@ -39,7 +45,7 @@ pub(super) struct Cell {
     pub next_waiter: Option<u16>,
     pub previous_waiter: Option<u16>,
     pub accepted: bool,
-    pub velocity_prefix: Option<u8>,
+    pub velocity_prefix: wave::Prefix,
 }
 #[derive(Default)]
 pub(super) struct Channels {
@@ -285,10 +291,13 @@ impl Source {
         }
     }
     pub(super) fn channel_done(&mut self, position: usize, pending: Pending) {
+        if let Some(channel) = pending.event.channel() {
+            self.drop_prefix(pending.channel.velocity_prefix, usize::from(channel));
+        }
         if let Role::Onset { previous, next } = pending.channel.role {
             self.unlink_onset(pending, previous, next);
         }
-        if let Role::Stop { previous, next } = pending.channel.role {
+        if let Role::Stop { previous, next, .. } = pending.channel.role {
             self.unlink_stop(previous, next);
             return;
         }

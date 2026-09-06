@@ -7,10 +7,11 @@ pub(super) struct Stops {
     head: u16,
     tail: u16,
     pub emergency_start: u32,
+    pub reached: u64,
 }
 impl Default for Stops {
     fn default() -> Self {
-        Self { head: NONE, tail: NONE, emergency_start: 0 }
+        Self { head: NONE, tail: NONE, emergency_start: 0, reached: 0 }
     }
 }
 impl Source {
@@ -24,7 +25,8 @@ impl Source {
         }
         let position = self.enqueue_cell(Event::Stop, NONE, sample, false);
         let mut pending = self.pending.at(position).unwrap();
-        pending.channel.role = channel::Role::Stop { previous: self.stops.tail, next: NONE };
+        pending.channel.role =
+            channel::Role::Stop { previous: self.stops.tail, next: NONE, owners: u16::MAX };
         self.pending.set(position, pending);
         if self.stops.tail == NONE {
             self.stops.head = position as u16;
@@ -37,6 +39,7 @@ impl Source {
             self.pending.set(usize::from(self.stops.tail), tail);
         }
         self.stops.tail = position as u16;
+        self.capture_stop_prefixes(position);
         // Later original input cannot address a lifetime from before Stop.
         // This changes input bindings, not actual sounding state or output debt.
         for index in &mut self.active {
@@ -68,14 +71,32 @@ impl Source {
             let position = usize::from(self.stops.head);
             self.stops.emergency_start = self.stops.emergency_start.max(offset);
             self.cancel_unsounded_through(pending.serial);
+            self.stops.reached = pending.serial;
+            let mut known = 0u16;
+            let mut waiting = 0u16;
+            for (channel, state) in self.state.channels().iter().enumerate() {
+                if state.controller_valid[1] & (1 << 24) != 0 {
+                    known |= 1 << channel;
+                    if state.controllers[88] != 0 {
+                        waiting |= 1 << channel;
+                    }
+                }
+            }
+            let channel::Role::Stop { previous, next, owners } = pending.channel.role else {
+                unreachable!()
+            };
+            // The reached marker stops scheduling even while association pins
+            // retain its exact boundary result for later consumers.
+            self.unlink_stop(previous, next);
+            let mut reached = self.pending.at(position).unwrap();
+            reached.channel.role = channel::Role::ReachedStop { known, waiting, owners };
+            self.pending.set(position, reached);
+            for channel in 0..16 {
+                self.settle_wave_prefix(channel);
+            }
             self.arm_release_debt();
             self.finish_work(position, NONE);
             self.cancel_slice();
-            // Reclamation itself uses the shared visit budget. Do not consume
-            // a marker twice if its completed cell is queued for later cleanup.
-            if self.stops.head == position as u16 {
-                break;
-            }
         }
     }
 

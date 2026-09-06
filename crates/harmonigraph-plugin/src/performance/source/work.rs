@@ -243,7 +243,7 @@ impl Source {
                 _ => pending.event.for_voice(life.id, life.channel, life.key),
             };
             if cell.operation == NOTE_OFF {
-                pending.channel.velocity_prefix = Some(0);
+                pending.channel.velocity_prefix = wave::Prefix::known(0);
             }
             pending.disposition = cell.phase & DISPOSITION != 0;
             pending.selected = child;
@@ -340,6 +340,10 @@ impl Source {
             || parent.work_linked != 0
             || parent.staged
             || parent.cleanup_queued
+        {
+            return;
+        }
+        if matches!(parent.channel.role, channel::Role::Stop { owners, .. } | channel::Role::ReachedStop { owners, .. } if owners != 0)
         {
             return;
         }

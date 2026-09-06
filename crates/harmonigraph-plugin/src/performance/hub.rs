@@ -1325,6 +1325,16 @@ impl Hub {
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
+    pub fn test_row_receiver(&self, slot: usize, channel: usize) -> (Option<u8>, usize, u64, u64) {
+        let row = &self.rows[slot];
+        let state = &row.state.channels()[channel];
+        (
+            (state.controller_valid[1] & (1 << 24) != 0).then_some(state.controllers[88]),
+            row.state.count(),
+            row.received,
+            row.applied,
+        )
+    }
     pub fn test_row_retirement(&self, slot: usize) -> (u64, u64, usize, Option<(u64, i64)>) {
         let row = &self.rows[slot];
         (

@@ -31,6 +31,7 @@ const NONE: u16 = u16::MAX;
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub velocity_prefix: [Option<u8>; 16],
+    pub unmapped_reports: usize,
     pub pending: usize,
     pub references: usize,
     pub obligations: usize,
@@ -48,6 +49,7 @@ pub struct Snapshot {
     pub faults: u32,
     pub epoch: u64,
     pub sequence: u64,
+    pub acknowledged: u64,
     pub transfer_cut: u64,
     pub baseline_cut: Option<u64>,
     pub seal: Option<u64>,
@@ -227,6 +229,12 @@ impl Source {
                 let state = &self.state.channels()[channel];
                 (state.controller_valid[1] & (1 << 24) != 0).then_some(state.controllers[88])
             }),
+            unmapped_reports: (0..self.journal.len())
+                .filter(|index| !self.journal.get(*index).unwrap().mapped)
+                .count()
+                + (0..self.emergency_output.len())
+                    .filter(|index| !self.emergency_output.get(*index).unwrap().mapped)
+                    .count(),
             pending: self.pending.len(),
             references: self.work.len(),
             obligations: self.obligations,
@@ -247,6 +255,7 @@ impl Source {
             faults: self.faults,
             epoch: self.epoch,
             sequence: self.sequence,
+            acknowledged: self.acknowledged,
             transfer_cut: self.transfer_cut,
             baseline_cut: self.baseline.map(|baseline| baseline.cut),
             seal: self.sealed.then_some(self.sealed_generation),
@@ -400,6 +409,7 @@ impl Source {
         assert!(!self.producer_joined);
         self.joined_unknown_wire = self.unknown_joined_wire_state();
         self.producer_joined = true;
+        self.discard_wave_prefix_pins();
     }
     pub fn joined_cut(&self) -> Option<u64> {
         self.producer_joined.then_some(self.sequence)
@@ -905,6 +915,7 @@ impl Source {
     }
 
     fn cancel_unsounded(&mut self) {
+        self.discard_wave_prefix_pins();
         self.cancel_unsounded_through(self.next_event);
     }
     fn cancel_unsounded_through(&mut self, cut: u64) {
@@ -989,10 +1000,12 @@ impl Source {
                 if !parent.inline_done
                     && !parent.disposition
                     && (parent.life == NONE
+                        || parent.event.attack().is_none() && !parent.event.release()
                         || self.lives[usize::from(parent.life)]
                             .is_some_and(|life| !life.sounded || life.terminal.is_some()))
                 {
-                    if parent.life != NONE {
+                    if parent.life != NONE && !self.lives[usize::from(parent.life)].unwrap().sounded
+                    {
                         self.lives[usize::from(parent.life)].as_mut().unwrap().canceled = true;
                     }
                     if !self.dispose_work(position, NONE) {
@@ -1183,7 +1196,7 @@ impl Source {
             return true;
         };
         if parent.event == Event::Stop {
-            return false;
+            return matches!(parent.channel.role, channel::Role::ReachedStop { .. });
         }
         if matches!(parent.channel.role, channel::Role::Header { .. }) {
             let channel = usize::from(parent.event.channel_control().unwrap());
@@ -1382,6 +1395,9 @@ impl Source {
             return false;
         };
         let pending = self.resolved(position, child);
+        if !self.prefix_ready(pending) {
+            return false;
+        }
         if group.velocity_prefix().is_none() && self.prefix_reconciliation(pending).is_some() {
             return false;
         }
@@ -1629,6 +1645,11 @@ impl Source {
                 || completion.disposition == api::Disposition::MissingOutput
             {
                 self.fault(OUTPUT_FAULT);
+                if prefix.is_some() && completion.accepted & 1 != 0 {
+                    // Every newly accepted prefix without its consumer owns
+                    // repair, even when an earlier output fault is latched.
+                    self.arm_release_debt();
+                }
             } else if prefix.is_none()
                 && self.prefix_reconciliation(pending).is_some()
                 && self.charge(1)
@@ -2473,6 +2494,10 @@ impl Source {
                 size_of::<channel::Channels>(),
                 size_of::<work::Work>()
             ]
+        );
+        println!(
+            "LEDGER wave [wave,stops,prefix] {:?}",
+            [size_of::<wave::Wave>(), size_of::<stop::Stops>(), size_of::<wave::Prefix>()]
         );
     }
 }

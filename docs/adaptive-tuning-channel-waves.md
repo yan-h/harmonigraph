@@ -47,6 +47,10 @@ The retained prelude consumes the same finite 8,192-envelope capacity as other o
 it is not an unbounded secondary history allocation.
 
 Every actual setup event uses the normal prepare/host/complete path with journal headroom reserved before the host call.
+Each separate setup validates its anchored pending serial and generation, checks current admission, and claims the real lease gate from OPEN to BUSY.
+The claim lasts through accepted State and journal bookkeeping;
+a concurrent close can let that claimed group finish but inhibits the next group until valid readmission.
+Setup never acquires a musical voice credit.
 An accepted prefix remains factual if a later setup event is rejected.
 Emergency pedal neutralization updates actual state and its corresponding input checkpoint repair separately;
 a later Reset cannot resurrect an already overwritten input pedal value.
@@ -81,6 +85,7 @@ Both reuse one private two-event representation and the existing consecutive hos
 Preparation reserves the dependent note's credit and all report cells before either call.
 Completion records accepted CC88 with no lifetime, then records a note only when its separate acceptance bit is set.
 If the prefix alone was accepted, the unused onset reservation is returned exactly once, while actual prefix history, visible output fault and channel repair debt remain owned.
+Every new partial acceptance rearms its own repair even when OUTPUT_FAULT was already latched.
 No fictitious On or terminal is created to refund a preflight reservation.
 
 An accepted raw MIDI consumer derives receiver-prefix zero without adding a wire reset record.
@@ -89,6 +94,24 @@ Emergency prefix repair precedes any raw MIDI Off that could consume it;
 rejection retains the debt and the bounded retry must accept before that Off is attempted.
 The reserved 128-attempt allowance fits 64 voice terminations, 48 pedal resets and 16 prefix repairs.
 Rejected attempts can leave debt for a later callback, and accepted repair records remain in the emergency journal until retention acknowledgement.
+Without a valid clock mapping, the same accepted nonzero corrective prefix, emergency zero and raw Off still update both Source and Hub receiver state and settle their factual sequence acknowledgements.
+They do not acquire invented musical timestamps.
+
+Input capture can run ahead of Stop output, so the first subsequent raw consumer holds a deferred association to that exact Stop envelope.
+A two-byte tag replaces the existing two-byte optional prefix;
+a channel owner bit pins the original full-serial Pending cell against reuse, then transfers from the Wave register to its first consumer.
+Explicit later CC88 input overrides the Wave register without rewriting a captured consumer's association.
+A reached Stop leaves the scheduling list while its known/unknown boundary result remains pinned.
+Known nonzero boundary state waits for actual accepted neutralization;
+known zero stays zero and unknown stays unknown.
+Accepted repair authority retains the reached Stop cut, so a later prefix or later Stop cannot change an earlier boundary result.
+Resolved Wave registers release their pins immediately;
+consumer cleanup, cancellation and producer retirement release each remaining pin exactly once.
+
+The same Stop cancellation disposes old inline expressions while their voices are still sounding, matching the Work-backed path.
+Otherwise the cancellation cursor can pass those expressions before emergency termination and leave the new channel wave permanently blocked.
+Only an unsounded lifetime is marked canceled;
+an established lifetime's essential original Off remains eligible when an emergency termination is rejected.
 
 ## Executed functional coverage
 
@@ -100,6 +123,9 @@ Its next callback spends 64 visits capturing Stop and 1,856 capturing 29 complet
 setup still makes zero host attempts at or beyond that captured boundary.
 
 CC88 fixtures separately reach healthy prefix output before consumer capture, older-Off reconciliation, delayed consumer restoration, all three prefix/note acceptance outcomes, and rejected repair before an owed MIDI Off.
+Review regressions cover accepted unmapped corrections with positive Hub state and acknowledgements, repeated partial-prefix failure, per-setup lease closure before/after claim, and retained raw-pedal repair across Reset.
+The cancellation fixture proves all 512 expressions and the final CC88 were captured while visit pressure leaves that prefix unattempted, then requires the real post-Stop consumer and forbids restoration of canceled55. Its negative control retains the necessary inline-cancellation correction while using the previous Stop association implementation.
+Additional Stop cases cover unknown startup across two Stops, accepted and rejected neutralization, later original37 overrides, exact deferred-consumer order and complete pin retirement.
 The full output fixture executes 512 normal plus 128 emergency attempts and retains all accepted emergency facts.
 Wrapper boundary tests verify the independent acceptance masks and exact raw MIDI bytes/flags.
 These functional results do not provide a timing or D512 sequencing claim.

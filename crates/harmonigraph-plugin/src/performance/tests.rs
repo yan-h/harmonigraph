@@ -115,10 +115,33 @@ unsafe extern "C" fn get(events: *const clap_input_events, index: u32) -> *const
 }
 struct Sink {
     values: Vec<(u32, Event)>,
+    acceptance: Vec<bool>,
     attempts: usize,
     reject_kind: Option<u16>,
     reject_attempt: Option<usize>,
     callback_nanos: u128,
+}
+type SetupClose = (std::sync::Arc<protocol::SessionControl>, usize, bool, Option<u64>);
+thread_local! {
+    static ACCEPTANCE_SCRIPT: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SETUP_CLOSE: std::cell::RefCell<Option<SetupClose>> = const { std::cell::RefCell::new(None) };
+}
+pub(super) fn close_setup_lease(before_prepare: bool) {
+    SETUP_CLOSE.with(|hook| {
+        let mut hook = hook.borrow_mut();
+        let Some((session, slot, before, observed)) = hook.as_mut() else { return };
+        if *before == before_prepare && observed.is_none() {
+            let row = &session.rows[*slot];
+            *observed = Some(row.emission_gate.load(Ordering::Acquire));
+            row.withdrawn.store(true, Ordering::Release);
+            let _ = row.emission_gate.compare_exchange(
+                source::OPEN,
+                source::CLOSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    });
 }
 unsafe extern "C" fn push(
     output: *const clap_output_events,
@@ -127,9 +150,11 @@ unsafe extern "C" fn push(
     let sink = unsafe { &mut *((*output).ctx.cast::<Sink>()) };
     let header = unsafe { &*header };
     sink.attempts += 1;
+    close_setup_lease(false);
     if sink.reject_kind == Some(header.type_)
         || sink.reject_kind == Some(u16::MAX)
         || sink.reject_attempt == Some(sink.attempts)
+        || sink.acceptance.get(sink.attempts - 1) == Some(&false)
     {
         return false;
     }
@@ -318,6 +343,10 @@ impl Device {
     fn run(&self, raw: i64, events: Vec<Input>, reject_kind: Option<u16>) -> Sink {
         self.run_select(raw, events, reject_kind, None)
     }
+    fn run_scripted(&self, raw: i64, events: Vec<Input>, acceptance: Vec<bool>) -> Sink {
+        ACCEPTANCE_SCRIPT.with(|script| *script.borrow_mut() = acceptance);
+        self.run(raw, events, None)
+    }
     fn run_select(
         &self,
         raw: i64,
@@ -366,6 +395,7 @@ impl Device {
         };
         let mut sink = Sink {
             values: Vec::with_capacity(640),
+            acceptance: ACCEPTANCE_SCRIPT.with(|script| std::mem::take(&mut *script.borrow_mut())),
             attempts: 0,
             reject_kind,
             reject_attempt,

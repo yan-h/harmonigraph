@@ -2,7 +2,7 @@
 use super::*;
 use registry::SourceReturn;
 
-fn lease(source: &Device) -> Option<protocol::Lease> {
+pub(super) fn lease(source: &Device) -> Option<protocol::Lease> {
     let wrapper = unsafe {
         &*((*source.plugin)
             .plugin_data
