@@ -141,7 +141,14 @@ Ordinary supported MIDI CC, bend, pressure, program and per-note expression even
 Use three `rtrb` 0.3.5 SPSC endpoint pairs per tuner for intents, replies and actual output.
 The version is pinned in `Cargo.lock`.
 Each producer/consumer belongs to one serialized owner for the whole lease, even as the host changes threads.
-Messages are fixed `Copy` values with no destructor, owning `Arc`, `String`, `Vec` or external pointer.
+Ordinary output, coverage, disposition and reply payloads are fixed `Copy` values with no destructor or heap-backed contents.
+The original-input capture publication is the explicit exception:
+it moves one non-Clone token containing an arena `Arc` and exact lease/epoch/input identity through the intent ring.
+The registry pins that arena before any callback exists, so token movement and retirement cannot free it on audio.
+The receiver retains the token in its existing ingress window until every frozen reader has ended;
+it clears read permissions and drops its handle before publishing the distinct exact capture-retirement reply.
+Local output completion and output ACK do not grant capture reuse.
+The [CaptureArena ownership stage](adaptive-tuning-capture-arena.md) specifies this field-level sharing boundary.
 The ring producer writes its exclusively owned empty slot before publishing its tail with Release;
 the consumer acquires the tail before reading, and releases its head before producer reuse.
 The reciprocal acquire prevents overwrite during a read.

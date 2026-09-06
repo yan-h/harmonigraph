@@ -44,10 +44,11 @@ impl Source {
         // This changes input bindings, not actual sounding state or output debt.
         for index in &mut self.active {
             if *index != NONE {
-                self.lives[usize::from(*index)].as_mut().unwrap().active = false;
+                self.lives.local_mut(*index).unwrap().active = false;
                 *index = NONE;
             }
         }
+        self.pending.seal(position);
         api::Consumption::Consumed
     }
 

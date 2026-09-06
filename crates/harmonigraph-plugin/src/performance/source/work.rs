@@ -2,7 +2,7 @@
 //! Pending slot, regardless of how many captured targets it addresses.
 use super::NONE;
 
-pub(super) const CAPACITY: usize = 32768;
+pub(in crate::performance) const CAPACITY: usize = 32768;
 pub(super) const TARGET: u8 = 0;
 pub(super) const CHOKE: u8 = 1;
 pub(super) const NOTE_OFF: u8 = 2;
@@ -35,94 +35,149 @@ pub(super) struct Cell {
     pub operation: u8,
     pub phase: u8,
 }
-pub(super) struct Work {
-    cells: Box<[Packed]>,
+pub(in crate::performance) struct Work {
+    arena: std::sync::Arc<crate::performance::capture::CaptureArena>,
+    phases: Box<[u8]>,
     free: u16,
     len: usize,
     pub high_water: usize,
 }
 
-/// Bounded indices, never truncated identities. The two full 16-bit links
-/// represent every Work slot plus NONE; life/parent are allocated 13-bit
-/// indices. The free bit supplies the otherwise missing parent sentinel.
-#[derive(Clone, Copy)]
-struct Packed {
-    serial: u64,
-    bits: u64,
+/// The immutable region uses fourteen bytes: full serial plus 44 capture bits.
+/// ready_next is a separately addressed Source-only field. Never write a whole
+/// Packed or its immutable bytes after publication, including for phase changes.
+#[repr(C)]
+pub(crate) struct Packed {
+    serial: std::cell::UnsafeCell<u64>,
+    capture: std::cell::UnsafeCell<[u8; 6]>,
+    ready_next: std::cell::UnsafeCell<u16>,
 }
+const FREE: u64 = 1 << 44;
 impl Packed {
     fn free(next: u16) -> Self {
-        Self { serial: 0, bits: (1 << 63) | (u64::from(next) << 26) }
-    }
-    fn new(cell: Cell) -> Self {
-        assert!(cell.life < 8192 && cell.parent < 8192);
-        assert!(cell.next == NONE || usize::from(cell.next) < CAPACITY);
-        assert!(
-            cell.ready_next == NONE || usize::from(cell.ready_next) < CAPACITY + PENDING_EVENTS
-        );
-        assert!(cell.operation < 4 && cell.phase < 8);
         Self {
-            serial: cell.serial,
-            bits: u64::from(cell.life)
-                | (u64::from(cell.parent) << 13)
-                | (u64::from(cell.next) << 26)
-                | (u64::from(cell.ready_next) << 42)
-                | (u64::from(cell.operation) << 58)
-                | (u64::from(cell.phase) << 60),
+            serial: std::cell::UnsafeCell::new(0),
+            capture: std::cell::UnsafeCell::new(Self::pack(FREE | (u64::from(next) << 26))),
+            ready_next: std::cell::UnsafeCell::new(NONE),
         }
     }
-    fn get(self) -> Cell {
-        assert_eq!(self.bits >> 63, 0);
-        Cell {
-            serial: self.serial,
-            life: (self.bits & 8191) as u16,
-            parent: ((self.bits >> 13) & 8191) as u16,
-            next: (self.bits >> 26) as u16,
-            ready_next: (self.bits >> 42) as u16,
-            operation: ((self.bits >> 58) & 3) as u8,
-            phase: ((self.bits >> 60) & 7) as u8,
+    fn pack(bits: u64) -> [u8; 6] {
+        bits.to_le_bytes()[..6].try_into().unwrap()
+    }
+    fn bits(&self) -> u64 {
+        // SAFETY: Source-only builder/free access or pinned immutable Hub read.
+        let bytes = unsafe { *self.capture.get() };
+        u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0])
+    }
+    pub(in crate::performance) fn original(&self) -> (u64, u16, u16, u16, u8) {
+        let bits = self.bits();
+        assert_eq!(bits & FREE, 0);
+        // SAFETY: caller owns the Source handle or checked capture permission.
+        (
+            unsafe { *self.serial.get() },
+            (bits & 8191) as u16,
+            ((bits >> 13) & 8191) as u16,
+            (bits >> 26) as u16,
+            ((bits >> 42) & 3) as u8,
+        )
+    }
+    fn initialize(&self, cell: Cell) {
+        assert!(cell.life < 8192 && cell.parent < 8192 && cell.operation < 4);
+        let bits = u64::from(cell.life)
+            | (u64::from(cell.parent) << 13)
+            | (u64::from(cell.next) << 26)
+            | (u64::from(cell.operation) << 42);
+        // SAFETY: free list ownership, before any capture token exists.
+        unsafe {
+            *self.serial.get() = cell.serial;
+            *self.capture.get() = Self::pack(bits);
+            *self.ready_next.get() = cell.ready_next;
         }
     }
 }
-impl Default for Work {
-    fn default() -> Self {
-        let cells = (0..CAPACITY)
-            .map(|index| {
-                Packed::free(if index + 1 == CAPACITY { NONE } else { (index + 1) as u16 })
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        Self { cells, free: 0, len: 0, high_water: 0 }
-    }
+pub(in crate::performance) fn backing() -> Box<[Packed]> {
+    (0..CAPACITY)
+        .map(|index| Packed::free(if index + 1 == CAPACITY { NONE } else { (index + 1) as u16 }))
+        .collect()
 }
 impl Work {
+    pub(in crate::performance) fn new(
+        arena: std::sync::Arc<crate::performance::capture::CaptureArena>,
+    ) -> Self {
+        Self {
+            arena,
+            phases: vec![0; CAPACITY / 4].into_boxed_slice(),
+            free: 0,
+            len: 0,
+            high_water: 0,
+        }
+    }
     #[cfg(all(test, not(feature = "tuning-probe")))]
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.len
     }
-    pub fn free(&self) -> usize {
+    pub(super) fn free(&self) -> usize {
         CAPACITY - self.len
     }
-    pub fn at(&self, index: u16) -> Cell {
-        self.cells[usize::from(index)].get()
+    pub(super) fn at(&self, index: u16) -> Cell {
+        let slot = &self.arena.work[index as usize];
+        let (serial, life, parent, next, operation) = slot.original();
+        let code = (self.phases[index as usize / 4] >> (2 * (index as usize % 4))) & 3;
+        Cell {
+            serial,
+            life,
+            parent,
+            next,
+            operation,
+            // SAFETY: this Work handle uniquely owns readiness and phases.
+            ready_next: unsafe { *slot.ready_next.get() },
+            phase: [0, DISPOSITION, DONE, DONE | UNLINKED][code as usize],
+        }
     }
-    pub fn set(&mut self, index: u16, cell: Cell) {
-        assert_eq!(self.cells[usize::from(index)].bits >> 63, 0);
-        self.cells[usize::from(index)] = Packed::new(cell);
+    pub(super) fn set(&mut self, index: u16, cell: Cell) {
+        let slot = &self.arena.work[index as usize];
+        let old = slot.original();
+        assert_eq!(old, (cell.serial, cell.life, cell.parent, cell.next, cell.operation));
+        let code = match cell.phase {
+            0 => 0,
+            DISPOSITION => 1,
+            DONE => 2,
+            5 => 3,
+            _ => panic!("invalid Source Work phase"),
+        };
+        let shift = 2 * (index as usize % 4);
+        let byte = &mut self.phases[index as usize / 4];
+        *byte = (*byte & !(3 << shift)) | (code << shift);
+        // SAFETY: this write addresses only the Source-owned link, not capture.
+        unsafe {
+            *slot.ready_next.get() = cell.ready_next;
+        }
     }
-    pub fn push(&mut self, cell: Cell) -> u16 {
+    pub(super) fn link_building(&mut self, index: u16, next: u16) {
+        let slot = &self.arena.work[index as usize];
+        let bits = slot.bits();
+        // SAFETY: used only while building the same not-yet-sealed parent group.
+        unsafe {
+            *slot.capture.get() = Packed::pack((bits & !(0xffff << 26)) | (u64::from(next) << 26));
+        }
+    }
+    pub(super) fn push(&mut self, cell: Cell) -> u16 {
         assert_ne!(self.free, NONE, "whole reference group reserved at capture");
         let index = self.free;
-        self.free = (self.cells[usize::from(index)].bits >> 26) as u16;
-        self.cells[usize::from(index)] = Packed::new(cell);
+        self.free = (self.arena.work[index as usize].bits() >> 26) as u16;
+        self.arena.work[index as usize].initialize(cell);
+        self.set(index, cell);
         self.len += 1;
         self.high_water = self.high_water.max(self.len);
         index
     }
-    pub fn remove(&mut self, index: u16) {
-        let cell = &mut self.cells[usize::from(index)];
-        assert_eq!(cell.bits >> 63, 0);
-        *cell = Packed::free(self.free);
+    pub(super) fn remove(&mut self, index: u16) {
+        let slot = &self.arena.work[index as usize];
+        assert_eq!(slot.bits() & FREE, 0);
+        // SAFETY: parent cleanup requires BOTH local and exact remote retirement.
+        unsafe {
+            *slot.capture.get() = Packed::pack(FREE | (u64::from(self.free) << 26));
+        }
         self.free = index;
         self.len -= 1;
     }
@@ -134,7 +189,7 @@ const _: () = assert!(PENDING_EVENTS <= 8192 && LIFETIMES <= 8192);
 use super::*;
 impl Source {
     fn append_ready(&mut self, life: u16, reference: u16) {
-        let value = self.lives[usize::from(life)].as_mut().unwrap();
+        let value = self.lives.local_mut(life).unwrap();
         if value.ready_tail == NONE {
             value.ready_head = reference;
         } else if let Some(position) = inline_position(value.ready_tail) {
@@ -161,14 +216,14 @@ impl Source {
 
     fn unlink_inline_ready(&mut self, position: usize) {
         let mut pending = self.pending.at(position).unwrap();
-        let life = self.lives[usize::from(pending.life)].as_mut().unwrap();
+        let life = self.lives.local_mut(pending.life).unwrap();
         assert_eq!(life.ready_head, ready_reference(position, NONE));
         assert!(pending.inline_done && pending.work_linked == 1);
         life.ready_head = pending.work_tail;
         if life.ready_head == NONE {
             life.ready_tail = NONE;
         }
-        life.refs -= 1;
+        // The original capture keeps its Birth pin through remote retirement.
         pending.work_linked = 0;
         pending.work_tail = NONE;
         self.pending.set(position, pending);
@@ -187,10 +242,11 @@ impl Source {
         }
     }
     pub(super) fn capture_work(&mut self, position: usize, life: u16, operation: u8) {
-        let value = self.lives[usize::from(life)].as_mut().unwrap();
+        let birth = self.lives.at(life).unwrap();
+        let serial = birth.serial;
+        let generation = birth.generation;
+        let value = self.lives.local_mut(life).unwrap();
         value.refs += 1;
-        let serial = value.serial;
-        let generation = value.generation;
         let mut pending = self.pending.at(position).unwrap();
         if operation == CHANNEL && pending.event.channel_termination() == Some(true) {
             value.sound_off_refs += 1;
@@ -208,9 +264,7 @@ impl Source {
         if pending.work_head == NONE {
             pending.work_head = index;
         } else {
-            let mut tail = self.work.at(pending.work_tail);
-            tail.next = index;
-            self.work.set(pending.work_tail, tail);
+            self.work.link_building(pending.work_tail, index);
         }
         pending.work_tail = index;
         pending.work_count += 1;
@@ -221,7 +275,7 @@ impl Source {
             || operation == NOTE_OFF
             || operation == TARGET && pending.event.release()
         {
-            self.lives[usize::from(life)].as_mut().unwrap().release =
+            self.lives.local_mut(life).unwrap().release =
                 Some(ReleaseIndex { parent: position as u16, work: index });
         }
         self.add_obligation(generation);
@@ -233,7 +287,7 @@ impl Source {
             let cell = self.work.at(child);
             assert_eq!(usize::from(cell.parent), position);
             assert_eq!(cell.phase & DONE, 0);
-            let life = self.lives[usize::from(cell.life)].unwrap();
+            let life = self.lives.at(cell.life).unwrap();
             assert_eq!(cell.serial, life.serial);
             pending.life = cell.life;
             pending.generation = life.generation;
@@ -248,7 +302,7 @@ impl Source {
             pending.disposition = cell.phase & DISPOSITION != 0;
             pending.selected = child;
         } else if pending.life != NONE && pending.event.attack().is_none() {
-            let life = self.lives[usize::from(pending.life)].unwrap();
+            let life = self.lives.at(pending.life).unwrap();
             pending.event = pending.event.for_voice(life.id, life.channel, life.key);
         }
         pending
@@ -263,10 +317,7 @@ impl Source {
             parent.disposition = false;
             self.settle_obligation(parent.generation);
             if parent.life != NONE {
-                let life = self.lives[usize::from(parent.life)].as_mut().unwrap();
-                if parent.work_count != 0 || parent.work_linked == 0 {
-                    life.refs -= 1;
-                }
+                let life = self.lives.local_mut(parent.life).unwrap();
                 if life.canceled {
                     life.active = false;
                 }
@@ -283,9 +334,10 @@ impl Source {
             if cell.phase & DONE != 0 {
                 return;
             }
-            let life = self.lives[usize::from(cell.life)].as_mut().unwrap();
-            assert_eq!(life.serial, cell.serial);
-            let generation = life.generation;
+            let birth = self.lives.at(cell.life).unwrap();
+            assert_eq!(birth.serial, cell.serial);
+            let generation = birth.generation;
+            let life = self.lives.local_mut(cell.life).unwrap();
             if life.canceled {
                 life.active = false;
             }
@@ -306,13 +358,11 @@ impl Source {
         self.service_revision = self.service_revision.wrapping_add(1);
         self.pending.set(position, parent);
         if child == NONE && parent.work_count == 0 && parent.work_linked != 0 {
-            if self.lives[usize::from(parent.life)].unwrap().ready_head
-                == ready_reference(position, NONE)
-            {
+            if self.lives.at(parent.life).unwrap().ready_head == ready_reference(position, NONE) {
                 // The common accepted inline head has constant unlink work,
                 // covered by its normal envelope cleanup visit.
                 self.unlink_inline_ready(position);
-                if self.lives[usize::from(parent.life)].is_some_and(|life| {
+                if self.lives.at(parent.life).is_some_and(|life| {
                     life.ready_head != NONE
                         && inline_position(life.ready_head).map_or_else(
                             || self.work.at(life.ready_head).phase & DONE != 0,
@@ -343,17 +393,25 @@ impl Source {
         {
             return;
         }
-        if matches!(parent.channel.role, channel::Role::Stop { owners, .. } | channel::Role::ReachedStop { owners, .. } if owners != 0)
-        {
-            return;
-        }
-        if let Some(channel) = parent.event.channel_control().map(usize::from) {
-            if self.channel_history_needed(parent)
-                || self.channels.head[channel]
-                    .is_some_and(|head| usize::from(head.index) != position)
-                    && (parent.channel.accepted || parent.serial > self.cancel_cut)
+        if self.pending.local_done(position) {
+            if self.pending.remote_pending(position)
+                || self.pending.unpublished(position) && self.session().is_some()
             {
                 return;
+            }
+        } else {
+            if matches!(parent.channel.role, channel::Role::Stop { owners, .. } | channel::Role::ReachedStop { owners, .. } if owners != 0)
+            {
+                return;
+            }
+            if let Some(channel) = parent.event.channel_control().map(usize::from) {
+                if self.channel_history_needed(parent)
+                    || self.channels.head[channel]
+                        .is_some_and(|head| usize::from(head.index) != position)
+                        && (parent.channel.accepted || parent.serial > self.cancel_cut)
+                {
+                    return;
+                }
             }
         }
         parent.cleanup_queued = true;
@@ -382,19 +440,47 @@ impl Source {
             if self.cleanup_head == NONE {
                 self.cleanup_tail = NONE;
             }
-            self.channel_done(position, parent);
+            if !self.pending.local_done(position) {
+                self.channel_done(position, parent);
+                self.pending.finish_local(position);
+            }
+            let mut updated = self.pending.at(position).unwrap();
+            updated.cleanup_queued = false;
+            updated.cleanup_next = NONE;
+            self.pending.set(position, updated);
+            if let Some(channel) = parent.event.channel().map(usize::from) {
+                if let Some(head) = self.channels.head[channel] {
+                    if head.index as usize != position {
+                        self.remove_finished(head.index as usize);
+                    }
+                }
+            }
+            if self.pending.remote_pending(position)
+                || self.pending.unpublished(position) && self.session().is_some()
+            {
+                continue;
+            }
             if self.cancel_cursor == Some(position) {
                 self.cancel_cursor = self.pending.next_position(position);
             }
             if self.pending_cursor == Some(position) {
                 self.pending_cursor = self.pending.next_position(position);
             }
+            if self.capture_cursor == Some(position) {
+                self.capture_cursor = self.pending.next_position(position);
+            }
             let mut child = parent.work_head;
             while child != NONE {
                 let cell = self.work.at(child);
                 assert_eq!(cell.phase & DONE, DONE);
                 self.work.remove(child);
+                self.lives.local_mut(cell.life).unwrap().refs -= 1;
+                self.recycle(cell.life);
                 child = cell.next;
+            }
+            if parent.life != NONE {
+                self.lives.local_mut(parent.life).unwrap().refs -= 1;
+                self.recycle(parent.life);
             }
             self.pending.remove(position).unwrap();
             if let Some(channel) = parent.event.channel().map(usize::from) {
@@ -407,7 +493,7 @@ impl Source {
     }
 
     fn queue_ready_cleanup(&mut self, index: u16) {
-        let life = self.lives[usize::from(index)].as_mut().unwrap();
+        let life = self.lives.local_mut(index).unwrap();
         if life.ready_queued {
             return;
         }
@@ -415,7 +501,7 @@ impl Source {
         if self.work_cleanup_tail == NONE {
             self.work_cleanup_head = index;
         } else {
-            self.lives[usize::from(self.work_cleanup_tail)].as_mut().unwrap().cleanup_next = index;
+            self.lives.local_mut(self.work_cleanup_tail).unwrap().cleanup_next = index;
         }
         self.work_cleanup_tail = index;
     }
@@ -426,7 +512,7 @@ impl Source {
                 return;
             }
             let index = self.work_cleanup_head;
-            let life = self.lives[usize::from(index)].unwrap();
+            let life = self.lives.at(index).unwrap();
             if let Some(position) = inline_position(life.ready_head) {
                 if self.pending.at(position).unwrap().inline_done {
                     self.unlink_inline_ready(position);
@@ -442,7 +528,7 @@ impl Source {
                 if self.work_cleanup_head == NONE {
                     self.work_cleanup_tail = NONE;
                 }
-                let value = self.lives[usize::from(index)].as_mut().unwrap();
+                let value = self.lives.local_mut(index).unwrap();
                 value.ready_queued = false;
                 value.cleanup_next = NONE;
                 self.recycle(index);
@@ -452,12 +538,12 @@ impl Source {
             assert_eq!(cell.serial, life.serial);
             cell.phase |= UNLINKED;
             self.work.set(life.ready_head, cell);
-            let value = self.lives[usize::from(index)].as_mut().unwrap();
+            let value = self.lives.local_mut(index).unwrap();
             value.ready_head = cell.ready_next;
             if value.ready_head == NONE {
                 value.ready_tail = NONE;
             }
-            value.refs -= 1;
+            // Birth remains pinned by the original parent until both owners retire.
             let mut parent = self.pending.at(usize::from(cell.parent)).unwrap();
             parent.work_linked -= 1;
             self.pending.set(usize::from(cell.parent), parent);

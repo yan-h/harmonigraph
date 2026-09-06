@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
+#[path = "capture_tests.rs"]
+mod capture_tests;
 #[path = "channel_wave_tests.rs"]
 mod channel_wave_tests;
 #[path = "publication_tests.rs"]
@@ -389,6 +391,8 @@ impl Device {
         transport: Option<clap_event_transport>,
     ) -> Sink {
         let (reject_kind, reject_attempt) = rejection;
+        // Register this host hook's TLS destructor before the allocation guard.
+        SETUP_CLOSE.with(|_| {});
         let (frames, expect_error) = format;
         assert!(frames > 0 && frames <= 512);
         let input = clap_input_events {
@@ -726,7 +730,7 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
         );
         assert!(!source.source_snapshot().pedals_held);
         if reject_release {
-            assert_eq!(source.source_snapshot().pending, 3);
+            assert_eq!(source.source_snapshot().local_pending, 3);
         }
         hub.run(128, vec![], None); // hub need not have observed the source's Stop yet
         let second = source.run_callback(
@@ -821,20 +825,41 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
         source.run_callback(128, events, (None, None), (64, false), Some(observation(true, 0)));
     assert_eq!(first.values.len(), 512);
     let mut output = first.values;
+    let mut source_raw = 192;
+    // The cancellation cursor first passes the 512 completed originals whose
+    // remote capture pins survive. Keep Hub paused until a real full manifest.
+    for _ in 0..4 {
+        if source.source_snapshot().manifest == 64 {
+            break;
+        }
+        output.extend(
+            source
+                .run_callback(
+                    source_raw,
+                    vec![],
+                    (None, None),
+                    (64, false),
+                    Some(observation(false, 0)),
+                )
+                .values,
+        );
+        source_raw += 64;
+    }
     let blocked = source.source_snapshot();
     assert_eq!(blocked.manifest, 64, "the Stop cut reaches the full acknowledgement window");
     assert!(blocked.pending > blocked.manifest, "older work remains outside that window");
     assert_eq!(blocked.faults, 0);
     hub.run(128, vec![], None);
-    for block in 3..=12 {
+    for block in 3..=22 {
         let next = source.run_callback(
-            block * 64,
+            source_raw,
             vec![],
             (None, None),
             (64, false),
             Some(observation(false, 0)),
         );
         output.extend(next.values);
+        source_raw += 64;
         hub.run(block * 64, vec![], None);
     }
     assert!(
@@ -860,13 +885,15 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
     assert_eq!(source.source_snapshot().pending, 0);
     assert_eq!(source.source_snapshot().faults, 0);
     source.run_callback(
-        13 * 64,
+        source_raw,
         vec![midi([0xb0, 64, 0], 0)],
         (None, None),
         (64, false),
         Some(observation(false, 0)),
     );
-    hub.run(13 * 64, vec![], None);
+    hub.run(23 * 64, vec![], None);
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert!(!source.source_snapshot().pedals_held);
 }
 
 #[test]
@@ -1246,7 +1273,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
     assert_eq!(full.attempts, 512);
     assert!(full.values.iter().all(|(_, event)| matches!(event, Event::Expression { .. })));
     let before = source.source_snapshot();
-    assert_eq!(before.pending, 1, "the old lease owns an onset awaiting output budget");
+    assert_eq!(before.local_pending, 1, "the old lease owns an onset awaiting output budget");
     assert_eq!(before.old_obligations, 1);
     hub.run(128, vec![], None);
     let duplicate = Device::new(false);
@@ -1257,7 +1284,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
         hub.run(block * 64, vec![], None);
         let retained = source.source_snapshot();
         assert_eq!(retained.faults, 0);
-        assert_eq!(retained.pending, 1, "ambiguity is no cancellation authority");
+        assert_eq!(retained.local_pending, 1, "ambiguity is no cancellation authority");
         assert_eq!(retained.old_obligations, 1);
         assert_eq!(retained.lives, 2);
     }
@@ -1708,19 +1735,29 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
         accepted, 128,
         "the source's 64 terminal-but-unacknowledged reservations remain charged"
     );
-    assert_eq!(source.source_snapshot().pending, 8064);
+    assert_eq!(source.source_snapshot().pending, 8192);
+    assert_eq!(source.source_snapshot().local_pending, 8064);
     let shared = source.shared();
     shared.apply(shared.value().routing, true).unwrap();
     for block in 1..=4 {
         hub.run(block * 64, vec![], None);
     }
     let mut largest_manifest = 0;
-    for block in 5..=142 {
+    let mut previous_remaining = source.source_snapshot().pending;
+    // The retained inputs now require both capture retirement and disposition.
+    // Separately bounded publication/backpressure and retirement phases
+    // include the complete 8192-capture and 8064-disposition populations.
+    for block in 5..=516 {
         assert!(
             source.run(block * 64, vec![], None).values.is_empty(),
             "explicit Reset must not emit a retained unsounded onset"
         );
         largest_manifest = largest_manifest.max(source.source_snapshot().manifest);
+        if block == 142 || block == 324 {
+            let remaining = source.source_snapshot().pending;
+            assert!(remaining > 0 && remaining < previous_remaining);
+            previous_remaining = remaining;
+        }
         hub.run(block * 64, vec![], None);
         source.main();
         hub.main();
@@ -2396,6 +2433,7 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
         measure_allocations(|| registry.register_hub(SavedUuid::default(), bridge).unwrap());
     tune_owner.source.as_ref().unwrap().print_test_memory_layout();
     hub_owner.print_test_memory_layout();
+    super::capture::print_test_memory_layout();
     use super::{protocol as wire, slots::Slots};
     use std::mem::size_of;
     println!("LEDGER protocol [intent,reply,output,control,baseline,source_control,session_control,hub_bank] {:?}",
@@ -2885,6 +2923,7 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
         source.run(128, vec![], None);
     }
     hub.run(128, vec![], None);
+    let mut physical_high_water = 0;
     for block in 3..=50 {
         let accepted = target.run(
             block * 64,
@@ -2897,27 +2936,32 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
             .iter()
             .all(|(_, event)| matches!(event, Event::Expression { id: 1, .. })));
         assert_eq!(
-            target.source_snapshot().pending,
+            target.source_snapshot().local_pending,
             1,
-            "completed later cells are reusable while the old attack remains blocked"
+            "completed later local work settles while the old attack remains blocked"
         );
+        physical_high_water = physical_high_water.max(target.source_snapshot().pending);
+        assert_eq!(target.source_snapshot().faults, 0);
         for source in &fillers {
             source.run(block * 64, vec![], None);
         }
         hub.run(block * 64, vec![], None);
     }
+    assert!(physical_high_water > 4096 && physical_high_water < 8192);
     let release = target.run(51 * 64, vec![note(1, 0, 60, 7, false)], None);
     assert_eq!(release.values.len(), 1);
     assert_eq!(release.values[0].0, 7);
     assert!(release.values[0].1.release());
-    assert_eq!(target.source_snapshot().pending, 1);
+    assert_eq!(target.source_snapshot().local_pending, 1);
     for source in &fillers {
         source.run(51 * 64, vec![], None);
     }
     hub.run(51 * 64, vec![], None);
     let shared = target.shared();
     shared.apply(shared.value().routing, true).unwrap();
-    for block in 52..=58 {
+    // Separately drain original capture retirement after the unchanged
+    // 48 callbacks of 200 accepted expressions and exact release at 51*64+7.
+    for block in 52..=190 {
         assert!(target.run(block * 64, vec![], None).values.is_empty());
         for source in &fillers {
             source.run(block * 64, vec![], None);
@@ -2930,18 +2974,18 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
     assert_eq!(target.source_snapshot().lives, 0);
     for source in &fillers {
         source.run(
-            59 * 64,
+            191 * 64,
             (0..64).map(|key| note(key + 1, 0, key as i16, 0, false)).collect(),
             None,
         );
     }
-    target.run(59 * 64, vec![], None);
-    hub.run(59 * 64, (0..63).map(|key| note(key + 1, 0, key as i16, 0, false)).collect(), None);
+    target.run(191 * 64, vec![], None);
+    hub.run(191 * 64, (0..63).map(|key| note(key + 1, 0, key as i16, 0, false)).collect(), None);
     for source in &fillers {
-        source.run(60 * 64, vec![], None);
+        source.run(192 * 64, vec![], None);
     }
-    target.run(60 * 64, vec![], None);
-    hub.run(60 * 64, vec![], None);
+    target.run(192 * 64, vec![], None);
+    hub.run(192 * 64, vec![], None);
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     drop(fillers);
     drop(target);
@@ -3141,7 +3185,7 @@ fn partial_wildcard_acceptance_keeps_one_input_until_remaining_child_disposition
     assert_eq!((partial.pending, partial.references, partial.input_cut), (1, 2, 3));
     source.run(192, vec![], None);
     let waiting = source.source_snapshot();
-    assert_eq!((waiting.pending, waiting.references, waiting.manifest), (1, 2, 1));
+    assert_eq!((waiting.local_pending, waiting.references, waiting.manifest), (1, 2, 1));
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         2,
@@ -3236,6 +3280,8 @@ fn sixty_four_channel_terminals_keep_pedals_and_original_sound_off_wire_obligati
         hub.run(320, vec![], None);
         source.run(384, vec![], None);
         hub.run(384, vec![], None);
+        source.run(448, vec![], None);
+        hub.run(448, vec![], None);
         let state = source.source_snapshot();
         assert_eq!(
             (
@@ -3359,7 +3405,7 @@ fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_wi
             });
             assert!(source.run(block * 64, vec![cc], None).values.is_empty());
         }
-        let mut remaining = 7616;
+        let mut remaining = 8192 - source.source_snapshot().pending;
         let mut block = 515;
         while remaining != 0 {
             let count = remaining.min(1024);
@@ -4637,7 +4683,7 @@ fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_
         .iter()
         .all(|(_, event)| matches!(event, Event::Expression { id: 1, value: 0.125, .. })));
     let captured = source.source_snapshot();
-    assert_eq!((captured.pending, captured.references, captured.input_cut), (2, 2, 515));
+    assert_eq!((captured.local_pending, captured.references, captured.input_cut), (2, 2, 515));
     assert_eq!(
         (captured.obligations, captured.old_obligations),
         (3, 1),
@@ -4648,18 +4694,22 @@ fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_
     assert_eq!(released.values.iter().filter(|(_, event)| event.release()).count(), 1);
     assert!(released.values.iter().all(|(_, event)| event.attack().is_none()));
     assert!(source.run(320, vec![], None).values.is_empty());
+    // Cancellation scans the 512 locally completed but remotely pinned
+    // originals before reaching the two-generation wildcard. Hub stays paused.
+    assert!(source.run(384, vec![], None).values.is_empty());
+    assert!(source.run(448, vec![], None).values.is_empty());
     let waiting = source.source_snapshot();
-    assert_eq!((waiting.pending, waiting.references, waiting.manifest), (1, 2, 1));
+    assert_eq!((waiting.local_pending, waiting.references, waiting.manifest), (1, 2, 1));
     assert_eq!((waiting.obligations,waiting.old_obligations),(1,1),"the new-generation child settled locally; only the original lease's disposition still owns the parent");
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         1,
         "current empty state cannot acknowledge actual old output"
     );
-    for block in 2..=12 {
+    for block in 2..=24 {
         hub.run(block * 64, vec![], None);
         assert!(source
-            .run((block + 4) * 64, vec![], None)
+            .run((block + 6) * 64, vec![], None)
             .values
             .iter()
             .all(|(_, event)| event.attack().is_none()));
@@ -4713,7 +4763,8 @@ fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit(
         assert!(
             matches!(wire.values[1].1,Event::Note {kind:CLAP_EVENT_NOTE_ON,id:new,..} if new==id)
         );
-        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (0, 0));
+        assert_eq!(source.source_snapshot().local_pending, 0);
+        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (1, 1));
         hub.run(block * 64, vec![], None);
     }
     wrapper.test_with_plugin(|plugin| plugin.source.as_ref().unwrap().test_finish_replay());

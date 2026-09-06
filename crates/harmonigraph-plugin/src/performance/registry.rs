@@ -28,6 +28,7 @@ pub struct HubOffer {
     pub bank: Box<HubBank>,
 }
 pub struct SourceBridge {
+    pub arena: OnceLock<Arc<super::capture::CaptureArena>>,
     pub offers: Slots<SourceOffer>,
     pub returns: Slots<SourceReturn>,
     pub generation: AtomicU64,
@@ -36,6 +37,7 @@ pub struct SourceBridge {
 impl Default for SourceBridge {
     fn default() -> Self {
         Self {
+            arena: OnceLock::new(),
             offers: Slots::default(),
             returns: Slots::default(),
             generation: AtomicU64::new(1),
@@ -44,6 +46,7 @@ impl Default for SourceBridge {
     }
 }
 pub struct HubBridge {
+    pub arena: OnceLock<Arc<super::capture::CaptureArena>>,
     pub offers: Slots<HubOffer>,
     pub returns: Slots<u64>,
     pub retired_pending: AtomicBool,
@@ -52,6 +55,7 @@ pub struct HubBridge {
 impl Default for HubBridge {
     fn default() -> Self {
         Self {
+            arena: OnceLock::new(),
             offers: Slots::default(),
             returns: Slots::default(),
             retired_pending: AtomicBool::new(false),
@@ -498,12 +502,19 @@ pub fn service_retired() {
     // tail;80 fixed handshakes. The traversal allowance rounds up
     // ceil(8192/256)+ceil((2*(8192+32768)+65*672)/(2048-2*65))=98,
     // including blocked-parent restarts and indivisible cleanup tails.
-    // Every outer round services all four sessions independently.2048 rounds
-    // exceed the1454-round sum: add16 serialized joined-producer controls and
+    // Every outer round services all four sessions independently. The previous
+    // 1454-round sum includes16 serialized joined-producer controls and
     // 16 saved-baseline progress reports. At retirement each Source owns at
     // most one baseline and cannot create another. Mailbox retries wait only
     // for already-counted report/output drainage; successful publication and
-    // consumption bump revision. No new acknowledgement lane is introduced.
+    // consumption bump revision. Capture installation and retirement add at
+    // most2*17*(8192+32768) charged input units.350 further rounds cover that
+    // population with the4096 grant and an indivisible tail of at most64.
+    // Reserve32 more rounds for a retained ingress sweep and its oldest-cell
+    // revisit once reply capacity returns (1024/64 visits each). These added
+    // phases keep the conservative sum1836 below2048. Capture retirement uses
+    // the existing reply lane; the full16-source capacity fixture drains both
+    // ordinary dispositions and these capture owners without rescue callbacks.
     // Missing external proof still exits immediately.
     for _ in 0..2048 {
         if !service_retired_once() {

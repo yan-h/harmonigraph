@@ -1,23 +1,29 @@
 //! Callback-owned retained storage. Construction is off audio, operations move
-//! only Copy values, and a full queue returns the caller's still-owned value.
-pub struct Queue<T: Copy, const N: usize> {
+//! owned values, and a full queue returns the caller's still-owned value.
+pub struct Queue<T, const N: usize> {
     cells: Box<[Option<T>]>,
     head: usize,
     len: usize,
 }
-impl<T: Copy, const N: usize> Default for Queue<T, N> {
+impl<T, const N: usize> Default for Queue<T, N> {
     fn default() -> Self {
-        Self { cells: vec![None; N].into_boxed_slice(), head: 0, len: 0 }
+        Self { cells: (0..N).map(|_| None).collect(), head: 0, len: 0 }
     }
 }
-impl<T: Copy, const N: usize> Queue<T, N> {
+impl<T, const N: usize> Queue<T, N> {
     pub fn position(&self, offset: usize) -> Option<usize> {
         (offset < self.len).then_some((self.head + offset) % N)
     }
-    pub fn at(&self, position: usize) -> Option<T> {
+    pub fn at(&self, position: usize) -> Option<T>
+    where
+        T: Copy,
+    {
         self.cells.get(position).copied().flatten()
     }
-    pub fn get(&self, offset: usize) -> Option<T> {
+    pub fn get(&self, offset: usize) -> Option<T>
+    where
+        T: Copy,
+    {
         self.at(self.position(offset)?)
     }
     pub fn len(&self) -> usize {
@@ -26,11 +32,16 @@ impl<T: Copy, const N: usize> Queue<T, N> {
     pub fn free(&self) -> usize {
         N - self.len
     }
-    pub fn clear(&mut self) {
-        self.head = 0;
-        self.len = 0;
+    pub fn clear(&mut self)
+    where
+        T: Copy,
+    {
+        while self.pop().is_some() {}
     }
-    pub fn front(&self) -> Option<T> {
+    pub fn front(&self) -> Option<T>
+    where
+        T: Copy,
+    {
         (self.len != 0).then(|| self.cells[self.head].unwrap())
     }
     pub fn push(&mut self, value: T) -> Result<(), T> {
@@ -42,116 +53,118 @@ impl<T: Copy, const N: usize> Queue<T, N> {
         Ok(())
     }
     pub fn pop(&mut self) -> Option<T> {
-        let value = self.front()?;
-        self.cells[self.head] = None;
+        if self.len == 0 {
+            return None;
+        }
+        let value = self.cells[self.head].take().unwrap();
         self.head = (self.head + 1) % N;
         self.len -= 1;
         Some(value)
     }
 }
 
-/// Intrusive FIFO with independently reclaimable cells. An accepted established
-/// release frees its event slot even while an older unsounded attack is blocked.
-/// Stable cell indices are paired with caller serials across staged completion.
-pub struct Indexed<T: Copy, const N: usize> {
-    cells: Box<[Linked<T>]>,
-    free: Vec<u16>,
-    head: Option<u16>,
-    tail: Option<u16>,
-    len: usize,
-}
-#[derive(Clone, Copy)]
-struct Linked<T> {
-    value: Option<T>,
-    previous: Option<u16>,
-    next: Option<u16>,
-}
-impl<T: Copy, const N: usize> Default for Indexed<T, N> {
-    fn default() -> Self {
-        assert!(N < usize::from(u16::MAX));
-        Self {
-            cells: vec![Linked { value: None, previous: None, next: None }; N].into_boxed_slice(),
-            free: (0..N as u16).rev().collect(),
-            head: None,
-            tail: None,
-            len: 0,
-        }
-    }
-}
-impl<T: Copy, const N: usize> Indexed<T, N> {
-    pub const BACKING_CELL_BYTES: usize = std::mem::size_of::<Linked<T>>();
-    pub fn len(&self) -> usize {
-        self.len
-    }
-    pub fn free(&self) -> usize {
-        self.free.len()
-    }
-    pub fn front_position(&self) -> Option<usize> {
-        self.head.map(usize::from)
-    }
-    pub fn back_position(&self) -> Option<usize> {
-        self.tail.map(usize::from)
-    }
-    pub fn next_position(&self, index: usize) -> Option<usize> {
-        self.cells[index].next.map(usize::from)
-    }
-    pub fn at(&self, index: usize) -> Option<T> {
-        self.cells.get(index)?.value
-    }
-    pub fn set(&mut self, index: usize, value: T) {
-        assert!(self.cells[index].value.is_some());
-        self.cells[index].value = Some(value);
-    }
-    pub fn push(&mut self, value: T) -> Result<(), T> {
-        let Some(index) = self.free.pop() else {
-            return Err(value);
-        };
-        self.cells[usize::from(index)] =
-            Linked { value: Some(value), previous: self.tail, next: None };
-        if let Some(tail) = self.tail {
-            self.cells[usize::from(tail)].next = Some(index);
-        } else {
-            self.head = Some(index);
-        }
-        self.tail = Some(index);
-        self.len += 1;
-        Ok(())
-    }
-    pub fn remove(&mut self, index: usize) -> Option<T> {
-        let cell = self.cells[index];
-        let value = cell.value?;
-        if let Some(previous) = cell.previous {
-            self.cells[usize::from(previous)].next = cell.next;
-        } else {
-            self.head = cell.next;
-        }
-        if let Some(next) = cell.next {
-            self.cells[usize::from(next)].previous = cell.previous;
-        } else {
-            self.tail = cell.previous;
-        }
-        self.cells[index].value = None;
-        self.free.push(index as u16);
-        self.len -= 1;
-        Some(value)
-    }
-}
-
 #[cfg(all(test, not(feature = "tuning-probe")))]
-impl<T: Copy, const N: usize> Queue<T, N> {
+impl<T, const N: usize> Queue<T, N> {
     pub fn test_layout(&self) -> [usize; 3] {
         [std::mem::size_of::<Option<T>>(), self.cells.len(), std::mem::size_of_val(&*self.cells)]
     }
 }
-#[cfg(all(test, not(feature = "tuning-probe")))]
-impl<T: Copy, const N: usize> Indexed<T, N> {
-    pub fn test_layout(&self) -> [usize; 5] {
-        [
-            std::mem::size_of::<Option<T>>(),
-            std::mem::size_of::<Linked<T>>(),
-            self.cells.len(),
-            std::mem::size_of_val(&*self.cells),
-            self.free.capacity(),
-        ]
+
+/// Retained ownership window with stable handles and independent reclamation.
+/// A frozen capture does not prevent parsing later coverage or dispositions.
+/// The free chain reuses the vacant cell's next link, adding no index slab.
+pub struct Window<T, const N: usize> {
+    cells: Box<[WindowCell<T>]>,
+    head: u16,
+    tail: u16,
+    free: u16,
+    len: usize,
+}
+struct WindowCell<T> {
+    value: Option<T>,
+    previous: u16,
+    next: u16,
+}
+const NONE: u16 = u16::MAX;
+impl<T, const N: usize> Default for Window<T, N> {
+    fn default() -> Self {
+        assert!(N > 0 && N < NONE as usize);
+        Self {
+            cells: (0..N)
+                .map(|index| WindowCell {
+                    value: None,
+                    previous: NONE,
+                    next: if index + 1 == N { NONE } else { (index + 1) as u16 },
+                })
+                .collect(),
+            head: NONE,
+            tail: NONE,
+            free: 0,
+            len: 0,
+        }
+    }
+}
+impl<T, const N: usize> Window<T, N> {
+    pub const CELL_BYTES: usize = std::mem::size_of::<WindowCell<T>>();
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn free(&self) -> usize {
+        N - self.len
+    }
+    pub fn front_position(&self) -> Option<usize> {
+        (self.head != NONE).then_some(self.head as usize)
+    }
+    pub fn next_position(&self, index: usize) -> Option<usize> {
+        (self.cells[index].next != NONE).then_some(self.cells[index].next as usize)
+    }
+    pub fn at_ref(&self, index: usize) -> Option<&T> {
+        self.cells.get(index)?.value.as_ref()
+    }
+    pub fn at_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.cells.get_mut(index)?.value.as_mut()
+    }
+    pub fn push(&mut self, value: T) -> Result<usize, T> {
+        if self.free == NONE {
+            return Err(value);
+        }
+        let index = self.free as usize;
+        self.free = self.cells[index].next;
+        self.cells[index] = WindowCell { value: Some(value), previous: self.tail, next: NONE };
+        if self.tail == NONE {
+            self.head = index as u16;
+        } else {
+            self.cells[self.tail as usize].next = index as u16;
+        }
+        self.tail = index as u16;
+        self.len += 1;
+        Ok(index)
+    }
+    pub fn map_at(&mut self, index: usize, update: impl FnOnce(T) -> T) {
+        let value = self.cells[index].value.take().unwrap();
+        self.cells[index].value = Some(update(value));
+    }
+    pub fn remove(&mut self, index: usize) -> Option<T> {
+        let value = self.cells[index].value.take()?;
+        let previous = self.cells[index].previous;
+        let next = self.cells[index].next;
+        if previous == NONE {
+            self.head = next;
+        } else {
+            self.cells[previous as usize].next = next;
+        }
+        if next == NONE {
+            self.tail = previous;
+        } else {
+            self.cells[next as usize].previous = previous;
+        }
+        self.cells[index].next = self.free;
+        self.free = index as u16;
+        self.len -= 1;
+        Some(value)
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub fn test_layout(&self) -> [usize; 3] {
+        [Self::CELL_BYTES, N, std::mem::size_of_val(&*self.cells)]
     }
 }

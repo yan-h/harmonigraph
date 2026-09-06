@@ -209,8 +209,7 @@ impl Source {
                 .into_iter()
                 .any(|cc| self.state.channels()[channel].controllers[cc] >= 64)
             || self.owed_note_off.into_iter().any(|index| {
-                index != NONE
-                    && usize::from(self.lives[usize::from(index)].unwrap().channel) == channel
+                index != NONE && usize::from(self.lives.at(index).unwrap().channel) == channel
             })
     }
     pub(super) fn pending_reference(&self, index: u16) -> channel::Reference {
@@ -368,7 +367,7 @@ impl Source {
                 || self.channel_has_release_debt(channel as u8)
                 || self.reserved.into_iter().chain(self.owed_note_off).any(|index| {
                     index != NONE
-                        && self.lives[usize::from(index)].is_some_and(|life| {
+                        && self.lives.at(index).is_some_and(|life| {
                             usize::from(life.channel) == channel
                                 && (life.terminal.is_none() || life.note_off_owed)
                         })
@@ -714,7 +713,7 @@ impl Source {
     }
 
     pub(super) fn wake_life(&mut self, index: u16, start: i64, output: &mut api::Output<'_>) {
-        let Some(life) = self.lives[usize::from(index)] else {
+        let Some(life) = self.lives.at(index) else {
             return;
         };
         if !life.sounded || life.ready_head == NONE || !self.charge(1) {

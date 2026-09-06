@@ -4,7 +4,7 @@ use super::{
     clock::{Calibration, Clock, Coverage},
     event::Event,
     protocol::*,
-    queue::{Indexed, Queue},
+    queue::Queue,
     registry::{SourceOffer, SourceReturn},
     setup,
     state::{Stamp, State},
@@ -19,20 +19,22 @@ use nice_plug::wrapper::clap::{
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-mod channel;
+pub(super) mod channel;
 #[cfg(all(test, debug_assertions, not(feature = "tuning-probe")))]
 mod replay_tests;
 mod stop;
 mod wave;
-mod work;
+pub(super) mod work;
 
-const NONE: u16 = u16::MAX;
+pub(super) const NONE: u16 = u16::MAX;
 #[cfg(all(test, not(feature = "tuning-probe")))]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
+    pub captures: usize,
     pub velocity_prefix: [Option<u8>; 16],
     pub unmapped_reports: usize,
     pub pending: usize,
+    pub local_pending: usize,
     pub references: usize,
     pub obligations: usize,
     pub old_obligations: usize,
@@ -66,53 +68,53 @@ pub const BUSY: u64 = 1;
 pub const FENCED: u64 = 3;
 
 #[derive(Clone, Copy)]
-struct Pending {
-    channel: channel::Cell,
-    serial: u64,
-    event: Event,
-    life: u16,
-    input: i64,
-    generation: u64,
-    staged: bool,
-    cleanup_queued: bool,
-    cleanup_next: u16,
-    disposition: bool,
-    work_head: u16,
-    work_tail: u16,
-    work_count: u8,
-    work_remaining: u8,
-    work_linked: u8,
-    selected: u16,
-    inline_done: bool,
+pub(super) struct Pending {
+    pub(super) channel: channel::Cell,
+    pub(super) serial: u64,
+    pub(super) event: Event,
+    pub(super) life: u16,
+    pub(super) input: i64,
+    pub(super) generation: u64,
+    pub(super) staged: bool,
+    pub(super) cleanup_queued: bool,
+    pub(super) cleanup_next: u16,
+    pub(super) disposition: bool,
+    pub(super) work_head: u16,
+    pub(super) work_tail: u16,
+    pub(super) work_count: u8,
+    pub(super) work_remaining: u8,
+    pub(super) work_linked: u8,
+    pub(super) selected: u16,
+    pub(super) inline_done: bool,
 }
 #[derive(Clone, Copy)]
-struct ReleaseIndex {
-    parent: u16,
-    work: u16,
+pub(super) struct ReleaseIndex {
+    pub(super) parent: u16,
+    pub(super) work: u16,
 }
 #[derive(Clone, Copy)]
-struct Life {
-    serial: u64,
-    id: i32,
-    channel: u8,
-    key: u8,
-    input: i64,
-    refs: u32,
-    active: bool,
-    reserved: bool,
-    sounded: bool,
-    canceled: bool,
-    shift: Option<i64>,
-    terminal: Option<(u64, i64, bool)>,
-    release: Option<ReleaseIndex>,
-    generation: u64,
-    midi: bool,
-    note_off_owed: bool,
-    sound_off_refs: u16,
-    ready_head: u16,
-    ready_tail: u16,
-    cleanup_next: u16,
-    ready_queued: bool,
+pub(super) struct Life {
+    pub(super) serial: u64,
+    pub(super) id: i32,
+    pub(super) channel: u8,
+    pub(super) key: u8,
+    pub(super) input: i64,
+    pub(super) refs: u32,
+    pub(super) active: bool,
+    pub(super) reserved: bool,
+    pub(super) sounded: bool,
+    pub(super) canceled: bool,
+    pub(super) shift: Option<i64>,
+    pub(super) terminal: Option<(u64, i64, bool)>,
+    pub(super) release: Option<ReleaseIndex>,
+    pub(super) generation: u64,
+    pub(super) midi: bool,
+    pub(super) note_off_owed: bool,
+    pub(super) sound_off_refs: u16,
+    pub(super) ready_head: u16,
+    pub(super) ready_tail: u16,
+    pub(super) cleanup_next: u16,
+    pub(super) ready_queued: bool,
 }
 #[derive(Clone, Copy)]
 struct Permit {
@@ -164,11 +166,11 @@ pub struct Source {
     pub offer: Option<SourceOffer>,
     direct: Option<Arc<SessionControl>>,
     pub state: State,
-    pending: Indexed<Pending, PENDING_EVENTS>,
+    pending: super::capture::PendingStore,
     work: work::Work,
     cleanup_head: u16,
     cleanup_tail: u16,
-    lives: Box<[Option<Life>]>,
+    lives: super::capture::Lives,
     free_lives: Vec<u16>,
     active: [u16; 64],
     reserved: [u16; 64],
@@ -233,12 +235,16 @@ pub struct Source {
     work_cleanup_tail: u16,
     draining_finished: bool,
     pending_cursor: Option<usize>,
+    capture_cursor: Option<usize>,
+    capture_offer: Option<super::capture::Token>,
+    captures_outstanding: usize,
 }
 
 impl Source {
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
+            captures: self.captures_outstanding,
             velocity_prefix: std::array::from_fn(|channel| {
                 let state = &self.state.channels()[channel];
                 (state.controller_valid[1] & (1 << 24) != 0).then_some(state.controllers[88])
@@ -250,6 +256,11 @@ impl Source {
                     .filter(|index| !self.emergency_output.get(*index).unwrap().mapped)
                     .count(),
             pending: self.pending.len(),
+            local_pending: (0..PENDING_EVENTS)
+                .filter(|index| {
+                    self.pending.at(*index).is_some() && !self.pending.local_done(*index)
+                })
+                .count(),
             references: self.work.len(),
             obligations: self.obligations,
             old_obligations: self.old_pending,
@@ -287,16 +298,17 @@ impl Source {
         ]
     }
     pub fn new(shared: Arc<setup::Shared>) -> Box<Self> {
+        let (pending, lives, work) = super::capture::storage(&shared);
         Box::new(Self {
             shared,
             offer: None,
             direct: None,
             state: State::default(),
-            pending: Indexed::default(),
-            work: work::Work::default(),
+            pending,
+            work,
             cleanup_head: NONE,
             cleanup_tail: NONE,
-            lives: vec![None; LIFETIMES].into_boxed_slice(),
+            lives,
             free_lives: (0..LIFETIMES as u16).rev().collect(),
             active: [NONE; 64],
             reserved: [NONE; 64],
@@ -361,6 +373,9 @@ impl Source {
             work_cleanup_tail: NONE,
             draining_finished: false,
             pending_cursor: None,
+            capture_cursor: None,
+            capture_offer: None,
+            captures_outstanding: 0,
         })
     }
     pub fn activate(&mut self, rate: f64, max_frames: u32) {
@@ -408,6 +423,16 @@ impl Source {
     fn incarnation(&self) -> u64 {
         self.offer.as_ref().map_or(0, |o| o.lease.incarnation)
     }
+    pub(super) fn capture_lease(&self) -> Option<Lease> {
+        self.offer.as_ref().map(|offer| offer.lease).or_else(|| {
+            self.direct.as_ref().map(|session| Lease {
+                session: session.runtime,
+                source: SourceId::DIRECT,
+                incarnation: 0,
+                slot: 0,
+            })
+        })
+    }
     fn lease_generation(&self) -> Option<u64> {
         self.offer
             .as_ref()
@@ -449,7 +474,7 @@ impl Source {
             && self.manifest.len() == 0
     }
     fn lease_settled(&self) -> bool {
-        self.old_pending == 0 && self.output_settled()
+        self.old_pending == 0 && self.captures_outstanding == 0 && self.output_settled()
     }
     fn output_settled(&self) -> bool {
         self.held() == 0
@@ -639,7 +664,7 @@ impl Source {
             || matches!(event, Event::Expression { .. })
             || matches!(event, Event::Midi { data, .. } if data[0] & 0xf0 == 0xa0);
         for index in self.active.into_iter().filter(|index| *index != NONE) {
-            let life = self.lives[usize::from(index)].unwrap();
+            let life = self.lives.at(index).unwrap();
             if channel.is_some_and(|channel| life.channel == channel)
                 || attack
                     .is_some_and(|(_, channel, key, _)| life.channel == channel && life.key == key)
@@ -667,7 +692,9 @@ impl Source {
         let active_slot = if let Some((_, channel, key, _)) = attack {
             let slot = self.active.iter().position(|index| {
                 *index == NONE
-                    || self.lives[usize::from(*index)]
+                    || self
+                        .lives
+                        .at(*index)
                         .is_some_and(|life| life.channel == channel && life.key == key)
             });
             if slot.is_none() || self.free_lives.is_empty() || self.next_lifetime == u64::MAX {
@@ -681,29 +708,32 @@ impl Source {
         let life = if let Some((id, channel, key, _)) = attack {
             let index = self.free_lives.pop().unwrap();
             self.next_lifetime += 1;
-            self.lives[usize::from(index)] = Some(Life {
-                serial: self.next_lifetime,
-                id,
-                channel,
-                key,
-                input: raw,
-                refs: 0,
-                active: true,
-                reserved: false,
-                sounded: false,
-                canceled: false,
-                shift: None,
-                terminal: None,
-                release: None,
-                generation: self.generation,
-                midi: matches!(event, Event::Midi { .. }),
-                note_off_owed: false,
-                sound_off_refs: 0,
-                ready_head: NONE,
-                ready_tail: NONE,
-                cleanup_next: NONE,
-                ready_queued: false,
-            });
+            self.lives.insert(
+                index,
+                Life {
+                    serial: self.next_lifetime,
+                    id,
+                    channel,
+                    key,
+                    input: raw,
+                    refs: 0,
+                    active: true,
+                    reserved: false,
+                    sounded: false,
+                    canceled: false,
+                    shift: None,
+                    terminal: None,
+                    release: None,
+                    generation: self.generation,
+                    midi: matches!(event, Event::Midi { .. }),
+                    note_off_owed: false,
+                    sound_off_refs: 0,
+                    ready_head: NONE,
+                    ready_tail: NONE,
+                    cleanup_next: NONE,
+                    ready_queued: false,
+                },
+            );
             index
         } else if addressed && count == 1 {
             targets[0]
@@ -716,7 +746,7 @@ impl Source {
             self.capture_inline_ready(position, life);
         }
         for target in targets[..count].iter().copied() {
-            let previous = self.lives[usize::from(target)].unwrap();
+            let previous = self.lives.at(target).unwrap();
             let operation = if channel.is_some() {
                 work::CHANNEL
             } else if attack.is_some() {
@@ -731,11 +761,11 @@ impl Source {
             if references != 0 {
                 self.capture_work(position, target, operation);
             } else if event.release() {
-                self.lives[usize::from(target)].as_mut().unwrap().release =
+                self.lives.local_mut(target).unwrap().release =
                     Some(ReleaseIndex { parent: position as u16, work: NONE });
             }
             if attack.is_some() || event.release() || event.channel_termination() == Some(false) {
-                self.lives[usize::from(target)].as_mut().unwrap().active = false;
+                self.lives.local_mut(target).unwrap().active = false;
                 if let Some(slot) = self.active.iter_mut().find(|index| **index == target) {
                     *slot = NONE;
                 }
@@ -750,17 +780,15 @@ impl Source {
         } else {
             self.link_channel(position);
         }
+        self.pending.seal(position);
         self.remove_finished(position);
         api::Consumption::Consumed
     }
 
     fn enqueue_cell(&mut self, event: Event, life: u16, input: i64, addressed: bool) -> usize {
         self.next_event += 1;
-        let generation = if life == NONE {
-            self.generation
-        } else {
-            self.lives[usize::from(life)].unwrap().generation
-        };
+        let generation =
+            if life == NONE { self.generation } else { self.lives.at(life).unwrap().generation };
         self.pending
             .push(Pending {
                 channel: channel::Cell::default(),
@@ -789,8 +817,11 @@ impl Source {
         if self.pending_cursor.is_none() {
             self.pending_cursor = Some(position);
         }
+        if self.capture_cursor.is_none() {
+            self.capture_cursor = Some(position);
+        }
         if life != NONE {
-            self.lives[usize::from(life)].as_mut().unwrap().refs += 1;
+            self.lives.local_mut(life).unwrap().refs += 1;
         }
         position
     }
@@ -991,14 +1022,14 @@ impl Source {
                 }
                 let cell = self.work.at(child);
                 if cell.phase == 0 {
-                    let life = self.lives[usize::from(cell.life)].unwrap();
+                    let life = self.lives.at(cell.life).unwrap();
                     if cell.operation == work::CHANNEL
                         || !life.sounded
                         || life.terminal.is_some()
                         || pending.event.attack().is_none() && !pending.event.release()
                     {
                         if !life.sounded {
-                            self.lives[usize::from(cell.life)].as_mut().unwrap().canceled = true;
+                            self.lives.local_mut(cell.life).unwrap().canceled = true;
                         }
                         if !self.dispose_work(position, child) {
                             blocked = true;
@@ -1019,12 +1050,13 @@ impl Source {
                     && !parent.disposition
                     && (parent.life == NONE
                         || parent.event.attack().is_none() && !parent.event.release()
-                        || self.lives[usize::from(parent.life)]
+                        || self
+                            .lives
+                            .at(parent.life)
                             .is_some_and(|life| !life.sounded || life.terminal.is_some()))
                 {
-                    if parent.life != NONE && !self.lives[usize::from(parent.life)].unwrap().sounded
-                    {
-                        self.lives[usize::from(parent.life)].as_mut().unwrap().canceled = true;
+                    if parent.life != NONE && !self.lives.at(parent.life).unwrap().sounded {
+                        self.lives.local_mut(parent.life).unwrap().canceled = true;
                     }
                     if !self.dispose_work(position, NONE) {
                         break;
@@ -1067,10 +1099,12 @@ impl Source {
         let mut used_channels = 0u16;
         for life in self.reserved.into_iter().chain(self.owed_note_off) {
             if life != NONE
-                && self.lives[usize::from(life)]
+                && self
+                    .lives
+                    .at(life)
                     .is_some_and(|l| l.sounded && (l.terminal.is_none() || l.note_off_owed))
             {
-                used_channels |= 1 << self.lives[usize::from(life)].unwrap().channel;
+                used_channels |= 1 << self.lives.at(life).unwrap().channel;
                 self.ensure_emergency(life);
             }
         }
@@ -1102,8 +1136,7 @@ impl Source {
         self.channel_reset[usize::from(channel)] != 0
             || self.emergency.iter().flatten().any(|release| {
                 release.accepted.is_none()
-                    && self.lives[usize::from(release.life)]
-                        .is_some_and(|life| life.channel == channel)
+                    && self.lives.at(release.life).is_some_and(|life| life.channel == channel)
             })
     }
 
@@ -1116,7 +1149,7 @@ impl Source {
             .iter()
             .position(Option::is_none)
             .expect("at most64 held/owed wire lifetimes");
-        self.lives[usize::from(life)].as_mut().unwrap().refs += 1;
+        self.lives.local_mut(life).unwrap().refs += 1;
         self.emergency[slot] = Some(Release { life, staged: false, accepted: None });
     }
     pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
@@ -1140,7 +1173,7 @@ impl Source {
             if index == NONE {
                 continue;
             }
-            let life = self.lives[usize::from(index)].unwrap();
+            let life = self.lives.at(index).unwrap();
             if life.sounded && life.terminal.is_none() {
                 if let Some(position) = life.release {
                     self.stage_work(
@@ -1160,7 +1193,7 @@ impl Source {
             if index == NONE {
                 continue;
             }
-            let life = self.lives[usize::from(index)].unwrap();
+            let life = self.lives.at(index).unwrap();
             if life.reserved {
                 continue;
             }
@@ -1290,7 +1323,7 @@ impl Source {
         if !self.channel_ready(pending) {
             return false;
         }
-        let life = (pending.life != NONE).then(|| self.lives[usize::from(pending.life)].unwrap());
+        let life = (pending.life != NONE).then(|| self.lives.at(pending.life).unwrap());
         if self.detaching
             || self.sealed
             || self.offer.as_ref().is_some_and(|offer| pending.generation > offer.generation)
@@ -1511,7 +1544,7 @@ impl Source {
                 .iter()
                 .copied()
                 .filter(|index| *index != NONE)
-                .filter(|index| !self.lives[usize::from(*index)].unwrap().reserved)
+                .filter(|index| !self.lives.at(*index).unwrap().reserved)
                 .count();
             if self.held() + unreserved_offs >= 64 {
                 return false;
@@ -1545,9 +1578,9 @@ impl Source {
             }
             permit.credit = true;
             self.reserved[slot] = pending.life;
-            self.lives[usize::from(pending.life)].as_mut().unwrap().reserved = true;
+            self.lives.local_mut(pending.life).unwrap().reserved = true;
         } else if pending.life != NONE {
-            let life = self.lives[usize::from(pending.life)].unwrap();
+            let life = self.lives.at(pending.life).unwrap();
             if !life.sounded
                 || life.terminal.is_some() && !(life.note_off_owed && pending.event.release())
             {
@@ -1634,7 +1667,7 @@ impl Source {
                 let mut target = parent.work_head;
                 while target != NONE {
                     let cell = self.work.at(target);
-                    if self.lives[usize::from(cell.life)].is_some_and(|life| life.sounded) {
+                    if self.lives.at(cell.life).is_some_and(|life| life.sounded) {
                         self.finish_work(position, target);
                     }
                     target = cell.next;
@@ -1728,7 +1761,7 @@ impl Source {
         let mapped_input = if mapped { self.clock.calibration.map(input).unwrap() } else { input };
         let mapped_actual =
             if mapped { self.clock.calibration.map(actual).unwrap() } else { actual };
-        let lifetime = if life == NONE { 0 } else { self.lives[usize::from(life)].unwrap().serial };
+        let lifetime = if life == NONE { 0 } else { self.lives.at(life).unwrap().serial };
         let delta = OutputDelta {
             incarnation: self.incarnation(),
             sequence: self.sequence,
@@ -1764,7 +1797,7 @@ impl Source {
             assert!(self.state.apply_unmapped_terminal(event, lifetime));
         }
         if life != NONE {
-            let value = self.lives[usize::from(life)].as_mut().unwrap();
+            let value = self.lives.local_mut(life).unwrap();
             if event.attack().is_some() {
                 value.sounded = true;
                 value.shift = actual.checked_sub(input);
@@ -1797,7 +1830,7 @@ impl Source {
         }
     }
     fn return_credit(&mut self, index: u16) {
-        let value = self.lives[usize::from(index)].as_mut().unwrap();
+        let value = self.lives.local_mut(index).unwrap();
         assert!(value.reserved);
         value.reserved = false;
         let previous = self.session().unwrap().credits.fetch_sub(1, Ordering::AcqRel);
@@ -1806,10 +1839,12 @@ impl Source {
         self.recycle(index);
     }
     fn recycle(&mut self, index: u16) {
-        if self.lives[usize::from(index)]
+        if self
+            .lives
+            .at(index)
             .is_some_and(|l| !l.active && !l.reserved && l.refs == 0 && !l.ready_queued)
         {
-            self.lives[usize::from(index)] = None;
+            self.lives.remove(index);
             self.free_lives.push(index);
             if let Some(slot) = self.active.iter_mut().find(|i| **i == index) {
                 *slot = NONE;
@@ -1875,7 +1910,7 @@ impl Source {
             if release.staged || release.accepted.is_some() {
                 continue;
             }
-            let life = self.lives[usize::from(release.life)].unwrap();
+            let life = self.lives.at(release.life).unwrap();
             let token = api::Token([self.attempt, index as u64, life.serial, 1]);
             let event = if life.note_off_owed {
                 Event::note_off(life.id, life.channel, life.key, life.midi)
@@ -1946,7 +1981,7 @@ impl Source {
             release.staged = false;
             if completion.accepted & 1 != 0 {
                 assert!(permit.is_some_and(|p| p.emergency));
-                let life = self.lives[usize::from(release.life)].unwrap();
+                let life = self.lives.at(release.life).unwrap();
                 let pending_release = life.release;
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
@@ -2022,6 +2057,14 @@ impl Source {
     }
     fn reply(&mut self, reply: Reply) {
         match reply {
+            Reply::CaptureRetired(key) => {
+                if let Some(lease) = self.capture_lease() {
+                    if let Some(position) = self.pending.retire(key, lease, self.epoch) {
+                        self.captures_outstanding -= 1;
+                        self.remove_finished(position);
+                    }
+                }
+            }
             Reply::OutputRetained { incarnation, epoch, cut, complete_through }
                 if incarnation == self.incarnation() && epoch == self.epoch =>
             {
@@ -2125,14 +2168,14 @@ impl Source {
                 })
             }) {
                 let release = self.emergency[slot].take().unwrap();
-                self.lives[usize::from(release.life)].as_mut().unwrap().refs -= 1;
+                self.lives.local_mut(release.life).unwrap().refs -= 1;
                 self.recycle(release.life);
             }
         }
         for slot in 0..64 {
             let index = self.reserved[slot];
             if index != NONE
-                && self.lives[usize::from(index)].is_some_and(|l| {
+                && self.lives.at(index).is_some_and(|l| {
                     l.terminal.is_some_and(|(sequence, time, mapped)| {
                         sequence <= cut
                             && (mapped && time < through
@@ -2170,6 +2213,7 @@ impl Source {
         if self.offer.is_none() {
             return;
         }
+        self.transfer_captures();
         for _ in 0..512 {
             let ordinary = self.journal.get(self.sent);
             let emergency = self
@@ -2210,6 +2254,58 @@ impl Source {
             self.transfer_cut = next.sequence;
         }
     }
+    fn next_capture(&mut self) -> Option<super::capture::Token> {
+        if let Some(token) = self.capture_offer.take() {
+            return Some(token);
+        }
+        let position = self.capture_cursor?;
+        let lease = self.capture_lease()?;
+        let Some(token) =
+            self.pending.offer(position, lease, self.epoch, self.clock.calibration.offset)
+        else {
+            self.fault(CLOCK_FAULT);
+            return None;
+        };
+        self.captures_outstanding += 1;
+        Some(token)
+    }
+    fn transfer_captures(&mut self) {
+        if !self.adoption.sent() {
+            return;
+        }
+        for _ in 0..512 {
+            let Some(token) = self.next_capture() else {
+                break;
+            };
+            let position = token.key.position as usize;
+            match self.offer.as_mut().unwrap().endpoints.intents.push(Intent::Capture(token)) {
+                Ok(()) => {
+                    self.capture_cursor = self.pending.next_position(position);
+                    self.service_revision = self.service_revision.wrapping_add(1);
+                }
+                Err(rtrb::PushError::Full(Intent::Capture(token))) => {
+                    self.capture_offer = Some(token);
+                    break;
+                }
+                Err(_) => unreachable!(),
+            }
+        }
+    }
+    pub(super) fn take_direct_capture(&mut self) -> Option<super::capture::Token> {
+        assert!(self.direct.is_some());
+        let token = self.next_capture()?;
+        self.capture_cursor = self.pending.next_position(token.key.position as usize);
+        self.service_revision = self.service_revision.wrapping_add(1);
+        Some(token)
+    }
+    pub(super) fn direct_capture_units(&self) -> Option<usize> {
+        let position = self.capture_cursor?;
+        Some(1 + usize::from(self.pending.at(position)?.work_count))
+    }
+    pub(super) fn retire_direct_capture(&mut self, retirement: super::capture::Retirement) {
+        assert!(self.direct.is_some());
+        self.reply(Reply::CaptureRetired(retirement.key));
+    }
     fn last_sent_sequence(&self) -> u64 {
         self.transfer_cut
     }
@@ -2230,11 +2326,8 @@ impl Source {
             return false;
         }
         let transaction = self.next_disposition + 1;
-        let lifetime = if pending.life == NONE {
-            0
-        } else {
-            self.lives[usize::from(pending.life)].unwrap().serial
-        };
+        let lifetime =
+            if pending.life == NONE { 0 } else { self.lives.at(pending.life).unwrap().serial };
         let offer = self.offer.as_mut().unwrap();
         let message = Intent::Disposition {
             incarnation: offer.lease.incarnation,
@@ -2348,6 +2441,8 @@ impl Source {
             return;
         };
         if self.input_complete
+            && self.capture_cursor.is_none()
+            && self.capture_offer.is_none()
             && self.input_reported != Some(coverage.through)
             && offer
                 .endpoints
@@ -2487,13 +2582,15 @@ impl Source {
     }
 }
 
-const _: () = assert!(Indexed::<Pending, PENDING_EVENTS>::BACKING_CELL_BYTES <= 128);
+const _: () = assert!(super::capture::PendingStore::BACKING_CELL_BYTES <= 128);
 const _: () = assert!(std::mem::align_of::<Pending>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Life>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Life>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
+// The ledger charges this measured owner including test-support padding.
+const _: () = assert!(std::mem::size_of::<Source>() <= 29856);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {
@@ -2522,7 +2619,7 @@ impl Source {
         self.offer.as_mut().unwrap().endpoints.outputs.push(delta).unwrap();
     }
     pub fn print_test_memory_layout(&self) {
-        use std::mem::{size_of, size_of_val};
+        use std::mem::size_of;
         println!(
             "LEDGER source indexed [option,linked,count,backing,free_u16_capacity] {:?}",
             self.pending.test_layout()
@@ -2530,9 +2627,9 @@ impl Source {
         println!(
             "LEDGER source lifetime [option,count,backing,free_u16_capacity] {:?}",
             [
-                size_of::<Option<Life>>(),
-                self.lives.len(),
-                size_of_val(&*self.lives),
+                self.lives.test_layout()[0],
+                self.lives.test_layout()[1],
+                self.lives.test_layout()[2],
                 self.free_lives.capacity()
             ]
         );
@@ -2556,5 +2653,57 @@ impl Source {
             "LEDGER wave [wave,stops,prefix] {:?}",
             [size_of::<wave::Wave>(), size_of::<stop::Stops>(), size_of::<wave::Prefix>()]
         );
+    }
+}
+
+#[cfg(all(test, not(feature = "tuning-probe")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CaptureSnapshot {
+    pub position: u16,
+    pub life: u16,
+    pub life_serial: u64,
+    pub work_head: u16,
+    pub work_count: u8,
+    pub local_done: bool,
+    pub remote_pending: bool,
+}
+#[cfg(all(test, not(feature = "tuning-probe")))]
+impl Source {
+    pub fn test_pad_disposition_scan(&mut self, count: usize) {
+        let offer = self.offer.as_mut().unwrap();
+        for _ in 0..count {
+            offer
+                .endpoints
+                .intents
+                .push(Intent::Coverage {
+                    incarnation: offer.lease.incarnation,
+                    epoch: self.epoch,
+                    coverage: self.coverage.unwrap(),
+                    input_cut: self.next_event,
+                })
+                .unwrap();
+        }
+    }
+    pub(super) fn test_capture(&self, serial: u64) -> Option<CaptureSnapshot> {
+        let mut position = self.pending.front_position();
+        while let Some(index) = position {
+            let pending = self.pending.at(index).unwrap();
+            position = self.pending.next_position(index);
+            if pending.serial != serial {
+                continue;
+            }
+            return Some(CaptureSnapshot {
+                position: index as u16,
+                life: pending.life,
+                life_serial: self.lives.at(pending.life).map_or(0, |life| life.serial),
+                work_head: pending.work_head,
+                work_count: pending.work_count,
+                local_done: pending.inline_done
+                    && pending.work_remaining == 0
+                    && pending.work_linked == 0,
+                remote_pending: self.pending.remote_pending(index),
+            });
+        }
+        None
     }
 }

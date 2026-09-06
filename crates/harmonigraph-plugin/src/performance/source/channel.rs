@@ -39,13 +39,13 @@ pub(super) enum Role {
     },
 }
 #[derive(Clone, Copy, Default)]
-pub(super) struct Cell {
-    pub role: Role,
-    pub dependency: Reference,
-    pub next_waiter: Option<u16>,
-    pub previous_waiter: Option<u16>,
-    pub accepted: bool,
-    pub velocity_prefix: wave::Prefix,
+pub(in crate::performance) struct Cell {
+    pub(super) role: Role,
+    pub(super) dependency: Reference,
+    pub(super) next_waiter: Option<u16>,
+    pub(super) previous_waiter: Option<u16>,
+    pub(super) accepted: bool,
+    pub(super) velocity_prefix: wave::Prefix,
 }
 #[derive(Default)]
 pub(super) struct Channels {
@@ -151,7 +151,7 @@ impl Source {
             while child != NONE {
                 let cell = self.work.at(child);
                 if cell.phase & work::DONE == 0
-                    && self.lives[usize::from(cell.life)].is_some_and(|life| {
+                    && self.lives.at(cell.life).is_some_and(|life| {
                         life.sounded && life.terminal.is_none() && life.ready_head != child
                     })
                 {
@@ -182,7 +182,9 @@ impl Source {
             }
             let target = self.work.at(targets);
             if target.phase & work::DONE == 0
-                && self.lives[usize::from(target.life)]
+                && self
+                    .lives
+                    .at(target.life)
                     .is_some_and(|life| life.sounded && life.terminal.is_none())
             {
                 required += 1;
@@ -254,7 +256,7 @@ impl Source {
                 targets = target.next;
                 continue;
             }
-            let life = self.lives[usize::from(target.life)].unwrap();
+            let life = self.lives.at(target.life).unwrap();
             assert_eq!(life.serial, target.serial);
             if life.sounded && life.terminal.is_none() {
                 let terminal = if choke {
@@ -272,7 +274,7 @@ impl Source {
                     .push(fact)
                     .unwrap_or_else(|_| unreachable!("prepared whole channel outcome group"));
                 if choke {
-                    let current = self.lives[usize::from(target.life)].as_mut().unwrap();
+                    let current = self.lives.local_mut(target.life).unwrap();
                     let slot = self
                         .owed_note_off
                         .iter_mut()

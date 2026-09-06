@@ -1,3 +1,4 @@
+mod capture;
 pub(crate) mod clock;
 pub mod direct;
 pub mod event;

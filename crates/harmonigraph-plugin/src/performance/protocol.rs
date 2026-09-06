@@ -25,8 +25,11 @@ pub struct Lease {
     pub slot: u8,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum Intent {
+    Capture(super::capture::Token),
+    /// Hub-local phase of the same retained ingress slot, never Source output.
+    CaptureRetirement(super::capture::Retirement),
     Coverage {
         incarnation: u64,
         epoch: u64,
@@ -51,6 +54,8 @@ pub enum Intent {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Reply {
+    /// All immutable reads and remote references ended for exactly this capture.
+    CaptureRetired(super::capture::Key),
     Baseline {
         incarnation: u64,
         epoch: u64,

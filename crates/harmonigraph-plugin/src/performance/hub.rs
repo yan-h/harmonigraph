@@ -3,7 +3,7 @@
 use super::{
     clock::{Clock, Coverage},
     protocol::*,
-    queue::Queue,
+    queue::{Queue, Window},
     registry::HubOffer,
     setup,
     source::{Source, BUSY, CLOSED, FENCED, OPEN},
@@ -28,6 +28,7 @@ struct ChannelWitness {
     derived: u8,
 }
 struct Row {
+    captures: super::capture::Permissions,
     channel_witness: Option<ChannelWitness>,
     lease: Option<Lease>,
     epoch: u64,
@@ -46,7 +47,10 @@ struct Row {
     baseline_id: u64,
     detach: Option<u64>,
     last_ack: Option<(u64, i64)>,
-    ingress: Queue<Intent, 1024>,
+    ingress: Window<Intent, 1024>,
+    ingress_cursor: Option<usize>,
+    ingress_left: usize,
+    last_disposition: Option<u64>,
     input_coverage: Option<(Coverage, u64)>,
     seal: Option<u64>,
     producer_joined: Option<u64>,
@@ -58,6 +62,7 @@ struct Row {
 impl Default for Row {
     fn default() -> Self {
         Self {
+            captures: super::capture::Permissions::default(),
             channel_witness: None,
             lease: None,
             epoch: 0,
@@ -76,7 +81,10 @@ impl Default for Row {
             baseline_id: 0,
             detach: None,
             last_ack: None,
-            ingress: Queue::default(),
+            ingress: Window::default(),
+            ingress_cursor: None,
+            ingress_left: 0,
+            last_disposition: None,
             input_coverage: None,
             seal: None,
             producer_joined: None,
@@ -88,6 +96,13 @@ impl Default for Row {
     }
 }
 pub struct Hub {
+    #[cfg(test)]
+    pub test_capture_request: Option<i64>,
+    #[cfg(test)]
+    pub test_capture_result:
+        Option<Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error>>,
+    #[cfg(test)]
+    pub test_capture_commit: bool,
     #[cfg(test)]
     pub window_report_seen: bool,
     pub shared: Arc<setup::Shared>,
@@ -112,7 +127,17 @@ pub struct Hub {
     retired_publication: Option<(Box<Owner>, Recorder, f64)>,
     retired_through: Option<i64>,
     service_revision: u64,
+    capture_hold: bool,
+    frozen_captures: super::capture::Frozen,
+    direct_ingress: Window<Intent, INTENT_RING>,
+    direct_captures: super::capture::Permissions,
+    direct_capture_cursor: Option<usize>,
+    direct_capture_left: usize,
 }
+// Charged owner upper bounds apply in production builds too, where the fixture
+// freeze controls are absent. Larger backing cells have their own assertions.
+const _: () = assert!(std::mem::size_of::<Hub>() <= 1104);
+const _: () = assert!(std::mem::size_of::<Row>() <= 31032);
 impl Hub {
     pub fn end(
         &mut self,
@@ -220,6 +245,12 @@ impl Hub {
         let direct = Source::new(shared.clone());
         Box::new(Self {
             #[cfg(test)]
+            test_capture_request: None,
+            #[cfg(test)]
+            test_capture_result: None,
+            #[cfg(test)]
+            test_capture_commit: false,
+            #[cfg(test)]
             window_report_seen: false,
             shared,
             offer: None,
@@ -249,6 +280,12 @@ impl Hub {
             retired_publication: None,
             retired_through: None,
             service_revision: 0,
+            capture_hold: false,
+            frozen_captures: super::capture::Frozen::default(),
+            direct_ingress: Window::default(),
+            direct_captures: super::capture::Permissions::default(),
+            direct_capture_cursor: None,
+            direct_capture_left: 0,
         })
     }
     pub fn activate(&mut self, rate: f64, frames: u32) {
@@ -306,7 +343,10 @@ impl Hub {
             self.force_reset(owner, false);
         }
         self.direct.begin(callback);
+        self.collect_direct_captures();
         self.collect();
+        #[cfg(test)]
+        self.test_capture_tick();
     }
 
     fn commit_transition(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
@@ -390,9 +430,11 @@ impl Hub {
                 && row.output.len() == 0
                 && row.state.count() == 0
                 && row.ingress.len() == 0
+                && row.captures.empty()
                 && row.baseline.is_none()
             {
                 row.lease = None;
+                row.last_disposition = None;
                 row.channel_witness = None;
                 row.epoch = 0;
                 row.state = State::default();
@@ -498,29 +540,103 @@ impl Hub {
                 if self.input_work == 4096 || row.ingress.free() == 0 {
                     break;
                 }
+                let units = match offer.bank.rows[index].intents.peek() {
+                    Ok(Intent::Capture(token)) => token.units(),
+                    Ok(_) => 1,
+                    Err(_) => break,
+                };
+                if self.input_work + units > 4096 {
+                    break;
+                }
                 let Ok(intent) = offer.bank.rows[index].intents.pop() else {
                     break;
                 };
-                self.input_work += 1;
+                self.input_work += units;
                 self.service_revision = self.service_revision.wrapping_add(1);
+                if let Intent::Disposition {
+                    incarnation,
+                    transaction,
+                    total: 1,
+                    index: 0,
+                    canceled: true,
+                    ..
+                } = &intent
+                {
+                    // Seed in FIFO receipt order, never first sweep encounter:
+                    // this Source's monotonic counter can predate this lease.
+                    if *transaction != 0
+                        && row.last_disposition.is_none()
+                        && row.lease.is_some_and(|lease| lease.incarnation == *incarnation)
+                    {
+                        row.last_disposition = Some(transaction - 1);
+                    }
+                }
+                let intent = if let Intent::Capture(token) = intent {
+                    if row.lease == Some(token.key.lease) && row.epoch == token.key.epoch {
+                        row.captures.accept(&token, token.key.lease, row.epoch);
+                        Intent::Capture(token)
+                    } else {
+                        Intent::CaptureRetirement(token.retire_unread())
+                    }
+                } else {
+                    intent
+                };
                 row.ingress.push(intent).unwrap_or_else(|_| unreachable!("checked ingress window"));
             }
+            // A sweep starts at the oldest retained cell and visits only the
+            // cells present now. Later appends cannot prolong it: even with 64
+            // arrivals per callback, blocked retirement gets another visit.
+            if row.ingress_left == 0 {
+                row.ingress_cursor = row.ingress.front_position();
+                row.ingress_left = row.ingress.len();
+            }
             for _ in 0..64 {
-                let Some(intent) = row.ingress.front() else {
+                let Some(position) = row.ingress_cursor else {
                     break;
                 };
-                match intent {
+                let units = match row.ingress.at_ref(position) {
+                    Some(Intent::Capture(token))
+                        if !self.capture_hold && token.frozen.is_none() =>
+                    {
+                        token.units()
+                    }
+                    _ => 1,
+                };
+                if self.input_work + units > 4096 {
+                    break;
+                }
+                self.input_work += units;
+                row.ingress_left -= 1;
+                row.ingress_cursor =
+                    if row.ingress_left == 0 { None } else { row.ingress.next_position(position) };
+                if let Some(Intent::Capture(token)) = row.ingress.at_ref(position) {
+                    if self.capture_hold || token.frozen.is_some() {
+                        continue;
+                    }
+                    row.ingress.map_at(position, |intent| {
+                        let Intent::Capture(token) = intent else { unreachable!() };
+                        Intent::CaptureRetirement(row.captures.retire(token))
+                    });
+                }
+                let Some(intent) = row.ingress.at_ref(position) else {
+                    unreachable!();
+                };
+                let reply = match intent {
+                    Intent::CaptureRetirement(retirement) => {
+                        Some(Reply::CaptureRetired(retirement.key))
+                    }
                     Intent::Coverage { incarnation, epoch, coverage, input_cut }
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && epoch == row.epoch =>
+                        if row.lease.is_some_and(|lease| lease.incarnation == *incarnation)
+                            && *epoch == row.epoch =>
                     {
                         if row.input_coverage.is_none_or(|(old, cut)| {
                             old.start == coverage.start
                                 && old.through <= coverage.through
-                                && cut <= input_cut
+                                && cut <= *input_cut
                         }) {
-                            row.input_coverage = Some((coverage, input_cut));
+                            row.input_coverage = Some((*coverage, *input_cut));
                         }
+                        None
                     }
                     Intent::Disposition {
                         incarnation,
@@ -530,21 +646,36 @@ impl Hub {
                         index: 0,
                         lifetime: _,
                         canceled: true,
-                    } if row.lease.is_some_and(|lease| lease.incarnation == incarnation) => {
-                        // Ordinary requests have no adaptive plans. Receipt of
-                        // this explicit cancellation boundary is nevertheless
-                        // separate from held-state and output-history acks.
-                        if offer.bank.rows[index]
-                            .replies
-                            .push(Reply::Disposition { incarnation, transaction, input_cut })
-                            .is_err()
-                        {
-                            break;
+                    } if *transaction != 0
+                        && row.lease.is_some_and(|lease| lease.incarnation == *incarnation) =>
+                    {
+                        let last = row.last_disposition.unwrap();
+                        if *transaction > last && last.checked_add(1) != Some(*transaction) {
+                            // A failed older reply still owns manifest.front at
+                            // Source. Keep this younger message through sweeps.
+                            continue;
                         }
+                        if *transaction <= last {
+                            row.ingress.remove(position);
+                            self.service_revision = self.service_revision.wrapping_add(1);
+                            continue;
+                        }
+                        Some(Reply::Disposition {
+                            incarnation: *incarnation,
+                            transaction: *transaction,
+                            input_cut: *input_cut,
+                        })
                     }
-                    _ => {}
+                    _ => None,
+                };
+                if reply.is_some_and(|reply| offer.bank.rows[index].replies.push(reply).is_err()) {
+                    continue;
                 }
-                row.ingress.pop();
+                if let Some(Reply::Disposition { transaction, .. }) = reply {
+                    row.last_disposition = Some(transaction);
+                }
+                row.ingress.remove(position);
+                self.service_revision = self.service_revision.wrapping_add(1);
             }
             for _ in 0..256 {
                 if self.collected == 4096 || row.output.free() == 0 {
@@ -1155,6 +1286,7 @@ impl Hub {
                     && row.output.len() == 0
                     && row.state.count() == 0
                     && row.ingress.len() == 0
+                    && row.captures.empty()
                     && row.baseline.is_none()
             }) {
                 row.member = false;
@@ -1171,7 +1303,12 @@ impl Hub {
             std::array::from_fn(|index| self.rows[index].received),
             std::array::from_fn(|index| self.rows[index].applied),
             [
-                self.rows.iter().map(|row| row.ingress.len() + row.output.len()).sum(),
+                self.direct_ingress.len()
+                    + self
+                        .rows
+                        .iter()
+                        .map(|row| row.ingress.len() + row.output.len())
+                        .sum::<usize>(),
                 self.rows.iter().filter(|row| row.baseline.is_some()).count(),
                 self.rows.iter().filter(|row| row.seal.is_some()).count(),
             ],
@@ -1182,11 +1319,13 @@ impl Hub {
         )
     }
     pub fn retired_pump(&mut self) {
+        self.release_captures(true);
         self.direct.retired_pump();
         self.collected = 0;
         self.input_work = 0;
         self.merged = 0;
         self.collect();
+        self.collect_direct_captures();
         // Drain retained payloads without waiting for the final cut to fit in
         // this bounded window. publish still clamps to actual source coverage;
         // only retired_streams_published proves final publication ownership.
@@ -1258,6 +1397,7 @@ impl Hub {
                 && row.state.count() == 0
                 && row.baseline.is_none()
                 && row.ingress.len() == 0
+                && row.captures.empty()
                 && !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel)
             {
                 self.service_revision = self.service_revision.wrapping_add(1);
@@ -1265,12 +1405,16 @@ impl Hub {
         }
     }
     pub fn retired_settled(&self) -> bool {
+        if self.direct_ingress.len() != 0 || !self.direct_captures.empty() {
+            return false;
+        }
         self.direct.settled()
             && self.rows.iter().all(|r| {
                 r.output.len() == 0
                     && r.baseline.is_none()
                     && r.state.count() == 0
                     && r.ingress.len() == 0
+                    && r.captures.empty()
                     && (r.lease.is_none() || r.seal == Some(r.applied))
             })
             && self.offer.as_ref().is_none_or(|offer| {
@@ -1378,5 +1522,352 @@ impl Hub {
             self.rows[0].output.test_layout(),
             self.rows[0].ingress.test_layout()
         );
+        println!(
+            "LEDGER DIRECT capture ingress [cell,count,backing] {:?}",
+            self.direct_ingress.test_layout()
+        );
+    }
+}
+
+impl Hub {
+    fn collect_direct_captures(&mut self) {
+        let Some(lease) = self.direct.capture_lease() else {
+            return;
+        };
+        for _ in 0..256 {
+            if self.direct_ingress.free() == 0 {
+                break;
+            }
+            let Some(units) = self.direct.direct_capture_units() else {
+                break;
+            };
+            if self.input_work + units > 4096 {
+                break;
+            }
+            self.input_work += units;
+            let Some(token) = self.direct.take_direct_capture() else {
+                break;
+            };
+            self.direct_captures.accept(&token, lease, token.key.epoch);
+            self.direct_ingress
+                .push(Intent::Capture(token))
+                .unwrap_or_else(|_| unreachable!("checked DIRECT ingress capacity"));
+            self.service_revision = self.service_revision.wrapping_add(1);
+        }
+        if self.direct_capture_left == 0 {
+            self.direct_capture_cursor = self.direct_ingress.front_position();
+            self.direct_capture_left = self.direct_ingress.len();
+        }
+        for _ in 0..64 {
+            let Some(position) = self.direct_capture_cursor else {
+                break;
+            };
+            let units = match self.direct_ingress.at_ref(position) {
+                Some(Intent::Capture(token)) if !self.capture_hold && token.frozen.is_none() => {
+                    token.units()
+                }
+                _ => 1,
+            };
+            if self.input_work + units > 4096 {
+                break;
+            }
+            self.input_work += units;
+            self.direct_capture_left -= 1;
+            self.direct_capture_cursor = if self.direct_capture_left == 0 {
+                None
+            } else {
+                self.direct_ingress.next_position(position)
+            };
+            let Some(Intent::Capture(token)) = self.direct_ingress.at_ref(position) else {
+                unreachable!();
+            };
+            if self.capture_hold || token.frozen.is_some() {
+                continue;
+            }
+            let Intent::Capture(token) = self.direct_ingress.remove(position).unwrap() else {
+                unreachable!();
+            };
+            let retirement = self.direct_captures.retire(token);
+            self.direct.retire_direct_capture(retirement);
+            self.service_revision = self.service_revision.wrapping_add(1);
+        }
+    }
+
+    /// The future scheduler supplies the complete cut. This stage provides only
+    /// persistent metadata/target ownership; calling this proves no frontier.
+    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    pub(super) fn freeze_captures(
+        &mut self,
+        sample: i64,
+    ) -> Result<harmonigraph_core::cohort::FrozenInputId, harmonigraph_core::cohort::Error> {
+        use super::capture::View;
+        let windows =
+            std::iter::once(&self.direct_ingress).chain(self.rows.iter().map(|row| &row.ingress));
+        let count = windows.map(|window| {
+            let mut position = window.front_position();
+            let mut count = 0;
+            while let Some(index) = position {
+                if matches!(window.at_ref(index), Some(Intent::Capture(token)) if token.sample == sample) { count += 1; }
+                position = window.next_position(index);
+            }
+            count
+        }).sum();
+        let id = self.frozen_captures.begin(sample, count)?;
+        let direct = (&mut self.direct_ingress, &self.direct_captures, self.direct.capture_lease());
+        let rows = std::iter::once(direct)
+            .chain(self.rows.iter_mut().map(|row| (&mut row.ingress, &row.captures, row.lease)));
+        for (window, permissions, lease) in rows {
+            let Some(lease) = lease else {
+                continue;
+            };
+            let mut position = window.front_position();
+            while let Some(index) = position {
+                position = window.next_position(index);
+                let epoch = match window.at_mut(index) {
+                    Some(Intent::Capture(token)) if token.sample == sample => {
+                        token.frozen = Some(id);
+                        token.key.epoch
+                    }
+                    _ => continue,
+                };
+                let view = View { ingress: window, permissions, lease, epoch, frozen: id };
+                self.frozen_captures.push(view.metadata(index).unwrap());
+            }
+        }
+        self.capture_hold = false;
+        Ok(id)
+    }
+    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    fn capture_targets<'a>(
+        rows: &'a [Row; TUNERS],
+        direct: &'a Window<Intent, INTENT_RING>,
+        direct_permissions: &'a super::capture::Permissions,
+        direct_lease: Option<Lease>,
+        epoch: u64,
+        id: harmonigraph_core::cohort::FrozenInputId,
+    ) -> super::capture::Targets<'a> {
+        super::capture::Targets {
+            rows: std::array::from_fn(|index| {
+                if index == 0 {
+                    direct_lease.map(|lease| super::capture::View {
+                        ingress: direct,
+                        permissions: direct_permissions,
+                        lease,
+                        epoch,
+                        frozen: id,
+                    })
+                } else {
+                    let row = &rows[index - 1];
+                    row.lease.map(|lease| super::capture::View {
+                        ingress: &row.ingress,
+                        permissions: &row.captures,
+                        lease,
+                        epoch: row.epoch,
+                        frozen: id,
+                    })
+                }
+            }),
+        }
+    }
+    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    pub(super) fn advance_captures(
+        &mut self,
+        units: usize,
+    ) -> Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error> {
+        let targets = Self::capture_targets(
+            &self.rows,
+            &self.direct_ingress,
+            &self.direct_captures,
+            self.direct.capture_lease(),
+            self.publication_clock.epoch,
+            self.frozen_captures.id,
+        );
+        self.frozen_captures.advance(&targets, units)
+    }
+    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    pub(super) fn commit_capture(&mut self) -> Result<(), harmonigraph_core::cohort::Error> {
+        let targets = Self::capture_targets(
+            &self.rows,
+            &self.direct_ingress,
+            &self.direct_captures,
+            self.direct.capture_lease(),
+            self.publication_clock.epoch,
+            self.frozen_captures.id,
+        );
+        self.frozen_captures.commit(&targets)
+    }
+    pub(super) fn release_captures(&mut self, joined: bool) {
+        if !self.frozen_captures.active && !self.capture_hold {
+            return;
+        }
+        self.frozen_captures.end(joined);
+        for window in std::iter::once(&mut self.direct_ingress)
+            .chain(self.rows.iter_mut().map(|row| &mut row.ingress))
+        {
+            let mut position = window.front_position();
+            while let Some(index) = position {
+                position = window.next_position(index);
+                if let Some(Intent::Capture(token)) = window.at_mut(index) {
+                    token.frozen = None;
+                }
+            }
+        }
+        self.capture_hold = false;
+    }
+}
+
+#[cfg(test)]
+impl Hub {
+    pub fn test_pause_captures(&mut self) {
+        self.capture_hold = true;
+    }
+    pub fn test_hold_captures(&mut self, sample: i64) {
+        self.capture_hold = true;
+        self.test_capture_request = Some(sample);
+    }
+    fn test_capture_tick(&mut self) {
+        if let Some(sample) = self.test_capture_request.take() {
+            self.freeze_captures(sample).unwrap();
+        }
+        if self.frozen_captures.active {
+            if std::mem::take(&mut self.test_capture_commit) {
+                self.commit_capture().unwrap();
+            }
+            self.test_capture_result = Some(self.advance_captures(4096));
+        }
+    }
+    pub fn test_capture_metadata(
+        &self,
+        source: u8,
+        serial: u64,
+    ) -> Option<(
+        usize,
+        super::capture::Key,
+        harmonigraph_core::cohort::Event,
+        [Option<harmonigraph_core::cohort::TargetLink>; 64],
+    )> {
+        use harmonigraph_core::cohort::TargetAccess;
+        let targets = Self::capture_targets(
+            &self.rows,
+            &self.direct_ingress,
+            &self.direct_captures,
+            self.direct.capture_lease(),
+            self.publication_clock.epoch,
+            self.frozen_captures.id,
+        );
+        let view = targets.rows[source as usize].as_ref()?;
+        let mut position = view.ingress.front_position();
+        while let Some(index) = position {
+            position = view.ingress.next_position(index);
+            let Some(Intent::Capture(token)) = view.ingress.at_ref(index) else {
+                continue;
+            };
+            if token.key.serial != serial {
+                continue;
+            }
+            let metadata = view.metadata(index)?;
+            let mut next = metadata.targets.first;
+            let links = std::array::from_fn(|_| {
+                let link = view.get(source, next);
+                if let Some(link) = link {
+                    next = link.next;
+                }
+                link
+            });
+            return Some((index, token.key, metadata, links));
+        }
+        None
+    }
+    pub fn test_capture_keys(&self, source: usize) -> Vec<super::capture::Key> {
+        let window =
+            if source == 0 { &self.direct_ingress } else { &self.rows[source - 1].ingress };
+        let mut keys = Vec::new();
+        let mut position = window.front_position();
+        while let Some(index) = position {
+            position = window.next_position(index);
+            match window.at_ref(index).unwrap() {
+                Intent::Capture(token) => keys.push(token.key),
+                Intent::CaptureRetirement(retirement) => keys.push(retirement.key),
+                _ => {}
+            }
+        }
+        keys
+    }
+}
+
+#[cfg(test)]
+impl Hub {
+    pub fn test_capture_phases(&self, source: usize) -> (usize, usize) {
+        let window =
+            if source == 0 { &self.direct_ingress } else { &self.rows[source - 1].ingress };
+        let mut position = window.front_position();
+        let mut counts = (0, 0);
+        while let Some(index) = position {
+            position = window.next_position(index);
+            match window.at_ref(index).unwrap() {
+                Intent::Capture(_) => counts.0 += 1,
+                Intent::CaptureRetirement(_) => counts.1 += 1,
+                _ => {}
+            }
+        }
+        counts
+    }
+}
+
+#[cfg(test)]
+impl Hub {
+    pub fn test_frozen_id(&self) -> harmonigraph_core::cohort::FrozenInputId {
+        self.frozen_captures.id
+    }
+    pub fn test_capture_lookup(
+        &self,
+        source: u8,
+        binding: harmonigraph_core::cohort::FrozenInputId,
+        handle: u32,
+    ) -> Option<harmonigraph_core::cohort::TargetLink> {
+        use harmonigraph_core::cohort::TargetAccess;
+        Self::capture_targets(
+            &self.rows,
+            &self.direct_ingress,
+            &self.direct_captures,
+            self.direct.capture_lease(),
+            self.publication_clock.epoch,
+            binding,
+        )
+        .get(source, handle)
+    }
+    pub fn test_fill_reply_with_old_ack(&mut self) {
+        let row = &self.rows[0];
+        let (cut, complete_through) = row.last_ack.unwrap();
+        let reply = Reply::OutputRetained {
+            incarnation: row.lease.unwrap().incarnation,
+            epoch: row.epoch,
+            cut,
+            complete_through,
+        };
+        let replies = &mut self.offer.as_mut().unwrap().bank.rows[0].replies;
+        while replies.push(reply).is_ok() {}
+    }
+    pub fn test_disposition_cursor(&self) -> (usize, Option<u64>) {
+        let row = &self.rows[0];
+        let mut count = 0;
+        let mut next = row.ingress.front_position();
+        while let Some(position) = next {
+            if matches!(row.ingress.at_ref(position), Some(Intent::Disposition { .. })) {
+                count += 1;
+            }
+            next = row.ingress.next_position(position);
+        }
+        let cursor = row.ingress_cursor.and_then(|position| match row.ingress.at_ref(position) {
+            Some(Intent::Disposition { transaction, .. }) => Some(*transaction),
+            _ => None,
+        });
+        (count, cursor)
+    }
+    pub fn test_repeat_capture_retirement(&mut self, key: super::capture::Key) {
+        self.offer.as_mut().unwrap().bank.rows[key.lease.slot as usize - 1]
+            .replies
+            .push(Reply::CaptureRetired(key))
+            .unwrap();
     }
 }
