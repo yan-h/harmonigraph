@@ -832,6 +832,298 @@ fn channel_termination_captures_each_wave_and_sound_off_keeps_physical_offs() {
 }
 
 #[test]
+fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    let mut source = Device::new(true);
+    source.configure_offset(uuid, true, 65536);
+    source.activate();
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    let mut seed = known_seed();
+    seed.push(note(73, 0, 60, 4, true));
+    let on = source.run(64, seed, None);
+    assert_eq!(on.values.len(), 5);
+    assert!(matches!(on.values[4], (4, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 73, .. })));
+    let wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    let (lease, adopted, acknowledged, _) =
+        wrapper.test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
+    assert!(adopted && !acknowledged);
+    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
+    let row = &session.rows[usize::from(lease.unwrap().slot - 1)];
+    assert_eq!(row.emission_gate.load(Ordering::Acquire), source::OPEN);
+    let shared = source.shared();
+    let setup::Routing::Source(mut routing) = shared.value().routing else { unreachable!() };
+    routing.selected = Some(SavedUuid::default());
+    shared.apply(setup::Routing::Source(routing), false).unwrap();
+    source.main();
+    hub.run(64, vec![], None);
+    assert!(row.withdrawn.load(Ordering::Acquire));
+    assert_eq!(row.emission_gate.load(Ordering::Acquire), source::CLOSED);
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert_eq!(source.source_snapshot().held, 1);
+    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
+    let output = source.run(
+        128,
+        vec![
+            expression(73, 0.1234567890123, 4),
+            midi(0, 0xb0, 11, 90, 8),
+            note(73, 0, 60, 16, false),
+        ],
+        None,
+    );
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert!(output.values.iter().any(|(time, event)| *time == 4
+        && matches!(event, Event::Expression { id: 73, value, .. } if *value == 0.1234567890123)),
+        "an established expression must not wait for the future baseline ACK after withdrawal");
+    assert!(output.values.iter().any(
+        |(time, event)| *time == 8 && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })
+    ));
+    assert!(output.values.iter().any(|(time, event)| *time == 16
+        && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 73, .. })));
+    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
+    assert_eq!(session.credits.load(Ordering::Acquire), 1);
+    drop(hub);
+    drop(source);
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn a_join_floor_retry_keeps_new_stream_controls_behind_the_fresh_zero_cut_baseline() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut source = Device::new(true);
+    source.configure(uuid, false);
+    source.activate();
+    source.run(0, vec![], None);
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    hub.run(0, vec![], None);
+    hub.run(64, vec![], None);
+    source.main();
+    source.run(64, vec![], None);
+    let wrapper = unsafe {
+        &*((*source.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+    };
+    let (_, adopted, joined, coverage) =
+        wrapper.test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
+    assert!(adopted && !joined);
+    assert_eq!(
+        coverage.unwrap().start,
+        64,
+        "the initial snapshot starts behind Hub's published128 frontier"
+    );
+    hub.run(128, vec![], None);
+    let retry = source.run(128, vec![midi(0, 0xb0, 88, 37, 2), midi(0, 0x90, 60, 64, 4)], None);
+    let (_, _, joined, coverage) =
+        wrapper.test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
+    assert_eq!(coverage.unwrap().start, 128, "the real Hub reply moved the join floor");
+    assert!(
+        !joined && retry.values.is_empty(),
+        "acknowledging an obsolete zero-cut snapshot is not stream admission"
+    );
+    hub.run(192, vec![], None);
+    let output = source.run(192, vec![], None);
+    assert!(output
+        .values
+        .iter()
+        .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 37], .. })));
+    assert!(output.values.iter().any(|(_, event)| event.attack().is_some()));
+    hub.run(256, vec![], None);
+    let (lease, _, joined, _) =
+        wrapper.test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
+    assert!(joined);
+    assert_eq!(receiver(&hub, usize::from(lease.unwrap().slot - 1)), (Some(0), 1, 2, 2));
+    source.run(256, vec![midi(0, 0x80, 60, 0, 4)], None);
+    hub.run(320, vec![], None);
+    source.run(320, vec![], None);
+    hub.run(384, vec![], None);
+    source.run(384, vec![], None);
+    assert_eq!(source.source_snapshot().held, 0);
+}
+
+#[test]
+fn reset_cancels_prefix_associations_without_rewriting_actual_receiver_facts() {
+    let _scope = crate::test_scope::enter();
+    for case in [2, 0, 1, 3] {
+        let uuid = SavedUuid::default();
+        let mut hub = Device::new(false);
+        hub.configure(uuid, true);
+        hub.activate();
+        let session = registry::global().lock().unwrap().test_session(uuid);
+        let mut source = Device::new(true);
+        source.configure(uuid, false);
+        source.activate();
+        source.run(0, vec![], None);
+        hub.run(0, vec![], None);
+        let initial = match case {
+            0 => Some(0),
+            1 => None,
+            _ => Some(55),
+        };
+        let mut seed = known_seed();
+        if let Some(value) = initial {
+            seed.push(midi(0, 0xb0, 88, value, 4));
+        }
+        source.run(64, seed, None);
+        hub.run(64, vec![], None);
+        let mut wire = Vec::new();
+        if case < 2 {
+            let rejected = source.run_select(128, vec![midi(0, 0xb0, 88, 55, 4)], None, Some(1));
+            assert_eq!(rejected.attempts, 1);
+            assert!(rejected.values.is_empty());
+            assert_eq!(source.source_snapshot().velocity_prefix[0], initial);
+            assert_ne!(source.source_snapshot().faults & source::OUTPUT_FAULT, 0);
+            hub.run(128, vec![], None);
+        } else {
+            source.run(128, vec![], None);
+            hub.run(128, vec![], None);
+        }
+        let shared = source.shared();
+        let applied = shared.applied.load(Ordering::Acquire);
+        shared.apply(shared.value().routing, true).unwrap();
+        let pending = source.run(192, vec![], (case >= 2).then_some(CLAP_EVENT_MIDI));
+        if case >= 2 {
+            assert!(pending.attempts > 0 && pending.values.is_empty());
+            assert_eq!(source.source_snapshot().velocity_prefix[0], Some(55));
+            assert_eq!(
+                shared.applied.load(Ordering::Acquire),
+                applied,
+                "Reset stays unapplied while actual prefix repair rejects"
+            );
+        }
+        hub.run(192, vec![], None);
+        let before = source.source_snapshot().input_cut;
+        for block in 4..16 {
+            source.main();
+            hub.main();
+            let inputs = if case >= 2 && block == 4 {
+                let mut inputs = vec![];
+                if case == 3 {
+                    inputs.push(midi(0, 0xb0, 88, 37, 2));
+                }
+                inputs.push(midi(0, 0x90, 60, 64, 4));
+                inputs
+            } else {
+                vec![]
+            };
+            let output = source.run(block * 64, inputs, None);
+            if case >= 2 && block == 4 {
+                assert_eq!(
+                    source.source_snapshot().input_cut,
+                    before + if case == 3 { 2 } else { 1 }
+                );
+                assert!(
+                    output
+                        .values
+                        .iter()
+                        .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 0], .. })),
+                    "actual repair accepts after the new consumer was captured"
+                );
+            }
+            let accepted37 = output
+                .values
+                .iter()
+                .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 37], .. }));
+            wire.extend(output.values);
+            hub.run(block * 64, vec![], None);
+            if case == 3 && accepted37 {
+                let wrapper = unsafe {
+                    &*((*source.plugin)
+                        .plugin_data
+                        .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+                };
+                let (lease, adopted, joined, coverage) = wrapper.test_inspect_plugin(|plugin| {
+                    plugin.source.as_ref().unwrap().test_stream_status()
+                });
+                assert!(
+                    adopted && joined && coverage.is_some(),
+                    "the first new-stream control waits for its real join and current coverage"
+                );
+                let (_, held, received, applied) =
+                    receiver(&hub, usize::from(lease.unwrap().slot - 1));
+                assert_eq!(held, 1);
+                assert_eq!(
+                    (received, applied),
+                    (source.source_snapshot().sequence, source.source_snapshot().sequence),
+                    "Hub retains both the new controller and its actual consumer"
+                );
+            }
+        }
+        assert!(
+            shared.applied.load(Ordering::Acquire) > applied,
+            "case{case}: {:?}; update {:?}; wire {:?}",
+            source.source_snapshot(),
+            shared.value(),
+            wire
+        );
+        assert_eq!(source.source_snapshot().faults, 0);
+        if case < 2 {
+            wire.extend(source.run(1024, vec![midi(0, 0x90, 60, 64, 4)], None).values);
+        } else {
+            wire.extend(source.run(1024, vec![], None).values);
+        }
+        hub.run(1024, vec![], None);
+        assert!(
+            wire.iter().any(|(_, event)| event.attack().is_some()),
+            "fresh raw On actually sounds after Reset case{case}: {:?}; wire {:?}",
+            source.source_snapshot(),
+            wire
+        );
+        assert!(
+            !wire
+                .iter()
+                .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 55], .. })),
+            "Reset cannot restore canceled55 through the new consumer"
+        );
+        if case == 1 {
+            assert!(
+                !wire
+                    .iter()
+                    .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, _], .. })),
+                "unknown input state cannot manufacture a zero-prefix wire event"
+            );
+        }
+        if case == 3 {
+            let onset = wire.iter().position(|(_, event)| event.attack().is_some()).unwrap();
+            let prefix: Vec<_> = wire[..onset]
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    Event::Midi { data: [0xb0, 88, value], .. } => Some(*value),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                prefix,
+                [0, 37],
+                "accepted repair0 precedes the genuine37 actually consumed by the new On"
+            );
+        }
+        assert_eq!(source.source_snapshot().velocity_prefix[0], Some(0));
+        source.run(1088, vec![midi(0, 0x80, 60, 2, 4)], None);
+        hub.run(1088, vec![], None);
+        for block in 18..24 {
+            source.run(block * 64, vec![], None);
+            hub.run(block * 64, vec![], None);
+        }
+        assert_eq!(session.credits.load(Ordering::Acquire), 0);
+        assert_eq!(source.source_snapshot().pending, 0);
+    }
+}
+
+#[test]
 fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal() {
     let _scope = crate::test_scope::enter();
     for raw_prelude in [false, true] {
@@ -841,15 +1133,29 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
         }
         seed.push(midi(0, 0xb0, 64, 127, 3));
         if raw_prelude {
+            seed.push(midi(0, 0xe0, 64, 64, 3));
             seed.push(midi(0, 0xb0, 1, 90, 3));
         }
         let fixture = Pressure::new(seed);
-        fixture.target.run(128, vec![note(2, 0, 64, 4, true), midi(0, 0xb0, 64, 0, 20)], None);
+        let mut input = vec![note(2, 0, 64, 4, true), midi(0, 0xb0, 64, 0, 20)];
+        if !raw_prelude {
+            input.push(midi(0, 0xe0, 64, 64, 24));
+        }
+        let original = fixture.target.run(128, input, None);
+        if !raw_prelude {
+            assert_eq!(
+                original.values,
+                [
+                    (20, Event::Midi { port: 0, data: [0xb0, 64, 0], flags: 0 }),
+                    (24, Event::Midi { port: 0, data: [0xe0, 64, 64], flags: 0 }),
+                ]
+            );
+        }
         fixture.peers(128, false);
         fixture.target.run(192, vec![note(1, 0, 60, 16, false)], None);
         fixture.peers(192, true);
         let rejected =
-            fixture.target.run_select(256, vec![], None, Some(if raw_prelude { 7 } else { 3 }));
+            fixture.target.run_select(256, vec![], None, Some(if raw_prelude { 8 } else { 3 }));
         let expected = if raw_prelude {
             vec![
                 (0, Event::Midi { port: 0, data: [0xb0, 7, 40], flags: 0 }),
@@ -858,6 +1164,7 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
                 (0, Event::Midi { port: 0, data: [0xb0, 69, 0], flags: 0 }),
                 (0, Event::Midi { port: 0, data: [0xb0, 0, 1], flags: 0 }),
                 (0, Event::Midi { port: 0, data: [0xb0, 64, 127], flags: 0 }),
+                (0, Event::Midi { port: 0, data: [0xe0, 64, 64], flags: 0 }),
                 (0, Event::Midi { port: 0, data: [0xb0, 64, 0], flags: 0 }),
             ]
         } else {
@@ -879,6 +1186,16 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
             fixture.peers(block * 64, false);
         }
         assert_eq!(fixture.target.source_snapshot().faults, 0);
+        if !raw_prelude {
+            assert_eq!(
+                (
+                    fixture.target.source_snapshot().pending,
+                    fixture.target.source_snapshot().references
+                ),
+                (0, 0),
+                "the accepted younger bend has retired into the folded checkpoint"
+            );
+        }
         let fresh = fixture.target.run(704, vec![note(3, 0, 60, 4, true)], None);
         assert!(
             fresh.values.iter().any(|(_, event)| event.attack().is_some()),
@@ -916,6 +1233,12 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
                 .iter()
                 .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64, 127], .. })),
             "the acknowledged Reset must not resurrect an overwritten input pedal value"
+        );
+        assert!(
+            recovered.values[..onset]
+                .iter()
+                .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 64, 64], .. })),
+            "pedal neutralization must preserve bend8256, not bend64; raw_prelude={raw_prelude}"
         );
         fixture.peers(896, false);
         fixture.finish(960);

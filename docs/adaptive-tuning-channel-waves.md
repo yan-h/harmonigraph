@@ -54,6 +54,8 @@ Setup never acquires a musical voice credit.
 An accepted prefix remains factual if a later setup event is rejected.
 Emergency pedal neutralization updates actual state and its corresponding input checkpoint repair separately;
 a later Reset cannot resurrect an already overwritten input pedal value.
+Both raw replay and checkpoint folding substitute repaired pedal values only for Control Change messages;
+pitch-bend bytes that happen to match a pedal controller number remain unchanged.
 Preparation checks the captured Stop sample even when the visit budget cannot yet advance the Stop marker.
 
 CC120/123 remain physical channel operations with input-captured targets.
@@ -113,6 +115,24 @@ Otherwise the cancellation cursor can pass those expressions before emergency te
 Only an unsounded lifetime is marked canceled;
 an established lifetime's essential original Off remains eligible when an emergency termination is rejected.
 
+Explicit Reset also discards known canceled input associations, including a standalone CC88 that the host rejected.
+At that reached boundary, known prefix state associates later consumers with the required neutral result, while unknown state stays unknown.
+The receiver's actual nonzero value remains unchanged until a real repair is accepted;
+new input can be captured during rejected repair without copying that old value into its later consumer.
+Genuine post-cut CC88 input still overrides later associations.
+Reset completion waits for the old lease generation, its exact cancellation cut and every physical/output-retention obligation.
+After a new lease is adopted, its genuine post-cut pending note cannot also be required to finish before Reset clears the fault that inhibits that note.
+Lease detachment, sealing and transition settlement retain their full old-obligation checks.
+Nonessential output for a newly adopted stream waits for current callback coverage and actual Hub admission of its initial zero-cut baseline.
+Admission can precede snapshot acknowledgement when calibration places the snapshot ahead of the Hub's playhead;
+the pending snapshot still fences transfer of later accepted history, without delaying its physical output.
+The existing one-byte adoption state retains this initial admission fact through later gate closure so established controls stay responsive before snapshot acknowledgement;
+new offer adoption resets it, and fresh attacks and setup still claim current admission separately.
+This prevents a post-Reset controller from being accepted before Adopt, transferred into an unknown Hub row, and then blocking the note behind an unacknowledged nonempty initial baseline.
+An obsolete zero-cut baseline acknowledged only to move the join floor keeps that gate closed;
+the retained snapshot's original coverage identifies that reply, independent of mutable current coverage.
+Established streams retain their responsive controls and essential releases.
+
 ## Executed functional coverage
 
 The exported-factory fixtures reach the real 256-credit boundary and normal host acceptance path with the process allocation/deallocation guard enabled.
@@ -126,6 +146,10 @@ CC88 fixtures separately reach healthy prefix output before consumer capture, ol
 Review regressions cover accepted unmapped corrections with positive Hub state and acknowledgements, repeated partial-prefix failure, per-setup lease closure before/after claim, and retained raw-pedal repair across Reset.
 The cancellation fixture proves all 512 expressions and the final CC88 were captured while visit pressure leaves that prefix unattempted, then requires the real post-Stop consumer and forbids restoration of canceled55. Its negative control retains the necessary inline-cancellation correction while using the previous Stop association implementation.
 Additional Stop cases cover unknown startup across two Stops, accepted and rejected neutralization, later original37 overrides, exact deferred-consumer order and complete pin retirement.
+Explicit Reset cases cover rejected55 with known zero or unknown state, a captured consumer during rejected nonzero repair, and exact accepted repair0 then post-cut37 before its consumer.
+The folded-bend fixture proves its raw history is gone before testing the replayed checkpoint;
+the join-floor fixture receives a real Hub retry and proves new controls wait for the replacement zero-cut snapshot.
+The far-ahead calibration fixture closes a truthfully joined lease through an ordinary pairing edit while its zero-cut snapshot is still unacknowledged, then verifies exact established expression, controller and Off timing and complete retirement.
 The full output fixture executes 512 normal plus 128 emergency attempts and retains all accepted emergency facts.
 Wrapper boundary tests verify the independent acceptance masks and exact raw MIDI bytes/flags.
 These functional results do not provide a timing or D512 sequencing claim.

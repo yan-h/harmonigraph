@@ -187,16 +187,19 @@ impl Source {
     pub(super) fn discard_wave_prefix_pins(&mut self) {
         for channel in 0..16 {
             let prefix = self.channels.waves[channel].input_prefix;
-            if prefix.stop_index().is_some() {
-                let actual = &self.state.channels()[channel];
-                self.channels.waves[channel].input_prefix =
-                    if actual.controller_valid[1] & (1 << 24) != 0 {
-                        Prefix::known(actual.controllers[88])
-                    } else {
-                        Prefix::default()
-                    };
-                self.drop_prefix(prefix, channel);
-            }
+            let actual = &self.state.channels()[channel];
+            // A reached cancellation discards every old input association.
+            // Known nonzero receiver state still owns actual repair debt;
+            // a consumer captured while that repair rejects must bind its
+            // required neutral result, not resurrect the old receiver value.
+            // State itself changes only when the host accepts output.
+            self.channels.waves[channel].input_prefix =
+                if actual.controller_valid[1] & (1 << 24) != 0 {
+                    Prefix::known(0)
+                } else {
+                    Prefix::default()
+                };
+            self.drop_prefix(prefix, channel);
         }
     }
 
@@ -282,7 +285,8 @@ impl Source {
         }
         let Event::Midi { data: [status, a, b], .. } = pending.event else { return };
         let wave = &mut self.channels.waves[usize::from(status & 15)];
-        let b = if pending.serial <= wave.reset_cut
+        let b = if status & 0xf0 == 0xb0
+            && pending.serial <= wave.reset_cut
             && [64, 66, 69]
                 .iter()
                 .position(|cc| *cc == a)
@@ -426,7 +430,8 @@ impl Source {
                     pending.event
                 {
                     let wave = &self.channels.waves[channel];
-                    if pending.serial <= wave.reset_cut
+                    if status & 0xf0 == 0xb0
+                        && pending.serial <= wave.reset_cut
                         && [64, 66, 69]
                             .iter()
                             .position(|value| *value == cc)
@@ -511,7 +516,7 @@ impl Source {
         else {
             return false;
         };
-        if !self.admitted(pending.generation) {
+        if !self.ordinary_stream_ready() || !self.admitted(pending.generation) {
             return false;
         }
         if self.journal.free() == 0
@@ -543,8 +548,8 @@ impl Source {
             false
         };
         self.permit = Some(Permit {
-            position: usize::from(wave.setup.index),
-            serial: wave.setup.serial,
+            position: usize::from(self.channels.waves[channel].setup.index),
+            serial: pending.serial,
             credit: false,
             gate,
             emergency: false,

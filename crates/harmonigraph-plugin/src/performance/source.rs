@@ -145,6 +145,20 @@ struct PendingBaseline {
     coverage: Coverage,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Adoption {
+    Pending,
+    Sent,
+    Joined,
+}
+
+impl Adoption {
+    fn sent(self) -> bool {
+        self != Self::Pending
+    }
+}
+
 pub struct Source {
     pub shared: Arc<setup::Shared>,
     pub offer: Option<SourceOffer>,
@@ -186,7 +200,7 @@ pub struct Source {
     next_baseline: u64,
     baseline_needed: bool,
     baseline_acked: bool,
-    adopt_sent: bool,
+    adoption: Adoption,
     coverage: Option<Coverage>,
     last_progress: Option<(i64, u64)>,
     acknowledged: u64,
@@ -314,7 +328,7 @@ impl Source {
             next_baseline: 0,
             baseline_needed: true,
             baseline_acked: false,
-            adopt_sent: false,
+            adoption: Adoption::Pending,
             coverage: None,
             last_progress: None,
             acknowledged: 0,
@@ -435,12 +449,14 @@ impl Source {
             && self.manifest.len() == 0
     }
     fn lease_settled(&self) -> bool {
+        self.old_pending == 0 && self.output_settled()
+    }
+    fn output_settled(&self) -> bool {
         self.held() == 0
             && !self.state.pedals_held()
             && self.owed_note_off == [NONE; 64]
             && self.journal.len() == 0
             && self.emergency_output.len() == 0
-            && self.old_pending == 0
             && self.permit.is_none()
             && self.manifest.len() == 0
             && self.emergency.iter().all(Option::is_none)
@@ -524,7 +540,7 @@ impl Source {
             self.old_pending = self.obligations;
             self.baseline_needed = true;
             self.baseline_acked = false;
-            self.adopt_sent = false;
+            self.adoption = Adoption::Pending;
             self.coverage = None;
             self.clock.coverage = None;
             self.last_progress = None;
@@ -849,10 +865,12 @@ impl Source {
             {
                 break;
             }
-            if update.reset && (!self.lease_settled() || !self.local_cancel_cut_settled()) {
+            if update.reset && (!self.output_settled() || !self.local_cancel_cut_settled()) {
                 // Explicit recovery clears local inhibition only after the
                 // old cancellation/release obligations have really settled.
-                // Ordinary offer adoption cannot provide that authority.
+                // The generation guard above waits for the old lease. A new
+                // lease counts post-cut input in old_pending again; requiring
+                // that input to finish before clearing this fault deadlocks it.
                 break;
             }
             if changes_clock {
@@ -1379,6 +1397,31 @@ impl Source {
         }
     }
 
+    fn ordinary_stream_ready(&mut self) -> bool {
+        // A newly adopted stream must reach its actual Hub join before controls
+        // create its first accepted output. Admission can precede snapshot ack
+        // when calibration places the snapshot ahead of the Hub's playhead;
+        // the pending baseline still fences transfer of later accepted history.
+        // Retain that fact through withdrawal so established controls remain
+        // responsive. A new offer resets it; fresh attacks/setup still claim
+        // current admission separately. Clock replacement also waits for the
+        // next validated callback.
+        if self.coverage.is_none() {
+            return false;
+        }
+        let Some(offer) = &self.offer else { return true };
+        let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
+        if row.expected_incarnation.load(Ordering::Acquire) != offer.lease.incarnation
+            || offer.session.epoch.load(Ordering::Acquire) != self.epoch
+        {
+            return false;
+        }
+        if self.adoption == Adoption::Sent && row.emission_gate.load(Ordering::Acquire) == OPEN {
+            self.adoption = Adoption::Joined;
+        }
+        self.adoption == Adoption::Joined
+    }
+
     pub fn prepare(&mut self, group: api::Group) -> bool {
         assert!(self.permit.is_none());
         if group.token.0[3] == wave::SETUP_TOKEN {
@@ -1428,7 +1471,7 @@ impl Source {
         if !self.charge(completion_work) {
             return false;
         }
-        if !self.clock.valid && !pending.event.release() {
+        if (!self.clock.valid || !self.ordinary_stream_ready()) && !pending.event.release() {
             return false;
         }
         let report_cells =
@@ -2001,9 +2044,15 @@ impl Source {
                         baseline.id == transaction && baseline.cut == cut
                     }) =>
             {
+                let retry = cut == 0 && self.baseline.unwrap().coverage.start < start;
                 self.baseline = None;
-                self.baseline_acked = true;
-                if cut == 0 && self.coverage.is_some_and(|coverage| coverage.start < start) {
+                // The Hub can acknowledge an obsolete empty snapshot solely
+                // to move its join floor. That reply does not admit this stream.
+                self.baseline_acked = !retry;
+                if !retry {
+                    self.adoption = Adoption::Joined;
+                }
+                if retry {
                     self.clock.coverage = None;
                     self.coverage = None;
                     self.last_progress = None;
@@ -2171,7 +2220,7 @@ impl Source {
             return true;
         }
         if self.offer.is_none()
-            || !self.adopt_sent
+            || !self.adoption.sent()
             || self.offer.as_ref().is_some_and(|offer| pending.generation > offer.generation)
         {
             self.finish_work(position, child);
@@ -2242,7 +2291,7 @@ impl Source {
         self.publish_seal();
         if self.producer_joined && !self.joined_published && self.transfer_cut == self.sequence {
             if let Some(offer) = &self.offer {
-                if self.adopt_sent
+                if self.adoption.sent()
                     && offer.session.rows[usize::from(offer.lease.slot - 1)]
                         .to_hub
                         .publish(Control::ProducerJoined {
@@ -2313,7 +2362,7 @@ impl Source {
         {
             self.input_reported = Some(coverage.through);
         }
-        if !self.adopt_sent
+        if !self.adoption.sent()
             && row
                 .to_hub
                 .publish(Control::Adopt {
@@ -2323,7 +2372,7 @@ impl Source {
                 })
                 .is_ok()
         {
-            self.adopt_sent = true;
+            self.adoption = Adoption::Sent;
         }
         if self.baseline_needed && self.baseline.is_none() && !row.withdrawn.load(Ordering::Acquire)
         {
@@ -2357,7 +2406,7 @@ impl Source {
     }
 
     fn publish_output_progress(&mut self) {
-        if self.detaching || !self.adopt_sent {
+        if self.detaching || !self.adoption.sent() {
             return;
         }
         // Advertise completed coverage and its full accepted cut before
@@ -2448,6 +2497,14 @@ const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {
+    pub fn test_stream_status(&self) -> (Option<Lease>, bool, bool, Option<Coverage>) {
+        (
+            self.offer.as_ref().map(|offer| offer.lease),
+            self.adoption.sent(),
+            self.baseline_acked,
+            self.coverage,
+        )
+    }
     pub fn test_rebase_output_prefix(&mut self, prefix: u64) -> Lease {
         assert_eq!(self.journal.len(), 0);
         assert_eq!(self.emergency_output.len(), 0);
