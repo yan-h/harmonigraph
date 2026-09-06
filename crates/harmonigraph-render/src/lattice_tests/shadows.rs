@@ -15,13 +15,8 @@ const SIZE: [u32; 2] = [256, 256];
 /// lands on. Bright, so one multiply has the range of a channel to move in.
 const GROUND: f64 = 0.8;
 
-/// The shader's own `INK_FLOOR`: the least a caster may darken the frame by
-/// before its fragment is discarded rather than drawn, and so where every
-/// shadow read here ENDS, whatever the quad around it reaches.
-///
-/// Pinned to the shader's own declaration by
-/// [`the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar`], the
-/// one reading it bounds.
+/// The node ink floor, used by the subfloor-mark fixture. Shadows must keep
+/// fading below this coverage rather than borrowing the ink's cutoff.
 const INK_FLOOR: f64 = 0.01;
 
 fn over_ground() -> wgpu::Color {
@@ -1153,11 +1148,6 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         scene.camera.distance *= PULL_BACK;
         scene
     };
-    assert!(
-        SHADER_SRC.contains(&format!("const INK_FLOOR: f32 = {INK_FLOOR};")),
-        "lattice.wgsl must declare INK_FLOOR as {INK_FLOOR}, which is what the tail below is \
-         read against"
-    );
     shooter.clear = over_ground();
     // A node's rings and a cross, each with its own ink radius on the pane:
     // the two quads are built by different code and each has to hold its own
@@ -1214,8 +1204,8 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // `profile[0]` starts two points past the ink, so its index alone is
         // two points short of the physical reach being tested.
         let reach = last as f32 + 2.0;
-        // A DECADE above the floor the walk has to arrive at, so that `last`
-        // is the end of a descent rather than the one column a faint caster
+        // A substantial shadow, so that `last` is the end of a descent
+        // rather than the one column a faint caster
         // wrote. Not a fixed half of the ground: the two casters here are
         // deliberately different thicknesses against σ, and at the top of the
         // bar a cross an arm wide is thin enough that the gain leaves its
@@ -1224,7 +1214,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // what this fixture stands on; a bound that ruled it out would be
         // asking the cross to be a node.
         assert!(
-            profile[0] > 10.0 * INK_FLOOR && reach > 2.0 * sigma(&deep_scene),
+            profile[0] > 0.1 && reach > 2.0 * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -1237,15 +1227,11 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
                 pair[1],
             );
         }
-        // What ends a shadow is the shader's own `INK_FLOOR`: a fragment
-        // darkening under a hundredth of the frame is discarded rather than
-        // drawn, so the last column a caster writes stands just above that
-        // floor whatever the quad does. The bound is twice it — the floor,
-        // plus one column of this profile's own slope, plus the code value an
-        // 8-bit frame quantizes the reading to. A quad cut short leaves the
-        // blur's own value there, which is an order up on any of the three.
+        // Reach the final output's smallest step before disappearing. The old
+        // one-percent cutoff stopped at several codes and the old two-percent
+        // tolerance accepted exactly the contour this reading should catch.
         assert!(
-            profile[last] < 2.0 * INK_FLOOR,
+            profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
             "{what}'s shadow stops at {:.4} of the ground {last} px out: the quad ended inside \
              the blur",
             profile[last],
