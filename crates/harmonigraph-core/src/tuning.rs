@@ -291,6 +291,14 @@ impl PitchClass {
         cents(self.0)
     }
 
+    /// Exact signed correction from `other` to this class, folded into
+    /// `[-600, 600)` cents. An exact half-octave tie chooses the negative side.
+    pub fn signed_microcents_from(self, other: PitchClass) -> i32 {
+        let octave = i64::from(OCTAVE_MICROCENTS);
+        ((i64::from(self.0) - i64::from(other.0) + octave / 2).rem_euclid(octave) - octave / 2)
+            as i32
+    }
+
     /// Distance to another pitch class, accounting for octave wraparound
     /// (e.g. 10¢ and 1190¢ are 20¢ apart, not 1180¢).
     pub fn distance_to(self, other: PitchClass) -> PitchClassDistance {

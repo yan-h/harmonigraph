@@ -25,6 +25,7 @@ pub mod confirmed;
 pub mod coords;
 pub mod history;
 pub mod notes;
+pub mod policy;
 pub mod roll;
 pub mod spectrogram;
 pub mod spectrum;
