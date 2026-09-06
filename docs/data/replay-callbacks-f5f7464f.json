@@ -1,0 +1,80 @@
+{
+  "dev": {
+    "run": {
+      "ambient_load": "User apps remain active: WindowServer60.8%, BitwigPluginHost50.6%, CodexService23.7%, Codex15.2%, Renderer10.3%, Bitwig9.5% at coordinator clearance. Per-process snapshot, not total machine utilization. No apps changed or stopped.",
+      "command": "cargo test -p harmonigraph-plugin --lib --features nice-plug/assert_process_allocs performance::tests::observed_callback_cost_at_empty_and_full_session_state -- --exact --nocapture --test-threads=1",
+      "environment": {
+        "CARGO_BUILD_JOBS": "2",
+        "HARMONIGRAPH_REPLAY_REHEARSAL": "UNSET",
+        "RUSTC_WRAPPER": "",
+        "RUST_TEST_THREADS": "1"
+      },
+      "exclusive_grant": "Coordinator process clearance 2026-09-06 11:08:26 UTC: no cargo/rustc/clang/ld/sccache; no concurrent agent builds.",
+      "guard": "Allocation/deallocation guard enabled in optimized-dev; compiled out in release.",
+      "head": "f5f7464ff663fad3f6aaad51c68206a6d1d4992a",
+      "machine_coordinator_verified": "MacBookPro18,3; Apple M1 Pro; 8 physical/8 logical; 16 GiB; Darwin25.6.0 ARM64_T6000",
+      "profile": "dev",
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)\nbinary: rustc\ncommit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234\ncommit-date: 2025-12-08\nhost: aarch64-apple-darwin\nrelease: 1.92.0\nLLVM version: 21.1.3",
+      "scope": "Normal ambient-load callback observations, including preallocated host event bookkeeping. Sum17 excludes host scheduling/jitter. Not idle-machine, WCET or full616D512 deadline qualification.",
+      "started_utc": "2026-09-06T11:10:28.437669+00:00"
+    },
+    "completion": {
+      "cargo_wall_seconds_including_build": 17.939731208000012,
+      "exit_code": 0,
+      "finished_utc": "2026-09-06T11:10:46.416671+00:00"
+    },
+    "baseline_single_256_onset_hub_ns": 3383458,
+    "replay_reach": [
+      [
+        "reject-repair",
+        "history=2064 setup=2081 max_setup_attempts=512 rejected_attempts=2 peak_pending_refs_journal_emergency_held=[2086, 2074, 1280, 1, 1] retained_cut=4175 acknowledged=4175 canonical_young=0 owners=16+Hub rate=44100 frames=512"
+      ],
+      [
+        "success",
+        "history=2064 setup=2081 max_setup_attempts=512 rejected_attempts=0 peak_pending_refs_journal_emergency_held=[2086, 2074, 1280, 0, 1] retained_cut=4181 acknowledged=4181 canonical_young=2 owners=16+Hub rate=44100 frames=512"
+      ]
+    ],
+    "replay_episodes_per_variant": 16,
+    "test_result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 145 filtered out; finished in 1.65s",
+    "raw_log_sha256": "cc05b9e4e78acf9504ec91a6539a023f9d12aba9162c770ca5a308d4cc741d1f"
+  },
+  "release": {
+    "run": {
+      "ambient_load": "User apps remain active: WindowServer60.8%, BitwigPluginHost50.6%, CodexService23.7%, Codex15.2%, Renderer10.3%, Bitwig9.5% at coordinator clearance. Per-process snapshot, not total machine utilization. No apps changed or stopped.",
+      "command": "cargo test --release -p harmonigraph-plugin --lib --features nice-plug/assert_process_allocs performance::tests::observed_callback_cost_at_empty_and_full_session_state -- --exact --nocapture --test-threads=1",
+      "environment": {
+        "CARGO_BUILD_JOBS": "2",
+        "HARMONIGRAPH_REPLAY_REHEARSAL": "UNSET",
+        "RUSTC_WRAPPER": "",
+        "RUST_TEST_THREADS": "1"
+      },
+      "exclusive_grant": "Coordinator process clearance 2026-09-06 11:08:26 UTC: no cargo/rustc/clang/ld/sccache; no concurrent agent builds.",
+      "guard": "Allocation/deallocation guard enabled in optimized-dev; compiled out in release.",
+      "head": "f5f7464ff663fad3f6aaad51c68206a6d1d4992a",
+      "machine_coordinator_verified": "MacBookPro18,3; Apple M1 Pro; 8 physical/8 logical; 16 GiB; Darwin25.6.0 ARM64_T6000",
+      "profile": "release",
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)\nbinary: rustc\ncommit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234\ncommit-date: 2025-12-08\nhost: aarch64-apple-darwin\nrelease: 1.92.0\nLLVM version: 21.1.3",
+      "scope": "Normal ambient-load callback observations, including preallocated host event bookkeeping. Sum17 excludes host scheduling/jitter. Not idle-machine, WCET or full616D512 deadline qualification.",
+      "started_utc": "2026-09-06T11:11:55.387788+00:00"
+    },
+    "completion": {
+      "cargo_wall_seconds_including_build": 112.72695812500024,
+      "exit_code": 0,
+      "finished_utc": "2026-09-06T11:13:48.154868+00:00"
+    },
+    "baseline_single_256_onset_hub_ns": 3171750,
+    "replay_reach": [
+      [
+        "reject-repair",
+        "history=2064 setup=2081 max_setup_attempts=512 rejected_attempts=2 peak_pending_refs_journal_emergency_held=[2086, 2074, 1280, 1, 1] retained_cut=4175 acknowledged=4175 canonical_young=0 owners=16+Hub rate=44100 frames=512"
+      ],
+      [
+        "success",
+        "history=2064 setup=2081 max_setup_attempts=512 rejected_attempts=0 peak_pending_refs_journal_emergency_held=[2086, 2074, 1280, 0, 1] retained_cut=4181 acknowledged=4181 canonical_young=2 owners=16+Hub rate=44100 frames=512"
+      ]
+    ],
+    "replay_episodes_per_variant": 16,
+    "test_result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 143 filtered out; finished in 1.57s",
+    "raw_log_sha256": "f0197fc6006f573ba68f919c8c0a4b62d5c438975eb01360d534aabf7ec89f2d"
+  }
+}

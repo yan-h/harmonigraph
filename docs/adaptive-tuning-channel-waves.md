@@ -153,4 +153,5 @@ The far-ahead calibration fixture closes a truthfully joined lease through an or
 The full output fixture executes 512 normal plus 128 emergency attempts and retains all accepted emergency facts.
 Wrapper boundary tests verify the independent acceptance masks and exact raw MIDI bytes/flags.
 These functional results do not provide a timing or D512 sequencing claim.
+Separate [targeted replay callback observations](adaptive-tuning-replay-timing.md) record the guarded optimized-dev and release measurements, including all 16 Sources plus Hub per-block sums and their scope limits.
 The [allocation ledger](adaptive-tuning-aggregation-memory.md) accounts for actual current cells and the separate future reservations.
