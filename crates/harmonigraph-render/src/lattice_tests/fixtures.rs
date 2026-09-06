@@ -229,6 +229,10 @@ pub(super) fn parity_scene() -> Scene {
         // The share a lit slice's own ink takes of the light, so a test that
         // says nothing about it measures the fresh picture.
         glow_wash: 1.0,
+        // The exponent the halos are unioned at, at the fresh value, so a test
+        // that says nothing about it measures the fold the picture ships
+        // (`ViewConfig::glow_union`).
+        glow_union: 8.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.

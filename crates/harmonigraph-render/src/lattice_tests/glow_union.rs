@@ -1,24 +1,34 @@
 //! How two lights add where they meet: the p-norm union `fs_glow_gather` folds
 //! the halos with.
 //!
-//! Both claims are read on a BARE part of the frame — outside every node's ink,
-//! over a black ground, with the Shadow off — so a pixel is the light and
-//! nothing else, and each fixture's first assertion is that the reading really
-//! is zero without it.
+//! What a note gives off on its own, what two of them come to where they meet,
+//! and what a cluster of them comes to — the three readings the Overlap bar
+//! moves, and the first of them is the one it must not move at all.
 //!
-//! Both are read off SUMS over many pixels rather than one, because the effect
-//! they measure is a few percent and a single 8-bit pixel is worth half a level
-//! either way.
+//! The two RATIOS are read on a BARE part of the frame — outside every node's
+//! ink, over a black ground, with the Shadow off — so a pixel is the light and
+//! nothing else, and each fixture's first assertion is that the reading really
+//! is zero without it. Both are read off SUMS over many pixels rather than one,
+//! because the effect they measure is a few percent and a single 8-bit pixel is
+//! worth half a level either way. The lone note is read the other way about,
+//! over every byte of the frame, for the reason its own doc gives.
 
 use super::fixtures::*;
 use crate::*;
 
 const SIZE: [u32; 2] = [256, 256];
 
-/// The exponent the halos are unioned at — `GLOW_UNION` in lattice.wgsl,
-/// restated rather than read out of the source: a test that took the shader's
-/// own number could not fail when the shader's number moved.
+/// The exponent the halos are unioned at, at the value a fresh view opens on —
+/// restated rather than read out of `ViewConfig::default`, since a test that
+/// took the shipped number could not fail when the shipped number moved.
 const P: f64 = 8.0;
+
+/// The Overlap bar's three readings: its two ends and the fresh middle.
+///
+/// Both ends are the bar's own ([`harmonigraph_scene::GLOW_UNION_MIN`] and
+/// `GLOW_UNION_MAX`), restated here for the same reason `P` is. The gains they
+/// stand for are 41%, 9% and 2% over one node.
+const SWEEP: [f64; 3] = [2.0, P, 32.0];
 
 /// Where the pair below is read: the middle of the pane, on the centre of one
 /// pixel, which is where each fixture pans the world origin to.
@@ -56,6 +66,65 @@ fn bare_lattice(strength: f32) -> Scene {
     scene
 }
 
+/// A note ON ITS OWN draws the same frame at every position of the Overlap bar,
+/// to the byte.
+///
+/// #680's first promise and the half the bar could quietly break. With one
+/// contributor the union's sum `s` is exactly 1, and `pow(1, 1/p)` is 1 at
+/// every exponent, so the light is that node's own coverage and its own colour
+/// whatever the bar says — but only while the power and the root read ONE
+/// number. A fold raised at the uniform and rooted at a leftover constant, a
+/// clamp spent on one side of the pair, or an exponent reaching into
+/// `glow_layer`'s coverage would each show up here and nowhere else in this
+/// file, since every other reading is a RATIO of frames drawn at one exponent
+/// and a common factor cancels out of all of them.
+///
+/// Read as byte-identity over the WHOLE frame rather than as a number on a
+/// line: with one node there is no bisector to read, and "nothing moved" is
+/// worth as many pixels as it is asked over.
+#[test]
+fn a_lone_halo_is_the_same_frame_at_every_bar_position() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |p: f64| -> Scene {
+        let mut scene = bare_lattice(1.5);
+        scene.glow_union = p as f32;
+        scene
+    };
+    let middle = at(P);
+    assert_eq!(
+        middle.nodes.iter().filter(|node| node.glow.level > 0.0).count(),
+        1,
+        "the fixture must ship exactly one LIT node, or this is a claim about a chord",
+    );
+    // Non-vacuous: there is a halo in these frames for the exponent to leave
+    // alone. Against the same scene with the Reach at 0 — the light's own off
+    // switch — rather than against a black frame, since the node's own ink is
+    // in both and is not what is being measured.
+    let mut dark = at(P);
+    dark.glow_reach = 0.0;
+    let (lit, unlit) = (shooter.shot(&middle), shooter.shot(&dark));
+    assert!(
+        total_light(&lit) > total_light(&unlit),
+        "the fixture draws no light at all ({} against {}), so every frame below agrees for \
+         the wrong reason",
+        total_light(&lit),
+        total_light(&unlit),
+    );
+
+    for p in SWEEP {
+        let shot = shooter.shot(&at(p));
+        let moved = shot.iter().zip(&lit).filter(|(a, b)| a != b).count();
+        let worst = shot.iter().zip(&lit).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert_eq!(
+            moved, 0,
+            "an exponent of {p} moved {moved} channels of a frame with ONE lit node in it, \
+             by up to {worst}/255",
+        );
+    }
+}
+
 /// Where two equal halos MEET, the light is `2^(1/p)` times what one of them
 /// puts there — 9% at the exponent this folds at, and not the 80% the screen
 /// blend it replaces would have laid down.
@@ -80,10 +149,19 @@ fn bare_lattice(strength: f32) -> Scene {
 /// coverage the summed brightness is exactly the mean of the two, scaled by the
 /// norm's own gain, whatever either colour is.
 ///
-/// The tolerance is 1.5% against a 9% effect — six times apart, so this fails
-/// on any other fold at this geometry: the screen blend it replaces reads 73%
-/// over one node here (measured), a plain max would read 0%. The fixture lands
-/// within 0.05%, so the slack is for a driver rather than for the claim.
+/// Read at the Overlap bar's two ends as well as at the fresh middle
+/// ([`SWEEP`]), which is the whole of what the bar is: the same two halos meet
+/// 41% over one at the bottom, 9% in the middle and 2% at the top, and the
+/// exponent the shader roots by has to be the one it raised by at each.
+///
+/// The tolerance is 0.5% of one node's light and it is stated against the
+/// SMALLEST of the three effects: 2.2% at the top of the bar, so a reading that
+/// took the exponent from anywhere else is four times outside it, and the two
+/// larger effects are further out again. It is not slack for the claim — the
+/// three measurements land 0.06%, 0.05% and 0.03% off — but for a driver.
+/// Nothing else here comes close: the screen blend this replaces reads 73% over
+/// one node at this geometry (measured), and a plain max reads 0% at every
+/// exponent.
 #[test]
 fn two_halos_meeting_read_the_norm_of_one_rather_than_their_sum() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -93,8 +171,9 @@ fn two_halos_meeting_read_the_norm_of_one_rather_than_their_sum() {
     // rings a node draws (0.795 uv) and inside the span its light reaches
     // (0.795 + the Reach), which is what puts a bare pixel in both halos.
     let half = single_marked_node(0, 0).node_radius * 1.8;
-    let at = |lit: [f32; 2]| -> Scene {
+    let at = |lit: [f32; 2], p: f64| -> Scene {
         let mut scene = bare_lattice(1.5);
+        scene.glow_union = p as f32;
         let node = scene.nodes[0];
         scene.nodes = [-half, half]
             .iter()
@@ -126,24 +205,32 @@ fn two_halos_meeting_read_the_norm_of_one_rather_than_their_sum() {
             .sum()
     };
 
-    let dark = bisector(&shooter.shot(&at([0.0, 0.0])));
+    let dark = bisector(&shooter.shot(&at([0.0, 0.0], P)));
     assert_eq!(dark, 0, "the read column is not bare: {dark} of something that is not the light");
-    let left = bisector(&shooter.shot(&at([1.0, 0.0])));
-    let right = bisector(&shooter.shot(&at([0.0, 1.0])));
-    let both = bisector(&shooter.shot(&at([1.0, 1.0])));
+    // The two singles are shot ONCE, at the middle of the bar. A single lit node
+    // is the same frame at every exponent to the byte — its own term is 1 and
+    // the root of 1 is 1, which is
+    // `a_lone_halo_is_the_same_frame_at_every_bar_position`'s whole claim — so a
+    // sweep of them would be three copies of one shot.
+    let left = bisector(&shooter.shot(&at([1.0, 0.0], P)));
+    let right = bisector(&shooter.shot(&at([0.0, 1.0], P)));
     assert!(
         left > 0 && right > 0,
         "a node's halo does not reach the bisector at all ({left} and {right}); the fixture \
          measures one light rather than two meeting",
     );
 
-    let gain = both as f64 / ((left + right) as f64 / 2.0);
-    let want = 2f64.powf(1.0 / P);
-    assert!(
-        (gain - want).abs() < 0.015,
-        "two halos meeting read {gain:.4} times one, against the norm's {want:.4} \
-         (one node {left} and {right}, both {both})",
-    );
+    for p in SWEEP {
+        let both = bisector(&shooter.shot(&at([1.0, 1.0], p)));
+        let gain = both as f64 / ((left + right) as f64 / 2.0);
+        let want = 2f64.powf(1.0 / p);
+        assert!(
+            (gain - want).abs() < 0.005,
+            "at an exponent of {p} two halos meeting read {gain:.4} times one, against the \
+             norm's {want:.4} — outside a tolerance of 0.5%, which is set against the 2.2% \
+             the top of the bar is worth (one node {left} and {right}, both {both})",
+        );
+    }
 }
 
 /// A CLUSTER does not brighten: `n` nodes over one another read at most

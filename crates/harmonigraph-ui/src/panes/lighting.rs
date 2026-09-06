@@ -6,6 +6,7 @@ use crate::SharedState;
 use harmonigraph_scene::{
     GlowCurve, ShadowKernel, ShadowSettings, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
+    GLOW_UNION_MAX, GLOW_UNION_MIN,
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -92,6 +93,37 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  0% preserves their original colors; \
                  100% blends them into the surrounding light. \
                  Idle shapes always receive the full glow.",
+            );
+        // What a CHORD comes to, which is the one thing none of the bars above
+        // says: they set what ONE note's light is, and this sets how much of it
+        // a second note standing in the same place adds. The stored value is
+        // the union's exponent (`ViewConfig::glow_union`) and the readout is
+        // what that exponent means — `2^(1/p) - 1`, the gain where two equal
+        // halos meet — so the number falls as the bar fills, which the hover
+        // text says in as many words.
+        //
+        // GEOMETRIC travel (`eased` on a range whose bottom is above zero),
+        // which is the only spacing that reads evenly: the gain is a root of
+        // the exponent, so equal steps in `p` would spend the top half of the
+        // bar on percentages a fraction apart.
+        //
+        // The top is 32 because of the SHAPE rather than the arithmetic: the
+        // fold factors its running maximum out, so it cannot overflow or
+        // underflow at any exponent, but past here the union's ridge along the
+        // bisector between two notes narrows toward the crease a plain max
+        // leaves (see `GLOW_UNION_MAX`).
+        ValueBar::new(&mut view.glow_union, GLOW_UNION_MIN..=GLOW_UNION_MAX, "Overlap")
+            .eased(true)
+            // One decimal, which is what `percent()` gives every other share on
+            // this page and what keeps the number moving over the whole drag:
+            // at whole percent the top third of the bar reads +2% throughout.
+            .display(|p| format!("+{:.1}%", (2f32.powf(1.0 / p) - 1.0) * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much two equal notes overlapping add up to, \
+                 from +41% at the bottom to +2% at the top. \
+                 One note on its own never changes; \
+                 a chord only spreads its light.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

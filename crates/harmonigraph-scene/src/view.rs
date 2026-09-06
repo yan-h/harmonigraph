@@ -6,8 +6,9 @@ use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
-    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
-    MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, GLOW_UNION_MAX,
+    GLOW_UNION_MIN, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
+    RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1267,6 +1268,23 @@ pub struct ViewConfig {
     /// heading, beside a Reach that is a distance, a "spread" reads as how far
     /// the light goes, and this moves no light at all — only what colour it is.
     pub glow_blend: f32,
+    /// The exponent the halos are UNIONED at, [`GLOW_UNION_MIN`]..=[`GLOW_UNION_MAX`]
+    /// — how much light a region gets for holding several notes rather than
+    /// one.
+    ///
+    /// The light at a pixel is the p-norm of every lit node's coverage there
+    /// (`fs_glow_gather` in lattice.wgsl), so `n` equal halos over one another
+    /// read `n^(1/p)` times one of them and a note ON ITS OWN reads exactly
+    /// itself at every value of this. The bar therefore moves what a CHORD
+    /// does and nothing else: two equal notes meeting add 41% at the bottom
+    /// and 2% at the top (#680).
+    ///
+    /// The exponent ITSELF, not the percentage the bar reads out: the blob
+    /// holds 8, and `2^(1/p) - 1` is the bar's own reading of it. Travel is
+    /// geometric, so a drag moves `p` by a ratio rather than by an amount.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_union: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
     /// one while the light is coming up, [`glow_release`](Self::glow_release)
@@ -2209,6 +2227,10 @@ impl ViewConfig {
         // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
+        // The union's exponent, which is neither a share nor a time: its own
+        // pair of ends, and the floor is what the shader's root divides by.
+        self.glow_union =
+            finite_or(self.glow_union, fresh.glow_union).clamp(GLOW_UNION_MIN, GLOW_UNION_MAX);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -2522,6 +2544,11 @@ impl Default for ViewConfig {
             // Each octave keeps its own arc of colour around the node instead
             // of averaging with the opposite side.
             glow_blend: 0.0,
+            // Two equal notes overlapping read 9% over one of them, which is a
+            // chord spreading its light rather than pooling it — and the
+            // exponent the union shipped as a constant before it was a bar, so
+            // a blob without the key draws exactly what it drew.
+            glow_union: 8.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of

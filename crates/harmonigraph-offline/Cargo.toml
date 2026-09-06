@@ -30,3 +30,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 harmonigraph-scene = { workspace = true }
 # The byte-exact frame gate the golden set is measured by.
 harmonigraph-golden = { workspace = true }
+# One probe projects lattice nodes into the frame it just rendered, to read the
+# light between them; `Scene::project` is stated in glam's vectors.
+glam = { workspace = true }

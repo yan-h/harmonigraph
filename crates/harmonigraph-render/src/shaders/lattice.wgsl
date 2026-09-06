@@ -71,7 +71,7 @@ struct GlowParams {
     wash: f32,
     row_capacity: f32,
     lit: f32,
-    padding: f32,
+    overlap: f32,
 };
 
 struct ShadowParams {
@@ -139,19 +139,6 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
-// The exponent the node glow's halos are UNIONED at ([`fs_glow_gather`]): the
-// light at a pixel is the p-norm of every halo's coverage there, so `n` notes
-// over one another read at most `n^(1/p)` times one and a lone note reads
-// exactly itself.
-//
-// 8 puts two equal notes overlapping 9% above one, which is a visible spread
-// without a chord's centre climbing toward white — the failure the screen blend
-// this replaces had, where `n` notes read `1 - (1-a)^n` (#680).
-//
-// ONE place, read by both the power and the root, and that is the invariant to
-// keep when #680's stage 2 makes it a uniform: a fold raised to one exponent and
-// rooted at another is not a norm of anything.
-const GLOW_UNION: f32 = 8.0;
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds
@@ -397,6 +384,23 @@ fn plus_shadow_through(
 // finished picture rather than from this field.
 fn glow_wash() -> f32 {
     return clamp(u.glow.wash, 0.0, 1.0);
+}
+
+// The exponent the node glow's halos are UNIONED at (`u.glow.overlap`, the
+// Overlap bar): the light at a pixel is the p-norm of every halo's coverage
+// there, so `n` notes over one another read at most `n^(1/p)` times one and a
+// lone note reads exactly itself at any exponent.
+//
+// ONE reader, spent by both the power and the root in [`fs_glow_gather`], and
+// that is the invariant the bar cannot be allowed to break: a fold raised to
+// one exponent and rooted at another is not a norm of anything.
+//
+// The floor is what the root divides by, and it is 1 rather than the bar's own
+// bottom of 2: every exponent at or above 1 is a norm, so this repairs only the
+// value nobody dialled — a group zeroed because the glow is off, which is a
+// pass this shader would have returned nothing from anyway.
+fn glow_union() -> f32 {
+    return max(u.glow.overlap, 1.0);
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
@@ -2986,10 +2990,10 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 //
 // ONE DRAW over the whole target, into one transparent texture.
 // `fs_glow_gather` walks every lit node at each pixel and folds their halos by
-// the p-norm UNION at `GLOW_UNION`. A note gives off the strength it gives off
-// whether it is alone or in a chord, and a chord only spreads that light over a
-// larger area: `n` halos over one another read at most `n^(1/p)` times one, and
-// a lone one reads exactly itself. The operator is commutative, so nothing about
+// the p-norm UNION at the Overlap bar's exponent. A note gives off the strength
+// it gives off whether it is alone or in a chord, and a chord only spreads that
+// light over a larger area: `n` halos over one another read at most `n^(1/p)`
+// times one, and a lone one reads exactly itself. The operator is commutative, so nothing about
 // the order it walks in reaches the picture. Screen — which this replaced — and
 // adding both make the COUNT of overlapping nodes, rather than any note, the
 // brightest thing on screen (#680).
@@ -3554,6 +3558,9 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let lit = u32(max(u.glow.lit, 0.0));
+    // Read ONCE, so the power below and the root at the end cannot come from
+    // two different numbers ([`glow_union`]).
+    let p = glow_union();
     // The union's three running terms, with the largest coverage so far FACTORED
     // OUT of the other two: `m` is that largest, `s` is the sum of `(a_i/m)^p`
     // and `c` the same sum weighted onto the nodes' own colours. Every term
@@ -3593,12 +3600,12 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             s = 1.0;
             c = halo.xyz;
         } else if a > m {
-            let k = pow(m / a, GLOW_UNION);
+            let k = pow(m / a, p);
             s = s * k + 1.0;
             c = c * k + halo.xyz;
             m = a;
         } else {
-            let w = pow(a / m, GLOW_UNION);
+            let w = pow(a / m, p);
             s = s + w;
             c = c + w * halo.xyz;
         }
@@ -3615,7 +3622,7 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     //
     // Clamped at 1 because the norm of coverages that each reach full is above
     // full, and the target is a coverage.
-    let alpha = min(m * pow(s, 1.0 / GLOW_UNION), 1.0);
+    let alpha = min(m * pow(s, 1.0 / p), 1.0);
     return vec4<f32>(c * (alpha / s), alpha);
 }
 

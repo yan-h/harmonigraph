@@ -1349,7 +1349,9 @@ impl LatticeCallback {
                         // Settled by prepare, which is where the lit nodes are
                         // mapped onto the target's pixels.
                         lit: 0.0,
-                        padding: 0.0,
+                        // Already clamped to the bar's ends by `derive_scene`;
+                        // the shader's own floor is against a zeroed group.
+                        overlap: scene.glow_union,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
@@ -1441,7 +1443,7 @@ impl LatticeCallback {
     }
 
     /// This frame's lit nodes, each carrying the map from a pixel of a `size`
-    /// target back into that node's own uv — the list [`fs_glow_gather`] walks.
+    /// target back into that node's own uv — the list `fs_glow_gather` walks.
     ///
     /// The set the billboard pass used to light, less the nodes whose halo
     /// cannot reach the target at all. The pass drew every shipped instance
@@ -2887,7 +2889,8 @@ fn create_cell_pipelines(
 ///
 /// **NO BLEND**, where a billboard per node needed one. The fold is
 /// `fs_glow_gather`'s: the p-norm UNION of every halo's coverage at the pixel,
-/// at `GLOW_UNION`. A lone note is unchanged exactly, `n` notes over one another
+/// at the exponent the Overlap bar holds ([`harmonigraph_scene::ViewConfig::glow_union`]).
+/// A lone note is unchanged exactly, `n` notes over one another
 /// read at most `n^(1/p)` times one, and it is commutative, so the order the
 /// loop walks in is not readable in the picture. The screen blend it replaces
 /// had that last guarantee and not the first two — `n` overlapping halos read

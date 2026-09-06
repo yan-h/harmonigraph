@@ -256,6 +256,27 @@ pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
+/// Ends of the exponent the node glow's halos are UNIONED at
+/// (see [`ViewConfig::glow_union`]): the light at a pixel is the p-norm of
+/// every lit node's coverage there, so `n` equal halos read `n^(1/p)` times
+/// one of them and a lone note reads exactly itself at any exponent.
+///
+/// The bottom is 2 rather than 1: at 1 the norm is the SUM, which is the
+/// additive wash #680 exists to remove, and the interval either side of it is
+/// where a chord's centre still climbs toward white. Two equal notes at 2 add
+/// 41%, which is as much overlap as the picture has any use for.
+///
+/// The top is 32 for the shape rather than for the arithmetic. The fold
+/// factors the running maximum out before raising anything to the power
+/// (`fs_glow_gather`), so every term is in (0, 1] and nothing overflows or
+/// underflows at any exponent this could hold. What goes wrong past here is
+/// the PICTURE: the union's ridge along the bisector between two nodes
+/// narrows as the exponent climbs — 2 percent of extra light at 32, over a
+/// band that keeps shrinking — until it reads as the crease a plain max
+/// leaves, which is the operator #443 and #520 ruled out.
+pub const GLOW_UNION_MIN: f32 = 2.0;
+pub const GLOW_UNION_MAX: f32 = 32.0;
+
 /// How wide a group's shadow may be asked to be (see [`ShadowStyle::width`]),
 /// in the quad UV units the layer sizes above are in — the far end of every
 /// Shadow bar.
@@ -918,6 +939,13 @@ pub struct Scene {
     /// shadow does not darken the light it is washed with — so the Shadow bars
     /// move it not at all.
     pub glow_wash: f32,
+    /// The exponent the halos are unioned at (see [`ViewConfig::glow_union`]);
+    /// already clamped to [`GLOW_UNION_MIN`]..=[`GLOW_UNION_MAX`].
+    ///
+    /// ONE number, read by the union's power and by its root alike
+    /// (`fs_glow_gather` in lattice.wgsl): a fold raised to one exponent and
+    /// rooted at another is not a norm of anything.
+    pub glow_union: f32,
     /// One quad-uv length of the home sheet, as a world length
     /// (`marker_world`): what converts the marker field between the units its
     /// own draws are in and the units every glow bar is dialled in.

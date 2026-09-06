@@ -127,7 +127,12 @@ uniform_group! {
         /// at or under that buffer's capacity — which is why `arrayLength` is
         /// not the bound (`fs_glow_gather`).
         lit: f32,
-        padding: f32,
+        /// The exponent the halos are unioned at
+        /// ([`harmonigraph_scene::ViewConfig::glow_union`]), in this group's
+        /// last padding slot. Named for what it does to the picture rather
+        /// than for the operator, `union` being a WGSL reserved word and the
+        /// declarations having to agree name for name (`uniforms::layout`).
+        overlap: f32,
     }
 }
 uniform_group! {
