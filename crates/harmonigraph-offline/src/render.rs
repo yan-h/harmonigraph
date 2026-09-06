@@ -339,11 +339,13 @@ mod tests {
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             width: 0.75,
             depth: f32::from(enabled),
+            ..Default::default()
         };
         state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
             kernel: harmonigraph_scene::ShadowKernel::Distance,
             width: 0.75,
             depth: f32::from(enabled),
+            ..Default::default()
         };
         let mut take = take();
         take.header.ui_state = Some(state.save_persist());

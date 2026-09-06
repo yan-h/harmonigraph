@@ -314,7 +314,11 @@ fn plus_shadow_through(
     if !shadow_is_distance(who) {
         return shadow_through(who, points, level, plus_shadow_depth());
     }
-    let full = standoff_coverage(d_points, 2.0 * shadow_casters[caster].shade.z);
+    let full = standoff_coverage(
+        d_points,
+        2.0 * shadow_casters[caster].shade.z,
+        shadow_casters[caster].shade.w,
+    );
     return ShadowThrough(
         shadow_transmittance(full, plus_shadow_depth(), distance_level),
         shadow_transmittance(full, 1.0, distance_level),
