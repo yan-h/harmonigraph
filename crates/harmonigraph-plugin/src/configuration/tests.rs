@@ -190,6 +190,46 @@ impl Device {
         assert!(unsafe { ((*self.plugin).start_processing.unwrap())(self.plugin) });
         self.active = true;
     }
+    // Called explicitly after a fixture's original assertions. These fixtures
+    // study configuration/recording, so finish their accepted physical gestures
+    // before destruction; joined unknown-wire debt must otherwise remain owned.
+    fn finish_notes(&mut self, mut raw: i64, notes: &[(i32, i16)]) {
+        let snapshot = |device: &Self| {
+            device.wrapper().test_inspect_plugin(|plugin| {
+                plugin.aggregation.as_ref().unwrap().direct.test_snapshot()
+            })
+        };
+        let held = snapshot(self).held;
+        let output = self.run(
+            raw,
+            notes.iter().map(|&(id, key)| note(id, key, 0, CLAP_EVENT_NOTE_OFF)).collect(),
+            false,
+        );
+        assert!(
+            output
+                .attempts
+                .iter()
+                .filter(|event| event.0 == CLAP_EVENT_NOTE_OFF && event.3)
+                .count()
+                >= held
+        );
+        for _ in 0..16 {
+            raw += 64;
+            // Recording fixtures can retain an unsounded On/Off pair behind
+            // unknown pedal state. A real falling Stop edge cancels that pair
+            // after the physical Offs above; an Off alone is not cancellation.
+            let mut stopped = transport(0.0, 0);
+            stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+            self.run_transport(raw, vec![], false, None, Some(stopped));
+            let state = snapshot(self);
+            if (state.held, state.pending, state.captures, state.lives, state.journal)
+                == (0, 0, 0, 0, 0)
+            {
+                return;
+            }
+        }
+        panic!("accepted gesture release must finish bounded ownership: {:?}", snapshot(self));
+    }
     fn params(&self) -> &clap_plugin_params {
         unsafe {
             &*(((*self.plugin).get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
@@ -532,6 +572,7 @@ fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
     assert!((learned.raw[2] - harmonigraph_core::tuning::FIVE_JUST).abs() < 0.001);
     device.run(64, vec![], false);
     assert_eq!(mailbox.visible().0.revision, learned.revision);
+    device.finish_notes(128, &[(60, 60), (64, 64), (67, 67)]);
 }
 
 #[test]
@@ -981,6 +1022,7 @@ fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
         sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
         "configuration and performance outputs must share chronological order"
     );
+    device.finish_notes(1064, &[(10, 60), (20, 67)]);
 }
 #[test]
 fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
@@ -1015,6 +1057,7 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
         400.0,
         "ID20 survived the ID10 release and now supplies C beside E"
     );
+    device.finish_notes(256, &[(20, 67), (30, 64)]);
 }
 
 std::thread_local! {
@@ -1095,6 +1138,7 @@ fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for
         assert_eq!(bytes.len(), 44 + frames as usize * 2 * 4);
     }
     drop(writer);
+    device.finish_notes(192, &[(10, 60), (20, 64)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1194,6 +1238,7 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
     assert!((late.t - 8.0 / 48000.0).abs() < 1e-9);
     assert_eq!(std::fs::read(path.with_extension("wav")).unwrap().len(), 44 + 32 * 2 * 4);
     drop(writer);
+    device.finish_notes(128, &[(9, 48), (10, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1241,6 +1286,7 @@ fn retried_gesture_closure_merges_before_earlier_timed_learning() {
             CLAP_EVENT_PARAM_GESTURE_END
         ]
     );
+    device.finish_notes(128, &[(10, 60), (20, 67), (30, 72)]);
 }
 
 #[test]
@@ -1383,6 +1429,7 @@ fn direct_publication_loss_recovers_64_exact_lifetimes_without_new_attacks() {
     assert!(!tracker.publication_gaps().is_empty(), "repair never erases missing history");
     assert!(harmonigraph_take::Take::read(path).unwrap().incomplete.is_some());
     drop(writer);
+    device.finish_notes(67 * 64, &(0..64).map(|key| (1000 + key, key as i16)).collect::<Vec<_>>());
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1458,6 +1505,7 @@ fn display_only_loss_requests_one_factual_direct_repair_after_capacity_returns()
     assert_eq!(take.events.iter().filter(|r| matches!(r,
         CanonicalRecord::Delta(d) if matches!(d.event.kind, harmonigraph_take::NoteKind::On { .. }))).count(), 2);
     drop(writer);
+    device.finish_notes(70 * 64, &[(20, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }

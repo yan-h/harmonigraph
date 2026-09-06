@@ -12,6 +12,134 @@ fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
 }
 
 #[test]
+fn production_initial_direct_replays_known_channel_setup_after_bounded_output_delay() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    let midi = |data| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
+            port_index: 0,
+            data,
+        })
+    };
+    let mut seed: Vec<_> = [64, 66, 69].map(|cc| midi([0xb0, cc, 0])).into();
+    seed.push(note(1, 0, 60, 1, true));
+    assert_eq!(hub.run(0, seed, None).values.len(), 4);
+    hub.run(64, vec![], None);
+    let mut input = vec![note(1, 0, 60, 0, false)];
+    input.extend((0..1024).map(|_| midi([0xf8, 0, 0])));
+    input.extend([note(2, 0, 62, 1, true), note(2, 0, 62, 2, false)]);
+    let mut output: Vec<_> = hub
+        .run(128, input, None)
+        .values
+        .into_iter()
+        .map(|(time, event)| (128 + i64::from(time), event))
+        .collect();
+    assert!(
+        !output.iter().any(|(_, event)| event.attack().is_some()),
+        "the real callback grant must delay the second onset"
+    );
+    for block in 3..67 {
+        output.extend(
+            hub.run(block * 64, vec![], None)
+                .values
+                .into_iter()
+                .map(|(time, event)| (block * 64 + i64::from(time), event)),
+        );
+        let state = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+        assert_eq!(state.faults, 0);
+        if state.pending == 0 && state.captures == 0 && state.lives == 0 {
+            break;
+        }
+    }
+    assert_eq!(output.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
+    assert_eq!(output.iter().filter(|(_, event)| event.release()).count(), 2);
+    let onset = output.iter().find(|(_, event)| event.attack().is_some()).unwrap().0;
+    let release = output
+        .iter()
+        .find(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 2, .. }))
+        .unwrap()
+        .0;
+    assert!(onset > 129, "the new gesture is actually delayed");
+    assert_eq!(release, onset + 1, "both events retain the same translation");
+    assert_eq!(
+        output
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::Midi { data: [0xf8, _, _], .. }))
+            .count(),
+        1024
+    );
+    for cc in [64, 66, 69] {
+        assert!(output.iter().any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, actual, 0], .. } if *actual == cc)), "actual known setup must be replayed");
+    }
+    let state = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+    assert_eq!(
+        (state.held, state.pending, state.captures, state.lives, state.journal),
+        (0, 0, 0, 0, 0)
+    );
+    assert!(!hub.shared().adopted().unwrap().calibration.validated);
+}
+
+#[test]
+fn production_initial_direct_survives_settled_host_reactivation_without_route_calibration() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    for pass in 0..2 {
+        let output = hub.run(0, vec![note(27, 0, 60, 3, true), note(27, 0, 60, 19, false)], None);
+        assert_eq!(
+            output.values,
+            [
+                (
+                    3,
+                    Event::Note {
+                        kind: CLAP_EVENT_NOTE_ON,
+                        id: 27,
+                        port: 0,
+                        channel: 0,
+                        key: 60,
+                        velocity: 0.625,
+                        flags: 0
+                    }
+                ),
+                (
+                    19,
+                    Event::Note {
+                        kind: CLAP_EVENT_NOTE_OFF,
+                        id: 27,
+                        port: 0,
+                        channel: 0,
+                        key: 60,
+                        velocity: 0.625,
+                        flags: 0
+                    }
+                ),
+            ],
+            "same exported instance, lifecycle pass {pass}"
+        );
+        hub.run(64, vec![], None);
+        hub.run(128, vec![], None);
+        let snapshot = inspect_hub(&hub, |hub| hub.direct.test_snapshot());
+        assert_eq!(
+            (snapshot.held, snapshot.pending, snapshot.captures, snapshot.lives),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(snapshot.faults, 0);
+        let adopted = hub.shared().adopted().unwrap();
+        assert!(!adopted.valid && !adopted.calibration.validated);
+        if pass == 0 {
+            unsafe {
+                (*hub.plugin).stop_processing.unwrap()(hub.plugin);
+                (*hub.plugin).deactivate.unwrap()(hub.plugin);
+            }
+            hub.active = false;
+            hub.activate();
+        }
+    }
+}
+
+#[test]
 fn production_initial_direct_accepts_exact_zero_delay_phrase_without_route_calibration() {
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -266,6 +394,7 @@ fn production_calibrated_direct_requires_valid_reset_after_clock_failure() {
     hub.run(64, vec![], None);
     hub.run(128, vec![], None);
     assert!(hub.run(256, vec![note(2, 0, 62, 0, true)], None).values.is_empty());
+    assert!(!inspect_hub(&hub, |hub| hub.direct.initial_direct()));
     let valid = hub.shared().value().routing;
     for block in 5..13 {
         assert!(hub.run(block * 64, vec![note(3, 0, 64, 1, true)], None).values.is_empty());
@@ -285,6 +414,7 @@ fn production_calibrated_direct_requires_valid_reset_after_clock_failure() {
     }
     assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults), 0);
     assert!(hub.shared().adopted().unwrap().valid);
+    assert!(!inspect_hub(&hub, |hub| hub.direct.initial_direct()));
     assert_eq!(
         hub.run(raw, vec![note(4, 0, 65, 1, true), note(4, 0, 65, 3, false)], None).values.len(),
         2

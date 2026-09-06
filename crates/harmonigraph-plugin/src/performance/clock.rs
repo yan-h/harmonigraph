@@ -50,6 +50,9 @@ impl Default for LocalClock {
     }
 }
 impl LocalClock {
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+    }
     pub fn valid(&self) -> bool {
         self.valid
     }

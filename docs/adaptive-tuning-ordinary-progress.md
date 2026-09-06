@@ -15,6 +15,11 @@ Observed DIRECT input and actual accepted forwarding remain separate facts.
 An invalid local callback latches the selected clock fault;
 an already calibrated route cannot fall back to this initial local mode.
 Explicit Reset waits for the existing sealed ownership/recording/credit boundary and a fresh callback, then can restore the same never-calibrated standalone mode.
+The same exported instance also survives a settled stop/deactivate/activate/start lifecycle:
+reactivation preserves its never-calibrated eligibility while invalidating old local coverage, and only the existing settled Reset boundary creates fresh coverage.
+A previously calibrated route never gains local eligibility.
+Ordinary output and retained channel setup use the same local-or-calibrated callback validity check;
+this does not bypass channel translation dependencies.
 
 Initial factual Capture tokens retire through the existing bounded permission/retirement path without waiting for a sequencer that cannot use an uncalibrated route.
 Calibrated DIRECT instead exposes the exact transferred complete input prefix:
@@ -69,7 +74,9 @@ The Hub had spent 3853 units (`512 + 13 * 257`), so the complete frontier remain
 retaining the credits was correct.
 After the index fix, the same workload spent 768 units, applied all four cuts 128, advanced the frontier to 192 and returned every credit.
 
-The original publication-loss/repair tests and original 48-by-200 nonhead workload now pass unchanged.
+The original publication-loss/repair workloads and assertions, and the original 48-by-200 nonhead workload, now pass.
+The final correction appends physical gesture cleanup after the two reporting fixtures' original assertions;
+the sixteen-source and nonhead fixture bodies remain unchanged.
 The nonhead fixture previously accepted 28 events at its failing batch instead of 200;
 the fixed run retains its older blocked attack while processing the complete stress stream and exact release.
 The two publication fixtures still reach real 4096-cell loss and verify exact lifetime repair and independent display/disk outcomes.
@@ -92,8 +99,51 @@ The other Stop fixtures retain their stress counts and exact canceled-prefix ass
 Fresh post-Reset input waits for the requested host main callback to return/rematch the settled Source lease and establish the fresh baseline.
 The 641-event Stop fixture fills the actual single-disposition repair lane with 644 Capture owners, 131 local pending obligations, 512 journal records and zero retention ACK.
 Its complete cut drains in 130 callbacks, preserving exactly the 512 accepted prefix events and one new stopped-live controller event.
-The Stop group passes 9/9. The production group passes 34/34 and Capture group 10/10;
-these are focused functional/ownership receipts, not complete timing or full-feature qualification.
+The initial Stop group passed 9/9, production group 34/34 and Capture group 10/10.
+Those were intermediate-code receipts before the final lifecycle correction and isolated boundary checks, not exact final-head full-suite results.
+After the lifecycle correction, the four original regression filters and the ordinary-progress tests were rerun with allocation guards;
+the PR carries the exact corrected-head receipts.
+These are focused functional/ownership checks, not complete timing or full-feature qualification.
+
+## Review and CI follow-up
+
+Independent review found that a second activation discarded initial DIRECT eligibility.
+A real lifecycle regression first accepts On/Off at samples 3/19, fully settles, then previously emitted nothing after stop/deactivate/activate/start.
+The correction invalidates local callback coverage while preserving eligibility for the authorized settled Reset.
+Its first scratch draft used an incorrect expected velocity and failed before reactivation;
+that fixture-only failure was corrected and is not the defect evidence.
+
+The first Actions run failed a global owner-count assertion after earlier configuration fixtures had passed.
+The named destruction fixture passed alone, while the guarded configuration group reproduced the failure.
+Temporary entry/owner snapshots identified a retired Hub left by the preceding rewind-recording fixture:
+one accepted held voice, sequence and ACK both 1, zero pending/Capture/journal owners, and reference fault 16.
+Later reporting fixtures similarly left 64 and 1 held voices.
+These are intentionally retained physical debts under the terminal contract, not authority to clear registry entries or invent an Off.
+
+Eight configuration/recording fixtures now finish their exact gestures with actual accepted Offs after all original behavior and file assertions.
+The explicit helper then sends a real falling transport Stop for recording fixtures that remained playing:
+their second On/Off pair can be unsounded behind unknown pedal state, and Off alone is not cancellation.
+It waits through bounded continuous callbacks for held, pending, Capture, Life and journal ownership to reach zero.
+It is never called from Drop, and tests studying owner loss retain their existing destruction behavior.
+The two reporting stress fixtures therefore change only by appended cleanup after their original assertions.
+All diagnostic entry logging and the scratch probe's incorrect zero-owner expectation for destroyed held notes were removed.
+
+That investigation also exposed a separate channel-setup validity mismatch.
+A production fixture supplies actual CC64/66/69 neutral events, keeps the first On held until its real Off in the next pressured callback, and places a new On/Off behind 1024 raw-clock events.
+The existing wave then requires setup replay at its later translation.
+Before correction, the new onset remained absent across 64 empty callbacks because setup checked only external calibration while ordinary output accepted the local clock.
+The shared validity predicate permits the actual setup without changing neutral-state requirements.
+The fixture retains absolute accepted samples and checks one new On, its Off exactly one sample later, all 1024 clocks, real controller replay and complete ownership retirement.
+An earlier scratch variant let the first wave become fully idle and did not reach setup;
+its missing-replay assertion is not the defect evidence.
+
+Final guarded correction checks pass: configuration 25/25, ordinary-progress 7/7, Stop 9/9, and the unchanged sixteen-source and 48-by-200 filters individually.
+The configuration group includes both original reporting stress workloads followed only by their appended cleanup.
+
+Unknown pedal state still blocks a differently translated wave under the selected channel contract.
+The measured recording case retained serial-2 On at raw sample 104 and its serial-4 Off at 192, with valid local coverage, wave shift zero, unknown actual controller bits and no sounded voice for that pair.
+The real falling Stop used by teardown cancels that retained pair;
+no default pedal state or spontaneous recovery is invented.
 
 ## Memory and remaining scope
 

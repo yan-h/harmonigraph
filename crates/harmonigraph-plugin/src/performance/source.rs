@@ -456,7 +456,11 @@ impl Source {
         if !first {
             // Reactivation cannot install accepted setup over a still-owned lease.
             self.clock.valid = false;
-            self.local_clock = None;
+            if let Some(local) = &mut self.local_clock {
+                // Keep the never-calibrated authority marker, but no old
+                // callback validity. Only a settled Reset can start it again.
+                local.invalidate();
+            }
             self.shared.publish_clock(&self.clock);
             self.stop();
             return;
@@ -513,6 +517,9 @@ impl Source {
     }
     pub(super) fn initial_direct(&self) -> bool {
         self.local_clock.is_some()
+    }
+    fn output_clock_valid(&self) -> bool {
+        self.clock.valid || self.local_clock.as_ref().is_some_and(LocalClock::valid)
     }
     pub(super) fn completed_input(&self) -> Option<(Coverage, u64)> {
         if !self.input_complete {
@@ -1749,9 +1756,8 @@ impl Source {
         if !self.charge(completion_work) {
             return false;
         }
-        let callback_valid =
-            self.clock.valid || self.local_clock.as_ref().is_some_and(LocalClock::valid);
-        if (!callback_valid || !self.ordinary_stream_ready()) && !pending.event.release() {
+        if (!self.output_clock_valid() || !self.ordinary_stream_ready()) && !pending.event.release()
+        {
             return false;
         }
         let report_cells = self.channel_report_cells(pending)

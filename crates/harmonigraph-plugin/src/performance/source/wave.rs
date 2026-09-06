@@ -507,7 +507,7 @@ impl Source {
             || wave.setup.serial != group.token.0[2]
             || self.faults != 0
             || wave.setup.serial <= self.cancel_cut
-            || !self.clock.valid
+            || !self.output_clock_valid()
         {
             return false;
         }
