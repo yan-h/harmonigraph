@@ -52,10 +52,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .percent()
             .show(ui)
             .on_hover_text(
-                "How overlapping glows combine. \
-                 0% joins them under a fixed full-strength brightness ceiling. \
-                 100% restores the original accumulating glow, including its color mixing. \
-                 Values between blend the two looks. A lone glow stays unchanged.",
+                "Controls how light builds up where note glows overlap. \
+                 0% caps their combined brightness at the level set by Glow gain. \
+                 100% lets their light build up where they overlap. \
+                 A single note's glow stays unchanged.",
             );
         ValueBar::new(
             &mut view.glow_curve.shape,
