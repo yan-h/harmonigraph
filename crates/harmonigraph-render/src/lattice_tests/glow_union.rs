@@ -2,7 +2,7 @@
 //! the halos with.
 //!
 //! What a note gives off on its own, what two of them come to where they meet,
-//! and what a cluster of them comes to — the three readings the Overlap bar
+//! and what a cluster of them comes to — the three readings the Union bar
 //! moves, and the first of them is the one it must not move at all.
 //!
 //! The two RATIOS are read on a BARE part of the frame — outside every node's
@@ -23,7 +23,7 @@ const SIZE: [u32; 2] = [256, 256];
 /// took the shipped number could not fail when the shipped number moved.
 const P: f64 = 8.0;
 
-/// The Overlap bar's three readings: its two ends and the fresh middle.
+/// The Union bar's three readings: its two ends and the fresh middle.
 ///
 /// Both ends are the bar's own ([`harmonigraph_scene::GLOW_UNION_MIN`] and
 /// `GLOW_UNION_MAX`), restated here for the same reason `P` is. The gains they
@@ -66,7 +66,7 @@ fn bare_lattice(strength: f32) -> Scene {
     scene
 }
 
-/// A note ON ITS OWN draws the same frame at every position of the Overlap bar,
+/// A note ON ITS OWN draws the same frame at every position of the Union bar,
 /// to the byte.
 ///
 /// #680's first promise and the half the bar could quietly break. With one
@@ -149,7 +149,7 @@ fn a_lone_halo_is_the_same_frame_at_every_bar_position() {
 /// coverage the summed brightness is exactly the mean of the two, scaled by the
 /// norm's own gain, whatever either colour is.
 ///
-/// Read at the Overlap bar's two ends as well as at the fresh middle
+/// Read at the Union bar's two ends as well as at the fresh middle
 /// ([`SWEEP`]), which is the whole of what the bar is: the same two halos meet
 /// 41% over one at the bottom, 9% in the middle and 2% at the top, and the
 /// exponent the shader roots by has to be the one it raised by at each.

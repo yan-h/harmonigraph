@@ -386,10 +386,11 @@ fn glow_wash() -> f32 {
     return clamp(u.glow.wash, 0.0, 1.0);
 }
 
-// The exponent the node glow's halos are UNIONED at (`u.glow.overlap`, the
-// Overlap bar): the light at a pixel is the p-norm of every halo's coverage
-// there, so `n` notes over one another read at most `n^(1/p)` times one and a
-// lone note reads exactly itself at any exponent.
+// The exponent the node glow's halos are UNIONED at (the Union bar, carried in
+// `u.glow.overlap` — the transport cannot spell it `union`, which WGSL
+// reserves): the light at a pixel is the p-norm of every halo's coverage there,
+// so `n` notes over one another read at most `n^(1/p)` times one and a lone
+// note reads exactly itself at any exponent.
 //
 // ONE reader, spent by both the power and the root in [`fs_glow_gather`], and
 // that is the invariant the bar cannot be allowed to break: a fold raised to
@@ -2990,7 +2991,7 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 //
 // ONE DRAW over the whole target, into one transparent texture.
 // `fs_glow_gather` walks every lit node at each pixel and folds their halos by
-// the p-norm UNION at the Overlap bar's exponent. A note gives off the strength
+// the p-norm UNION at the Union bar's exponent. A note gives off the strength
 // it gives off whether it is alone or in a chord, and a chord only spreads that
 // light over a larger area: `n` halos over one another read at most `n^(1/p)`
 // times one, and a lone one reads exactly itself. The operator is commutative, so nothing about

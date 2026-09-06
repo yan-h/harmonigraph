@@ -379,7 +379,7 @@ mod tests {
         }
     }
 
-    /// What the Overlap bar does BETWEEN two notes, written to
+    /// What the Union bar does BETWEEN two notes, written to
     /// `target/scratch/` as a table and one PNG a position.
     ///
     /// A probe: it asserts nothing about the picture, the verdict being a look
@@ -423,11 +423,11 @@ mod tests {
     /// constant over it.
     ///
     /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture overlap_bar
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture union_bar
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and prints a table"]
-    fn what_the_overlap_bar_does_between_two_notes() {
+    fn what_the_union_bar_does_between_two_notes() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -608,9 +608,11 @@ mod tests {
             "\n    t      p   2^(1/p)   ridge at mid   ridge out here   half width px   \
              of one step"
         );
-        // Each position's profile, laid out as it will be printed: the table
-        // above is a table only if nothing else is written between its rows.
+        // Each position's profile and each position's PNG, held back to be
+        // printed after the loop: the table above is a table only if nothing
+        // else is written between its rows.
         let mut profiles: Vec<String> = Vec::new();
+        let mut written: Vec<std::path::PathBuf> = Vec::new();
         for i in 0..5 {
             let t = i as f32 / 4.0;
             // The bar's own travel: geometric in the exponent, 2 at the bottom
@@ -681,10 +683,16 @@ mod tests {
             }
             profiles.push(block);
 
-            let path = dir.join(format!("overlap-t{:.0}-p{p:.0}.png", t * 100.0));
+            let path = dir.join(format!("union-t{:.0}-p{p:.0}.png", t * 100.0));
             image::save_buffer(&path, &both, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            // Held back with the profiles for the same reason they are: a path
+            // written here would land BETWEEN two rows of the table above.
+            written.push(path.canonicalize().unwrap_or(path));
+        }
+
+        for path in written {
+            eprintln!("{}", path.display());
         }
 
         // The profiles last, so the table above reads as a table. `u` walks

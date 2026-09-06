@@ -99,8 +99,14 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // a second note standing in the same place adds. The stored value is
         // the union's exponent (`ViewConfig::glow_union`) and the readout is
         // what that exponent means — `2^(1/p) - 1`, the gain where two equal
-        // halos meet — so the number falls as the bar fills, which the hover
-        // text says in as many words.
+        // halos meet — so the number FALLS as the bar fills.
+        //
+        // Named for the OPERATOR and not for the reading, which is what makes
+        // a falling number read forwards: a fuller bar is more of a union, two
+        // notes coming to one light rather than to the sum of two, and the
+        // percentage is what they still add on top of it. Under the reading's
+        // own name — "Overlap" — the same bar would say the overlap shrinks as
+        // it fills, which is a control that reads backwards at a glance.
         //
         // GEOMETRIC travel (`eased` on a range whose bottom is above zero),
         // which is the only spacing that reads evenly: the gain is a root of
@@ -112,7 +118,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // underflow at any exponent, but past here the union's ridge along the
         // bisector between two notes narrows toward the crease a plain max
         // leaves (see `GLOW_UNION_MAX`).
-        ValueBar::new(&mut view.glow_union, GLOW_UNION_MIN..=GLOW_UNION_MAX, "Overlap")
+        ValueBar::new(&mut view.glow_union, GLOW_UNION_MIN..=GLOW_UNION_MAX, "Union")
             .eased(true)
             // One decimal, which is what `percent()` gives every other share on
             // this page and what keeps the number moving over the whole drag:
@@ -120,10 +126,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .display(|p| format!("+{:.1}%", (2f32.powf(1.0 / p) - 1.0) * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much two equal notes overlapping add up to, \
-                 from +41% at the bottom to +2% at the top. \
-                 One note on its own never changes; \
-                 a chord only spreads its light.",
+                "How far overlapping notes merge into one light instead of adding up. \
+                 The number is what two equal notes still add where they meet: \
+                 +41% at the bottom of the bar, +2% at the top. \
+                 A fuller bar spreads a chord's light rather than piling it up, \
+                 and one note on its own never changes.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

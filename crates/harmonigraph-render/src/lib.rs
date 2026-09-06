@@ -2889,7 +2889,7 @@ fn create_cell_pipelines(
 ///
 /// **NO BLEND**, where a billboard per node needed one. The fold is
 /// `fs_glow_gather`'s: the p-norm UNION of every halo's coverage at the pixel,
-/// at the exponent the Overlap bar holds ([`harmonigraph_scene::ViewConfig::glow_union`]).
+/// at the exponent the Union bar holds ([`harmonigraph_scene::ViewConfig::glow_union`]).
 /// A lone note is unchanged exactly, `n` notes over one another
 /// read at most `n^(1/p)` times one, and it is commutative, so the order the
 /// loop walks in is not readable in the picture. The screen blend it replaces

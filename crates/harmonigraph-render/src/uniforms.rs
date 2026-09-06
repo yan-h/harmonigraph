@@ -129,9 +129,13 @@ uniform_group! {
         lit: f32,
         /// The exponent the halos are unioned at
         /// ([`harmonigraph_scene::ViewConfig::glow_union`]), in this group's
-        /// last padding slot. Named for what it does to the picture rather
-        /// than for the operator, `union` being a WGSL reserved word and the
-        /// declarations having to agree name for name (`uniforms::layout`).
+        /// last padding slot.
+        ///
+        /// The one name here that does NOT match the thing it carries — the
+        /// field, the scene and the bar are all called some form of "union",
+        /// and this is `overlap` because `union` is a WGSL reserved word and
+        /// `uniforms::layout` checks the Rust and WGSL declarations name for
+        /// name, so the two could not have agreed on it.
         overlap: f32,
     }
 }
