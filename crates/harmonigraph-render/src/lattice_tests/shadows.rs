@@ -15,10 +15,6 @@ const SIZE: [u32; 2] = [256, 256];
 /// lands on. Bright, so one multiply has the range of a channel to move in.
 const GROUND: f64 = 0.8;
 
-/// The node ink floor, used by the subfloor-mark fixture. Shadows must keep
-/// fading below this coverage rather than borrowing the ink's cutoff.
-const INK_FLOOR: f64 = 0.01;
-
 fn over_ground() -> wgpu::Color {
     wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 }
 }
@@ -1004,6 +1000,10 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
 
     const SHADOW: f32 = 0.6;
     const SUBFLOOR: f32 = 1.0 / 255.0;
+    let ink_floor: f32 = shadow::tests::shader_const(SHADER_SRC, "INK_FLOOR")
+        .parse()
+        .expect("the shader's ink floor is a number");
+    assert!(SUBFLOOR < ink_floor, "the mark must reach the shader's subfloor path");
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -1034,7 +1034,7 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
         .unwrap_or(0);
     assert!(
         lifted.abs() <= 2,
-        "a {SUBFLOOR:.4} mark below the {INK_FLOOR:.2} ink floor lifted its Gaussian shadow by \
+        "a {SUBFLOOR:.4} mark below the {ink_floor:.2} ink floor lifted its Gaussian shadow by \
          {lifted} brightness levels",
     );
 }

@@ -11,6 +11,8 @@ use crate::*;
 /// Keep every measured pixel outside visible ink and over actual node light.
 #[test]
 fn shadows_below_one_percent_still_fade_over_glow() {
+    const MARKER_X: f32 = 2.2;
+    const MARKER_RADIUS: f32 = 0.25;
     let Some(mut shooter) = Shooter::new([384, 384]) else {
         return;
     };
@@ -31,8 +33,8 @@ fn shadows_below_one_percent_still_fade_over_glow() {
             scene.pluses.clear();
             if marker {
                 scene.pluses.push(one_marker(
-                    glam::Vec3::new(0.8, 0.0, 0.0),
-                    0.25,
+                    glam::Vec3::new(MARKER_X, 0.0, 0.0),
+                    MARKER_RADIUS,
                     glam::Vec4::splat(1.0),
                     1.0,
                 ));
@@ -52,7 +54,11 @@ fn shadows_below_one_percent_still_fade_over_glow() {
             let centre = on_screen(&scene, shooter.size, glam::Vec3::ZERO);
             let scale = on_screen(&scene, shooter.size, glam::Vec3::X).distance(centre);
             let node_radius = scene.rings_outer * scene.marker_unit * scale + 2.0;
-            let marker_centre = on_screen(&scene, shooter.size, glam::Vec3::new(0.8, 0.0, 0.0));
+            // Keep the marker's near shadow clear of the node's ink. A marker
+            // buried inside the node leaves only its far tail to measure.
+            assert!(MARKER_X - MARKER_RADIUS > scene.rings_outer * scene.marker_unit);
+            let marker_centre =
+                on_screen(&scene, shooter.size, glam::Vec3::new(MARKER_X, 0.0, 0.0));
             scene.glow_reach = 3.0;
             scene.glow_strength = 1.0;
             let lit = shooter.shot(&scene);
@@ -72,13 +78,13 @@ fn shadows_below_one_percent_still_fade_over_glow() {
                         (p / shooter.size[0]) as f32 + 0.5,
                     );
                     at.distance(centre) > node_radius
-                        && (!marker || at.distance(marker_centre) > 0.25 * scale + 2.0)
+                        && (!marker || at.distance(marker_centre) > MARKER_RADIUS * scale + 2.0)
                 })
                 .filter(|&i| ink[i..i + 3] == [0, 0, 0] && lit[i] >= 64)
                 .filter(|&i| shaded[i] < lit[i])
                 .count();
             assert!(
-                darkened > 16,
+                darkened > 256,
                 "{kernel:?}, falloff={falloff}, marker={marker}: a 0.8% shadow darkened only \
                  {darkened} glow pixels",
             );
