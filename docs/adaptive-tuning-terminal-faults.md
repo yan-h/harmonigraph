@@ -142,11 +142,18 @@ cargo fmt --all
 
 Workspace Clippy, formatting and semantic Markdown checks pass.
 The broader plugin run remains failed: ordinary credit/publication and controller-replay expectations require their own triage alongside the two issues above.
+The targeted Stop group has five passes and four failures, recorded with an exact old-condition comparison in [issue 690](https://github.com/yan-h/harmonigraph/issues/690).
+Both the actual-voice Stop condition and the preceding credit-based condition produce the same four failing assertions;
+the ACK-only owner-loss correction does not cause them.
 Neither the selected groups nor the guarded allocator measurement substitute for full CI, independent review or practical D512 qualification.
 
 The review correction adds two reaching fixtures.
 The owner-loss fixture destroys an enrolled Source with an accepted held note while a peer owns a bound but unclaimed onset, then observes terminal completion with the peer inhibited and the destroyed Source's physical debt still retained.
 Its empty-source variant uses uninitialized controller state and a real healthy Stop, then verifies the peer's complete note, tuning, expression and Off and zero remaining registry owners.
+Its acknowledgement-only variant accepts the Off before the Hub can acknowledge it, retaining one credit with zero actual voices, known-neutral CC64 and initially unknown CC66/69.
+Retirement must preserve that absence of wire debt and let the peer finish;
+the pre-correction Stop gate used the retained credit to manufacture controller resets and falsely reported owner loss.
+Stop now keys fresh release debt on actual voices, held pedals, owed Offs or a nonzero velocity prefix.
 The accounting fixture keeps a real assignment reply ring full, advances one Source continuously ahead of its Hub, and accepts an established Off at its actual D512 due callback.
 It reaches ordinary Rebuild with one unpaid bound Plan and an unapplied factual cut, then a real input-inspection fault cancels that On and promotes terminal recovery.
 The pre-correction run reached the service_plans assertion inside the actual allocation-guarded Hub callback; the correction retires the old delivery interval while Finish still waits for output.

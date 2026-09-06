@@ -1122,7 +1122,9 @@ impl Source {
     }
     pub fn stop(&mut self) {
         self.cancel_unsounded();
-        if self.held() != 0
+        // Credits can outlive an accepted Off until its factual ACK arrives.
+        // Only actual wire state may create fresh release debt at Stop.
+        if self.state.count() != 0
             || self.state.pedals_held()
             || self.owed_note_off != [NONE; 64]
             || self.state.channels().iter().any(|channel| {

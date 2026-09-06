@@ -2628,14 +2628,16 @@ fn production_terminal_abort_retires_delivery_before_waiting_for_factual_output(
 fn production_destroyed_held_source_closes_pending_peer_without_fabricating_release() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").is_none() {
-        for held in [true, false] {
+        for mode in ["held", "empty", "ack"] {
             assert!(std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "performance::tests::sequencing_tests::production_destroyed_held_source_closes_pending_peer_without_fabricating_release", "--nocapture", "--test-threads=1"])
-            .env("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD", held.to_string()).status().unwrap().success());
+            .env("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD", mode).status().unwrap().success());
         }
         return;
     }
-    let held = std::env::var("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").unwrap() == "true";
+    let mode = std::env::var("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").unwrap();
+    let held = mode == "held";
+    let ack_debt = mode == "ack";
     // The real destroyed producer cannot accept an Off. Its physical debt
     // intentionally retains an owner, isolated from unrelated registry tests.
     let uuid = SavedUuid::default();
@@ -2658,7 +2660,13 @@ fn production_destroyed_held_source_closes_pending_peer_without_fabricating_rele
     a.run_format(1536, vec![], None, None, 512);
     b.run_format(
         1536,
-        if held { vec![note(7, 0, 60, 0, true)] } else { vec![transport(0, 120.0)] },
+        if held {
+            vec![note(7, 0, 60, 0, true)]
+        } else if ack_debt {
+            vec![raw_midi([0xb0, 64, 0], 0), note(7, 0, 60, 0, true)]
+        } else {
+            vec![transport(0, 120.0)]
+        },
         None,
         None,
         512,
@@ -2668,10 +2676,11 @@ fn production_destroyed_held_source_closes_pending_peer_without_fabricating_rele
     let mut stop = transport(0, 120.0);
     let Input::Transport(ref mut event) = stop else { unreachable!() };
     event.flags &= !CLAP_TRANSPORT_IS_PLAYING;
-    let b_output = b.run_format(2048, if held { vec![] } else { vec![stop] }, None, None, 512);
+    let b_output =
+        b.run_format(2048, if held || ack_debt { vec![] } else { vec![stop] }, None, None, 512);
     assert_eq!(
         b_output.values.iter().filter(|(_, e)| e.attack().is_some()).count(),
-        usize::from(held)
+        usize::from(held || ack_debt)
     );
     assert_eq!(
         b.source_snapshot().faults,
@@ -2687,10 +2696,35 @@ fn production_destroyed_held_source_closes_pending_peer_without_fabricating_rele
         512,
     );
     let original = inspect_source(&a, |s| s.test_capture(1).unwrap());
-    b.run_format(2560, vec![], None, None, 512);
+    b.run_format(
+        2560,
+        if ack_debt { vec![note(7, 0, 60, 0, false)] } else { vec![] },
+        None,
+        None,
+        512,
+    );
     hub.run_format(2560, vec![], None, None, 512);
     assert!(inspect_hub(&hub, |h| h.test_plan_binding(0, original.life)).is_some());
-    assert_eq!(b.source_snapshot().held, usize::from(held));
+    if ack_debt {
+        let off = b.run_format(3072, vec![], None, None, 512);
+        assert_eq!(off.values.iter().filter(|(_, e)| e.release()).count(), 1);
+        assert_eq!(b.source_snapshot().held, 1, "credit is still awaiting the unrun Hub ACK");
+        assert!(b.source_snapshot().sequence > b.source_snapshot().acknowledged);
+        inspect_source(&b, |s| {
+            assert_eq!(s.state.count(), 0);
+            assert!(!s.unknown_joined_wire_state(), "actual Off leaves no wire/debt evidence");
+            let channel = &s.state.channels()[0];
+            assert_eq!(channel.controllers[64], 0);
+            assert_ne!(channel.controller_valid[1] & 1, 0);
+            assert_eq!(
+                channel.controller_valid[1] & ((1 << 2) | (1 << 5)),
+                0,
+                "CC66/69 are still initially unknown"
+            );
+        });
+    } else {
+        assert_eq!(b.source_snapshot().held, usize::from(held));
+    }
     let cut = b.source_snapshot().sequence;
     let id = b.shared().registration().unwrap();
     let session = registry::global().lock().unwrap().test_session(uuid);
