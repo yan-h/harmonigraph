@@ -1724,7 +1724,32 @@ struct PaneBuffers {
     /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
     glyph_sheet_keys: (u64, u64, u64),
+    /// GPU colour history, keyed on this pane's identity and row capacity,
+    /// independently of the viewport targets. A release can have no current
+    /// ink, so resizing must retain these rows rather than reseeding them.
+    ink_history: Option<InkStrip>,
     offscreen: Option<Offscreen>,
+}
+
+impl PaneBuffers {
+    /// Called under the same drawable-geometry guard as target maintenance.
+    /// Glow-off discards history; otherwise only a capacity change replaces it.
+    /// `GlowFade::step` supplies mix = 1 on capacity changes, reseeding from
+    /// current ink. That deliberately does not preserve an inkless release on
+    /// growth. Viewport size, render scale and bloom never key this history.
+    fn ensure_ink_history(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        want: bool,
+        rows: u32,
+    ) {
+        if !want {
+            self.ink_history = None;
+        } else if self.ink_history.as_ref().is_none_or(|strip| strip.rows != rows) {
+            self.ink_history = Some(InkStrip::new(device, layout, rows));
+        }
+    }
 }
 
 /// The per-pane offscreen render target and bloom chain, recreated when
@@ -1741,17 +1766,6 @@ struct Offscreen {
     /// The independent label-free scene attachment and its filtered halo.
     /// Present only while bloom is on; toggling it never replaces glow history.
     bloom: Option<LatticeBloom>,
-    /// An ink strip rescued from the target this one replaced, for
-    /// [`ensure_glow`](Offscreen::ensure_glow) to adopt instead of building a
-    /// fresh one.
-    ///
-    /// A rebuild here is about the pane's PIXELS, and the strip is rows: it
-    /// holds every lit node's colour and nothing about it depends on the size
-    /// of the pane. Dropping it costs the one thing a node in its release
-    /// cannot replace — such a node draws no layer at all, so its halo's
-    /// colour is entirely what the strip already held, and a strip rebuilt
-    /// from nothing takes the halo with it in a single frame.
-    carried_strip: Option<InkStrip>,
     /// The node glow's own target, present only while the view asks for one.
     glow: Option<GlowTarget>,
     /// The names' shadow atlas, present only while a frame has names casting a
@@ -1822,21 +1836,20 @@ struct GlowTarget {
     /// The texture + the shared sampler, as
     /// [`LatticeResources::filter_layout`] takes them.
     bind_group: wgpu::BindGroup,
-    /// The colour that light is drawn in, settled once per node per frame.
-    strip: InkStrip,
 }
 
 /// A frame's ink strips: what every node is putting on itself, read round each
 /// of them at [`INK_STRIP_N`] angles and blurred there.
 ///
-/// One ROW per instance, in the instance buffer's own order, which is what a
-/// node's `strip_row` indexes. Two textures because the blur cannot read the
-/// target it writes: `raw` is `fs_ink_strip`'s reading, `blurred` is
+/// One row per assigned glow identity, indexed by the node's `strip_row`;
+/// instance order may change without changing that identity. Two raw textures
+/// carry history and a third holds its convolution: `raw` is
+/// `fs_ink_strip`'s reading, `blurred` is
 /// `fs_ink_blur`'s convolution of it plus, in one extra column, the same
 /// average at no concentration — the mean a node's middle eases toward.
 ///
 /// Small: an f16 RGBA texel per angle per node, so a lattice of 400 lit nodes
-/// spends about 400 KB on the pair — a rounding error beside the pane-sized
+/// spends about 600 KiB on the three textures, beside the much larger pane-sized
 /// half-float attachments. That is what the light costs in memory to stop
 /// costing a whole reading of the node per lit fragment.
 struct InkStrip {
@@ -1861,7 +1874,7 @@ struct InkStrip {
     /// there is nothing in it to carry.
     blurred_bind_group: wgpu::BindGroup,
     /// How many rows the set was built for — the row map's capacity on the
-    /// frame that built it, which is what [`Offscreen::ensure_glow`] compares.
+    /// frame that built it, which is what [`PaneBuffers::ensure_ink_history`] compares.
     rows: u32,
     /// Which of [`raw_views`](Self::raw_views) this frame writes. Flipped once
     /// per frame, in `prepare`.
@@ -1887,9 +1900,6 @@ struct OffscreenShared<'a> {
     composite_layout: &'a wgpu::BindGroupLayout,
     /// One texture plus the sampler; see [`LatticeResources::filter_layout`].
     filter_layout: &'a wgpu::BindGroupLayout,
-    /// One texture, unfiltered: what both stages of the ink strip are read
-    /// through (see [`InkStrip`]).
-    strip_layout: &'a wgpu::BindGroupLayout,
     /// The shadow atlas as its readers take it; see
     /// [`LatticeResources::shadow_layout`].
     shadow_layout: &'a wgpu::BindGroupLayout,
@@ -2059,7 +2069,6 @@ impl Offscreen {
         uniform_buffer: &wgpu::Buffer,
         size: [u32; 2],
         screen_size: [u32; 2],
-        carried_strip: Option<InkStrip>,
     ) -> Self {
         let OffscreenShared { format, .. } = *shared;
         let tex = |label, w: u32, h: u32, format, usage| {
@@ -2093,7 +2102,6 @@ impl Offscreen {
             bloom: None,
             glow: None,
             shadow: None,
-            carried_strip,
             composite_bind_group,
             color_view,
             size,
@@ -2180,55 +2188,14 @@ impl Offscreen {
         );
     }
 
-    /// Make this pane's glow target exist exactly while `want` says so.
-    ///
-    /// Separate from [`Offscreen::new`] because it answers a different
-    /// question: `new` runs when the pane's PIXELS change, this when the Reach
-    /// bar crosses 0. Folding the two would mean either rebuilding the glow on
-    /// every resize or keeping it allocated while the feature is off, and this
-    /// is the caller's every-frame path.
-    ///
-    /// A resize rebuilds the light target, which is the pane's own pixels and
-    /// has to be rebuilt, and CARRIES the strip across
-    /// (`Offscreen::carried_strip`), which is rows and does not. The two are
-    /// not interchangeable: dropping the strip is what takes every node's
-    /// colour history with it, and a node in its release has no ink of its own
-    /// to seed a new one from.
-    ///
-    /// `rows` is the row map's own capacity (`Scene::glow_rows`), which grows
-    /// and never shrinks within a session — rebuilding the strip is what takes
-    /// every node's colour history with it, and the whole set is a few hundred
-    /// KB at the sizes a lattice reaches. The light target beside it is
-    /// untouched by any of that — it is the pane's own pixels — which is why
-    /// only the strip is rebuilt here.
-    fn ensure_glow(
-        &mut self,
-        device: &wgpu::Device,
-        shared: &OffscreenShared<'_>,
-        want: bool,
-        rows: u32,
-    ) {
+    /// Make this pane's viewport-sized light target exist while `want` says
+    /// so. The separate pane history is maintained by the caller under the
+    /// same guard; recreating this image never allocates or transfers a strip.
+    fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
         match (want, self.glow.is_some()) {
-            (true, false) => {
-                let mut target = GlowTarget::new(device, shared, self.size, rows);
-                // A strip rescued from the target this one replaced, where
-                // there is one: see `carried_strip`. Only when it is the right
-                // height — a strip of the wrong `rows` is rebuilt below anyway,
-                // and adopting it first would only move the same work.
-                if let Some(strip) = self.carried_strip.take().filter(|s| s.rows == rows) {
-                    target.strip = strip;
-                }
-                self.glow = Some(target);
-            }
+            (true, false) => self.glow = Some(GlowTarget::new(device, shared, self.size)),
             (false, true) => self.glow = None,
             _ => {}
-        }
-        // Nothing carried survives past the frame that could adopt it: holding
-        // it longer would hand a stale set of colours to a glow switched back
-        // on much later.
-        self.carried_strip = None;
-        if let Some(glow) = self.glow.as_mut().filter(|g| g.strip.rows != rows) {
-            glow.strip = InkStrip::new(device, shared.strip_layout, rows);
         }
     }
 
@@ -2279,8 +2246,8 @@ impl GlowTarget {
     /// at its own fragment's coordinate: a target at any fraction of the scene
     /// would have to be sampled, and a filtered read of the light a node's ink
     /// is washed with is a blur nobody asked for.
-    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2], rows: u32) -> Self {
-        let OffscreenShared { format, filter_layout, strip_layout, sampler, .. } = *shared;
+    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
+        let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("lattice_glow"),
@@ -2313,7 +2280,6 @@ impl GlowTarget {
             format,
             view,
             bind_group,
-            strip: InkStrip::new(device, strip_layout, rows),
         }
     }
 }
@@ -2329,6 +2295,8 @@ impl InkStrip {
     /// height and knows when its answer changed (`panes::glow_fade` in
     /// harmonigraph-ui), and says so by handing every node a mix of 1.
     fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, rows: u32) -> Self {
+        #[cfg(test)]
+        lattice_tests::INK_STRIP_CREATIONS.with(|count| count.set(count.get() + 1));
         let tex = |label: &str, width: u32| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -3301,7 +3269,6 @@ impl LatticeResources {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.composite_layout,
             filter_layout: &self.filter_layout,
-            strip_layout: &self.strip_layout,
             shadow_layout: &self.shadow_layout,
             sampler: &self.sampler,
             bloom_dummy: &self.bloom_dummy,
@@ -3379,6 +3346,7 @@ impl LatticeResources {
                 }),
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
+                ink_history: None,
                 offscreen: None,
             }
         });
@@ -3408,31 +3376,17 @@ impl LatticeResources {
                 .as_ref()
                 .is_none_or(|o| o.size != size || o.screen_size != screen_size)
             {
-                // The outgoing target's ink strip comes across. What is being
-                // rebuilt is the pane's PIXELS — the strip is rows, and holds
-                // every lit node's colour. A node whose note fade has run out
-                // draws no layer at all, so its halo's colour is entirely what
-                // the strip already held; rebuilt from nothing, every light
-                // still running out goes off in one frame, while lights on
-                // nodes still holding keys are untouched. That reads as a bug
-                // in the release rather than in the resize, and a resize is
-                // one drag of a window edge, a dock separator, or a move
-                // between displays of different scale.
-                let carried = pane.offscreen.take().and_then(|o| o.glow).map(|g| g.strip);
-                pane.offscreen = Some(Offscreen::new(
-                    device,
-                    &shared,
-                    &pane.uniform_buffer,
-                    size,
-                    screen_size,
-                    carried,
-                ));
+                // Release the large old images before allocating replacements,
+                // as before. The pane-owned ink history stays alive beside them.
+                pane.offscreen = None;
+                pane.offscreen =
+                    Some(Offscreen::new(device, &shared, &pane.uniform_buffer, size, screen_size));
             }
-            // After the size check rather than inside it: a target rebuilt just
-            // above carries no glow, and one kept from last frame may carry the
-            // wrong answer. This settles both.
+            // Empty geometry skips both decisions, as before: this is target
+            // maintenance, not a hidden-view lifecycle or retirement policy.
+            pane.ensure_ink_history(device, &self.strip_layout, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
-                offscreen.ensure_glow(device, &shared, wants.glow, wants.rows);
+                offscreen.ensure_glow(device, &shared, wants.glow);
                 offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
             }
         }
@@ -3967,8 +3921,8 @@ impl CallbackTrait for LatticeCallback {
         // which of the ink strip's two raw textures this frame writes (see
         // [`InkStrip`]).
         let pane = resources.panes.get_mut(&self.pane_id).expect("created by pane_buffers above");
-        if let Some(glow) = pane.offscreen.as_mut().and_then(|o| o.glow.as_mut()) {
-            glow.strip.parity ^= 1;
+        if let Some(strip) = pane.ink_history.as_mut() {
+            strip.parity ^= 1;
         }
         let pane = resources.panes.get(&self.pane_id).expect("created by pane_buffers above");
         let draws = pane.instance_count > 0 || pane.plus_count > 0 || pane.glyph_count > 0;
@@ -4066,6 +4020,7 @@ impl CallbackTrait for LatticeCallback {
             // on screen. A lattice can be a frame of markers and labels with
             // every node culled, which is exactly that frame.
             if let Some(glow) = offscreen.glow.as_ref() {
+                let strip = pane.ink_history.as_ref().expect("glow target has pane history");
                 // What colour that light is, before any of it is laid down: the
                 // ink read round every node, then blurred (see [`InkStrip`]).
                 // Both are skipped with no instances to read — the light's own
@@ -4074,7 +4029,7 @@ impl CallbackTrait for LatticeCallback {
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("lattice_ink_strip_pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: glow.strip.writing(),
+                            view: strip.writing(),
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -4098,7 +4053,7 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     // The strip this same pass wrote last frame: what a node's
                     // light is carried FROM (see [`InkStrip`]).
-                    pass.set_bind_group(1, glow.strip.carried(), &[]);
+                    pass.set_bind_group(1, strip.carried(), &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.ink_strip_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
@@ -4107,7 +4062,7 @@ impl CallbackTrait for LatticeCallback {
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("lattice_ink_blur_pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &glow.strip.blurred_view,
+                            view: &strip.blurred_view,
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -4121,7 +4076,7 @@ impl CallbackTrait for LatticeCallback {
                         multiview_mask: None,
                     });
                     pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, glow.strip.written(), &[]);
+                    pass.set_bind_group(1, strip.written(), &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.ink_blur_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
@@ -4152,7 +4107,7 @@ impl CallbackTrait for LatticeCallback {
                 // single layer.
                 if pane.instance_count > 0 {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
+                    pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
