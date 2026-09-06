@@ -96,12 +96,12 @@ impl Default for Row {
     }
 }
 pub struct Hub {
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_request: Option<i64>,
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_result:
         Option<Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error>>,
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_commit: bool,
     #[cfg(test)]
     pub window_report_seen: bool,
@@ -244,11 +244,11 @@ impl Hub {
         let shared = setup::Shared::hub();
         let direct = Source::new(shared.clone());
         Box::new(Self {
-            #[cfg(test)]
+            #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_request: None,
-            #[cfg(test)]
+            #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_result: None,
-            #[cfg(test)]
+            #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_commit: false,
             #[cfg(test)]
             window_report_seen: false,
@@ -345,7 +345,7 @@ impl Hub {
         self.direct.begin(callback);
         self.collect_direct_captures();
         self.collect();
-        #[cfg(test)]
+        #[cfg(all(test, not(feature = "tuning-probe")))]
         self.test_capture_tick();
     }
 
@@ -1716,7 +1716,7 @@ impl Hub {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
     pub fn test_pause_captures(&mut self) {
         self.capture_hold = true;
@@ -1795,7 +1795,7 @@ impl Hub {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
     pub fn test_capture_phases(&self, source: usize) -> (usize, usize) {
         let window =
@@ -1814,7 +1814,7 @@ impl Hub {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
     pub fn test_frozen_id(&self) -> harmonigraph_core::cohort::FrozenInputId {
         self.frozen_captures.id
