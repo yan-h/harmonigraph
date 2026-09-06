@@ -1,5 +1,10 @@
 //! Separate binary: the policy unit-test binary already owns a global allocator.
 use harmonigraph_core::cohort::*;
+
+fn binding() -> FrozenInputId {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    FrozenInputId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::mem::{align_of, size_of};
@@ -89,6 +94,42 @@ fn complete(cohort: &mut Cohort<'_, '_>, expected_inputs: usize, expected_phases
     }
 }
 
+fn complete_reborrow(
+    frozen: FrozenInputId,
+    events: &[Event],
+    targets: &dyn TargetAccess,
+    scratch: &mut Scratch,
+) -> Work {
+    loop {
+        let progress = {
+            let mut view = Cohort::resume(frozen, 0, events, targets, scratch).unwrap();
+            let before = view.work().units();
+            let progress = view.advance(8191).unwrap();
+            assert!(view.work().units() - before <= 8191);
+            progress
+        };
+        // The callback borrow has ended, even when an event remains offered.
+        let mut view = Cohort::resume(frozen, 0, events, targets, scratch).unwrap();
+        match progress {
+            Progress::Pending => {}
+            Progress::Event(selected) => {
+                assert_eq!(view.advance(0), Ok(progress));
+                if selected.phase == EventPhase::Original && selected.role != Role::Event {
+                    assert_eq!(view.was_replacement_committed(selected.event_index), Some(true));
+                }
+                view.commit().unwrap();
+                assert_eq!(view.commit(), Err(Error::NoSelectedEvent));
+            }
+            Progress::Complete { original_inputs, vertices } => {
+                assert_eq!(original_inputs, 1024);
+                assert_eq!(vertices, 1280);
+                assert_eq!(view.committed(), 1280);
+                return view.work();
+            }
+        }
+    }
+}
+
 #[test]
 fn maximum_original_inputs_retriggers_edges_reset_and_overflow_use_no_heap() {
     let mut capture = Capture(Vec::new());
@@ -133,20 +174,22 @@ fn maximum_original_inputs_retriggers_edges_reset_and_overflow_use_no_heap() {
     onset_overflow[256] = Event { id: InputId { source: 16, sequence: 1 }, ..events[0] };
     let mut scratch = Scratch::default();
     let work = without_heap(|| {
+        let frozen = binding();
         let first = {
-            let mut cohort = Cohort::begin(0, &events, &capture, &mut scratch).unwrap();
+            let mut cohort = Cohort::begin(frozen, 0, &events, &capture, &mut scratch).unwrap();
             let first = complete(&mut cohort, 1024, 1280);
             cohort.reset();
             assert_eq!(cohort.was_committed(0), Some(false));
             assert_eq!(cohort.was_replacement_committed(0), Some(false));
-            assert_eq!(complete(&mut cohort, 1024, 1280), first);
             first
         };
+        assert_eq!(complete_reborrow(frozen, &events, &capture, &mut scratch), first);
         assert!(matches!(
-            Cohort::begin(0, &overflow, &capture, &mut scratch),
+            Cohort::begin(binding(), 0, &overflow, &capture, &mut scratch),
             Err(Error::TooManyEvents)
         ));
-        let mut over = Cohort::begin(0, &onset_overflow, &capture, &mut scratch).unwrap();
+        let mut over =
+            Cohort::begin(binding(), 0, &onset_overflow, &capture, &mut scratch).unwrap();
         assert_eq!(over.advance(usize::MAX), Err(Error::TooManyOnsets));
         assert_eq!(over.committed(), 0);
         assert_eq!(over.advance(0), Err(Error::TooManyOnsets));
@@ -215,10 +258,15 @@ fn maximum_unsorted_target_spans_and_full_adjacency_are_charged_without_heap() {
             .collect();
         let provider: &dyn TargetAccess = if separate_chains { &distinct } else { &capture };
         let work = without_heap(|| {
-            let mut cohort = Cohort::begin(0, &events, provider, &mut scratch).unwrap();
-            let work = complete(&mut cohort, 1024, 1024);
-            cohort.reset();
-            assert_eq!(cohort.committed(), 0);
+            let work = {
+                let mut cohort =
+                    Cohort::begin(binding(), 0, &events, provider, &mut scratch).unwrap();
+                let work = complete(&mut cohort, 1024, 1024);
+                cohort.reset();
+                assert_eq!(cohort.committed(), 0);
+                work
+            };
+            scratch.discard();
             work
         });
         assert_eq!(work.validated_targets, 1024 * 64);
