@@ -16,6 +16,7 @@ mod marks;
 mod octaves;
 mod quantization;
 mod reload;
+mod shadow_staging;
 mod shadows;
 mod shimmer;
 mod ships;

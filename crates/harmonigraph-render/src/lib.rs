@@ -3463,6 +3463,26 @@ fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) 
     })
 }
 
+/// Fill native staging directly; dropping the view schedules its copy. Byte
+/// arrays require no typed alignment, and `write_iter` enforces the exact row
+/// count. wgpu still allocates its staging buffer for each nonempty write.
+fn write_shadow_boxes(
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    count: usize,
+    boxes: impl Iterator<Item = shadow::ShadowBox>,
+) {
+    const CELL_BYTES: usize = std::mem::size_of::<shadow::ShadowBox>();
+    let Some(size) = wgpu::BufferSize::new((count * CELL_BYTES) as u64) else {
+        assert_eq!(boxes.count(), 0, "empty shadow upload must have no cells");
+        return;
+    };
+    let mut view = queue.write_buffer_with(buffer, 0, size).expect("valid shadow upload");
+    let (rows, tail) = view.slice(..).into_chunks::<CELL_BYTES>();
+    debug_assert!(tail.is_empty());
+    rows.write_iter(boxes.map(bytemuck::cast::<_, [u8; CELL_BYTES]>));
+}
+
 impl CallbackTrait for LatticeCallback {
     fn prepare(
         &self,
@@ -3781,13 +3801,12 @@ impl CallbackTrait for LatticeCallback {
         }
         if pane.instance_count > 0 {
             let all = &packed.boxes;
-            let boxes: Vec<shadow::ShadowBox> = self
+            let boxes = self
                 .node_cells
                 .iter()
-                .map(|&i| all.get(i as usize).copied().unwrap_or(shadow::NO_CELL))
-                .collect();
+                .map(|&i| all.get(i as usize).copied().unwrap_or(shadow::NO_CELL));
             debug_assert_eq!(boxes.len(), self.instances.len(), "one box per node instance");
-            queue.write_buffer(&pane.node_cell_buffer, 0, bytemuck::cast_slice(&boxes));
+            write_shadow_boxes(queue, &pane.node_cell_buffer, self.instances.len(), boxes);
         }
 
         // The labels. With no atlas there is nothing to sample, so the pass
@@ -3816,17 +3835,15 @@ impl CallbackTrait for LatticeCallback {
                 // Each glyph's own name's box beside it, for the cell draw. The
                 // runs are contiguous in draw order, so this is the boxes
                 // repeated by their runs' lengths.
-                let cells: Vec<shadow::ShadowBox> = self
+                let cells = self
                     .draws
                     .iter()
                     .filter_map(|draw| match *draw {
                         Draw::Label(a, b, l) => Some((b - a, packed.boxes[l as usize])),
                         _ => None,
                     })
-                    .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize))
-                    .collect();
-                debug_assert_eq!(cells.len(), self.glyphs.len(), "one cell per glyph");
-                queue.write_buffer(&pane.cell_buffer, 0, bytemuck::cast_slice(&cells));
+                    .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize));
+                write_shadow_boxes(queue, &pane.cell_buffer, self.glyphs.len(), cells);
             }
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
