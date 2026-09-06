@@ -115,6 +115,7 @@ unsafe extern "C" fn get(events: *const clap_input_events, index: u32) -> *const
 }
 struct Sink {
     values: Vec<(u32, Event)>,
+    rejected: Vec<(u32, Event)>,
     acceptance: Vec<bool>,
     attempts: usize,
     reject_kind: Option<u16>,
@@ -151,13 +152,10 @@ unsafe extern "C" fn push(
     let header = unsafe { &*header };
     sink.attempts += 1;
     close_setup_lease(false);
-    if sink.reject_kind == Some(header.type_)
+    let reject = sink.reject_kind == Some(header.type_)
         || sink.reject_kind == Some(u16::MAX)
         || sink.reject_attempt == Some(sink.attempts)
-        || sink.acceptance.get(sink.attempts - 1) == Some(&false)
-    {
-        return false;
-    }
+        || sink.acceptance.get(sink.attempts - 1) == Some(&false);
     let value = match header.type_ {
         CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE | CLAP_EVENT_NOTE_END => {
             let e = unsafe { &*(header as *const clap_event_header).cast::<clap_event_note>() };
@@ -189,8 +187,13 @@ unsafe extern "C" fn push(
             let e = unsafe { &*(header as *const clap_event_header).cast::<clap_event_midi>() };
             Event::Midi { port: e.port_index, data: e.data, flags: header.flags }
         }
-        _ => return true,
+        _ => return !reject,
     };
+    if reject {
+        assert!(sink.rejected.len() < sink.rejected.capacity());
+        sink.rejected.push((header.time, value));
+        return false;
+    }
     assert!(sink.values.len() < sink.values.capacity());
     sink.values.push((header.time, value));
     true
@@ -395,6 +398,7 @@ impl Device {
         };
         let mut sink = Sink {
             values: Vec::with_capacity(640),
+            rejected: Vec::with_capacity(640),
             acceptance: ACCEPTANCE_SCRIPT.with(|script| std::mem::take(&mut *script.borrow_mut())),
             attempts: 0,
             reject_kind,
@@ -2632,6 +2636,10 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
 #[test]
 fn observed_callback_cost_at_empty_and_full_session_state() {
     let _scope = crate::test_scope::enter();
+    if std::env::var_os("HARMONIGRAPH_REPLAY_REHEARSAL").is_some() {
+        channel_wave_tests::observe_replay_callbacks(true);
+        return;
+    }
     fn report(name: &str, mut times: Vec<u128>) {
         times.sort_unstable();
         let mean = times.iter().sum::<u128>() as f64 / times.len() as f64;
@@ -2716,6 +2724,7 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     sources.clear();
     drop(hub);
+    channel_wave_tests::observe_replay_callbacks(false);
 }
 
 #[test]

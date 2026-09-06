@@ -2,6 +2,10 @@
 //! callbacks, including the normal prepare/host/complete path.
 use super::*;
 
+#[path = "replay_timing.rs"]
+mod replay_timing;
+pub(super) use replay_timing::observe_replay_callbacks;
+
 fn receiver(hub: &Device, slot: usize) -> (Option<u8>, usize, u64, u64) {
     let wrapper = unsafe {
         &*((*hub.plugin)
