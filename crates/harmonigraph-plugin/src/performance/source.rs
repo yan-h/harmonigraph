@@ -46,6 +46,7 @@ pub struct Snapshot {
     pub faults: u32,
     pub epoch: u64,
     pub sequence: u64,
+    pub baseline_cut: Option<u64>,
     pub seal: Option<u64>,
     pub complete_through: i64,
 }
@@ -125,6 +126,15 @@ struct Manifest {
     work: u16,
 }
 
+#[derive(Clone, Copy)]
+struct PendingBaseline {
+    id: u64,
+    cut: u64,
+    /// The original callback's actual coverage, independent of later output
+    /// held behind this snapshot. Its progress report must survive retirement.
+    coverage: Coverage,
+}
+
 pub struct Source {
     pub shared: Arc<setup::Shared>,
     pub offer: Option<SourceOffer>,
@@ -162,7 +172,7 @@ pub struct Source {
     pub participating: bool,
     generation: u64,
     epoch: u64,
-    baseline: Option<(u64, u64)>,
+    baseline: Option<PendingBaseline>,
     next_baseline: u64,
     baseline_needed: bool,
     baseline_acked: bool,
@@ -221,6 +231,7 @@ impl Source {
             faults: self.faults,
             epoch: self.epoch,
             sequence: self.sequence,
+            baseline_cut: self.baseline.map(|baseline| baseline.cut),
             seal: self.sealed.then_some(self.sealed_generation),
             complete_through: self.complete_through,
         }
@@ -1756,7 +1767,9 @@ impl Source {
             Reply::Baseline { incarnation, epoch, transaction, cut, start, .. }
                 if incarnation == self.incarnation()
                     && epoch == self.epoch
-                    && self.baseline == Some((transaction, cut)) =>
+                    && self.baseline.is_some_and(|baseline| {
+                        baseline.id == transaction && baseline.cut == cut
+                    }) =>
             {
                 self.baseline = None;
                 self.baseline_acked = true;
@@ -1903,7 +1916,7 @@ impl Source {
             // >C history. Keep later actual deltas in their original journal
             // until the receiver has consumed that snapshot, not merely its
             // control-slot address.
-            if self.baseline.is_some_and(|(_, cut)| next.sequence > cut) {
+            if self.baseline.is_some_and(|baseline| next.sequence > baseline.cut) {
                 break;
             }
             let offer = self.offer.as_mut().unwrap();
@@ -2014,25 +2027,9 @@ impl Source {
                 }
             }
         }
+        self.publish_output_progress();
         if let Some(offer) = &self.offer {
             let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
-            if !self.detaching && self.adopt_sent && self.transfer_cut == self.sequence {
-                if let Some(coverage) = self.coverage {
-                    if self.last_progress != Some((coverage.through, self.sequence))
-                        && row
-                            .to_hub
-                            .publish(Control::Progress {
-                                incarnation: offer.lease.incarnation,
-                                epoch: self.epoch,
-                                coverage,
-                                output_cut: self.sequence,
-                            })
-                            .is_ok()
-                    {
-                        self.last_progress = Some((coverage.through, self.sequence));
-                    }
-                }
-            }
             if self.settled() {
                 if row.hub_detached.load(Ordering::Acquire) {
                     let Some(returned) = self.shared.source.as_ref().unwrap().returns.reserve()
@@ -2119,25 +2116,54 @@ impl Source {
                         .is_ok()
                     {
                         self.next_baseline = id;
-                        self.baseline = Some((id, self.sequence));
+                        self.baseline = Some(PendingBaseline { id, cut: self.sequence, coverage });
                         self.baseline_needed = false;
                     }
                 }
             }
         }
-        if self.transfer_cut == self.sequence
-            && self.last_progress != Some((coverage.through, self.sequence))
-            && row
-                .to_hub
-                .publish(Control::Progress {
-                    incarnation: offer.lease.incarnation,
-                    epoch: self.epoch,
-                    coverage,
-                    output_cut: self.sequence,
-                })
-                .is_ok()
+        self.publish_output_progress();
+    }
+
+    fn publish_output_progress(&mut self) {
+        if self.detaching || !self.adopt_sent {
+            return;
+        }
+        // The pending snapshot's original report can escape before later
+        // history, which cannot transfer until that same snapshot is acked.
+        let report = self
+            .coverage
+            .filter(|_| self.transfer_cut == self.sequence)
+            .map(|coverage| (coverage, self.sequence))
+            .or_else(|| {
+                self.baseline
+                    .filter(|baseline| self.transfer_cut >= baseline.cut)
+                    .map(|baseline| (baseline.coverage, baseline.cut))
+            });
+        let Some((coverage, cut)) = report else {
+            return;
+        };
+        if self
+            .last_progress
+            .is_some_and(|(through, old_cut)| through >= coverage.through && old_cut >= cut)
         {
-            self.last_progress = Some((coverage.through, self.sequence));
+            return;
+        }
+        let Some(offer) = &self.offer else {
+            return;
+        };
+        if offer.session.rows[usize::from(offer.lease.slot - 1)]
+            .to_hub
+            .publish(Control::Progress {
+                incarnation: offer.lease.incarnation,
+                epoch: self.epoch,
+                coverage,
+                output_cut: cut,
+            })
+            .is_ok()
+        {
+            self.last_progress = Some((coverage.through, cut));
+            self.service_revision = self.service_revision.wrapping_add(1);
         }
     }
 

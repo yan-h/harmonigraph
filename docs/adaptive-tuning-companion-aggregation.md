@@ -170,6 +170,12 @@ The pedal-only fixture also exposed a prerequisite defect:
 a source could previously seal a held pedal when no voices remained, so seal and settlement now require factual pedal neutralization.
 A real reused source slot has the same old/new accepted cut 2 but a new incarnation and no inherited joined proof.
 An actual refused fifth Hub closes its incomplete recording while the four registered Hubs remain alive.
+Its strengthened fixture enables Learning, exhausts eight real command insert/apply pairs and observes a C/E/G triad at sample 67;
+the required learning commit cannot fit, leaving actual DIRECT sequence 3 and pending sample 67 at configuration prefix 67 before destruction.
+All three notes then reach the incomplete file through retired DIRECT publication.
+Temporarily omitting that drain makes the same fixture record no notes;
+the negative control is not shipped.
+Moving 17 commands before the notes was separately measured to prevent observation entirely and was rejected as fixture reach.
 A file-backed recorder fixture holds a failed take open through empty lanes, then fills all 4,096 publication slots and retains one further explicit loss.
 Releasing retirement ownership while the ordinary lane is still full permits closure only after all 4,096 deltas and the exact 4097 loss reach the file.
 The Stop/Reset correction passed 121 guarded plugin tests with two test workers and the separately coordinated callback timing fixture excluded.
@@ -177,7 +183,9 @@ The optional probe build follows its existing export selection:
 production Tune/native-editor code and helpers used only by production Tune fixtures are excluded when `tuning-probe` supplies the companion class.
 Stop markers share the existing 8,192 pending cells and use constant-time unlinking during the existing retirement cleanup phase;
 they add no retirement handshake or pool.
-Joined-producer publication adds 16 conservatively serialized control-consumption rounds to the former 1,422-round bound, giving 1,438 below the existing 2,048-round ceiling.
+Joined-producer publication adds 16 conservatively serialized control-consumption rounds to the former 1,422-round bound.
+The retained baseline's saved progress report adds another 16, giving 1,454 below the existing 2,048-round ceiling.
+A joined Source owns at most one baseline and creates no new one during retirement.
 Retries wait for already-accounted report/output drainage and publish/consume each advance the service revision;
 there is no new acknowledgement lane.
 The full 16-owner event/reference fixture still reaches 8,192 inputs and 32,768 references per owner plus 256 actual terminal reservations.
@@ -188,8 +196,20 @@ The actual four-session factory retirement also returns registry counts to zero.
 Native interaction checks used an isolated local CLAP host and actual AppKit controls, with saved state and host-callback receipts confirming the action;
 they did not load or modify Bitwig.
 The Stop sample-boundary, unpaired Reset-cut and optional-probe export corrections cleared both scoped independent reviews and CI at 3c529a1a.
-The separate issue #672 repair awaits committed-head review;
-neither checkpoint completes the remaining integration below.
+The first issue #672 review found two remaining final-disposition stalls:
+more than the 2,048-record receiver window beyond a frozen configuration prefix, and a retained baseline later than that prefix with no queued output to extend drainage.
+Retirement now derives its candidate drain extent from actual retained output and baseline timestamps before requiring complete final cuts;
+existing member coverage and FIFO/baseline ordering still clamp publication, and only strict final-cut disposition releases the recording hold.
+The combined fixture additionally retains baseline cut 3,601 at sample 703 followed by output through cut 4,002;
+its old Progress reports cannot authorize the baseline acknowledgement.
+Source now retains the baseline's genuine original Coverage and can publish that bounded report once the baseline cut transfers, independently of later blocked output.
+It never pairs a historical cut with a newer callback's coverage.
+All three actual destruction fixtures fail before correction and pass afterward without rescue callbacks, preserving original routes and explicit failure for source-only spans with no Hub route.
+A live absent Source still retains publication ownership because its actual history may be outside the receiver lane.
+The take Writer flushes each appendable record, so its already-written prefix remains readable while final Incomplete marking and worker exit wait for factual closure;
+queue emptiness or a timeout does not grant that authority.
+The coherent follow-up awaits committed-head re-review;
+it does not complete the remaining integration below.
 
 ## Remaining integration boundary
 

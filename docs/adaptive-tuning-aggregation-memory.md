@@ -39,11 +39,13 @@ Observed DIRECT input additionally owns its distinct rich State and 2,048-cell h
 The 16 receiver Rows each hold another rich State and a complete cached baseline.
 These are actual separate allocations/copies despite the session's 256-voice musical credit limit.
 
-One Source Box is 25,224 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel dependencies, permits and pool headers.
-Its eight backing allocations plus its Box total 2,761,864 bytes.
+One Source Box is 25,240 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel dependencies, permits and pool headers.
+Its eight backing allocations plus its Box total 2,761,880 bytes.
 The retained Stop queue adds eight inline bytes per Source and uses existing pending envelopes;
 it adds no backing allocation or larger pool cell.
 The joined-producer flags add eight further bytes per Source and 16 per receiver Row, or 392 bytes per session.
+The retained baseline's original Coverage adds another 16 inline bytes per Source, or 272 bytes across all 17 forwarding owners;
+no payload is read back after ownership transfer, and no backing allocation is added.
 The new Recording disposition flags fit existing padding, so Recording and its configuration Owner stay unchanged.
 Compiling the actual previous and current RecordFence definitions without test-support fields measures 32 bytes for both;
 the retirement hold fits existing padding too.
@@ -64,21 +66,21 @@ each ring's measured Arc/header allocation is 512 bytes.
 
 | Actual constructor/factory measurement | Calling-thread retained bytes |
 | --- | ---: |
-| One Tune constructor | 2,763,021 |
-| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,715,128 |
+| One Tune constructor | 2,763,037 |
+| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,715,144 |
 | Actual 16 endpoint triples and controls | 5,894,848 |
-| Ordinary constructor subtotal | 57,818,312 |
-| Full-HG exported factory | 28,154,013 |
+| Ordinary constructor subtotal | 57,818,584 |
+| Full-HG exported factory | 28,154,029 |
 | Full-HG activation | 760 |
-| Sixteen exported Tune factories plus activation | 55,008,939 |
-| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 331,864,158 |
-| Refused sixty-fifth Tune factory | 3,429,809 |
+| Sixteen exported Tune factories plus activation | 55,009,195 |
+| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 331,865,246 |
+| Refused sixty-fifth Tune factory | 3,429,825 |
 
 Factory and constructor rows overlap and must not be added together.
 Each fixture host adds 96 measured bytes outside the plugin.
 Refused instances still construct their own owner/wrapper;
 the counted registry limit is not a claim that creating arbitrary refused instances allocates nothing.
-The four-session retirement interval allocated 9,024 and deallocated 284,768,840 bytes on the measured thread, returning registry counts to zero.
+The four-session retirement interval allocated 9,024 and deallocated 284,769,928 bytes on the measured thread, returning registry counts to zero.
 Other-thread ownership remains outside that counter.
 
 The sixteen new companion wrappers have 2,635,739 bytes of measured additional owners and generic queues after subtracting their constructors, performance boundary arrays/ready indices and fixture hosts.
@@ -114,7 +116,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 
 | Remaining owner/metadata reservation | Bytes charged |
 | --- | ---: |
-| Seventeen Source residual owners after State/emergency cells | 39,168 |
+| Seventeen Source residual owners after State/emergency cells | 39,440 |
 | State flags/padding for 17 source and 16 receiver copies | 264 |
 | Sixteen Tune parameter allocations | 2,384 |
 | Sixteen Row residual owners | 6,528 |
@@ -141,7 +143,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 | Future cohort ready/degree/traversal indices | 32,768 |
 | Future remaining fixed plan/history/source metadata | 65,536 |
 
-The complete specified plan is 150,582,427 bytes, leaving 412,517 bytes below the unchanged 144 MiB cap.
+The complete specified plan is 150,582,699 bytes, leaving 412,245 bytes below the unchanged 144 MiB cap.
 That remainder is an allowance, not measured allocator-private overhead.
 The attachment payload/metadata rows conservatively charge the whole process ceiling once in this single-session account;
 HubBridge's 16-byte shrink therefore does not reduce those reserved ceilings.

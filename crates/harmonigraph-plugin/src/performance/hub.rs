@@ -1187,20 +1187,22 @@ impl Hub {
         self.input_work = 0;
         self.merged = 0;
         self.collect();
-        if self.rows.iter().all(|row| {
-            row.lease.is_none()
-                || row.seal.or(row.producer_joined).is_some_and(|cut| row.received >= cut)
-        }) {
-            let mut through = self.publication_through.unwrap_or(i64::MIN);
-            for row in &*self.rows {
-                if let Some(last) =
-                    row.output.get(row.output.len().saturating_sub(1)).filter(|d| d.mapped)
-                {
-                    through = through.max(last.actual.saturating_add(1));
-                }
+        // Drain retained payloads without waiting for the final cut to fit in
+        // this bounded window. publish still clamps to actual source coverage;
+        // only retired_streams_published proves final publication ownership.
+        let mut through = self.publication_through.unwrap_or(i64::MIN);
+        for row in &*self.rows {
+            if let Some(last) =
+                row.output.get(row.output.len().saturating_sub(1)).filter(|d| d.mapped)
+            {
+                through = through.max(last.actual.saturating_add(1));
             }
-            self.retired_through = Some(through);
+            if let Some(baseline) = &row.baseline {
+                let sample = (baseline.frame.time * self.rate).round() as i64;
+                through = through.max(sample.saturating_add(1));
+            }
         }
+        self.retired_through = Some(through);
         if let Some((mut owner, mut recorder, observation)) = self.retired_publication.take() {
             if !owner.recording.retirement_finished {
                 if let (Some(through), Some(end)) =
@@ -1323,6 +1325,17 @@ impl Hub {
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
+    pub fn test_row_retirement(&self, slot: usize) -> (u64, u64, usize, Option<(u64, i64)>) {
+        let row = &self.rows[slot];
+        (
+            row.received,
+            row.applied,
+            row.output.len(),
+            row.baseline.as_ref().map(|baseline| {
+                (baseline.frame.output_cut, (baseline.frame.time * self.rate).round() as i64)
+            }),
+        )
+    }
     pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
         std::array::from_fn(|index| {
             let row = &self.rows[index];

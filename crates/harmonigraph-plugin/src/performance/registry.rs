@@ -499,10 +499,12 @@ pub fn service_retired() {
     // ceil(8192/256)+ceil((2*(8192+32768)+65*672)/(2048-2*65))=98,
     // including blocked-parent restarts and indivisible cleanup tails.
     // Every outer round services all four sessions independently.2048 rounds
-    // exceed the1438-round sum, including16 serialized joined-producer control
-    // consumptions. Mailbox retries wait only for the reports/output phases
-    // already counted above; joined publication/consumption bump revision and
-    // add no acknowledgement lane. Missing external proof still exits immediately.
+    // exceed the1454-round sum: add16 serialized joined-producer controls and
+    // 16 saved-baseline progress reports. At retirement each Source owns at
+    // most one baseline and cannot create another. Mailbox retries wait only
+    // for already-counted report/output drainage; successful publication and
+    // consumption bump revision. No new acknowledgement lane is introduced.
+    // Missing external proof still exits immediately.
     for _ in 0..2048 {
         if !service_retired_once() {
             break;
