@@ -12,9 +12,11 @@ fn callback(nodes: usize, labels: usize, atlas: bool, pane: u64) -> LatticeCallb
     scene.pluses.clear();
     let seed = scene.nodes[0];
     scene.nodes = (0..nodes)
-        .map(|i| harmonigraph_scene::NodeInstance {
-            world_pos: glam::vec3((i % 13) as f32 * 0.1 - 0.6, (i % 17) as f32 * 0.1 - 0.8, 0.0),
-            ..seed
+        .map(|i| {
+            let mut node = seed;
+            node.world_pos =
+                glam::vec3((i % 13) as f32 * 0.1 - 0.6, (i % 17) as f32 * 0.1 - 0.8, 0.0);
+            node
         })
         .collect();
     let mut named = names(
