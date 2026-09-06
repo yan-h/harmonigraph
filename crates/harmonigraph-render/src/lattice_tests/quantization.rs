@@ -14,9 +14,12 @@ fn shadows_below_one_percent_still_fade_over_glow() {
     let Some(mut shooter) = Shooter::new([384, 384]) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
+    for (kernel, falloff) in [
+        (harmonigraph_scene::ShadowKernel::Gaussian, 1.0),
+        (harmonigraph_scene::ShadowKernel::Distance, 0.35),
+        (harmonigraph_scene::ShadowKernel::Distance, 1.0),
+        (harmonigraph_scene::ShadowKernel::Distance, 3.0),
+    ] {
         for marker in [false, true] {
             let mut scene = single_marked_node(0, 0);
             scene.camera = harmonigraph_scene::Camera {
@@ -43,6 +46,7 @@ fn shadows_below_one_percent_still_fade_over_glow() {
                 style.kernel = kernel;
                 style.width = 0.6;
                 style.depth = 0.0;
+                style.falloff = falloff;
             }
             let ink = shooter.shot(&scene);
             let centre = on_screen(&scene, shooter.size, glam::Vec3::ZERO);
@@ -75,7 +79,8 @@ fn shadows_below_one_percent_still_fade_over_glow() {
                 .count();
             assert!(
                 darkened > 16,
-                "{kernel:?}, marker={marker}: a 0.8% shadow darkened only {darkened} glow pixels",
+                "{kernel:?}, falloff={falloff}, marker={marker}: a 0.8% shadow darkened only \
+                 {darkened} glow pixels",
             );
         }
     }
