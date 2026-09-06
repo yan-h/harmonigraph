@@ -143,7 +143,7 @@ Initial acceptance passed at source head `d458a51b240013b90b371d464558eda3993e91
 
 - [Full CI](https://github.com/yan-h/harmonigraph/actions/runs/34002124485) and Security passed at that exact head.
 - The local combined actual-adapter command below exited 0 after 114.80 s: 240 renderer tests passed (4 timing probes ignored), 47 offline tests passed (9 probes ignored), and no failures. The full log contains no adapter absence/skip output.
-- All 13 lattice and 5 offline goldens passed unchanged, including the new actual-prepare upload/picture fixture and the inherited hot-reload/reference/history coverage. No golden was blessed.
+- All 13 lattice and 5 offline goldens passed unchanged. The new actual-prepare upload/picture fixture and the inherited hot-reload/reference/history coverage also passed. No golden was blessed.
 - Exactly one requested Claude Opus/xhigh source review against verified `codex/lattice-history-owner` / `33dad566` completed with no findings. There were no fixes or declined findings and no second review. The reviewer could not access external registry source; Codex separately read `wgpu-types-29.0.4/src/write_only.rs:280–308` and verified that `write_iter` panics on both short and excess iterators.
 
 The earlier CI run at `43959360` hit a Rust/Clippy 1.92 internal compiler error in the fixture's external-struct update closure.
