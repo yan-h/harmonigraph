@@ -145,9 +145,9 @@ fn a_lone_halo_is_the_same_frame_at_every_bar_position() {
 /// either. The two are equally far from the column but see it from opposite
 /// directions, so each lays down its own strip's colour at a different angle
 /// and the two readings differ in hue. What the union does with that is take
-/// the mean colour, weighted by the same terms as the norm — so at equal
-/// coverage the summed brightness is exactly the mean of the two, scaled by the
-/// norm's own gain, whatever either colour is.
+/// the mean colour, weighted by the coverages — equal on this column, so the
+/// summed brightness is exactly the mean of the two, scaled by the norm's own
+/// gain, whatever either colour is.
 ///
 /// Read at the Union bar's two ends as well as at the fresh middle
 /// ([`SWEEP`]), which is the whole of what the bar is: the same two halos meet
@@ -352,4 +352,146 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
         "{N} nodes read {gain:.4} times one, which the screen blend would have given at a \
          coverage of {coverage:.3} ({screen:.4})",
     );
+}
+
+/// Where two notes of different colour meet, the hue is the two halos' colours
+/// mixed in proportion to their COVERAGE — at every pixel of the overlap and
+/// at every position of the Union bar, which moves how bright a meeting is and
+/// nothing about what colour it is.
+///
+/// The seam #683 was first rejected for. With the colour weighted by the
+/// norm's own terms, `(a_i/m)^p`, a node nearer by a hair took the whole vote,
+/// so two hues met at a switch a few pixels either side of the bisector, and
+/// the switch narrowed as the bar filled. Weighted by the coverage itself, the
+/// pair's colour at a pixel is `(a_1 c_1 + a_2 c_2) / (a_1 + a_2)`, and the
+/// two singles read `a_1 c_1` and `a_2 c_2` at the same pixel, so the pair's
+/// CHROMATICITY is exactly that of the singles' sum — with no coverage, no
+/// norm and no exponent left in the comparison, which is what lets it be read
+/// off 8-bit frames at all.
+///
+/// The pair of `two_halos_meeting_read_the_norm_of_one_rather_than_their_sum`
+/// with the two nodes given different colours and stood a tenth further apart,
+/// read on a column a fifth of a uv to one side of the bisector: far enough
+/// over that the nearer node's coverage is well above the farther one's, so
+/// the two weightings disagree by most of the distance between the hues, near
+/// enough that every pixel of the run still sees both halos, and — with the
+/// extra spacing — clear of the nearer node's own rings, which end at 0.795
+/// uv and would otherwise put ink on the column. Chromaticity is averaged over the run pixel
+/// by pixel, so the frame's stochastic rounding averages out instead of
+/// biasing a ratio of sums.
+///
+/// Reach: the two singles' chromaticities have to differ by well over the
+/// tolerance, since a pair of one colour passes any weighting; and the nearer
+/// node's chromaticity alone has to be outside it by a margin, since that is
+/// what the old fold read here. Measured on it, with the coverages 2.03 to 1:
+/// 0.805 red at the bottom of the bar against the coverage-weighted 0.670,
+/// and at the fresh exponent the nearer node's own red within a third of a
+/// percent — thirteen and thirty-three tolerances out.
+#[test]
+fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    /// How far left of the bisector the column stands, in node uv.
+    const OFFSET: f32 = 0.2;
+    /// Rows read either side of the middle one.
+    const RUN: usize = 16;
+    /// The most a channel's share of the pixel may differ from the singles'
+    /// sum's by, averaged over the run.
+    const TOLERANCE: f64 = 0.01;
+    // 1.1 uv each side of the bisector, so the column stands 0.9 uv from the
+    // nearer node and 1.3 from the farther, both inside the light's 1.595.
+    let half = single_marked_node(0, 0).node_radius * 1.8 * 1.1;
+    let at = |lit: [f32; 2], p: f64| -> Scene {
+        let mut scene = bare_lattice(1.5);
+        scene.glow_union = p as f32;
+        // Two hues well apart: a node's light is its lit pitch's table entry,
+        // so the table is cut in two — saturated red up to the middle of it,
+        // saturated blue above — and the right node is pitched eleven
+        // semitones over the left, across the cut. The fixture's own table is
+        // a sweep with 0.4 of green under all of it, and two pitches on it
+        // are a few hundredths of chroma apart.
+        scene.pitch_lut = std::array::from_fn(|k| {
+            if k * 2 < harmonigraph_scene::PITCH_LUT_N {
+                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+            } else {
+                glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+            }
+        });
+        let node = scene.nodes[0];
+        scene.nodes = [-half, half]
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let mut node = node;
+                node.world_pos = glam::Vec3::new(*x, 0.0, 0.0);
+                node.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+                if i == 1 {
+                    node.cents = 1100.0;
+                }
+                node.glow.level = lit[i];
+                node
+            })
+            .collect();
+        rows_per_node(&mut scene);
+        on_the_middle_pixel(&mut scene);
+        scene
+    };
+    let column = (CENTRE.x - OFFSET * pixels_per_uv(&at([1.0, 1.0], P))).floor() as usize;
+    let run = |shot: &[u8]| -> Vec<[f64; 3]> {
+        (SIZE[1] as usize / 2 - RUN..=SIZE[1] as usize / 2 + RUN)
+            .map(|row| {
+                let px = (row * SIZE[0] as usize + column) * 4;
+                [f64::from(shot[px]), f64::from(shot[px + 1]), f64::from(shot[px + 2])]
+            })
+            .collect()
+    };
+    let lit_throughout = |pixels: &[[f64; 3]]| pixels.iter().all(|px| px.iter().sum::<f64>() > 0.0);
+    // Each channel's share of its pixel, averaged over the run.
+    let chroma = |pixels: &[[f64; 3]]| -> [f64; 3] {
+        let mut mean = [0.0; 3];
+        for px in pixels {
+            let sum: f64 = px.iter().sum();
+            for (m, v) in mean.iter_mut().zip(px) {
+                *m += v / sum / pixels.len() as f64;
+            }
+        }
+        mean
+    };
+    let apart =
+        |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+
+    let dark: f64 = run(&shooter.shot(&at([0.0, 0.0], P))).iter().flatten().sum();
+    assert_eq!(dark, 0.0, "the read column is not bare: {dark} of something that is not the light");
+    let left = run(&shooter.shot(&at([1.0, 0.0], P)));
+    let right = run(&shooter.shot(&at([0.0, 1.0], P)));
+    assert!(
+        lit_throughout(&left) && lit_throughout(&right),
+        "a pixel of the run gets no light from one of the nodes, so the column is outside its halo \
+         and the fixture measures one light rather than two meeting",
+    );
+    let (near, far) = (chroma(&left), chroma(&right));
+    assert!(
+        apart(near, far) > 0.2,
+        "the two nodes read nearly one hue ({near:?} against {far:?}), so every weighting of the \
+         two agrees",
+    );
+    let summed: Vec<[f64; 3]> =
+        left.iter().zip(&right).map(|(a, b)| [a[0] + b[0], a[1] + b[1], a[2] + b[2]]).collect();
+    let want = chroma(&summed);
+    assert!(
+        apart(near, want) > TOLERANCE * 5.0,
+        "the nearer node's own hue {near:?} is within reach of the coverage-weighted {want:?}, so \
+         a fold that hands it the whole vote passes too",
+    );
+
+    for p in SWEEP {
+        let got = chroma(&run(&shooter.shot(&at([1.0, 1.0], p))));
+        assert!(
+            apart(got, want) < TOLERANCE,
+            "at an exponent of {p} the hue between the two reads {got:?} against the \
+             coverage-weighted {want:?} (the nearer node alone is {near:?}), off by {:.4}",
+            apart(got, want),
+        );
+    }
 }

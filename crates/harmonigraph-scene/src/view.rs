@@ -1277,7 +1277,9 @@ pub struct ViewConfig {
     /// read `n^(1/p)` times one of them and a note ON ITS OWN reads exactly
     /// itself at every value of this. The bar therefore moves what a CHORD
     /// does and nothing else: two equal notes meeting add 41% at the bottom
-    /// and 2% at the top (#680).
+    /// and 2% at the top (#680). It moves how BRIGHT a meeting is and not
+    /// what colour: the colour where notes overlap is their own colours mixed
+    /// in proportion to their coverage, whatever the exponent.
     ///
     /// The exponent ITSELF, not the percentage the bar reads out: the blob
     /// holds 8, and `2^(1/p) - 1` is the bar's own reading of it. Travel is
