@@ -767,13 +767,38 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 /// where this buffer is rewritten and regrown every frame. One layout carrying
 /// both would rebuild the atlas's bind groups whenever a name arrived.
 pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    // The VERTEX stage as well: a caster's quad is its widest term's box, and
+    // that box is in here (`vs_shadow_box` in text.wgsl).
+    storage_list_layout(
+        device,
+        "lattice_shadow_casters_layout",
+        wgpu::ShaderStages::VERTEX_FRAGMENT,
+    )
+}
+
+/// A buffer for `capacity` casters' kernels and the bind group naming it
+/// ([`storage_list`]).
+pub(crate) fn caster_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    storage_list::<ShadowCaster>(device, layout, capacity, "lattice_shadow_casters")
+}
+
+/// The layout every per-frame list the shaders walk binds through: one
+/// read-only storage buffer at binding 0, visible to `stages`. The casters
+/// above and the glow's lit nodes (`glow_node_layout` in lib.rs) are the two.
+pub(crate) fn storage_list_layout(
+    device: &wgpu::Device,
+    label: &str,
+    stages: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("lattice_shadow_casters_layout"),
+        label: Some(label),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            // The VERTEX stage as well: a caster's quad is its widest term's
-            // box, and that box is in here (`vs_shadow_box` in text.wgsl).
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility: stages,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only: true },
                 has_dynamic_offset: false,
@@ -784,26 +809,28 @@ pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// A buffer for `capacity` casters' kernels and the bind group naming it.
+/// A buffer for `capacity` entries of `T` and the bind group naming it, under
+/// a [`storage_list_layout`].
 ///
 /// The two together because they cannot come apart: a storage buffer's bind
 /// group names the buffer, so a pane that outgrows one rebuilds both. Floored
 /// at one entry, an empty storage binding being a validation error and a frame
-/// with no caster in it still having to bind SOMETHING for the pipeline's
+/// with nothing in the list still having to bind SOMETHING for the pipeline's
 /// layout.
-pub(crate) fn caster_buffer(
+pub(crate) fn storage_list<T: bytemuck::Pod>(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     capacity: usize,
+    label: &str,
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lattice_shadow_casters"),
-        size: (std::mem::size_of::<ShadowCaster>() * capacity.max(1)) as u64,
+        label: Some(label),
+        size: (std::mem::size_of::<T>() * capacity.max(1)) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("lattice_shadow_casters_bind_group"),
+        label: Some(&format!("{label}_bind_group")),
         layout,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
     });

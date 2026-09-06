@@ -668,47 +668,21 @@ struct GpuGlowNode {
 /// FRAGMENT alone, unlike `shadow::caster_layout`'s pair — the gather's vertex
 /// stage is four corners and reads nothing.
 fn glow_node_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("lattice_glow_nodes_layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    })
+    shadow::storage_list_layout(device, "lattice_glow_nodes_layout", wgpu::ShaderStages::FRAGMENT)
 }
 
-/// A buffer for `capacity` lit nodes and the bind group naming it.
+/// A buffer for `capacity` lit nodes and the bind group naming it
+/// (`shadow::storage_list`, which holds why the two come as one).
 ///
-/// The two together because they cannot come apart: a storage buffer's bind
-/// group names the buffer, so a pane that outgrows one rebuilds both. Keyed on
-/// the CAPACITY and on nothing else — a frame writes its own nodes into the
-/// buffer it finds and rebuilds neither object, so lighting one more node than
-/// last frame costs an upload and not a bind group. Floored at one entry, an
-/// empty storage binding being a validation error and a frame with no lit node
-/// still having to bind SOMETHING for the pipeline's layout.
+/// Keyed on the CAPACITY and on nothing else — a frame writes its own nodes
+/// into the buffer it finds and rebuilds neither object, so lighting one more
+/// node than last frame costs an upload and not a bind group.
 fn glow_node_buffer(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     capacity: usize,
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lattice_glow_nodes"),
-        size: (std::mem::size_of::<GpuGlowNode>() * capacity.max(1)) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("lattice_glow_nodes_bind_group"),
-        layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
-    });
-    (buffer, bind_group)
+    shadow::storage_list::<GpuGlowNode>(device, layout, capacity, "lattice_glow_nodes")
 }
 
 /// Pack a grid of per-bucket levels into the rows `spectrum_color_level()` in
@@ -1151,13 +1125,9 @@ impl LatticeCallback {
         // A node the projection cannot place — behind the eye, or collapsed to
         // nothing — casts no shadow rather than a box of infinities for the
         // packer to size.
-        let to_points = |p: glam::Vec3| {
-            let clip = view_proj * p.extend(1.0);
-            (clip.w > 1e-4).then(|| {
-                let ndc = clip / clip.w;
-                [(ndc.x * 0.5 + 0.5) * size_points.x, (0.5 - ndc.y * 0.5) * size_points.y]
-            })
-        };
+        let points = glam::vec2(size_points.x, size_points.y);
+        let to_points =
+            |p: glam::Vec3| project_onto(&view_proj, points, p).map(|(at, _)| at.to_array());
         let node_points = scene.node_radius * camera.points_per_world(size_points.y);
         // Each group's own σ in POINTS, read once: a caster carries it and the
         // packer needs no second conversion (`shadow::sigma_points`). A group
@@ -1513,15 +1483,8 @@ impl LatticeCallback {
         let pixels = glam::vec2(size[0] as f32, size[1] as f32);
         // The viewport transform the fragment stage's `@builtin(position)` is
         // on the far side of: the glow pass covers its whole attachment, so
-        // this is the target's own pixels with no offset in it. Guarded as
-        // `from_scene`'s own projection is, and for the same reason.
-        let to_pixels = |p: glam::Vec3| {
-            let clip = view_proj * p.extend(1.0);
-            (clip.w > 1e-4).then(|| {
-                let ndc = clip / clip.w;
-                (glam::vec2((ndc.x * 0.5 + 0.5) * pixels.x, (0.5 - ndc.y * 0.5) * pixels.y), ndc.z)
-            })
-        };
+        // this is the target's own pixels with no offset in it.
+        let to_pixels = |p: glam::Vec3| project_onto(&view_proj, pixels, p);
         self.instances
             .iter()
             .filter(|inst| inst.glow[0] > 0.0)
@@ -1529,7 +1492,12 @@ impl LatticeCallback {
                 // One node uv in world units, as `node_vertex` spends it: the
                 // quad's own margin cancels against the uv it hands out, so the
                 // map is the same whatever margin sized the billboard.
-                let uv_world = self.uniforms.node.radius * 0.90 * 2.0 * inst.scale.max(0.05);
+                //
+                // Off `u.node.radius`, which is what `node_vertex` reads, and
+                // not `u.marker.world_unit`: the two are one number out of
+                // `derive_scene` but a fixture that sets `Scene::node_radius`
+                // by hand moves only the first.
+                let uv_world = self.uniforms.node.radius * 1.8 * inst.scale.max(0.05);
                 let at = glam::Vec3::from(inst.world_pos);
                 let (centre, depth) = to_pixels(at)?;
                 // The frustum's depth range, asked once for the whole quad: its
@@ -1558,6 +1526,28 @@ impl LatticeCallback {
             })
             .collect()
     }
+}
+
+/// One world point through `view_proj` onto a pane of `extent` — points or
+/// pixels, whichever the caller measures in — as the rasterizer would place
+/// it: x right, y DOWN from the top-left corner, and wgpu's clip depth (0 near,
+/// 1 far) beside it. The two places the CPU stands in for the rasterizer read
+/// this: the shadow packer's boxes (`from_scene`) and the light's lit-node map
+/// ([`LatticeCallback::glow_nodes`]), which have to agree with each other and
+/// with `node_vertex`.
+///
+/// `None` for a point at or behind the eye, which no pass can place and which
+/// each caller drops on its own terms.
+fn project_onto(
+    view_proj: &glam::Mat4,
+    extent: glam::Vec2,
+    p: glam::Vec3,
+) -> Option<(glam::Vec2, f32)> {
+    let clip = *view_proj * p.extend(1.0);
+    (clip.w > 1e-4).then(|| {
+        let ndc = clip / clip.w;
+        (glam::vec2((ndc.x * 0.5 + 0.5) * extent.x, (0.5 - ndc.y * 0.5) * extent.y), ndc.z)
+    })
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.

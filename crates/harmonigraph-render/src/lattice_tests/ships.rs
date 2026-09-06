@@ -804,3 +804,63 @@ fn a_resting_lattice_ships_one_marker_draw() {
         "every cross is one run, the same batch the field used to be",
     );
 }
+
+/// The light's own list is the billboard pass's set EXACTLY, the nodes it
+/// dropped included: a node the frustum clips in depth had its whole quad
+/// clipped, every corner sharing the one depth, so it lit nothing — and the
+/// gather leaves it out on the CPU (`glow_nodes`). The steeply pitched
+/// perspective fixture is the one that holds such a node, a lattice corner in
+/// front of the near plane, so it is the fixture that reaches the drop at all.
+///
+/// And the map on every node that does ship is checked against the billboard
+/// it stands in for: the pixel `node_vertex` put uv (1, 0) at has to invert
+/// back to (1, 0), and (0, 1) likewise. That is the check a transposed or
+/// mis-signed adjugate fails, which the goldens cannot see — the halo stays
+/// round either way and only its colour turns.
+#[test]
+fn the_lit_node_list_is_the_billboard_set_under_the_billboard_map() {
+    const SIZE: [u32; 2] = [256, 256];
+    let shot = super::golden::names_overlapping_on_one_sheet();
+    let call = LatticeCallback::from_scene(
+        &shot.scene,
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        7,
+        None,
+    );
+    let view_proj = glam::Mat4::from_cols_array_2d(&call.uniforms.camera.view_proj.0.map(|c| c.0));
+    let pixels = glam::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let axis = |v: Float4| glam::Vec3::new(v.0[0], v.0[1], v.0[2]);
+    let (right, up) = (axis(call.uniforms.camera.right), axis(call.uniforms.camera.up));
+
+    let lit: Vec<&GpuInstance> = call.instances.iter().filter(|i| i.glow[0] > 0.0).collect();
+    assert!(lit.len() > 1, "the fixture lights nothing; the list is vacuous");
+    let placed = |inst: &GpuInstance| {
+        project_onto(&view_proj, pixels, glam::Vec3::from(inst.world_pos))
+            .filter(|(_, depth)| (0.0..=1.0).contains(depth))
+    };
+    let dropped = lit.iter().filter(|inst| placed(inst).is_none()).count();
+    assert!(
+        dropped > 0,
+        "the fixture lost its node in front of the near plane; the drop is unreached"
+    );
+
+    let nodes = call.glow_nodes(SIZE);
+    assert_eq!(nodes.len(), lit.len() - dropped, "the list is the lit set less the clipped");
+
+    // Instance order on both sides, so the two zip.
+    for (inst, node) in lit.iter().filter(|inst| placed(inst).is_some()).zip(&nodes) {
+        let at = glam::Vec3::from(inst.world_pos);
+        let uv_world = call.uniforms.node.radius * 1.8 * inst.scale.max(0.05);
+        let centre = glam::Vec2::from(node.centre);
+        let uv_of = |corner: glam::Vec3| {
+            let (px, _) = project_onto(&view_proj, pixels, corner).expect("a placed corner");
+            let d = px - centre;
+            glam::vec2(glam::Vec2::from(node.inv_x).dot(d), glam::Vec2::from(node.inv_y).dot(d))
+        };
+        let (r, u) = (uv_of(at + right * uv_world), uv_of(at + up * uv_world));
+        assert!(r.abs_diff_eq(glam::vec2(1.0, 0.0), 1e-3), "right corner inverts to {r}");
+        assert!(u.abs_diff_eq(glam::vec2(0.0, 1.0), 1e-3), "up corner inverts to {u}");
+    }
+}
