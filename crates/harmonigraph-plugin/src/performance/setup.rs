@@ -131,6 +131,7 @@ impl Shared {
     pub fn hub() -> Arc<Self> {
         Self::new(Routing::Hub(HubSetup::default()))
     }
+    #[cfg(not(feature = "tuning-probe"))]
     pub fn source() -> Arc<Self> {
         Self::new(Routing::Source(SourceSetup::default()))
     }

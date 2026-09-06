@@ -43,7 +43,7 @@ impl Default for Work {
     }
 }
 impl Work {
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn len(&self) -> usize {
         self.len
     }

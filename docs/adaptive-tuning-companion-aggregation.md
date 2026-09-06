@@ -140,6 +140,7 @@ Tests are in `crates/harmonigraph-plugin/src/performance/tests.rs` and its focus
 | Primary recording pressure | Two Tune sources, including Off, plus DIRECT hold 192 credits and overfill the actual primary queue; all 192 real releases and credits settle before any file/display drain; the file's incomplete range matches the primary loss descriptor |
 | Full held rejoin | 64 Off-held voices rejoin with a complete baseline between retained tuning and later releases; an actual complete take contains exactly 192 original on/tuning/off records with unchanged lifetimes and samples |
 | Transport Stop | An old held voice plus a new pre-Stop attack, expression and controller retain offsets 4/8/10 before an offset-16 Stop; terminations and three pedal neutralizations use offset 16 or a legal later retry; the new stopped phrase retains its timing and canonical identity |
+| Stop cancellation pressure | 641 MIDI clocks fill the 512 normal attempts before a pedal and Stop; the actual 64-entry disposition window fills while additional old work remains, all old non-release events remain ineligible across acknowledgements, and exactly one newer stopped-live controller survives |
 | Unpaired Reset | A malformed-input fault and 1,024 queued pedal messages keep Reset unapplied across its actual local cut; a genuinely later controller survives that pending cut and appears exactly once after recovery, with no old pedal replay |
 | Pairing and inhibition | 512 actual expressions exhaust ordinary output before a retained onset; duplicate UUIDs preserve its old obligation; malformed unpaired input stays inhibited through ordinary adoption and recovers after an explicit settled Reset |
 | Occupied baseline payloads | A third snapshot encounters two undrained payloads; actual release credit and journal retire before any consumer drain, an actual take records the exact one-serial loss, and later reconstruction is empty and participating |
@@ -158,7 +159,9 @@ Fixtures that intentionally retain unresolved owners remain isolated in child pr
 This fixture cleanup does not repair the production destruction case:
 [issue #672](https://github.com/yan-h/harmonigraph/issues/672) records a retired Hub pinned by configuration work whose wrapper has already been destroyed.
 Its ownership/disposition repair remains required before final aggregation retirement clearance.
-The Stop/Reset correction passed 120 guarded plugin tests with the separately coordinated callback timing fixture excluded.
+The Stop/Reset correction passed 121 guarded plugin tests with two test workers and the separately coordinated callback timing fixture excluded.
+The optional probe build follows its existing export selection:
+production Tune/native-editor code and helpers used only by production Tune fixtures are excluded when `tuning-probe` supplies the companion class.
 Stop markers share the existing 8,192 pending cells and use constant-time unlinking during the existing retirement cleanup phase;
 they add no retirement handshake or pool beyond the established 1,422-round bound.
 The full 16-owner event/reference retirement fixture and actual four-session factory retirement passed again.

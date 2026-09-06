@@ -207,16 +207,17 @@ impl Registry {
         self.rematch();
     }
 
+    #[cfg(all(target_os = "macos", not(feature = "tuning-probe")))]
     pub fn candidates(&self) -> Vec<SavedUuid> {
         // Keep duplicates visible. Selecting their UUID cannot disambiguate two
         // restored copies of the same saved project.
         self.hubs.iter().flatten().filter(|h| !h.retired).map(|h| h.uuid).collect()
     }
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_session(&self, uuid: SavedUuid) -> Arc<SessionControl> {
         self.hubs.iter().flatten().find(|h| h.uuid == uuid && !h.retired).unwrap().session.clone()
     }
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_counts(&self) -> (usize, usize, usize) {
         (
             self.hubs.iter().flatten().count(),
@@ -224,11 +225,11 @@ impl Registry {
             self.sources.iter().flatten().filter(|s| s.retired).count(),
         )
     }
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_has_source(&self, id: u64) -> bool {
         self.sources.iter().flatten().any(|s| s.id == id)
     }
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_retained_hub(&self, id: u64) -> bool {
         self.hubs.iter().flatten().any(|h| h.id == id && h.retired && h.owner.is_some())
     }
@@ -427,6 +428,7 @@ impl Registry {
 
 /// Move the actual joined owner into its EXISTING counted entry. Registry
 /// bookkeeping never borrows a live plugin and never calls a host under lock.
+#[cfg(not(feature = "tuning-probe"))]
 pub fn retire_source(mut owner: Box<super::source::Source>) {
     let Some(id) = owner.shared.registration() else {
         return;

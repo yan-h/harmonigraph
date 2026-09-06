@@ -1254,7 +1254,7 @@ impl Hub {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
     pub fn test_rebase_output_prefix(&mut self, lease: Lease, prefix: u64) {
         let row = self.rows.iter_mut().find(|row| row.lease == Some(lease)).unwrap();

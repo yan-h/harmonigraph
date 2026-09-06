@@ -555,7 +555,7 @@ impl Owner {
 pub(crate) fn injected_recorder() -> Option<harmonigraph_record::Recorder> {
     tests::take_recorder()
 }
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
     tests::install_recorder(recorder);
 }
@@ -563,7 +563,7 @@ pub(crate) fn inject_recorder(recorder: harmonigraph_record::Recorder) {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Owner {
     pub fn print_test_memory_layout(&self) {
         use std::mem::size_of;

@@ -20,13 +20,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 mod channel;
-#[cfg(all(test, debug_assertions))]
+#[cfg(all(test, debug_assertions, not(feature = "tuning-probe")))]
 mod replay_tests;
 mod stop;
 mod work;
 
 const NONE: u16 = u16::MAX;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub pending: usize,
@@ -195,7 +195,7 @@ pub struct Source {
 }
 
 impl Source {
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
             pending: self.pending.len(),
@@ -222,7 +222,7 @@ impl Source {
             complete_through: self.complete_through,
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_cell_sizes() -> [usize; 5] {
         [
             std::mem::size_of::<Pending>(),
@@ -1123,7 +1123,7 @@ impl Source {
         if pending.disposition || child == NONE && parent.inline_done {
             return true;
         }
-        if self.faults != 0 && !pending.event.release() {
+        if (self.faults != 0 || pending.serial <= self.cancel_cut) && !pending.event.release() {
             return false;
         }
         if !pending.event.release()
@@ -1245,9 +1245,10 @@ impl Source {
         if actual.is_none_or(|actual| self.next_stop_sample().is_some_and(|stop| actual >= stop)) {
             return false;
         }
-        // A fault may arrive after staging. Do not let an already staged
-        // controller restore pedal-down after emergency neutralization.
-        if self.faults != 0 && !pending.event.release() {
+        // Stop/Reset cancellation can remain acknowledgement-blocked after
+        // its marker is gone. The cut itself inhibits every old non-release,
+        // including a controller staged before the boundary was reached.
+        if (self.faults != 0 || pending.serial <= self.cancel_cut) && !pending.event.release() {
             return false;
         }
         if !pending.event.release()
@@ -1295,10 +1296,7 @@ impl Source {
             return false;
         }
         if pending.event.attack().is_some() {
-            if pending.serial <= self.cancel_cut
-                || self.faults != 0
-                || !self.admitted(pending.generation)
-            {
+            if !self.admitted(pending.generation) {
                 return false;
             }
             // A channel choke can end the logical reservation while the
@@ -2149,7 +2147,7 @@ const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {
     pub fn test_rebase_output_prefix(&mut self, prefix: u64) -> Lease {
         assert_eq!(self.journal.len(), 0);

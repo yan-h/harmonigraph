@@ -992,9 +992,7 @@ pub(super) fn install_recorder(recorder: harmonigraph_record::Recorder) {
 }
 fn recorded_device() -> (Device, harmonigraph_record::testing::Capture) {
     let (recorder, capture) = harmonigraph_record::testing::channel();
-    RECORDER.with(|r| {
-        assert!(r.borrow_mut().replace(recorder).is_none());
-    });
+    install_recorder(recorder);
     (Device::new(), capture)
 }
 fn transport(seconds: f64, time: u32) -> clap_event_transport {

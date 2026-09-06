@@ -742,6 +742,98 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
 }
 
 #[test]
+fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_arrive() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    let observation = |playing: bool, time| {
+        let Input::Transport(mut value) = transport(time, 120.0) else { unreachable!() };
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        value
+    };
+    for block in 0..2 {
+        source.run_callback(
+            block * 64,
+            vec![],
+            (None, None),
+            (64, false),
+            Some(observation(true, 0)),
+        );
+        hub.run(block * 64, vec![], None);
+    }
+    let midi = |data, time| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, time),
+            port_index: 0,
+            data,
+        })
+    };
+    let mut events: Vec<_> = (0..641).map(|_| midi([0xf8, 0, 0], 0)).collect();
+    events.extend([
+        midi([0xb0, 64, 127], 8),
+        Input::Transport(observation(false, 16)),
+        midi([0xb0, 64, 100], 20),
+    ]);
+    let first =
+        source.run_callback(128, events, (None, None), (64, false), Some(observation(true, 0)));
+    assert_eq!(first.values.len(), 512);
+    let mut output = first.values;
+    let blocked = source.source_snapshot();
+    assert_eq!(blocked.manifest, 64, "the Stop cut reaches the full acknowledgement window");
+    assert!(blocked.pending > blocked.manifest, "older work remains outside that window");
+    assert_eq!(blocked.faults, 0);
+    hub.run(128, vec![], None);
+    for block in 3..=12 {
+        let next = source.run_callback(
+            block * 64,
+            vec![],
+            (None, None),
+            (64, false),
+            Some(observation(false, 0)),
+        );
+        output.extend(next.values);
+        hub.run(block * 64, vec![], None);
+    }
+    assert!(
+        !output.iter().any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64, 127], .. })),
+        "no pre-Stop pedal may escape a partly acknowledged cancellation cut"
+    );
+    assert_eq!(
+        output
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::Midi { data: [0xf8, 0, 0], .. }))
+            .count(),
+        512,
+        "only the prefix actually accepted before Stop survives"
+    );
+    assert_eq!(
+        output
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64, 100], .. }))
+            .count(),
+        1,
+        "new stopped-live input survives the old cut"
+    );
+    assert_eq!(source.source_snapshot().pending, 0);
+    assert_eq!(source.source_snapshot().faults, 0);
+    source.run_callback(
+        13 * 64,
+        vec![midi([0xb0, 64, 0], 0)],
+        (None, None),
+        (64, false),
+        Some(observation(false, 0)),
+    );
+    hub.run(13 * 64, vec![], None);
+}
+
+#[test]
 fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_RESET_CUT_CHILD").is_none() {

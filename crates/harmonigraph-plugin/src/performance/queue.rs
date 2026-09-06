@@ -137,13 +137,13 @@ impl<T: Copy, const N: usize> Indexed<T, N> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl<T: Copy, const N: usize> Queue<T, N> {
     pub fn test_layout(&self) -> [usize; 3] {
         [std::mem::size_of::<Option<T>>(), self.cells.len(), std::mem::size_of_val(&*self.cells)]
     }
 }
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tuning-probe")))]
 impl<T: Copy, const N: usize> Indexed<T, N> {
     pub fn test_layout(&self) -> [usize; 5] {
         [
