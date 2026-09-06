@@ -6,7 +6,7 @@ use super::{
     queue::{Queue, Window},
     registry::HubOffer,
     setup,
-    source::{Source, BUSY, CLOSED, FENCED, OPEN},
+    source::{Source, BUSY, CLOSED, OPEN},
     state::{Stamp, State},
 };
 use crate::configuration::Owner;
@@ -17,6 +17,8 @@ use harmonigraph_record::{publication::PublishError, Recorder};
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+
+mod sequencing;
 
 #[derive(Clone, Copy)]
 struct ChannelWitness {
@@ -51,7 +53,12 @@ struct Row {
     ingress_cursor: Option<usize>,
     ingress_left: usize,
     last_disposition: Option<u64>,
+    status_query: Option<usize>,
+    retirement_scan: Option<(usize, usize, usize)>,
     input_coverage: Option<(Coverage, u64)>,
+    input_settled: (u64, u64),
+    input_membership: u64,
+    acknowledged_membership: u64,
     seal: Option<u64>,
     producer_joined: Option<u64>,
     joined_unknown_wire: bool,
@@ -85,7 +92,12 @@ impl Default for Row {
             ingress_cursor: None,
             ingress_left: 0,
             last_disposition: None,
+            status_query: None,
+            retirement_scan: None,
             input_coverage: None,
+            input_settled: (0, 0),
+            input_membership: 0,
+            acknowledged_membership: 0,
             seal: None,
             producer_joined: None,
             joined_unknown_wire: false,
@@ -95,7 +107,22 @@ impl Default for Row {
         }
     }
 }
+impl Row {
+    fn input_progress(&mut self, coverage: Coverage, input_cut: u64, membership: u64) {
+        let new_segment = self.coverage.is_some_and(|output| output.start == coverage.start)
+            && self.input_coverage.is_none_or(|(old, _)| coverage.start >= old.through);
+        if self.input_coverage.is_none_or(|(old, cut)| {
+            input_cut >= cut
+                && ((old.start == coverage.start && old.through <= coverage.through) || new_segment)
+        }) {
+            self.input_coverage = Some((coverage, input_cut));
+            self.input_membership = membership;
+        }
+    }
+}
 pub struct Hub {
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub test_aggregation: bool,
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_request: Option<i64>,
     #[cfg(all(test, not(feature = "tuning-probe")))]
@@ -105,6 +132,8 @@ pub struct Hub {
     pub test_capture_commit: bool,
     #[cfg(test)]
     pub window_report_seen: bool,
+    #[cfg(test)]
+    pub full_input_control_seen: bool,
     pub shared: Arc<setup::Shared>,
     pub offer: Option<HubOffer>,
     pub direct: Box<Source>,
@@ -133,11 +162,12 @@ pub struct Hub {
     direct_captures: super::capture::Permissions,
     direct_capture_cursor: Option<usize>,
     direct_capture_left: usize,
+    sequencer: Box<sequencing::Sequencer>,
 }
 // Charged owner upper bounds apply in production builds too, where the fixture
 // freeze controls are absent. Larger backing cells have their own assertions.
-const _: () = assert!(std::mem::size_of::<Hub>() <= 1104);
-const _: () = assert!(std::mem::size_of::<Row>() <= 31032);
+const _: () = assert!(std::mem::size_of::<Hub>() <= 1136);
+const _: () = assert!(std::mem::size_of::<Row>() <= 31200);
 impl Hub {
     pub fn end(
         &mut self,
@@ -154,20 +184,22 @@ impl Hub {
             self.direct.acknowledge_seal();
         }
         self.commit_transition(owner, recorder, observation);
+        let mut diagnostics = self.direct.diagnostics();
+        if let Some(offer) = &self.offer {
+            diagnostics |= offer.session.faults.load(Ordering::Acquire);
+            for row in &offer.session.rows {
+                diagnostics |= row.faults.load(Ordering::Acquire);
+            }
+        }
+        self.shared.status.store(diagnostics, Ordering::Release);
+        self.shared.extra_delay.fetch_max(self.sequencer.extra_delay, Ordering::Relaxed);
     }
     fn fence_rows(&self, generation: u64) {
         if let Some(offer) = &self.offer {
             offer.session.closing.store(generation, Ordering::Release);
             for row in &offer.session.rows {
                 row.withdrawn.store(true, Ordering::Release);
-                for state in [OPEN, CLOSED] {
-                    let _ = row.emission_gate.compare_exchange(
-                        state,
-                        FENCED,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    );
-                }
+                row.emission_gate.fetch_or(CLOSED, Ordering::AcqRel);
             }
         }
     }
@@ -191,7 +223,7 @@ impl Hub {
             if session.rows.iter().all(|row| {
                 row.source_detached.load(Ordering::Acquire)
                     && row.hub_detached.load(Ordering::Acquire)
-                    && row.emission_gate.load(Ordering::Acquire) != BUSY
+                    && row.emission_gate.load(Ordering::Acquire) & BUSY == 0
             }) {
                 // No musical or recording owner can refer to this clock. Keep
                 // the existing empty host-reset behavior for configuration.
@@ -225,7 +257,7 @@ impl Hub {
         offer.session.epoch.store(clock.epoch, Ordering::Release);
         for row in &offer.session.rows {
             row.withdrawn.store(false, Ordering::Release);
-            row.emission_gate.store(CLOSED, Ordering::Release);
+            row.emission_gate.fetch_or(CLOSED, Ordering::AcqRel);
         }
         offer.session.closing.store(0, Ordering::Release);
     }
@@ -239,11 +271,25 @@ impl Hub {
                 self.direct.fence_transition();
             }
         }
+        if self.sequences_inputs() {
+            self.collect_direct_captures();
+        }
+    }
+    pub fn configuration_exhausted(&mut self) {
+        if let Some(offer) = &self.offer {
+            offer.session.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+            for row in &offer.session.rows {
+                row.emission_gate.fetch_or(CLOSED, Ordering::AcqRel);
+            }
+        }
+        self.direct.fault(super::source::STORAGE_FAULT);
     }
     pub fn new() -> Box<Self> {
         let shared = setup::Shared::hub();
         let direct = Source::new(shared.clone());
         Box::new(Self {
+            #[cfg(all(test, not(feature = "tuning-probe")))]
+            test_aggregation: false,
             #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_request: None,
             #[cfg(all(test, not(feature = "tuning-probe")))]
@@ -252,6 +298,8 @@ impl Hub {
             test_capture_commit: false,
             #[cfg(test)]
             window_report_seen: false,
+            #[cfg(test)]
+            full_input_control_seen: false,
             shared,
             offer: None,
             direct,
@@ -286,6 +334,7 @@ impl Hub {
             direct_captures: super::capture::Permissions::default(),
             direct_capture_cursor: None,
             direct_capture_left: 0,
+            sequencer: Box::default(),
         })
     }
     pub fn activate(&mut self, rate: f64, frames: u32) {
@@ -325,6 +374,8 @@ impl Hub {
         self.collected = 0;
         self.input_work = 0;
         self.merged = 0;
+        self.sequencer.work = 0;
+        self.plan_callback();
         let offset = self.clock.calibration.offset;
         owner.recording.hub_offset = offset;
         self.publication_clock = owner.recording.clock;
@@ -343,7 +394,9 @@ impl Hub {
             self.force_reset(owner, false);
         }
         self.direct.begin(callback);
-        self.collect_direct_captures();
+        if !self.sequences_inputs() {
+            self.collect_direct_captures();
+        }
         self.collect();
         #[cfg(all(test, not(feature = "tuning-probe")))]
         self.test_capture_tick();
@@ -363,7 +416,7 @@ impl Hub {
             return;
         };
         if offer.session.rows.iter().any(|row| {
-            row.emission_gate.load(Ordering::Acquire) == BUSY
+            row.emission_gate.load(Ordering::Acquire) & BUSY != 0
                 || !row.source_detached.load(Ordering::Acquire)
                 || !row.hub_detached.load(Ordering::Acquire)
         }) || self.rows.iter().any(|row| {
@@ -411,6 +464,7 @@ impl Hub {
         time + (sample as f64 - anchor as f64) / self.rate
     }
     fn collect(&mut self) {
+        let sequencing = self.sequences_inputs();
         let Some(offer) = &mut self.offer else {
             return;
         };
@@ -432,6 +486,8 @@ impl Hub {
                 && row.ingress.len() == 0
                 && row.captures.empty()
                 && row.baseline.is_none()
+                && row.status_query.is_none()
+                && row.retirement_scan.is_none()
             {
                 row.lease = None;
                 row.last_disposition = None;
@@ -451,11 +507,66 @@ impl Hub {
                 row.detach = None;
                 row.last_ack = None;
                 row.input_coverage = None;
+                row.input_settled = (0, 0);
+                row.input_membership = 0;
+                row.acknowledged_membership = 0;
+                self.sequencer.heads[index + 1] = None;
+                self.sequencer.captured[index + 1] = 0;
                 row.seal = None;
                 row.producer_joined = None;
                 row.joined_unknown_wire = false;
                 row.last_sealed_ack = None;
                 row.joining = None;
+            }
+            // This lane never waits for Capture ingress or an older Progress
+            // report. Reserve cancellation ACK before consuming its authority.
+            if self.input_work < 4096 {
+                let ack = shared.to_source.reserve_repair();
+                let repair = shared.to_hub.take_repair_if(|control| match control {
+                    Control::Disposition { incarnation, epoch, transaction, .. }
+                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                            && row.epoch == epoch
+                            && transaction != 0 =>
+                    {
+                        ack.is_some()
+                            && row.last_disposition.is_none_or(|last| {
+                                transaction <= last || last.checked_add(1) == Some(transaction)
+                            })
+                    }
+                    _ => true,
+                });
+                if let Some(control) = repair {
+                    self.input_work += 1;
+                    self.service_revision = self.service_revision.wrapping_add(1);
+                    match control {
+                        Control::RevokeAck { fence, input_cut, output_cut, settled_attempt } => {
+                            self.sequencer.revoke_ack(index, fence, input_cut, output_cut, settled_attempt);
+                        }
+                        Control::CaptureStatus { key, status } => {
+                            if let Some(position) = row.status_query.filter(|position|
+                                matches!(row.ingress.at_ref(*position), Some(Intent::Capture(token)) if token.key == key)) {
+                                if let Some(Intent::Capture(token)) = row.ingress.at_mut(position) {
+                                    if let Some(status) = status {
+                                        token.retain_status(status);
+                                    } else {
+                                        shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+                                    }
+                                }
+                                row.status_query = None;
+                            }
+                        }
+                        Control::Disposition { incarnation, epoch, transaction, input_cut, lifetime, request, original_on }
+                            if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                                && row.epoch == epoch && transaction != 0 => {
+                            ack.unwrap().publish(Reply::Disposition { incarnation, transaction, input_cut });
+                            row.last_disposition = Some(row.last_disposition.map_or(transaction, |old| old.max(transaction)));
+                            if sequencing || self.sequencer.retired || self.sequencer.recovering() {
+                                self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime, original_on);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             for _ in 0..2 {
                 // Keep the earliest not-yet-retained cut. A later report owns
@@ -468,7 +579,7 @@ impl Hub {
                 };
                 self.service_revision = self.service_revision.wrapping_add(1);
                 match control {
-                    Control::Adopt { lease, epoch, start }
+                    Control::Adopt { lease, epoch, coverage, output_cut, input_start_cut }
                         if lease.session == offer.session.runtime
                             && lease.incarnation
                                 == shared.expected_incarnation.load(Ordering::Acquire)
@@ -477,7 +588,13 @@ impl Hub {
                         if row.lease.is_none() {
                             row.lease = Some(lease);
                             row.epoch = epoch;
-                            row.coverage = Some(Coverage { start, through: start });
+                            row.coverage =
+                                Some(Coverage { start: coverage.start, through: coverage.start });
+                            // The first callback's actual progress travels with
+                            // Adopt in its one normal cell. A second message is
+                            // not needed to preserve the initial join boundary.
+                            row.report = Some((coverage, output_cut));
+                            self.sequencer.captured[index + 1] = input_start_cut;
                             shared.hub_detached.store(false, Ordering::Release);
                         }
                     }
@@ -537,10 +654,12 @@ impl Hub {
                 }
             }
             for _ in 0..256 {
-                if self.input_work == 4096 || row.ingress.free() == 0 {
+                if self.input_work == 4096 {
                     break;
                 }
                 let units = match offer.bank.rows[index].intents.peek() {
+                    Ok(Intent::Coverage { .. } | Intent::InputSettled { .. }) => 1,
+                    Ok(_) if row.ingress.free() == 0 => break,
                     Ok(Intent::Capture(token)) => token.units(),
                     Ok(_) => 1,
                     Err(_) => break,
@@ -553,6 +672,31 @@ impl Hub {
                 };
                 self.input_work += units;
                 self.service_revision = self.service_revision.wrapping_add(1);
+                match intent {
+                    Intent::Coverage { incarnation, epoch, coverage, input_cut, membership } => {
+                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                            && row.epoch == epoch
+                        {
+                            #[cfg(test)]
+                            if row.ingress.len() == INTENT_RING {
+                                self.full_input_control_seen = true;
+                            }
+                            row.input_progress(coverage, input_cut, membership);
+                        }
+                        continue;
+                    }
+                    Intent::InputSettled { incarnation, epoch, input_cut, output_cut } => {
+                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                            && row.epoch == epoch
+                            && input_cut >= row.input_settled.0
+                            && output_cut >= row.input_settled.1
+                        {
+                            row.input_settled = (input_cut, output_cut);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
                 if let Intent::Disposition {
                     incarnation,
                     transaction,
@@ -574,6 +718,7 @@ impl Hub {
                 let intent = if let Intent::Capture(token) = intent {
                     if row.lease == Some(token.key.lease) && row.epoch == token.key.epoch {
                         row.captures.accept(&token, token.key.lease, row.epoch);
+                        self.sequencer.captured[index + 1] = token.key.serial;
                         Intent::Capture(token)
                     } else {
                         Intent::CaptureRetirement(token.retire_unread())
@@ -581,7 +726,14 @@ impl Hub {
                 } else {
                     intent
                 };
-                row.ingress.push(intent).unwrap_or_else(|_| unreachable!("checked ingress window"));
+                let capture = matches!(&intent, Intent::Capture(_));
+                let position = row
+                    .ingress
+                    .push(intent)
+                    .unwrap_or_else(|_| unreachable!("checked ingress window"));
+                if capture && self.sequencer.heads[index + 1].is_none() {
+                    self.sequencer.heads[index + 1] = Some(position);
+                }
             }
             // A sweep starts at the oldest retained cell and visits only the
             // cells present now. Later appends cannot prolong it: even with 64
@@ -594,14 +746,28 @@ impl Hub {
                 let Some(position) = row.ingress_cursor else {
                     break;
                 };
-                let units = match row.ingress.at_ref(position) {
-                    Some(Intent::Capture(token))
-                        if !self.capture_hold && token.frozen.is_none() =>
+                let units = row.ingress.at_ref(position).map_or(1, |intent| match intent {
+                    Intent::Capture(token)
+                        if !self.capture_hold
+                            && row.status_query != Some(position)
+                            && !(self.frozen_captures.active
+                                && token.frozen == Some(self.frozen_captures.id))
+                            && ((!sequencing
+                                && (token.frozen.is_none() || self.sequencer.retired))
+                                || (sequencing
+                                    && token.frozen.is_some()
+                                    && (token.completed(row.received)
+                                        || token.key.serial <= row.input_settled.0
+                                            && row.received >= row.input_settled.1)))
+                            && (row.output.len() == 0
+                                || row.retirement_scan.is_some_and(|(owner, _, left)| {
+                                    owner == position && left == 0
+                                })) =>
                     {
                         token.units()
                     }
                     _ => 1,
-                };
+                });
                 if self.input_work + units > 4096 {
                     break;
                 }
@@ -609,12 +775,64 @@ impl Hub {
                 row.ingress_left -= 1;
                 row.ingress_cursor =
                     if row.ingress_left == 0 { None } else { row.ingress.next_position(position) };
-                if let Some(Intent::Capture(token)) = row.ingress.at_ref(position) {
-                    if self.capture_hold || token.frozen.is_some() {
+                if let Some(Intent::Capture(token)) = row.ingress.at_mut(position) {
+                    // Callback join ended every reader, including labels left
+                    // by completed cohorts. Retire them in this charged sweep.
+                    if self.sequencer.retired {
+                        token.frozen = None;
+                    }
+                    let frozen_reader = self.frozen_captures.active
+                        && token.frozen == Some(self.frozen_captures.id);
+                    // Contiguous settlement is a cheap sufficient proof; exact
+                    // copied status also progresses when an older A holds that
+                    // prefix while younger B has independently completed.
+                    if !self.sequencer.recovering() && token.key.serial <= row.input_settled.0 {
+                        token.retain_status(CaptureStatus {
+                            output_cut: row.input_settled.1,
+                            work_done: token.all_work(),
+                            inline_done: true,
+                        });
+                    }
+                    let completed = token.frozen.is_some() && token.completed(row.received);
+                    if sequencing
+                        && !self.sequencer.recovering()
+                        && !token.completed(u64::MAX)
+                        && row.status_query.is_none()
+                    {
+                        if let Some(query) = shared.to_source.reserve_repair() {
+                            query.publish(Reply::CaptureStatusQuery(token.key));
+                            row.status_query = Some(position);
+                        }
+                    }
+                    if self.capture_hold
+                        || self.sequencer.recovering()
+                        || frozen_reader
+                        || (sequencing && !completed)
+                        || (!sequencing && token.frozen.is_some())
+                        || row.status_query == Some(position)
+                    {
                         continue;
                     }
+                    if row.output.len() != 0 {
+                        if row.retirement_scan.is_none() {
+                            row.retirement_scan =
+                                Some((position, row.output.position(0).unwrap(), row.output.len()));
+                        }
+                        if row
+                            .retirement_scan
+                            .is_some_and(|(owner, _, left)| owner != position || left != 0)
+                        {
+                            continue;
+                        }
+                    }
+                    if row.retirement_scan.is_some_and(|(owner, _, _)| owner == position) {
+                        row.retirement_scan = None;
+                    }
                     row.ingress.map_at(position, |intent| {
-                        let Intent::Capture(token) = intent else { unreachable!() };
+                        let Intent::Capture(mut token) = intent else { unreachable!() };
+                        // The pass has ended and the Source's contiguous
+                        // settlement cut covers every local musical consumer.
+                        token.frozen = None;
                         Intent::CaptureRetirement(row.captures.retire(token))
                     });
                 }
@@ -625,7 +843,7 @@ impl Hub {
                     Intent::CaptureRetirement(retirement) => {
                         Some(Reply::CaptureRetired(retirement.key))
                     }
-                    Intent::Coverage { incarnation, epoch, coverage, input_cut }
+                    Intent::Coverage { incarnation, epoch, coverage, input_cut, membership }
                         if row.lease.is_some_and(|lease| lease.incarnation == *incarnation)
                             && *epoch == row.epoch =>
                     {
@@ -635,18 +853,31 @@ impl Hub {
                                 && cut <= *input_cut
                         }) {
                             row.input_coverage = Some((*coverage, *input_cut));
+                            row.input_membership = *membership;
+                        }
+                        None
+                    }
+                    Intent::InputSettled { incarnation, epoch, input_cut, output_cut }
+                        if row.lease.is_some_and(|lease| lease.incarnation == *incarnation)
+                            && row.epoch == *epoch =>
+                    {
+                        if *input_cut >= row.input_settled.0 && *output_cut >= row.input_settled.1 {
+                            row.input_settled = (*input_cut, *output_cut);
                         }
                         None
                     }
                     Intent::Disposition {
                         incarnation,
+                        epoch,
                         transaction,
                         input_cut,
                         total: 1,
                         index: 0,
                         lifetime: _,
+                        request: _,
                         canceled: true,
                     } if *transaction != 0
+                        && *epoch == row.epoch
                         && row.lease.is_some_and(|lease| lease.incarnation == *incarnation) =>
                     {
                         let last = row.last_disposition.unwrap();
@@ -673,9 +904,52 @@ impl Hub {
                 }
                 if let Some(Reply::Disposition { transaction, .. }) = reply {
                     row.last_disposition = Some(transaction);
+                    if let Some(Intent::Disposition {
+                        epoch, input_cut, request, lifetime, ..
+                    }) = row.ingress.at_ref(position)
+                    {
+                        self.sequencer.cancel(
+                            index,
+                            row.lease.unwrap(),
+                            *epoch,
+                            *input_cut,
+                            *request,
+                            *lifetime,
+                            false,
+                        );
+                    }
+                }
+                if self.sequencer.heads[index + 1] == Some(position) {
+                    self.sequencer.heads[index + 1] = row.ingress.next_position(position);
                 }
                 row.ingress.remove(position);
                 self.service_revision = self.service_revision.wrapping_add(1);
+            }
+            if let Some((position, mut cursor, mut left)) = row.retirement_scan {
+                let Some(Intent::Capture(token)) = row.ingress.at_ref(position) else {
+                    unreachable!()
+                };
+                for _ in 0..64 {
+                    if left == 0 || self.input_work == 4096 {
+                        break;
+                    }
+                    self.input_work += 1;
+                    if let Some(delta) = row.output.at_mut(cursor) {
+                        if delta.epoch == token.key.epoch
+                            && delta.incarnation == token.key.lease.incarnation
+                            && delta.outcome.origin.parent == token.key.position
+                        {
+                            // All original consumers are complete and their cut
+                            // is already retained. No later report may acquire
+                            // this identity. A popped/reused queue cell cannot
+                            // reintroduce it during this bounded physical scan.
+                            delta.outcome.origin = OutputOrigin::NONE;
+                        }
+                    }
+                    cursor = (cursor + 1) % OUTPUT_RING;
+                    left -= 1;
+                }
+                row.retirement_scan = Some((position, cursor, left));
             }
             for _ in 0..256 {
                 if self.collected == 4096 || row.output.free() == 0 {
@@ -786,7 +1060,7 @@ impl Hub {
                 row.member = true;
                 self.membership = self.membership.saturating_add(1);
                 row.joining = None;
-                if !shared.withdrawn.load(Ordering::Acquire) {
+                if !shared.withdrawn.load(Ordering::Acquire) && !self.sequencer.recovering() {
                     let _ = shared.emission_gate.compare_exchange(
                         CLOSED,
                         OPEN,
@@ -796,18 +1070,14 @@ impl Hub {
                 }
             }
             if shared.withdrawn.load(Ordering::Acquire) {
-                let _ = shared.emission_gate.compare_exchange(
-                    OPEN,
-                    CLOSED,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
+                shared.emission_gate.fetch_or(CLOSED, Ordering::AcqRel);
             }
         }
         self.rotation = (self.rotation + 1) % TUNERS;
     }
 
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
+        self.sequence_inputs(owner, recorder);
         let Some(callback) = self.callback else {
             return;
         };
@@ -883,10 +1153,19 @@ impl Hub {
                             .is_none_or(|baseline| delta.sequence <= baseline.frame.output_cut)
                 })
             }) {
+                let cost = self.sequencer.actual_output_cost(
+                    index,
+                    self.rows[index].lease.unwrap(),
+                    self.rows[index].output.front().unwrap(),
+                );
+                if self.collected + cost > 4096 {
+                    break;
+                }
+                self.collected += cost;
                 let row = &mut self.rows[index];
                 let value = row.output.pop().unwrap();
                 row.channel_witness = None;
-                if !matches!(value.outcome, Outcome::Wire)
+                if !value.outcome.is_wire()
                     || value.discontinuity_generation == 0
                     || !row.state.apply_unmapped_terminal(value.event, value.lifetime)
                 {
@@ -897,6 +1176,11 @@ impl Hub {
                 row.repair = true;
                 row.applied = value.sequence;
                 Self::confirm(row, &mut owner.confirmed);
+                let actual_voice = row.state.voice(value.lifetime).copied();
+                let lease = row.lease.unwrap();
+                if !self.sequencer.actual_output(index, lease, value, actual_voice) {
+                    self.configuration_exhausted();
+                }
                 self.merged += 1;
                 continue;
             }
@@ -936,9 +1220,27 @@ impl Hub {
             if sample >= through {
                 break;
             }
+            let factual_cost = if index == 0 {
+                sequencing::Sequencer::actual_direct_cost(direct.unwrap())
+            } else if index <= TUNERS {
+                self.sequencer.actual_output_cost(
+                    index - 1,
+                    self.rows[index - 1].lease.unwrap(),
+                    self.rows[index - 1].output.front().unwrap(),
+                )
+            } else {
+                0
+            };
+            if self.collected + factual_cost > 4096 {
+                break;
+            }
+            self.collected += factual_cost;
             self.merged += 1;
             if index == 0 {
                 let delta = direct.unwrap();
+                if !self.sequencer.actual_direct(delta) {
+                    self.configuration_exhausted();
+                }
                 let route = owner
                     .recording_route(delta.timing.unwrap(), delta.event.time)
                     .unwrap_or_else(|_| {
@@ -973,17 +1275,18 @@ impl Hub {
                     continue;
                 }
                 let source = self.rows[index].lease.unwrap().source;
+                let assignment = self.output_assignment(index, value);
                 let time = self.presentation(value.actual);
                 let input_time = self.presentation(value.input);
                 let timing = EventTiming {
                     clock,
                     input: value.input,
-                    planned: None,
+                    planned: assignment.map(|(_, planned)| planned),
                     sample: value.actual,
                     sample_rate: self.rate,
                 };
                 let row = &mut self.rows[index];
-                if let Some(delta) = row.state.apply(
+                if let Some(mut delta) = row.state.apply(
                     value.event,
                     Stamp {
                         source,
@@ -995,6 +1298,7 @@ impl Hub {
                         provenance: PitchProvenance::AcceptedOutput,
                     },
                 ) {
+                    delta.partial_output = value.outcome.partial();
                     let route = owner.recording_route(timing, time).unwrap_or_else(|_| {
                         recorder.fail_configuration();
                         Default::default()
@@ -1004,7 +1308,20 @@ impl Hub {
                     }
                 }
                 row.applied = value.sequence;
+                if let Some((binding, _)) = assignment.filter(|_| {
+                    matches!(value.event, super::event::Event::Expression { kind: 2, .. })
+                }) {
+                    row.state.assignment(value.lifetime, binding, value.player);
+                }
+                if value.outcome.partial() {
+                    row.state.partial(value.lifetime);
+                }
                 Self::confirm(row, &mut owner.confirmed);
+                let actual_voice = row.state.voice(value.lifetime).copied();
+                let lease = row.lease.unwrap();
+                if !self.sequencer.actual_output(index, lease, value, actual_voice) {
+                    self.configuration_exhausted();
+                }
             }
         }
         let mut completed = through;
@@ -1078,35 +1395,33 @@ impl Hub {
         }
     }
     fn valid_outcome(row: &mut Row, value: OutputDelta) -> bool {
-        match value.outcome {
-            Outcome::Wire => {
-                row.channel_witness =
-                    value.event.channel_termination().map(|choke| ChannelWitness {
-                        sequence: value.sequence,
-                        input: value.input,
-                        actual: value.actual,
-                        channel: value.event.channel().unwrap(),
-                        controller: if choke { 120 } else { 123 },
-                        derived: 0,
-                    });
-                true
+        if value.outcome.is_wire() {
+            row.channel_witness = value.event.channel_termination().map(|choke| ChannelWitness {
+                sequence: value.sequence,
+                input: value.input,
+                actual: value.actual,
+                channel: value.event.channel().unwrap(),
+                controller: if choke { 120 } else { 123 },
+                derived: 0,
+            });
+            true
+        } else if let Some((wire_sequence, controller)) = value.outcome.channel_terminal() {
+            let Some(witness) = &mut row.channel_witness else {
+                return false;
+            };
+            let valid = witness.sequence == wire_sequence
+                && witness.controller == controller
+                && witness.input == value.input
+                && witness.actual == value.actual
+                && value.event.channel() == Some(witness.channel)
+                && value.event.release()
+                && witness.derived < 64;
+            if valid {
+                witness.derived += 1;
             }
-            Outcome::ChannelTerminal { wire_sequence, controller } => {
-                let Some(witness) = &mut row.channel_witness else {
-                    return false;
-                };
-                let valid = witness.sequence == wire_sequence
-                    && witness.controller == controller
-                    && witness.input == value.input
-                    && witness.actual == value.actual
-                    && value.event.channel() == Some(witness.channel)
-                    && value.event.release()
-                    && witness.derived < 64;
-                if valid {
-                    witness.derived += 1;
-                }
-                valid
-            }
+            valid
+        } else {
+            false
         }
     }
     fn confirm(row: &Row, confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches) {
@@ -1152,8 +1467,19 @@ impl Hub {
             };
             let shared = &offer.session.rows[index];
             if let Some(baseline) = row.baseline.as_ref() {
+                // Adopt and its first Progress can occupy different callbacks.
+                // Keep the initial snapshot until collection has enrolled the
+                // row; acknowledging it earlier loses the only join proof.
+                if baseline.frame.output_cut == 0 && !row.member {
+                    continue;
+                }
                 let sample = (baseline.frame.time * self.rate).round() as i64;
                 if row.applied == baseline.frame.output_cut && sample < through {
+                    // The factual companion is one atomic source replacement:
+                    // clear at most256 entries and copy at most64 held entries.
+                    if self.collected + HELD_SESSION + 64 > 4096 {
+                        continue;
+                    }
                     let Some(ack) = shared.to_source.reserve() else {
                         continue;
                     };
@@ -1185,6 +1511,10 @@ impl Hub {
                     }
                     row.repair |= result.is_err();
                     row.state.replace(&frame);
+                    self.collected += HELD_SESSION + 64;
+                    if !self.sequencer.actual_baseline(index as u8 + 1, &frame) {
+                        shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+                    }
                     row.participating = frame.participating;
                     row.baseline_id = row.baseline_id.max(frame.id);
                     Self::confirm(row, &mut owner.confirmed);
@@ -1196,6 +1526,7 @@ impl Hub {
                         membership: self.membership,
                         start,
                     });
+                    row.acknowledged_membership = self.membership;
                     row.baseline = None;
                 }
             }
@@ -1319,12 +1650,18 @@ impl Hub {
         )
     }
     pub fn retired_pump(&mut self) {
-        self.release_captures(true);
+        self.frozen_captures.end(true);
+        self.capture_hold = false;
+        self.plan_callback();
+        self.sequencer.work = 0;
         self.direct.retired_pump();
         self.collected = 0;
         self.input_work = 0;
         self.merged = 0;
         self.collect();
+        if !self.sequencer.recovering() {
+            self.service_plans();
+        }
         self.collect_direct_captures();
         // Drain retained payloads without waiting for the final cut to fit in
         // this bounded window. publish still clamps to actual source coverage;
@@ -1343,6 +1680,9 @@ impl Hub {
         }
         self.retired_through = Some(through);
         if let Some((mut owner, mut recorder, observation)) = self.retired_publication.take() {
+            if self.sequencer.recovering() {
+                self.service_recovery(&mut owner);
+            }
             if !owner.recording.retirement_finished {
                 if let (Some(through), Some(end)) =
                     (self.retired_through.as_mut(), owner.direct.pending_end())
@@ -1408,7 +1748,10 @@ impl Hub {
         }
     }
     pub fn retired_settled(&self) -> bool {
-        if self.direct_ingress.len() != 0 || !self.direct_captures.empty() {
+        if self.sequencer.recovering()
+            || self.direct_ingress.len() != 0
+            || !self.direct_captures.empty()
+        {
             return false;
         }
         self.direct.settled()
@@ -1425,7 +1768,7 @@ impl Hub {
                     && offer.session.rows.iter().all(|row| {
                         row.source_detached.load(Ordering::Acquire)
                             && row.hub_detached.load(Ordering::Acquire)
-                            && row.emission_gate.load(Ordering::Acquire) != BUSY
+                            && row.emission_gate.load(Ordering::Acquire) & BUSY == 0
                     })
             })
             && self.retired_publication.as_ref().is_none_or(|(owner, _, _)| {
@@ -1455,6 +1798,7 @@ impl Hub {
         observation: f64,
     ) {
         assert!(self.retired_publication.is_none());
+        self.sequencer.retired = true;
         self.direct.join_producer();
         recorder.hold_retired_publication();
         owner.recording.dispose_retired_configuration(&mut recorder, &owner.timeline);
@@ -1509,6 +1853,7 @@ impl Hub {
         row.last_ack = Some((prefix, row.coverage.unwrap().through));
     }
     pub fn print_test_memory_layout(&self) {
+        self.sequencer.print_test_memory_layout();
         use std::mem::{size_of, size_of_val};
         println!(
             "LEDGER hub [owner,row,row_backing,state,baseline_option] {:?}",
@@ -1534,6 +1879,7 @@ impl Hub {
 
 impl Hub {
     fn collect_direct_captures(&mut self) {
+        let sequencing = self.sequences_inputs();
         let Some(lease) = self.direct.capture_lease() else {
             return;
         };
@@ -1552,9 +1898,14 @@ impl Hub {
                 break;
             };
             self.direct_captures.accept(&token, lease, token.key.epoch);
-            self.direct_ingress
+            self.sequencer.captured[0] = token.key.serial;
+            let position = self
+                .direct_ingress
                 .push(Intent::Capture(token))
                 .unwrap_or_else(|_| unreachable!("checked DIRECT ingress capacity"));
+            if self.sequencer.heads[0].is_none() {
+                self.sequencer.heads[0] = Some(position);
+            }
             self.service_revision = self.service_revision.wrapping_add(1);
         }
         if self.direct_capture_left == 0 {
@@ -1566,7 +1917,15 @@ impl Hub {
                 break;
             };
             let units = match self.direct_ingress.at_ref(position) {
-                Some(Intent::Capture(token)) if !self.capture_hold && token.frozen.is_none() => {
+                Some(Intent::Capture(token))
+                    if !self.capture_hold
+                        && ((sequencing
+                            && token.frozen.is_some()
+                            && !(self.frozen_captures.active
+                                && token.frozen == Some(self.frozen_captures.id)))
+                            || !sequencing
+                                && (token.frozen.is_none() || self.sequencer.retired)) =>
+                {
                     token.units()
                 }
                 _ => 1,
@@ -1581,15 +1940,26 @@ impl Hub {
             } else {
                 self.direct_ingress.next_position(position)
             };
-            let Some(Intent::Capture(token)) = self.direct_ingress.at_ref(position) else {
+            let Some(Intent::Capture(token)) = self.direct_ingress.at_mut(position) else {
                 unreachable!();
             };
-            if self.capture_hold || token.frozen.is_some() {
+            if self.sequencer.retired {
+                token.frozen = None;
+            }
+            let frozen_reader =
+                self.frozen_captures.active && token.frozen == Some(self.frozen_captures.id);
+            if self.capture_hold
+                || self.sequencer.recovering()
+                || frozen_reader
+                || (sequencing && token.frozen.is_none())
+                || (!sequencing && token.frozen.is_some())
+            {
                 continue;
             }
-            let Intent::Capture(token) = self.direct_ingress.remove(position).unwrap() else {
+            let Intent::Capture(mut token) = self.direct_ingress.remove(position).unwrap() else {
                 unreachable!();
             };
+            token.frozen = None;
             let retirement = self.direct_captures.retire(token);
             self.direct.retire_direct_capture(retirement);
             self.service_revision = self.service_revision.wrapping_add(1);
@@ -1814,6 +2184,37 @@ impl Hub {
             }
         }
         counts
+    }
+    pub fn test_input_sequence_progress(
+        &self,
+    ) -> (Option<(Coverage, u64)>, usize, bool, Option<i64>) {
+        (
+            self.rows[0].input_coverage,
+            self.frozen_captures.len(),
+            self.frozen_captures.active,
+            self.sequencer.finalized,
+        )
+    }
+    pub fn test_input_row(
+        &self,
+        source: usize,
+    ) -> (bool, u64, u64, Option<(Coverage, u64)>, Option<Coverage>, Option<(Coverage, u64)>) {
+        let row = &self.rows[source];
+        (
+            row.member,
+            row.acknowledged_membership,
+            row.input_membership,
+            row.input_coverage,
+            row.coverage,
+            row.report,
+        )
+    }
+    pub fn test_voice(
+        &self,
+        source: usize,
+        lifetime: u64,
+    ) -> Option<harmonigraph_core::canonical::VoiceBaseline> {
+        self.rows[source].state.voice(lifetime).copied()
     }
 }
 

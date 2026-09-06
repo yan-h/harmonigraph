@@ -236,6 +236,7 @@ impl Source {
     }
     pub(super) fn record_channel_terminals(
         &mut self,
+        parent: u16,
         pending: Pending,
         wire_sequence: u64,
         actual: i64,
@@ -266,10 +267,12 @@ impl Source {
                 };
                 let active_slot = self.active.iter().position(|index| *index == target.life);
                 let mut fact = self.record(terminal, target.life, pending.input, actual);
-                fact.outcome = Outcome::ChannelTerminal {
+                fact.outcome = Outcome::channel(
                     wire_sequence,
-                    controller: if choke { 120 } else { 123 },
-                };
+                    if choke { 120 } else { 123 },
+                    target.life,
+                    OutputOrigin { parent, work: targets },
+                );
                 self.journal
                     .push(fact)
                     .unwrap_or_else(|_| unreachable!("prepared whole channel outcome group"));

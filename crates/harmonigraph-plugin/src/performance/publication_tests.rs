@@ -12,14 +12,14 @@ fn tunings(time: u32) -> Vec<Input> {
 fn full_primary_publication_does_not_block_three_sources_actual_releases_and_credit_retirement() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut a = Device::new(true);
+    let mut a = Device::aggregation(true);
     a.configure(uuid, true);
     a.activate();
-    let mut b = Device::new(true);
+    let mut b = Device::aggregation(true);
     b.configure(uuid, false);
     b.activate();
     a.run(0, vec![], None);
@@ -98,11 +98,11 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
 fn occupied_baseline_payloads_do_not_pin_later_actual_releases_or_hide_reporting_loss() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -189,11 +189,11 @@ fn occupied_baseline_payloads_do_not_pin_later_actual_releases_or_hide_reporting
 fn off_rejoin_full_held_baseline_preserves_the_complete_original_take_lifetimes() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);

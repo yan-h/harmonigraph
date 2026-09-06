@@ -170,6 +170,7 @@ mod tests {
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
+                partial_output: false,
                 event,
                 sequence,
                 lifetime: 61,
@@ -312,6 +313,7 @@ mod tests {
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
+                partial_output: false,
                 event,
                 sequence,
                 lifetime: 61,

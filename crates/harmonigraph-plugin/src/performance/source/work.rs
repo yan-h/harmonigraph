@@ -465,6 +465,9 @@ impl Source {
             if self.capture_cursor == Some(position) {
                 self.capture_cursor = self.pending.next_position(position);
             }
+            if self.settlement_cursor == Some(position) {
+                self.settlement_cursor = self.pending.next_position(position);
+            }
             let mut child = parent.work_head;
             while child != NONE {
                 let cell = self.work.at(child);
@@ -489,6 +492,9 @@ impl Source {
     }
 
     fn capture_retained(&self, position: usize) -> bool {
+        if self.recovery.holds(self.pending.at(position).unwrap().serial) {
+            return true;
+        }
         // READY has never minted a token. After producer join and local
         // cancellation it has no possible reader, even if sample mapping made
         // publication impossible. OFFERED also covers a failed Source push;
@@ -501,10 +507,10 @@ impl Source {
 
     fn queue_ready_cleanup(&mut self, index: u16) {
         let life = self.lives.local_mut(index).unwrap();
-        if life.ready_queued {
+        if life.flags & READY_QUEUED != 0 {
             return;
         }
-        life.ready_queued = true;
+        life.flags |= READY_QUEUED;
         if self.work_cleanup_tail == NONE {
             self.work_cleanup_head = index;
         } else {
@@ -536,7 +542,7 @@ impl Source {
                     self.work_cleanup_tail = NONE;
                 }
                 let value = self.lives.local_mut(index).unwrap();
-                value.ready_queued = false;
+                value.flags &= !READY_QUEUED;
                 value.cleanup_next = NONE;
                 self.recycle(index);
                 continue;

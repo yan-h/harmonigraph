@@ -26,11 +26,11 @@ fn actual_adoption_and_detached_endpoint_fill_both_return_slots_without_main_ser
         return;
     }
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -78,11 +78,11 @@ fn actual_adoption_and_detached_endpoint_fill_both_return_slots_without_main_ser
 fn pairing_change_after_actual_offer_take_returns_the_whole_stale_bundle() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let shared = source.shared();

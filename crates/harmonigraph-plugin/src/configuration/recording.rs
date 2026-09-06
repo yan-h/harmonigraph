@@ -37,6 +37,7 @@ pub(crate) struct Recording {
     /// Continuous presentation clock for publication controls and loss markers.
     pub observation_time: f64,
     source_prefix: Option<i64>,
+    registered_through: i64,
     segments: [Option<Segment>; SEGMENTS],
     changes: [Option<(i64, ResolvedConfig)>; CHANGES],
     passes: [Option<Pass>; RECORD_PASSES],
@@ -57,6 +58,7 @@ impl Default for Recording {
             hub_offset: 0,
             observation_time: 0.0,
             source_prefix: None,
+            registered_through: i64::MIN,
             segments: [None; SEGMENTS],
             changes: [None; CHANGES],
             passes: [None; RECORD_PASSES],
@@ -130,6 +132,7 @@ impl Recording {
         self.clock = clock;
         self.hub_offset = offset;
         self.source_prefix = None;
+        self.registered_through = i64::MIN;
         for pass in self.passes.iter_mut().flatten() {
             pass.last = None;
             pass.seeded = false;
@@ -279,9 +282,22 @@ impl Recording {
             *cell = Some(segment);
         } else {
             recorder.fail_configuration();
+            return;
         }
 
+        self.registered_through = end;
         self.finish(recorder, timeline);
+    }
+
+    /// Future subblocks have no segment yet. Existing unseeded recording spans
+    /// also retain the exact configuration at their original start.
+    pub fn configuration_seed_frontier(&self) -> i64 {
+        self.segments
+            .iter()
+            .flatten()
+            .filter(|segment| segment.address.is_some() && !segment.seeded)
+            .map(|segment| segment.start)
+            .fold(self.prefix.min(self.registered_through), i64::min)
     }
 
     pub fn finish(&mut self, recorder: &mut Recorder, timeline: &ConfigTimeline) {

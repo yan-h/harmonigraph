@@ -121,6 +121,7 @@ pub enum Lane {
 enum Events {
     Single(InputValue),
     Pair { first: InputValue, second: InputValue },
+    VelocityOnset { port: u16, data: [u8; 3], flags: u32, note: InputValue, tuning: InputValue },
 }
 
 /// A single event or one of two narrowly validated pairs: note-on/tuning or
@@ -163,9 +164,38 @@ impl Group {
 
     pub fn velocity_prefix(&self) -> Option<InputValue> {
         match self.events {
-            Events::Pair { first: prefix @ InputValue::Midi { .. }, .. } => Some(prefix),
+            Events::Pair { first: prefix @ InputValue::Midi { data: [status, 88, _], .. }, .. }
+                if status & 0xf0 == 0xb0 => Some(prefix),
+            Events::VelocityOnset { port, data, flags, .. } => Some(InputValue::Midi { port, data, flags }),
             _ => None,
         }
+    }
+
+    pub fn initial_tuning(&self) -> Option<InputValue> {
+        match self.events {
+            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. }
+            | Events::VelocityOnset { tuning, .. } => Some(tuning),
+            _ => None,
+        }
+    }
+
+    /// A raw MIDI onset can need its captured CC88 immediately before the
+    /// consumer and per-note tuning immediately after it. The small prefix is
+    /// stored compactly; the complete group still fits its 256-byte reservation.
+    pub fn tuned_onset(
+        token: Token,
+        time: u32,
+        prefix: Option<InputValue>,
+        note: InputValue,
+        tuning: InputValue,
+    ) -> Result<Self, StageError> {
+        let mut group = Self::onset(token, time, note, tuning)?;
+        if let Some(prefix) = prefix {
+            Self::velocity_note(token, time, prefix, note)?;
+            let InputValue::Midi { port, data, flags } = prefix else { unreachable!() };
+            group.events = Events::VelocityOnset { port, data, flags, note, tuning };
+        }
+        Ok(group)
     }
 
     pub fn single(
@@ -198,6 +228,11 @@ impl Group {
                     ..
                 },
             ) => (note_id, port, channel, key) == (tid, tp, tc, tk),
+            (InputValue::Midi { port: 0, data: [status, key, velocity], .. },
+             InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, note_id: -1,
+                 port: 0, channel, key: tuning_key, .. }) =>
+                status & 0xf0 == 0x90 && key < 128 && (1..128).contains(&velocity) && i16::from(status & 15) == channel
+                    && i16::from(key) == tuning_key,
             _ => false,
         };
         if !matching || !valid_event(note) || !valid_event(tuning) {
@@ -210,6 +245,7 @@ impl Group {
         match self.events {
             Events::Single(_) => 1,
             Events::Pair { .. } => 2,
+            Events::VelocityOnset { .. } => 3,
         }
     }
 
@@ -218,6 +254,9 @@ impl Group {
             (Events::Single(e), 0)
             | (Events::Pair { first: e, .. }, 0)
             | (Events::Pair { second: e, .. }, 1) => Some(e),
+            (Events::VelocityOnset { port, data, flags, .. }, 0) => Some(InputValue::Midi { port, data, flags }),
+            (Events::VelocityOnset { note, .. }, 1) => Some(note),
+            (Events::VelocityOnset { tuning, .. }, 2) => Some(tuning),
             _ => None,
         }
     }
@@ -249,10 +288,10 @@ pub enum Disposition {
     ProcessError,
 }
 
-/// Bits follow event order: single; note-on then tuning; or CC88 then raw MIDI
-/// consumer. First-event rejection leaves the second unattempted. An accepted
-/// first event always attempts its second under the SAME caller permit, even
-/// if a fence closes inside the first host call.
+/// Bits follow event order: single, note-on then tuning, CC88 then raw MIDI,
+/// or CC88 then raw note-on then tuning. A rejection suppresses the remaining
+/// events. Accepted prefixes continue under the SAME caller permit even if a
+/// fence closes inside a host call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Completion {
     pub group: Group,

@@ -235,6 +235,70 @@ impl Owner {
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
         self.budget = ControlBudget::default();
+        self.retire_configuration();
+    }
+
+    /// Only already-proven input/binding frontiers authorize this reclamation.
+    /// Spend the same enclosing grant before new commands can fill the timeline.
+    fn retire_configuration(&mut self) {
+        while matches!(self.timeline.retire_one(&mut self.budget), Ok(true)) {}
+    }
+
+    pub fn bind_input_cohort(
+        &mut self,
+        clock: harmonigraph_core::canonical::ClockId,
+        sample: i64,
+    ) -> Result<ResolvedConfig, TimelineError> {
+        if self.frozen || clock != self.recording.clock {
+            return Err(TimelineError::InvalidFrontier);
+        }
+        let raw =
+            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)?;
+        if raw >= self.recording.prefix {
+            return Err(TimelineError::PendingBoundary);
+        }
+        self.timeline.begin_cohort(raw)
+    }
+
+    pub fn abandon_input_cohort(
+        &mut self,
+        clock: harmonigraph_core::canonical::ClockId,
+        sample: i64,
+    ) -> Result<(), TimelineError> {
+        if clock != self.recording.clock {
+            return Err(TimelineError::InvalidFrontier);
+        }
+        let raw =
+            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)?;
+        self.timeline.abandon_cohort(raw)
+    }
+
+    /// Called only after record() has registered this subblock's segments.
+    /// Seeding is a separate consumer of historical configuration, so it must
+    /// finish before even the logical lookup frontier can move past its start.
+    pub fn finalize_input(
+        &mut self,
+        clock: harmonigraph_core::canonical::ClockId,
+        finalized: i64,
+        bindings_copied: i64,
+        recorder: &mut harmonigraph_record::Recorder,
+    ) -> Result<(), TimelineError> {
+        if self.frozen || clock != self.recording.clock {
+            return Err(TimelineError::InvalidFrontier);
+        }
+        let raw = |sample: i64| {
+            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)
+        };
+        let finalized = raw(finalized)?;
+        let bindings_copied = raw(bindings_copied)?;
+        self.recording.finish(recorder, &self.timeline);
+        let cap = self.recording.configuration_seed_frontier();
+        if finalized > cap || bindings_copied > cap {
+            return Err(TimelineError::PendingBoundary);
+        }
+        self.timeline.advance_frontiers(finalized, bindings_copied)?;
+        self.retire_configuration();
+        Ok(())
     }
     pub fn reset(&mut self, recorder: &harmonigraph_record::Recorder) {
         self.frozen = false;

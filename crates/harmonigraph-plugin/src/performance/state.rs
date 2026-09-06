@@ -96,6 +96,25 @@ impl State {
     pub fn count(&self) -> usize {
         self.voices().count()
     }
+    pub fn partial(&mut self, lifetime: u64) {
+        if let Some(voice) =
+            self.voices.iter_mut().flatten().find(|voice| voice.lifetime == lifetime)
+        {
+            voice.partial_output = true;
+            voice.release_pending = true;
+        }
+    }
+    pub fn assignment(&mut self, lifetime: u64, binding: super::protocol::Assignment, player: f64) {
+        if let Some(voice) =
+            self.voices.iter_mut().flatten().find(|voice| voice.lifetime == lifetime)
+        {
+            voice.player_tuning = player;
+            voice.frozen_offset_microcents = binding.correction;
+            if binding.decision != 0 {
+                voice.assignment = Some(binding.configuration);
+            }
+        }
+    }
 
     pub fn channels(&self) -> &[ChannelBaseline; 16] {
         &self.channels
@@ -244,6 +263,7 @@ impl State {
             provenance: stamp.provenance,
             timing: stamp.timing,
             pitch_microcents,
+            partial_output: false,
         })
     }
 }

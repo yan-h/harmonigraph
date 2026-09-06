@@ -48,16 +48,16 @@ impl Pressure {
     fn new_with_midi(seed: Vec<Input>, raw_midi: bool) -> Self {
         let direct_count = 63 - seed.iter().filter(|input| matches!(input, Input::Note(event) if event.header.type_ == CLAP_EVENT_NOTE_ON)).count() as i32;
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut target = Device::new(true);
+        let mut target = Device::aggregation(true);
         target.configure(uuid, false);
         target.activate();
         let fillers: Vec<_> = (0..3)
             .map(|_| {
-                let mut source = Device::new(true);
+                let mut source = Device::aggregation(true);
                 source.configure(uuid, true);
                 source.activate();
                 source
@@ -343,11 +343,11 @@ fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
     let _scope = crate::test_scope::enter();
     for invalid_clock in [false, true] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut target = Device::new(true);
+        let mut target = Device::aggregation(true);
         target.configure(uuid, false);
         target.activate();
         target.run(0, vec![], None);
@@ -431,10 +431,10 @@ fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
 fn stop_cancels_an_unattempted_prefix_before_an_already_captured_new_consumer() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);
@@ -507,11 +507,11 @@ fn stop_prefix_associations_preserve_unknown_state_post_cut_input_and_exact_repa
     let _scope = crate::test_scope::enter();
     for case in 0..4 {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, false);
         source.activate();
         source.run(0, vec![], None);
@@ -596,10 +596,10 @@ fn stop_prefix_associations_preserve_unknown_state_post_cut_input_and_exact_repa
 fn unmapped_prefix_repair_and_midi_off_remain_factual_without_mapped_history() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -839,11 +839,11 @@ fn channel_termination_captures_each_wave_and_sound_off_keeps_physical_offs() {
 fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure_offset(uuid, true, 65536);
     source.activate();
     source.run(0, vec![], None);
@@ -905,11 +905,11 @@ fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack(
 fn a_join_floor_retry_keeps_new_stream_controls_behind_the_fresh_zero_cut_baseline() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     hub.run(0, vec![], None);
@@ -963,11 +963,11 @@ fn reset_cancels_prefix_associations_without_rewriting_actual_receiver_facts() {
     let _scope = crate::test_scope::enter();
     for case in [2, 0, 1, 3] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, false);
         source.activate();
         source.run(0, vec![], None);

@@ -65,21 +65,24 @@ struct PendingSlot {
 #[derive(Clone, Copy)]
 pub(super) struct Birth {
     pub serial: u64,
+    pub on_serial: u64,
     pub id: i32,
     pub channel: u8,
     pub key: u8,
     pub input: i64,
     pub generation: u64,
     pub midi: bool,
+    pub adaptive: bool,
 }
 #[derive(Clone, Copy)]
 pub(super) struct LifeLocal {
+    pub assignment: Assignment,
     pub refs: u32,
     pub active: bool,
     pub reserved: bool,
     pub sounded: bool,
     pub canceled: bool,
-    pub shift: Option<i64>,
+    pub shift: i64,
     pub terminal: Option<(u64, i64, bool)>,
     pub release: Option<ReleaseIndex>,
     pub note_off_owed: bool,
@@ -87,7 +90,7 @@ pub(super) struct LifeLocal {
     pub ready_head: u16,
     pub ready_tail: u16,
     pub cleanup_next: u16,
-    pub ready_queued: bool,
+    pub flags: u8,
 }
 struct LifeSlot {
     birth: UnsafeCell<MaybeUninit<Birth>>,
@@ -165,6 +168,9 @@ pub(super) struct PendingStore {
     len: usize,
 }
 impl PendingStore {
+    pub fn arena_identity(&self) -> usize {
+        Arc::as_ptr(&self.arena) as usize
+    }
     pub const BACKING_CELL_BYTES: usize = std::mem::size_of::<PendingSlot>();
     pub fn len(&self) -> usize {
         self.len
@@ -329,6 +335,7 @@ impl Lives {
         let birth = unsafe { (*slot.birth.get()).assume_init_ref() };
         Some(Life {
             serial: birth.serial,
+            on_serial: birth.on_serial,
             id: birth.id,
             channel: birth.channel,
             key: birth.key,
@@ -338,17 +345,20 @@ impl Lives {
             reserved: local.reserved,
             sounded: local.sounded,
             canceled: local.canceled,
-            shift: local.shift,
+            shift: (local.flags & super::source::SHIFT_VALID != 0).then_some(local.shift),
             terminal: local.terminal,
             release: local.release,
             generation: birth.generation,
             midi: birth.midi,
+            adaptive: birth.adaptive,
+            assignment: local.assignment,
+            assignment_held: local.flags & super::source::ASSIGNMENT_HELD != 0,
             note_off_owed: local.note_off_owed,
             sound_off_refs: local.sound_off_refs,
             ready_head: local.ready_head,
             ready_tail: local.ready_tail,
             cleanup_next: local.cleanup_next,
-            ready_queued: local.ready_queued,
+            ready_queued: local.flags & super::source::READY_QUEUED != 0,
         })
     }
     pub fn local_mut(&mut self, index: u16) -> Option<&mut LifeLocal> {
@@ -362,20 +372,23 @@ impl Lives {
             assert!((*slot.local.get()).is_none());
             (*slot.birth.get()).write(Birth {
                 serial: value.serial,
+                on_serial: value.on_serial,
                 id: value.id,
                 channel: value.channel,
                 key: value.key,
                 input: value.input,
                 generation: value.generation,
                 midi: value.midi,
+                adaptive: value.adaptive,
             });
             *slot.local.get() = Some(LifeLocal {
+                assignment: value.assignment,
                 refs: value.refs,
                 active: value.active,
                 reserved: value.reserved,
                 sounded: value.sounded,
                 canceled: value.canceled,
-                shift: value.shift,
+                shift: value.shift.unwrap_or_default(),
                 terminal: value.terminal,
                 release: value.release,
                 note_off_owed: value.note_off_owed,
@@ -383,7 +396,9 @@ impl Lives {
                 ready_head: value.ready_head,
                 ready_tail: value.ready_tail,
                 cleanup_next: value.cleanup_next,
-                ready_queued: value.ready_queued,
+                flags: u8::from(value.ready_queued) * super::source::READY_QUEUED
+                    | u8::from(value.assignment_held) * super::source::ASSIGNMENT_HELD
+                    | u8::from(value.shift.is_some()) * super::source::SHIFT_VALID,
             });
         }
     }
@@ -393,7 +408,12 @@ impl Lives {
         unsafe {
             let local = (*slot.local.get()).as_ref().unwrap();
             assert_eq!(local.refs, 0);
-            assert!(!local.active && !local.reserved && !local.ready_queued);
+            assert!(
+                !local.active
+                    && !local.reserved
+                    && local.flags & (super::source::READY_QUEUED | super::source::ASSIGNMENT_HELD)
+                        == 0
+            );
             *slot.local.get() = None;
         }
     }
@@ -403,7 +423,12 @@ impl Lives {
     }
 }
 const _: () = assert!(std::mem::size_of::<PendingSlot>() <= 128);
-const _: () = assert!(std::mem::size_of::<LifeSlot>() + 128 <= 256);
+const _: () = assert!(
+    std::mem::size_of::<LifeSlot>()
+        - std::mem::size_of::<harmonigraph_core::configuration::ResolvedConfig>()
+        + 128
+        <= 256
+);
 
 use harmonigraph_core::cohort::{self, FrozenInputId, TargetAccess};
 
@@ -426,6 +451,7 @@ pub(crate) struct Token {
     #[allow(dead_code)] // Frozen metadata is consumed by the next scheduler stage.
     pub sample: i64,
     pub frozen: Option<FrozenInputId>,
+    pub status: Option<CaptureStatus>,
 }
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -461,6 +487,7 @@ impl PendingStore {
             },
             sample,
             frozen: None,
+            status: None,
         })
     }
     pub fn retire(&mut self, key: Key, lease: Lease, epoch: u64) -> Option<usize> {
@@ -477,8 +504,37 @@ impl PendingStore {
         self.local_mut(position).phase = (self.local(position).phase & LOCAL_DONE) | RETIRED;
         Some(position)
     }
+    pub fn owns_publication(&self, key: Key, lease: Lease, epoch: u64) -> bool {
+        let position = usize::from(key.position);
+        key.lease == lease
+            && key.epoch == epoch
+            && key.arena == Arc::as_ptr(&self.arena) as usize
+            && position < PENDING_EVENTS
+            && self.local(position).phase & PHASE == OFFERED
+            && self.at(position).is_some_and(|original| original.serial == key.serial)
+    }
 }
 impl Token {
+    pub fn all_work(&self) -> u64 {
+        u64::MAX.checked_shr(64 - u32::from(self.original().work_count)).unwrap_or(0)
+    }
+    pub fn completed(&self, received: u64) -> bool {
+        self.status.is_some_and(|status| {
+            status.inline_done
+                && status.work_done == self.all_work()
+                && received >= status.output_cut
+        })
+    }
+    pub fn retain_status(&mut self, status: CaptureStatus) {
+        if self.completed(u64::MAX) {
+            return;
+        }
+        if self.status.is_none_or(|old| {
+            old.work_done & !status.work_done == 0 && (!old.inline_done || status.inline_done)
+        }) {
+            self.status = Some(status);
+        }
+    }
     pub fn units(&self) -> usize {
         1 + usize::from(self.original().work_count)
     }
@@ -647,6 +703,28 @@ impl View<'_> {
             replaced: if onset { work } else { cohort::TargetSpan::default() },
         })
     }
+    pub fn original(&self, slot: usize) -> Option<(Key, Original)> {
+        let token = self.token(slot)?;
+        Some((token.key, *token.original()))
+    }
+    pub fn onset(&self, slot: usize) -> Option<(u16, Birth)> {
+        let token = self.token(slot)?;
+        let original = token.original();
+        original.event.attack()?;
+        Some((original.life, *token.birth(original.life)?))
+    }
+    /// The caller froze this copied status and applied its output cut before
+    /// replay. TargetAccess itself always exposes the immutable complete chain.
+    pub fn effect_done(&self, address: u32, ordinal: u16) -> Option<bool> {
+        let token = self.token((address >> 16) as usize)?;
+        let status = token.status?;
+        Some(if (address as u16) < INLINE {
+            ordinal < u16::from(token.original().work_count)
+                && status.work_done & (1u64 << ordinal) != 0
+        } else {
+            status.inline_done
+        })
+    }
 }
 impl TargetAccess for View<'_> {
     fn get(&self, source: u8, address: u32) -> Option<cohort::TargetLink> {
@@ -726,6 +804,7 @@ pub(super) struct Frozen {
     started: bool,
     pub active: bool,
     complete: bool,
+    pub spent: usize,
 }
 impl Default for Frozen {
     fn default() -> Self {
@@ -738,11 +817,19 @@ impl Default for Frozen {
             started: false,
             active: false,
             complete: false,
+            spent: 0,
         }
     }
 }
 #[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 impl Frozen {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn event(&self, index: usize) -> Option<cohort::Event> {
+        // SAFETY: push initializes every cell in this prefix.
+        (index < self.len).then(|| unsafe { self.inputs[index].assume_init() })
+    }
     pub fn begin(&mut self, sample: i64, count: usize) -> Result<FrozenInputId, cohort::Error> {
         if self.active {
             return Err(cohort::Error::CohortInProgress);
@@ -781,7 +868,9 @@ impl Frozen {
             self.started = true;
             cohort::Cohort::begin(self.id, self.sample, inputs, targets, &mut self.scratch)?
         };
+        let before = view.work();
         let progress = view.advance(units)?;
+        self.spent = (view.work().units() - before.units()) as usize;
         self.complete = matches!(progress, cohort::Progress::Complete { .. });
         Ok(progress)
     }
@@ -793,6 +882,15 @@ impl Frozen {
             std::slice::from_raw_parts(self.inputs.as_ptr().cast::<cohort::Event>(), self.len)
         };
         cohort::Cohort::resume(self.id, self.sample, inputs, targets, &mut self.scratch)?.commit()
+    }
+    /// Caller has settled old external decisions and preserved all bindings.
+    /// Keep capture permissions and the reserved checked generation intact.
+    pub fn abandon(&mut self) {
+        self.scratch.discard();
+        self.active = false;
+        self.started = false;
+        self.complete = false;
+        self.spent = 0;
     }
     pub fn end(&mut self, joined: bool) {
         assert!(!self.active || self.complete || joined, "offered phase still owned");

@@ -73,6 +73,7 @@ pub struct DeltaRecord {
     pub provenance: ProvenanceRecord,
     pub timing: Option<TimingRecord>,
     pub pitch_microcents: Option<i64>,
+    pub partial_output: bool,
 }
 impl From<NoteDelta> for DeltaRecord {
     fn from(d: NoteDelta) -> Self {
@@ -83,6 +84,7 @@ impl From<NoteDelta> for DeltaRecord {
             provenance: d.provenance.into(),
             timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
+            partial_output: d.partial_output,
         }
     }
 }
@@ -95,6 +97,7 @@ impl From<DeltaRecord> for NoteDelta {
             provenance: d.provenance.into(),
             timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
+            partial_output: d.partial_output,
         }
     }
 }

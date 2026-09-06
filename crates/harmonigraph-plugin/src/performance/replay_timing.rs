@@ -54,12 +54,12 @@ impl Episode {
         let uuid = SavedUuid::default();
         let calibration =
             Calibration { offset: 0, sample_rate: 44100.0, max_frames: FRAMES, validated: true };
-        let (mut hub, capture) = Device::recorded_hub();
+        let (mut hub, capture) = Device::recorded_aggregation_hub();
         hub.configure_format(uuid, true, calibration);
         hub.activate_format(44100.0, FRAMES);
         let sources = (0..16)
             .map(|index| {
-                let mut source = Device::new(true);
+                let mut source = Device::aggregation(true);
                 source.configure_format(uuid, index != 0, calibration);
                 source.activate_format(44100.0, FRAMES);
                 source

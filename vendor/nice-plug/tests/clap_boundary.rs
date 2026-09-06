@@ -319,7 +319,11 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
         }
     }
     fn clap_performance_prepare(&mut self, group: perf::Group) -> bool {
-        if matches!(group.event(0), Some(InputValue::Note { kind: CLAP_EVENT_NOTE_ON, .. }))
+        if (0..group.event_count()).any(|index| match group.event(index) {
+            Some(InputValue::Note { kind: CLAP_EVENT_NOTE_ON, .. }) => true,
+            Some(InputValue::Midi { data: [status, _, velocity], .. }) => status & 0xf0 == 0x90 && velocity != 0,
+            _ => false,
+        })
             && self.control.closed.load(Ordering::Acquire)
         {
             return false;
@@ -411,6 +415,15 @@ fn single(n: u64, lane: perf::Lane, time: u32, value: InputValue) -> perf::Group
 }
 fn pair(n: u64, time: u32) -> perf::Group {
     perf::Group::onset(token(n), time, note(CLAP_EVENT_NOTE_ON), tuning()).unwrap()
+}
+fn triple(n: u64, time: u32) -> perf::Group {
+    let prefix = InputValue::Midi { port: 0, data: [0xb2, 88, 37], flags: CLAP_EVENT_IS_LIVE };
+    let note = InputValue::Midi { port: 0, data: [0x92, 61, 99], flags: CLAP_EVENT_DONT_RECORD };
+    let tuning = InputValue::Expression {
+        expression: CLAP_NOTE_EXPRESSION_TUNING, note_id: -1, port: 0, channel: 2, key: 61,
+        value: 0.123456789123, flags: CLAP_EVENT_DONT_RECORD,
+    };
+    perf::Group::tuned_onset(token(n), time, Some(prefix), note, tuning).unwrap()
 }
 fn header<T>(kind: u16, time: u32) -> clap_event_header {
     clap_event_header {
@@ -1285,6 +1298,52 @@ fn velocity_prefix_and_raw_note_keep_separate_acceptance_under_one_permit() {
         if d.sink.attempts.len() == 2 { assert_eq!(d.sink.attempts[1].value, Some(note)); }
         assert!(d.sink.attempts.iter().all(|attempt| attempt.time == 47));
         assert!(!d.control.busy.load(Ordering::Acquire));
+    }
+}
+
+#[test]
+fn tuned_raw_onset_retains_all_three_acceptance_bits_under_one_permit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (script, closed, expected) in [
+        (vec![], true, (0, 0, 7)),
+        (vec![false], false, (1, 0, 6)),
+        (vec![true, false], false, (3, 1, 4)),
+        (vec![true, true, false], false, (7, 3, 0)),
+        (vec![true, true, true], false, (7, 7, 0)),
+    ] {
+        let group = triple(1, 47);
+        let mut d = Device::new(Control { script: instructions([group]), ..Default::default() }, c"fixture.performance");
+        d.control.closed.store(closed, Ordering::Release);
+        // A close after the prefix does not split an already claimed bundle.
+        d.control.fence_on_push.store(true, Ordering::Release);
+        d.sink.script = script;
+        d.run(0, 64, vec![], true);
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        let completion = o.completions[0];
+        assert_eq!((completion.attempted, completion.accepted, completion.unattempted), expected);
+        for (index, attempt) in d.sink.attempts.iter().enumerate() {
+            assert_eq!(attempt.value, group.event(index));
+            assert_eq!(attempt.time, 47);
+        }
+        assert!(!d.control.busy.load(Ordering::Acquire));
+    }
+}
+
+#[test]
+fn tuned_raw_onset_reserves_three_credits_atomically() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for remaining in [1, 2] {
+        let before = 512 - remaining;
+        let mut script = instructions((0..before).map(|n| single(n as u64, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF))));
+        script.extend(instructions([triple(600, 0)]));
+        script.extend(instructions((0..remaining).map(|n| single(700 + n as u64, perf::Lane::Normal, 0, note(CLAP_EVENT_NOTE_OFF)))));
+        let mut d = Device::new(Control { script, ..Default::default() }, c"fixture.performance");
+        d.run(0, 64, vec![], true);
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(o.admissions[before], Err(perf::StageError::Full));
+        assert!(o.admissions[before + 1..].iter().all(|admission| *admission == Ok(())));
+        assert_eq!(d.sink.attempts.len(), 512);
+        assert!(d.sink.attempts.iter().all(|attempt| attempt.kind == CLAP_EVENT_NOTE_OFF));
     }
 }
 

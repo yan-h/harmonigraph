@@ -201,6 +201,16 @@ impl ConfigTimeline {
         Ok(config)
     }
 
+    /// The live scheduler has copied every binding from this abandoned cohort.
+    /// This releases only its lookup owner; both retirement frontiers remain.
+    pub fn abandon_cohort(&mut self, sample: i64) -> Result<(), TimelineError> {
+        if self.started_cohort.is_some_and(|started| started != sample) {
+            return Err(TimelineError::InvalidFrontier);
+        }
+        self.started_cohort = None;
+        Ok(())
+    }
+
     pub fn configuration_at(&self, sample: i64) -> Result<ResolvedConfig, TimelineError> {
         if sample < self.finalized_exclusive || self.storage_fault {
             return Err(TimelineError::InvalidFrontier);

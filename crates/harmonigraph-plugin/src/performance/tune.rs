@@ -45,6 +45,15 @@ impl Plugin for HarmonigraphTune {
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
     }
+    fn initialize(
+        &mut self,
+        _: &AudioIOLayout,
+        _: &BufferConfig,
+        context: &mut impl InitContext<Self>,
+    ) -> bool {
+        context.set_latency_samples(super::protocol::DELAY as u32);
+        true
+    }
     #[cfg(target_os = "macos")]
     fn editor(&mut self, _: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         Some(Box::new(super::native::NativeEditor {

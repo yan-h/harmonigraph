@@ -20,6 +20,9 @@ impl<T, const N: usize> Queue<T, N> {
     {
         self.cells.get(position).copied().flatten()
     }
+    pub fn at_mut(&mut self, position: usize) -> Option<&mut T> {
+        self.cells.get_mut(position)?.as_mut()
+    }
     pub fn get(&self, offset: usize) -> Option<T>
     where
         T: Copy,

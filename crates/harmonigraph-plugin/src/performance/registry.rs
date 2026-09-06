@@ -481,14 +481,7 @@ pub fn retire_hub(owner: Box<super::hub::Hub>) {
         entry.session.closing.store(u64::MAX, Ordering::Release);
         for row in &entry.session.rows {
             row.withdrawn.store(true, Ordering::Release);
-            for state in [super::source::OPEN, super::source::CLOSED] {
-                let _ = row.emission_gate.compare_exchange(
-                    state,
-                    super::source::FENCED,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-            }
+            row.emission_gate.fetch_or(super::source::CLOSED, Ordering::AcqRel);
         }
         if owner.offer.is_none() {
             assert!(entry.returned.is_none());

@@ -941,6 +941,9 @@ impl ClapPlugin for Harmonigraph {
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
         let owner = self.configuration.as_mut().unwrap();
         let result = owner.apply(command, commit, &self.take);
+        if owner.timeline.storage_fault {
+            self.aggregation.as_mut().unwrap().configuration_exhausted();
+        }
         if result.is_none() {
             self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         }
@@ -964,6 +967,7 @@ impl ClapPlugin for Harmonigraph {
     fn clap_configuration_fault(&mut self) {
         let owner = self.configuration.as_mut().unwrap();
         owner.fault();
+        self.aggregation.as_mut().unwrap().configuration_exhausted();
         self.params.configuration.get().unwrap().published.publish(owner.snapshot);
     }
 

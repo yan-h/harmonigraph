@@ -11,6 +11,7 @@ fn path(name: &str) -> std::path::PathBuf {
 
 fn accepted(event: NoteEvent, sequence: u64) -> NoteDelta {
     NoteDelta {
+        partial_output: false,
         event,
         sequence,
         lifetime: 1,

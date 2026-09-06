@@ -45,13 +45,13 @@ fn offered_capture_survives_real_off_ack_and_cell_reuse_in_both_callback_orders(
     let mut selections = Vec::new();
     for reverse in [false, true] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
-        let mut a = Device::new(true);
+        let mut a = Device::aggregation(true);
         a.configure(uuid, true);
         a.activate();
-        let mut b = Device::new(true);
+        let mut b = Device::aggregation(true);
         b.configure(uuid, true);
         b.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
@@ -231,11 +231,11 @@ fn offered_capture_survives_real_off_ack_and_cell_reuse_in_both_callback_orders(
 fn full_retirement_reply_window_keeps_exact_owner_until_both_peers_are_destroyed() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     let mut state = source.save();
     state.fields.insert(
@@ -331,10 +331,10 @@ fn offered_result(hub: &hub::Hub) -> bool {
 fn reused_ingress_and_birth_reject_old_frozen_binding_and_exact_retirement_replays() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
@@ -423,10 +423,10 @@ fn reused_ingress_and_birth_reject_old_frozen_binding_and_exact_retirement_repla
 fn mixed_generation_cancellation_keeps_the_original_complete_captured_targets() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
@@ -517,7 +517,7 @@ fn mixed_generation_cancellation_keeps_the_original_complete_captured_targets() 
 fn direct_input_uses_the_same_persistent_capture_and_retirement_owner() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
@@ -563,10 +563,10 @@ fn direct_input_uses_the_same_persistent_capture_and_retirement_owner() {
 fn continued_arrivals_cannot_starve_released_tune_or_direct_captures() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let clocks = |count| {
@@ -631,10 +631,10 @@ fn continued_arrivals_cannot_starve_released_tune_or_direct_captures() {
 fn failed_last_disposition_in_a_slice_cannot_be_overtaken_after_reply_capacity_returns() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -670,10 +670,10 @@ fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
     let _scope = crate::test_scope::enter();
     for cancel in [false, true] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         source.run(0, vec![], None);
@@ -730,10 +730,10 @@ fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
 fn retired_hub_waits_for_source_detach_after_seal_and_post_cut_capture() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
@@ -774,10 +774,10 @@ fn retired_hub_waits_for_source_detach_after_seal_and_post_cut_capture() {
 fn retired_hub_drains_originals_still_unpublished_when_the_output_seal_arrives() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
@@ -822,10 +822,10 @@ fn retired_hub_drains_originals_still_unpublished_when_the_output_seal_arrives()
 fn joined_source_reclaims_canceled_original_that_cannot_map_to_a_capture_sample() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure_offset(uuid, true, i64::MAX - 128);
     source.activate();
     source.run(0, vec![], None);

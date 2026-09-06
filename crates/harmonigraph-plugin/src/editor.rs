@@ -1232,6 +1232,7 @@ mod tests {
             producer
                 .note(
                     harmonigraph_core::canonical::NoteDelta {
+                        partial_output: false,
                         event,
                         sequence: 1,
                         lifetime: 1,
@@ -1268,6 +1269,7 @@ mod tests {
         use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
         use harmonigraph_core::confirmed::PitchProvenance;
         let accepted = NoteDelta {
+            partial_output: false,
             event: NoteEvent::on(2.0, SourceId(3), 0, 72, 0.8),
             sequence: 1,
             lifetime: 61,

@@ -36,6 +36,9 @@ pub struct NoteDelta {
     /// Exact current accepted pitch, when this delta establishes one. The f32
     /// in NoteEvent remains the presentation adapter, never pitch authority.
     pub pitch_microcents: Option<i64>,
+    /// This physical onset was accepted, but its required initial tuning was
+    /// rejected. Its intended correction is not an accepted pitch fact.
+    pub partial_output: bool,
 }
 
 impl From<NoteEvent> for NoteDelta {
@@ -47,6 +50,7 @@ impl From<NoteEvent> for NoteDelta {
             provenance: PitchProvenance::ObservedDirect,
             timing: None,
             pitch_microcents: None,
+            partial_output: false,
         }
     }
 }
@@ -63,6 +67,9 @@ impl NoteDelta {
             || (self.provenance == PitchProvenance::AcceptedOutput
                 && (self.sequence == 0 || self.lifetime == 0 || self.timing.is_none()))
             || self.timing.is_some_and(|t| !t.valid())
+            || (self.partial_output
+                && (self.provenance != PitchProvenance::AcceptedOutput
+                    || !matches!(self.event.kind, NoteEventKind::On { .. })))
         {
             return Err(InvalidCanonical);
         }
@@ -414,6 +421,7 @@ mod tests {
 
     fn delta(event: NoteEvent, sequence: u64) -> NoteDelta {
         NoteDelta {
+            partial_output: false,
             event,
             sequence,
             lifetime: 61,

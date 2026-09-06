@@ -332,9 +332,12 @@ impl Source {
             return false;
         }
         let callback = self.callback.unwrap();
-        let actual = start.max(callback.steady_time + i64::from(output.cursor()));
-        let Some(proposed) =
-            actual.checked_sub(pending.input).map(|shift| shift.max(self.wave_shift))
+        let actual = start
+            .max(callback.steady_time + i64::from(output.cursor()))
+            .max(self.recovery.boundary.unwrap_or(i64::MIN));
+        let Some(proposed) = actual
+            .checked_sub(pending.input)
+            .map(|shift| shift.max(self.wave_shift).max(self.delay()))
         else {
             self.fault(CLOCK_FAULT);
             return false;
@@ -515,7 +518,10 @@ impl Source {
         else {
             return false;
         };
-        if !self.ordinary_stream_ready() || !self.admitted(pending.generation) {
+        if !self.ordinary_stream_ready()
+            || !self.admitted(pending.generation)
+            || !self.assignment_ready(pending.life)
+        {
             return false;
         }
         if self.journal.free() == 0
@@ -535,9 +541,10 @@ impl Source {
         }
         let gate = if let Some(offer) = &self.offer {
             let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
+            let emission = self.emission(pending, row);
             if row
                 .emission_gate
-                .compare_exchange(OPEN, BUSY, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(emission, emission | BUSY, Ordering::AcqRel, Ordering::Acquire)
                 .is_err()
             {
                 return false;

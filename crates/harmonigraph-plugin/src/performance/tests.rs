@@ -5,6 +5,7 @@ use clap_sys::{
     audio_buffer::clap_audio_buffer,
     events::*,
     ext::{
+        latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY},
         params::{clap_plugin_params, CLAP_EXT_PARAMS},
         state::{clap_plugin_state, CLAP_EXT_STATE},
     },
@@ -31,13 +32,28 @@ mod capture_tests;
 mod channel_wave_tests;
 #[path = "publication_tests.rs"]
 mod publication_tests;
+#[path = "sequencing_tests.rs"]
+mod sequencing_tests;
 
 #[derive(Default)]
 struct Host {
     callbacks: AtomicUsize,
+    restarts: AtomicUsize,
+    latency_changes: AtomicUsize,
 }
-unsafe extern "C" fn extension(_: *const clap_host, _: *const c_char) -> *const c_void {
-    ptr::null()
+unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
+    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
+        &HOST_LATENCY as *const _ as *const c_void
+    } else {
+        ptr::null()
+    }
+}
+static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
+unsafe extern "C" fn latency_changed(host: *const clap_host) {
+    unsafe { &*((*host).host_data.cast::<Host>()) }.latency_changes.fetch_add(1, Ordering::Relaxed);
+}
+unsafe extern "C" fn restart(host: *const clap_host) {
+    unsafe { &*((*host).host_data.cast::<Host>()) }.restarts.fetch_add(1, Ordering::Relaxed);
 }
 unsafe extern "C" fn request(_: *const clap_host) {}
 unsafe extern "C" fn callback(host: *const clap_host) {
@@ -137,12 +153,7 @@ pub(super) fn close_setup_lease(before_prepare: bool) {
             let row = &session.rows[*slot];
             *observed = Some(row.emission_gate.load(Ordering::Acquire));
             row.withdrawn.store(true, Ordering::Release);
-            let _ = row.emission_gate.compare_exchange(
-                source::OPEN,
-                source::CLOSED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            row.emission_gate.fetch_or(source::CLOSED, Ordering::AcqRel);
         }
     });
 }
@@ -208,6 +219,30 @@ struct Device {
     active: bool,
 }
 impl Device {
+    /// Subsystem apparatus: original D0 forwarding fixtures retain their exact
+    /// stress shapes. New sequencing acceptance uses new() with factory defaults.
+    fn aggregation(tuner: bool) -> Self {
+        let device = Self::new(tuner);
+        if tuner {
+            let wrapper = unsafe {
+                &*((*device.plugin)
+                    .plugin_data
+                    .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+            };
+            wrapper
+                .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_aggregation = true);
+        } else {
+            let wrapper = unsafe {
+                &*((*device.plugin)
+                    .plugin_data
+                    .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+            };
+            wrapper.test_with_plugin(|plugin| {
+                plugin.aggregation.as_mut().unwrap().test_aggregation = true
+            });
+        }
+        device
+    }
     fn new(tuner: bool) -> Self {
         let mut stats = Box::<Host>::default();
         let host = Box::new(clap_host {
@@ -218,7 +253,7 @@ impl Device {
             url: c"".as_ptr(),
             version: c"1".as_ptr(),
             get_extension: Some(extension),
-            request_restart: Some(request),
+            request_restart: Some(restart),
             request_process: Some(request),
             request_callback: Some(callback),
         });
@@ -242,10 +277,10 @@ impl Device {
         assert!(unsafe { (*self.plugin).start_processing.unwrap()(self.plugin) });
         self.active = true;
     }
-    fn recorded_hub() -> (Self, harmonigraph_record::testing::Capture) {
+    fn recorded_aggregation_hub() -> (Self, harmonigraph_record::testing::Capture) {
         let (recorder, capture) = harmonigraph_record::testing::channel();
         crate::configuration::inject_recorder(recorder);
-        (Self::new(false), capture)
+        (Self::aggregation(false), capture)
     }
     fn main(&self) {
         unsafe {
@@ -261,6 +296,13 @@ impl Device {
         unsafe {
             &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_PARAMS.as_ptr()).cast())
         }
+    }
+    fn latency(&self) -> u32 {
+        let latency = unsafe {
+            &*((*self.plugin).get_extension.unwrap()(self.plugin, CLAP_EXT_LATENCY.as_ptr())
+                .cast::<clap_plugin_latency>())
+        };
+        unsafe { latency.get.unwrap()(self.plugin) }
     }
     fn participation(&self, value: bool, time: u32) -> Input {
         assert!(self.tuner);
@@ -498,6 +540,14 @@ fn production_factory_exports_two_clap_classes_and_lightweight_tune_ports() {
     assert_eq!(unsafe { audio.count.unwrap()(source.plugin, true) }, 0);
     assert_eq!(unsafe { audio.count.unwrap()(source.plugin, false) }, 0);
     source.activate();
+    let latency = unsafe {
+        &*((*source.plugin).get_extension.unwrap()(
+            source.plugin,
+            clap_sys::ext::latency::CLAP_EXT_LATENCY.as_ptr(),
+        )
+        .cast::<clap_sys::ext::latency::clap_plugin_latency>())
+    };
+    assert_eq!(unsafe { latency.get.unwrap()(source.plugin) }, 512);
     assert!(source.run(0, vec![], None).values.is_empty());
 }
 
@@ -505,7 +555,7 @@ fn production_factory_exports_two_clap_classes_and_lightweight_tune_ports() {
 fn tuner_before_hub_retains_a_phrase_and_preserves_spacing_after_real_admission() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     assert!(source
@@ -520,7 +570,7 @@ fn tuner_before_hub_retains_a_phrase_and_preserves_spacing_after_real_admission(
         )
         .values
         .is_empty());
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     hub.run(0, vec![], None);
@@ -555,7 +605,7 @@ fn repeated_stopped_callbacks_preserve_new_live_input_but_a_real_stop_edge_cance
     };
     for real_stop in [false, true] {
         let uuid = SavedUuid::default();
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         source.run_callback(
@@ -595,7 +645,7 @@ fn repeated_stopped_callbacks_preserve_new_live_input_but_a_real_stop_edge_cance
                 .is_empty());
         }
         assert_eq!(source.source_snapshot().pending, 3, "new stopped-live input survives repeated stopped observations; only a real earlier Stop edge cancels the old phrase");
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         hub.run(192, vec![], None);
@@ -636,10 +686,10 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
     };
     for reject_release in [false, true] {
         let uuid = SavedUuid::default();
-        let (mut hub, mut capture) = Device::recorded_hub();
+        let (mut hub, mut capture) = Device::recorded_aggregation_hub();
         hub.configure(uuid, true);
         hub.activate();
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
@@ -785,10 +835,10 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
 fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_arrive() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let observation = |playing: bool, time| {
@@ -908,7 +958,7 @@ fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input(
         return;
     }
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let malformed = Input::Midi(clap_event_midi {
@@ -968,10 +1018,10 @@ fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input(
 fn attached_off_source_transfers_more_than_a_journal_of_actual_output() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);
@@ -995,7 +1045,7 @@ fn attached_off_source_transfers_more_than_a_journal_of_actual_output() {
 fn off_restore_with_missing_parameter_keeps_actual_get_value_and_saved_value_off() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);
@@ -1010,7 +1060,7 @@ fn off_restore_with_missing_parameter_keeps_actual_get_value_and_saved_value_off
     assert_eq!(value, 0.0);
     source.run(64, vec![], None);
     assert!(matches!(source.save().params[setup::PARTICIPATING], ParamValue::Bool(false)));
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     source.run(128, vec![], None);
@@ -1048,19 +1098,19 @@ fn off_restore_with_missing_parameter_keeps_actual_get_value_and_saved_value_off
 fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservations() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
     let mut sources: Vec<_> = (0..16)
         .map(|_| {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure(uuid, true);
             source.activate();
             source
         })
         .collect();
-    let mut seventeenth = Device::new(true);
+    let mut seventeenth = Device::aggregation(true);
     seventeenth.configure(uuid, true);
     seventeenth.activate();
     assert_eq!(
@@ -1124,11 +1174,11 @@ fn all_sixteen_tuners_adopt_before_any_registry_ack_and_share_256_real_reservati
 fn actual_host_rejection_retains_release_debt_and_never_returns_credit_early() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1154,13 +1204,13 @@ fn actual_host_rejection_retains_release_debt_and_never_returns_credit_early() {
 fn duplicate_saved_uuid_before_adoption_keeps_pending_phrase_until_unique_again() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
-    let duplicate = Device::new(false);
+    let duplicate = Device::aggregation(false);
     duplicate.configure(uuid, true);
     assert!(source
         .run(0, vec![note(11, 0, 60, 3, true), note(11, 0, 60, 23, false)], None)
@@ -1181,10 +1231,10 @@ fn duplicate_saved_uuid_before_adoption_keeps_pending_phrase_until_unique_again(
 fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1204,7 +1254,7 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
         4
     );
     hub.run(64, vec![], None);
-    let duplicate = Device::new(false);
+    let duplicate = Device::aggregation(false);
     duplicate.configure(uuid, true);
     let release = source.run(128, vec![note(21, 1, 64, 17, false)], None);
     assert_eq!(release.values.len(), 1, "ambiguity cannot strand an established release");
@@ -1257,10 +1307,10 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
 fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1276,7 +1326,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
     assert_eq!(before.local_pending, 1, "the old lease owns an onset awaiting output budget");
     assert_eq!(before.old_obligations, 1);
     hub.run(128, vec![], None);
-    let duplicate = Device::new(false);
+    let duplicate = Device::aggregation(false);
     duplicate.configure(uuid, true);
     for block in 3..=6 {
         let output = source.run(block * 64, vec![], None);
@@ -1307,7 +1357,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
 fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     let malformed = Input::Midi(clap_event_midi {
@@ -1321,7 +1371,7 @@ fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset
     source.run_status(0, vec![malformed], None, None, 64, true);
     source.run(64, vec![], None);
     assert_eq!(source.source_snapshot().faults, source::INPUT_FAULT);
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     source.run(128, vec![], None);
@@ -1352,10 +1402,10 @@ fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callback
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1391,7 +1441,7 @@ fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callback
 #[test]
 fn full_unpaired_pending_pool_is_retained_and_retired_without_a_peer_wakeup() {
     let _scope = crate::test_scope::enter();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
     for block in 0..4 {
@@ -1412,11 +1462,11 @@ fn full_unpaired_pending_pool_is_retained_and_retired_without_a_peer_wakeup() {
 fn repeated_emergency_rejection_keeps_one_exact_release_and_its_credit() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1462,10 +1512,10 @@ fn repeated_emergency_rejection_keeps_one_exact_release_and_its_credit() {
 fn active_restore_cannot_reuse_either_retained_setup_slot_or_mutate_on_refusal() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1506,7 +1556,7 @@ fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_
     let _scope = crate::test_scope::enter();
     use nice_plug::wrapper::clap::setup::Setup;
     let uuid = SavedUuid::default();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1580,13 +1630,13 @@ fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_evicti
     let mut sessions = Vec::new();
     for _ in 0..4 {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
         let mut sources = Vec::new();
         for _ in 0..16 {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure(uuid, true);
             source.activate();
             source.run(0, vec![], None);
@@ -1608,7 +1658,7 @@ fn sixty_four_unresolved_retired_sources_refuse_next_registration_without_evicti
         hubs.push(hub);
     }
     assert_eq!(registry::global().lock().unwrap().test_counts(), (4, 64, 64));
-    let refused = Device::new(true);
+    let refused = Device::aggregation(true);
     assert!(refused.shared().registration().is_none());
     assert_eq!(
         refused.shared().source.as_ref().unwrap().status.load(Ordering::Acquire),
@@ -1623,14 +1673,14 @@ fn hub_reinitialize_waits_for_differently_timed_source_seals_and_preserves_the_t
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut a = Device::new(true);
+    let mut a = Device::aggregation(true);
     a.configure(uuid, true);
     a.activate();
-    let mut b = Device::new(true);
+    let mut b = Device::aggregation(true);
     b.configure(uuid, false);
     b.activate();
     capture.arm();
@@ -1716,10 +1766,10 @@ fn hub_reinitialize_waits_for_differently_timed_source_seals_and_preserves_the_t
 fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substitution() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -1813,11 +1863,11 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     }
     let _resume_writer = ResumeWriter(&writer);
     crate::configuration::inject_recorder(recorder);
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -2000,14 +2050,14 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
 #[test]
 fn refused_hub_destruction_releases_its_recording_hold_without_a_registry_owner() {
     let _scope = crate::test_scope::enter();
-    let registered: Vec<_> = (0..4).map(|_| Device::new(false)).collect();
+    let registered: Vec<_> = (0..4).map(|_| Device::aggregation(false)).collect();
     let directory = std::env::temp_dir()
         .join(format!("harmonigraph-refused-retirement-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let (recorder, control) = harmonigraph_record::channel();
     let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
     crate::configuration::inject_recorder(recorder);
-    let mut refused = Device::new(false);
+    let mut refused = Device::aggregation(false);
     refused.activate();
     assert!(refused.shared().registration().is_none());
     control.start(48000.0, String::new(), false);
@@ -2077,7 +2127,7 @@ fn refused_hub_destruction_releases_its_recording_hold_without_a_registry_owner(
 fn joined_producer_fact_is_cleared_when_the_actual_source_row_is_reused() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let rows = || {
@@ -2089,7 +2139,7 @@ fn joined_producer_fact_is_cleared_when_the_actual_source_row_is_reused() {
         wrapper
             .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().test_joined_rows())
     };
-    let mut old = Device::new(true);
+    let mut old = Device::aggregation(true);
     old.configure(uuid, true);
     old.activate();
     old.run(0, vec![], None);
@@ -2112,7 +2162,7 @@ fn joined_producer_fact_is_cleared_when_the_actual_source_row_is_reused() {
         (Some(2), 2),
         "the fixture must store a real joined cut before actual slot reuse"
     );
-    let mut new = Device::new(true);
+    let mut new = Device::aggregation(true);
     new.configure(uuid, true);
     new.activate();
     new.run(512, vec![], None);
@@ -2137,11 +2187,11 @@ fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_ol
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -2297,13 +2347,13 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
-    let mut a = Device::new(true);
+    let mut a = Device::aggregation(true);
     a.configure(uuid, true);
     a.activate();
-    let mut b = Device::new(true);
+    let mut b = Device::aggregation(true);
     b.configure(uuid, false);
     b.activate();
     a.run(0, vec![], None);
@@ -2436,6 +2486,16 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     super::capture::print_test_memory_layout();
     use super::{protocol as wire, slots::Slots};
     use std::mem::size_of;
+    println!(
+        "LEDGER inventory [record,chunk,single_slot,read_guard,write_guard] {:?}",
+        [
+            size_of::<wire::RequestInventory>(),
+            size_of::<wire::InventoryChunk>(),
+            size_of::<Slots<wire::InventoryChunk, 1>>(),
+            size_of::<super::slots::ReadGuard<wire::InventoryChunk, 1>>(),
+            size_of::<super::slots::OwnedReservation<wire::InventoryChunk, 1>>()
+        ]
+    );
     println!("LEDGER protocol [intent,reply,output,control,baseline,source_control,session_control,hub_bank] {:?}",
         [size_of::<wire::Intent>(), size_of::<wire::Reply>(), size_of::<wire::OutputDelta>(),
          size_of::<wire::Control>(), size_of::<wire::Baseline>(), size_of::<wire::SourceControl>(),
@@ -2488,12 +2548,12 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     drop(tune_owner);
     drop(hub_owner);
     drop(registry);
-    let (mut hub, hub_factory) = measure_allocations(|| Device::new(false));
+    let (mut hub, hub_factory) = measure_allocations(|| Device::aggregation(false));
     let (_, hub_activation) = measure_allocations(|| hub.activate());
     let mut tuners = Vec::with_capacity(16);
     let (_, tune_factory) = measure_allocations(|| {
         for _ in 0..16 {
-            let mut tuner = Device::new(true);
+            let mut tuner = Device::aggregation(true);
             tuner.activate();
             tuners.push(tuner);
         }
@@ -2508,9 +2568,9 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     // A refused instance still has its own wrapper/owner today: report that
     // measured increment explicitly instead of calling registration the heap cap.
     for _ in 16..64 {
-        tuners.push(Device::new(true));
+        tuners.push(Device::aggregation(true));
     }
-    let (refused, refused_storage) = measure_allocations(|| Device::new(true));
+    let (refused, refused_storage) = measure_allocations(|| Device::aggregation(true));
     assert_eq!(
         refused.shared().source.as_ref().unwrap().status.load(Ordering::Acquire),
         registry::OVERCAPACITY
@@ -2525,11 +2585,11 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     let (_, four_sessions) = measure_allocations(|| {
         for _ in 0..4 {
             let uuid = SavedUuid::default();
-            let mut hub = Device::new(false);
+            let mut hub = Device::aggregation(false);
             hub.configure(uuid, true);
             hub.activate();
             for _ in 0..16 {
-                let mut tuner = Device::new(true);
+                let mut tuner = Device::aggregation(true);
                 tuner.configure(uuid, true);
                 tuner.activate();
                 tuner.run(0, vec![], None);
@@ -2556,11 +2616,11 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
 fn sealed_source_does_not_rearm_neutral_pedals_when_retirement_adds_a_stronger_fault() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -2608,11 +2668,11 @@ fn sealed_source_does_not_rearm_neutral_pedals_when_retirement_adds_a_stronger_f
 fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     let mut state = source.save();
     state.fields.insert(
@@ -2690,12 +2750,12 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
         device.run_format(block * 512, events, None, None, 512)
     };
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
     let mut sources: Vec<_> = (0..16)
         .map(|_| {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure_format(uuid, true, calibration);
             source.activate_format(44100.0, 512);
             source
@@ -2769,13 +2829,13 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
 fn session_reservation_257_waits_for_real_retention_including_direct_and_off() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
     let mut sources: Vec<_> = (0..4)
         .map(|index| {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure(uuid, index != 2);
             source.activate();
             source
@@ -2849,11 +2909,11 @@ fn session_reservation_257_waits_for_real_retention_including_direct_and_off() {
 fn source_65th_held_attack_is_contained_without_releasing_unacknowledged_credits() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, false);
     source.activate();
     source.run(0, vec![], None);
@@ -2892,16 +2952,16 @@ fn source_65th_held_attack_is_contained_without_releasing_unacknowledged_credits
 fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut target = Device::new(true);
+    let mut target = Device::aggregation(true);
     target.configure(uuid, false);
     target.activate();
     let fillers: Vec<_> = (0..3)
         .map(|_| {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure(uuid, true);
             source.activate();
             source
@@ -2997,11 +3057,11 @@ fn one_actual_all_notes_off_targets_original_lifetimes_before_same_key_retrigger
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3070,7 +3130,7 @@ fn one_actual_all_notes_off_targets_original_lifetimes_before_same_key_retrigger
 #[test]
 fn channel_references_leave_all_8192_original_event_slots_available() {
     let _scope = crate::test_scope::enter();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
     source.run(0, (0..64).map(|key| note(key + 1, 0, key as i16, 0, true)).collect(), None);
@@ -3118,7 +3178,7 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
 #[test]
 fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
     let _scope = crate::test_scope::enter();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(SavedUuid::default(), true);
     source.activate();
     source.run(0, (0..64).map(|key| note(key + 1, 0, key as i16, 0, true)).collect(), None);
@@ -3154,11 +3214,11 @@ fn partial_wildcard_acceptance_keeps_one_input_until_remaining_child_disposition
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3227,11 +3287,11 @@ fn sixty_four_channel_terminals_keep_pedals_and_original_sound_off_wire_obligati
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     for controller in [120, 123] {
         let uuid = SavedUuid::default();
-        let (mut hub, mut capture) = Device::recorded_hub();
+        let (mut hub, mut capture) = Device::recorded_aggregation_hub();
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         source.run(0, vec![], None);
@@ -3313,7 +3373,7 @@ fn sixty_four_channel_terminals_keep_pedals_and_original_sound_off_wire_obligati
 fn direct_channel_termination_observes_original_lifetimes_independently_of_forwarding() {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(SavedUuid::default(), true);
     hub.activate();
     hub.run(0, vec![], None);
@@ -3361,13 +3421,13 @@ fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_wi
         return;
     }
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
     let sources: Vec<_> = (0..16)
         .map(|_| {
-            let mut source = Device::new(true);
+            let mut source = Device::aggregation(true);
             source.configure(uuid, true);
             source.activate();
             source
@@ -3450,10 +3510,10 @@ fn future_progress_does_not_hide_an_earlier_complete_output_interval() {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3523,11 +3583,11 @@ fn destroyed_frozen_configuration_drains_more_than_a_full_source_output_window()
         return;
     }
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3610,11 +3670,11 @@ fn destroyed_frozen_configuration_disposes_a_later_baseline_without_output() {
         return;
     }
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3690,11 +3750,11 @@ fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixe
         return;
     }
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3786,11 +3846,11 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
     }
     let withdrawn = std::env::var("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD").unwrap() == "withdrawn";
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3912,11 +3972,11 @@ fn progress_spanning_more_than_the_output_window_releases_only_complete_timestam
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -3987,11 +4047,11 @@ fn clock_calibration_preserves_enclosing_wire_offsets_across_transport_subblocks
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure_offset(uuid, true, 32);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure_offset(uuid, true, 64);
     source.activate();
     source.run(0, vec![], None);
@@ -4038,14 +4098,14 @@ fn clock_missing_silent_member_blocks_canonical_output_until_actual_coverage_arr
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::CanonicalRecord;
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut a = Device::new(true);
+    let mut a = Device::aggregation(true);
     a.configure(uuid, true);
     a.activate();
-    let mut b = Device::new(true);
+    let mut b = Device::aggregation(true);
     b.configure(uuid, true);
     b.activate();
     a.run(0, vec![], None);
@@ -4089,14 +4149,14 @@ fn clock_missing_silent_member_blocks_canonical_output_until_actual_coverage_arr
 fn clock_reinitialize_keeps_an_absent_held_member_until_it_resumes_contiguous_callbacks() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut a = Device::new(true);
+    let mut a = Device::aggregation(true);
     a.configure(uuid, true);
     a.activate();
-    let mut b = Device::new(true);
+    let mut b = Device::aggregation(true);
     b.configure(uuid, false);
     b.activate();
     a.run(0, vec![], None);
@@ -4144,11 +4204,11 @@ fn channel_terminal_journal_preflight_reserves_only_the_facts_the_wire_can_creat
     let _scope = crate::test_scope::enter();
     for (already_terminated, free) in [(true, 64), (false, 64), (false, 65)] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         source.run(0, vec![], None);
@@ -4259,10 +4319,10 @@ fn channel_terminal_sequence_preflight_checks_the_whole_actual_outcome_group() {
     }
     for (already_terminated, headroom) in [(false, 65), (false, 64), (true, 1), (true, 0)] {
         let uuid = SavedUuid::default();
-        let mut hub = Device::new(false);
+        let mut hub = Device::aggregation(false);
         hub.configure(uuid, true);
         hub.activate();
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         source.run(0, vec![], None);
@@ -4329,11 +4389,11 @@ fn sequence_reserve_preserves_real_emergency_history_and_acknowledged_credits() 
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -4421,11 +4481,11 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     for mapped in [true, false] {
         let uuid = SavedUuid::default();
-        let (mut hub, mut capture) = Device::recorded_hub();
+        let (mut hub, mut capture) = Device::recorded_aggregation_hub();
         hub.configure(uuid, true);
         hub.activate();
         let session = registry::global().lock().unwrap().test_session(uuid);
-        let mut source = Device::new(true);
+        let mut source = Device::aggregation(true);
         source.configure(uuid, true);
         source.activate();
         capture.arm();
@@ -4546,11 +4606,11 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
 fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_available() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -4655,11 +4715,11 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
 fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_obligation() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let mut hub = Device::new(false);
+    let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
@@ -4736,11 +4796,11 @@ fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit(
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
     hub.configure(uuid, true);
     hub.activate();
     let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::new(true);
+    let mut source = Device::aggregation(true);
     source.configure(uuid, true);
     source.activate();
     source.run(0, vec![], None);
