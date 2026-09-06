@@ -147,8 +147,9 @@ fn two_halos_meeting_read_the_norm_of_one_rather_than_their_sum() {
 }
 
 /// A CLUSTER does not brighten: `n` nodes over one another read at most
-/// `n^(1/p)` times one of them at the same pixel, and never less than one of
-/// them.
+/// `n^(1/p)` times one of them at the same pixel — and, where the `n` coverages
+/// are EQUAL as this fixture makes them, exactly that, which is what holds the
+/// reading to all four of them rather than to however many happened to ship.
 ///
 /// The other half of #680's ask, and the one the screen blend failed worst: `n`
 /// coverages of `a` under screen read `1 - (1-a)^n`, which is nearly `n` times
@@ -248,7 +249,17 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
         gain <= want * 1.01,
         "{N} nodes at one place read {gain:.4} times one, past the norm's {want:.4}",
     );
-    assert!(gain >= 1.0, "{N} nodes read {gain:.4} times one, less than one of them alone");
+    // The same 1% the other way, and that is the fixture's own reach rather
+    // than a second reading of the claim: four EQUAL coverages make the norm an
+    // equality, so a fixture that shipped three of them (or one) reads
+    // `3^(1/p)` or `1`, both of which clear the bound above and neither of
+    // which clears this. The measurement lands 0.02% under `want`, so the slack
+    // is for a driver.
+    assert!(
+        gain >= want * 0.99,
+        "{N} nodes at one place read {gain:.4} times one, short of the norm's {want:.4}: \
+         fewer of them are lighting the ring than the fixture ships",
+    );
     assert!(
         gain < screen,
         "{N} nodes read {gain:.4} times one, which the screen blend would have given at a \

@@ -866,7 +866,11 @@ fn the_lit_node_list_is_the_billboard_set_under_the_billboard_map() {
         let (Some(r), Some(u)) = (axis_px(right), axis_px(up)) else {
             return false;
         };
-        centre.clamp(glam::Vec2::ZERO, pixels).distance(centre) <= halo_pixels(&call.uniforms, r, u)
+        // Squared on both sides, as `glow_nodes` compares them: a node landing
+        // on the bound would otherwise be kept here and dropped there, or the
+        // other way about, on a rounding neither side is asking about.
+        centre.clamp(glam::Vec2::ZERO, pixels).distance_squared(centre)
+            <= halo_pixels(&call.uniforms, r, u).powi(2)
     };
     let kept: Vec<&&GpuInstance> = lit.iter().filter(|inst| reaches(inst)).collect();
     assert!(

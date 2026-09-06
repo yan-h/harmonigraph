@@ -1606,12 +1606,15 @@ fn halo_pixels(uniforms: &Uniforms, r: glam::Vec2, u: glam::Vec2) -> f32 {
     };
     let span = (rim + uniforms.glow.reach.max(0.0)).max(0.1);
     // The larger eigenvalue of `[r u]^T [r u]`, whose root is that singular
-    // value. Half the trace plus the root of the discriminant, floored at zero
-    // where the difference of two nearly equal squares can round below it.
+    // value: half the trace plus the root of the discriminant. Both halves are
+    // non-negative, so no floor is wanted under the root — one at zero would
+    // fire on nothing but a NaN, and would turn it into a bound of zero, which
+    // is the DROP side. A NaN left alone fails the comparison at the call site
+    // instead and keeps the node, which is the side a bound is loose toward.
     let (a, b, c) = (r.length_squared(), u.length_squared(), r.dot(u));
     let half = (a + b) * 0.5;
     let off = (a - b) * 0.5;
-    span * (half + (off * off + c * c).sqrt()).max(0.0).sqrt()
+    span * (half + (off * off + c * c).sqrt()).sqrt()
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
