@@ -419,7 +419,10 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
             "{kernel:?}: the shadow beside the fading arm took only {body_loss} of light",
         );
         assert!(
-            tip_loss <= 1,
+            // At 97% of the arm the taper has not reached zero. Its surviving
+            // tail may now take one output code per channel; brightness sums
+            // all three. The old ink cutoff erased this part of the fade.
+            tip_loss <= 3,
             "{kernel:?}: the shadow still outlines the transparent arm tip by {tip_loss}, \
              against {body_loss} beside the visible arm",
         );

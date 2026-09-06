@@ -408,11 +408,13 @@ const EARLY_OUT: bool = true;
 //
 // What makes the early-outs EXACT rather than nearly so: they answer "this
 // node paints nothing here" off a radius (`paint_reach`) and off the levels
-// its layers carry, and a coverage this far under a code value is what the
-// full path answers in the same places. Without a floor the two paths differ
+// its layers carry, and this one-percent ink floor is what the full path
+// answers in the same places. Without a floor the two paths differ
 // by a thousandth of a covered pixel — invisible on the ink, and not invisible
 // on the SHADOW under it, which is a multiply on the whole frame and lets that
 // thousandth of the frame through.
+// This gates node INK only. Applying it to a finished shadow would cut a
+// smooth tail off at 1% darkening: up to 2.55 output codes on a bright glow.
 const INK_FLOOR: f32 = 0.01;
 
 // How far from the node's center anything can paint, in its own uv.
@@ -2543,19 +2545,10 @@ struct Painted {
     bloom: f32,
 }
 
-/// The PICTURE's own fragment, with the ink's threshold spelled on the ink's
-/// own alpha.
-///
-/// The discard reads the DEEPER alpha, so a shadow only the bright pass can
-/// show is not thrown away with the fragment — and a fragment kept for that
-/// reason has to leave the picture exactly where the discard would have, which
-/// is a whole no-op. Without this, the bloom copy's whole shadow darkens the
-/// visible frame by a fraction of a code value in the tail of every shadow,
-/// where the picture a person sees is defined never to be touched at all.
+/// The visible composite keeps the whole shadow tail. Node ink has already
+/// spent `INK_FLOOR`; the finished alpha also darkens whatever lies beneath
+/// it and must fade continuously to zero, just as a glyph's shadow does.
 fn seen_of(paint: Painted) -> vec4<f32> {
-    if paint.seen < INK_FLOOR {
-        return vec4<f32>(0.0);
-    }
     return vec4<f32>(paint.rgb, paint.seen);
 }
 
@@ -2588,19 +2581,12 @@ fn node_paint(in: VsOut) -> Painted {
         glow_shadow_depth(),
     );
     if !g.paints {
-        // The ink's own threshold, spelled here too and NOT behind `EARLY_OUT`:
-        // this branch is the full path with an alpha of zero, so it has to
-        // leave the frame where that path would — a shadow under a hundredth of
-        // a code value is no shadow, and one of the two writing it while the
-        // other discards is a pixel of difference the parity test reads.
-        //
-        // Read off the DEEPER of the two, which is the larger alpha: a discard
-        // takes the fragment out of both attachments at once, so a shadow the
-        // picture cannot show and the bloom's copy can has to survive it. The
-        // two thresholds coincide with the bloom bar at 0.
+        // Discard only an empty composite. Read the deeper alpha because a
+        // discard removes both attachments, including a tail that only the
+        // bloom input still carries. The ink floor must not truncate either.
         let shadow = 1.0 - t.seen;
         let bloom = 1.0 - t.bloom;
-        if bloom < INK_FLOOR {
+        if bloom <= 0.0 {
             discard;
         }
         return Painted(vec3<f32>(0.0), shadow, bloom);
@@ -2619,7 +2605,7 @@ fn node_paint(in: VsOut) -> Painted {
     let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
     let final_alpha = 1.0 - (1.0 - ink.alpha) * seen_through;
     let bloom_alpha = 1.0 - (1.0 - ink.alpha) * bloom_through;
-    if bloom_alpha < INK_FLOOR {
+    if bloom_alpha <= 0.0 {
         discard;
     }
     // The WASH: the light standing at this pixel, laid over the node's own INK.
@@ -3544,7 +3530,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // one — the larger alpha, so a shadow only the bright pass can show is not
     // thrown away with the fragment (`node_paint` states the case in full).
     let bloom_alpha = 1.0 - (1.0 - alpha) * bloom_through;
-    if bloom_alpha < INK_FLOOR {
+    if bloom_alpha <= 0.0 {
         discard;
     }
     // Premultiplied, as every draw in this pass is: the marker IS its own ink
