@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
+#[path = "channel_wave_tests.rs"]
+mod channel_wave_tests;
 #[path = "publication_tests.rs"]
 mod publication_tests;
 
@@ -1126,7 +1128,20 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
     source.activate();
     source.run(0, vec![], None);
     hub.run(0, vec![], None);
-    assert_eq!(source.run(64, vec![note(21, 1, 64, 5, true)], None).values.len(), 1);
+    let neutral = |cc| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
+            port_index: 0,
+            data: [0xb1, cc, 0],
+        })
+    };
+    assert_eq!(
+        source
+            .run(64, vec![neutral(64), neutral(66), neutral(69), note(21, 1, 64, 5, true)], None)
+            .values
+            .len(),
+        4
+    );
     hub.run(64, vec![], None);
     let duplicate = Device::new(false);
     duplicate.configure(uuid, true);
@@ -1147,8 +1162,17 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
         new_phrase.extend(source.run(block * 64, vec![], None).values);
         hub.run(block * 64, vec![], None);
     }
-    assert_eq!(new_phrase.len(), 2, "new-side phrase survives two-owner detach and rematch");
-    assert_eq!(new_phrase[1].0 - new_phrase[0].0, 20);
+    assert_eq!(
+        new_phrase.len(),
+        5,
+        "known setup and new-side phrase survive two-owner detach and rematch"
+    );
+    for (index, cc) in [64, 66, 69].into_iter().enumerate() {
+        assert_eq!(new_phrase[index], (0, Event::Midi { port: 0, data: [0xb1, cc, 0], flags: 0 }));
+    }
+    assert!(matches!(new_phrase[3].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 22, .. }));
+    assert!(matches!(new_phrase[4].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 22, .. }));
+    assert_eq!(new_phrase[4].0 - new_phrase[3].0, 20);
     let records = capture.drain_canonical();
     let identities: std::collections::BTreeSet<_> = records
         .iter()
@@ -4434,7 +4458,7 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
 }
 
 #[test]
-fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_available() {
+fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_available() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::new(false);
@@ -4456,17 +4480,24 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
         })
         .collect();
     initial.extend((0..64).map(|id| note(id + 1, (id / 4) as i16, (60 + id % 4) as i16, 1, true)));
-    assert_eq!(source.run(64, initial, None).values.len(), 80);
+    initial.extend((0..16).map(|channel| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 2),
+            port_index: 0,
+            data: [0xb0 | channel, 88, 37],
+        })
+    }));
+    assert_eq!(source.run(64, initial, None).values.len(), 96);
     hub.run(64, vec![], None);
     assert_eq!(session.credits.load(Ordering::Acquire), 64);
     assert!(source.source_snapshot().pedals_held);
     let events = (0..512).map(|index| expression(index % 64 + 1, 0.125, 0)).collect();
     let wire = source.run_select(128, events, None, Some(512));
     assert_eq!(
-        wire.attempts, 624,
-        "512 actual normal attempts plus64 voice and48 pedal emergency attempts"
+        wire.attempts, 640,
+        "512 actual normal attempts plus64 voice,48 pedal and16 prefix emergency attempts"
     );
-    assert_eq!(wire.values.len(), 623);
+    assert_eq!(wire.values.len(), 639);
     assert_eq!(
         wire.values.iter().filter(|(_, event)| matches!(event, Event::Expression { .. })).count(),
         511
@@ -4492,10 +4523,17 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     assert_eq!(snapshot.faults, source::OUTPUT_FAULT);
     assert_eq!(snapshot.journal, 511);
     assert_eq!(
-        snapshot.emergency, 112,
+        snapshot.emergency, 128,
         "actual accepted emergency facts use their separate retained journal"
     );
     assert!(!snapshot.pedals_held);
+    assert_eq!(snapshot.velocity_prefix, [Some(0); 16]);
+    assert!(
+        wire.values[511..527]
+            .iter()
+            .all(|(_, event)| matches!(event, Event::Midi { data: [_, 88, 0], .. })),
+        "all16 repairs precede the emergency voices"
+    );
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         64,
@@ -4514,10 +4552,10 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     });
     let extra = source.run_status(192, vec![malformed], None, None, 64, true);
     assert_eq!(extra.attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 112);
+    assert_eq!(source.source_snapshot().emergency, 128);
     assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT | source::INPUT_FAULT);
     assert_eq!(source.run(256, vec![], None).attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 112);
+    assert_eq!(source.source_snapshot().emergency, 128);
     let mut remaining_resets = 0;
     for block in 2..=16 {
         hub.run(block * 64, vec![], None);
@@ -4548,12 +4586,19 @@ fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_
     next.selected = Some(SavedUuid::default());
     shared.apply(setup::Routing::Source(next), false).unwrap();
     source.run(128, vec![], None);
-    assert!(source
-        .run(192, vec![note(2, 0, 64, 0, true), expression(-1, 0.234567890123, 1)], None)
+    // Established expressions remain responsive through a younger lease wait.
+    // Exhaust the real normal output allowance to retain the wildcard's old
+    // child for the cancellation/acknowledgement path this fixture measures.
+    let mut input: Vec<_> = (0..512).map(|_| expression(1, 0.125, 0)).collect();
+    input.extend([note(2, 0, 64, 0, true), expression(-1, 0.234567890123, 1)]);
+    let earlier = source.run(192, input, None);
+    assert_eq!(earlier.values.len(), 512);
+    assert!(earlier
         .values
-        .is_empty());
+        .iter()
+        .all(|(_, event)| matches!(event, Event::Expression { id: 1, value: 0.125, .. })));
     let captured = source.source_snapshot();
-    assert_eq!((captured.pending, captured.references, captured.input_cut), (2, 2, 3));
+    assert_eq!((captured.pending, captured.references, captured.input_cut), (2, 2, 515));
     assert_eq!(
         (captured.obligations, captured.old_obligations),
         (3, 1),

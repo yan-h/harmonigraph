@@ -23,12 +23,14 @@ mod channel;
 #[cfg(all(test, debug_assertions, not(feature = "tuning-probe")))]
 mod replay_tests;
 mod stop;
+mod wave;
 mod work;
 
 const NONE: u16 = u16::MAX;
 #[cfg(all(test, not(feature = "tuning-probe")))]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
+    pub velocity_prefix: [Option<u8>; 16],
     pub pending: usize,
     pub references: usize,
     pub obligations: usize,
@@ -77,6 +79,7 @@ struct Pending {
     work_tail: u16,
     work_count: u8,
     work_remaining: u8,
+    work_linked: u8,
     selected: u16,
     inline_done: bool,
 }
@@ -104,6 +107,10 @@ struct Life {
     midi: bool,
     note_off_owed: bool,
     sound_off_refs: u16,
+    ready_head: u16,
+    ready_tail: u16,
+    cleanup_next: u16,
+    ready_queued: bool,
 }
 #[derive(Clone, Copy)]
 struct Permit {
@@ -206,12 +213,20 @@ pub struct Source {
     direct_generation: u64,
     service_revision: u64,
     channels: channel::Channels,
+    work_cleanup_head: u16,
+    work_cleanup_tail: u16,
+    draining_finished: bool,
+    pending_cursor: Option<usize>,
 }
 
 impl Source {
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
+            velocity_prefix: std::array::from_fn(|channel| {
+                let state = &self.state.channels()[channel];
+                (state.controller_valid[1] & (1 << 24) != 0).then_some(state.controllers[88])
+            }),
             pending: self.pending.len(),
             references: self.work.len(),
             obligations: self.obligations,
@@ -319,6 +334,10 @@ impl Source {
             direct_generation: 1,
             service_revision: 0,
             channels: channel::Channels::default(),
+            work_cleanup_head: NONE,
+            work_cleanup_tail: NONE,
+            draining_finished: false,
+            pending_cursor: None,
         })
     }
     pub fn activate(&mut self, rate: f64, max_frames: u32) {
@@ -521,6 +540,7 @@ impl Source {
             self.receive();
         }
         self.drain_finished();
+        self.drain_ready_work();
         if let Some(session) = self.session() {
             let faults = session.faults.load(Ordering::Acquire)
                 | self.offer.as_ref().map_or(0, |o| {
@@ -653,6 +673,10 @@ impl Source {
                 midi: matches!(event, Event::Midi { .. }),
                 note_off_owed: false,
                 sound_off_refs: 0,
+                ready_head: NONE,
+                ready_tail: NONE,
+                cleanup_next: NONE,
+                ready_queued: false,
             });
             index
         } else if addressed && count == 1 {
@@ -661,6 +685,10 @@ impl Source {
             NONE
         };
         let position = self.enqueue_cell(event, life, raw, addressed && count != 1);
+        self.capture_velocity_prefix(position);
+        if addressed && count == 1 {
+            self.capture_inline_ready(position, life);
+        }
         for target in targets[..count].iter().copied() {
             let previous = self.lives[usize::from(target)].unwrap();
             let operation = if channel.is_some() {
@@ -689,6 +717,7 @@ impl Source {
         }
         if let Some(slot) = active_slot {
             self.active[slot] = life;
+            self.capture_onset(position);
         }
         if channel.is_some() {
             self.capture_channel(position);
@@ -722,6 +751,7 @@ impl Source {
                 work_tail: NONE,
                 work_count: 0,
                 work_remaining: 0,
+                work_linked: 0,
                 selected: NONE,
                 inline_done: addressed,
             })
@@ -730,6 +760,9 @@ impl Source {
             self.add_obligation(generation);
         }
         let position = self.pending.back_position().unwrap();
+        if self.pending_cursor.is_none() {
+            self.pending_cursor = Some(position);
+        }
         if life != NONE {
             self.lives[usize::from(life)].as_mut().unwrap().refs += 1;
         }
@@ -875,19 +908,27 @@ impl Source {
         self.cancel_unsounded_through(self.next_event);
     }
     fn cancel_unsounded_through(&mut self, cut: u64) {
-        self.stopping = true;
         self.cancel_cursor = self.pending.front_position();
         self.cancel_cut = self.cancel_cut.max(cut);
+        self.stopping = self.cancel_cursor.is_some_and(|position| {
+            self.pending.at(position).is_some_and(|pending| pending.serial <= self.cancel_cut)
+        });
+        self.cancel_wave_history(cut);
     }
     fn local_cancel_cut_settled(&self) -> bool {
-        self.pending
-            .front_position()
-            .and_then(|head| self.pending.at(head))
-            .is_none_or(|pending| pending.serial > self.cancel_cut)
+        !self.stopping
+            && self.manifest.front().is_none_or(|manifest| manifest.serial > self.cancel_cut)
+            && self.work_cleanup_head == NONE
     }
     pub fn stop(&mut self) {
         self.cancel_unsounded();
-        if self.held() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64] {
+        if self.held() != 0
+            || self.state.pedals_held()
+            || self.owed_note_off != [NONE; 64]
+            || self.state.channels().iter().any(|channel| {
+                channel.controller_valid[1] & (1 << 24) != 0 && channel.controllers[88] != 0
+            })
+        {
             self.fault(OUTPUT_FAULT);
         }
     }
@@ -922,7 +963,11 @@ impl Source {
                 let cell = self.work.at(child);
                 if cell.phase == 0 {
                     let life = self.lives[usize::from(cell.life)].unwrap();
-                    if cell.operation == work::CHANNEL || !life.sounded || life.terminal.is_some() {
+                    if cell.operation == work::CHANNEL
+                        || !life.sounded
+                        || life.terminal.is_some()
+                        || pending.event.attack().is_none() && !pending.event.release()
+                    {
                         if !life.sounded {
                             self.lives[usize::from(cell.life)].as_mut().unwrap().canceled = true;
                         }
@@ -954,6 +999,9 @@ impl Source {
                         break;
                     }
                 }
+            }
+            if self.pending.at(position).is_some_and(|parent| parent.serial == pending.serial) {
+                self.remove_finished(position);
             }
             if self.cancel_cursor == Some(position) {
                 self.cancel_cursor = self.pending.next_position(position);
@@ -997,6 +1045,12 @@ impl Source {
         }
         for channel in 0..16 {
             let state = &self.state.channels()[channel];
+            if state.controller_valid[1] & (1 << 24) != 0
+                && state.controllers[88] != 0
+                && self.channel_reset[channel] & 0x80 == 0
+            {
+                self.channel_reset[channel] |= 0x40;
+            }
             if used_channels & (1 << channel) != 0 || state.controller_valid != [0, 0] {
                 for (bit, controller) in [64usize, 66, 69].into_iter().enumerate() {
                     let known_neutral =
@@ -1068,12 +1122,32 @@ impl Source {
                 }
             }
         }
+        // CC120 can retire the musical credit before the original physical
+        // Note-Off arrives. Its independent binding is still an indexed release
+        // owner even though it no longer appears in reserved[].
+        for index in self.owed_note_off {
+            if index == NONE {
+                continue;
+            }
+            let life = self.lives[usize::from(index)].unwrap();
+            if life.reserved {
+                continue;
+            }
+            if !self.charge(1) {
+                break;
+            }
+            if let Some(position) = life.release {
+                self.stage_work(usize::from(position.parent), position.work, start, end, output);
+            }
+        }
         self.schedule_pending(start, end, output);
+        self.schedule_channels(start, end, output);
+        self.schedule_ready(start, end, output);
         self.compact();
     }
 
     fn schedule_pending(&mut self, start: i64, end: i64, output: &mut api::Output<'_>) {
-        let mut next = self.pending.front_position();
+        let mut next = self.pending_cursor;
         while self.visits < 2048 {
             let Some(position) = next else {
                 break;
@@ -1087,6 +1161,7 @@ impl Source {
             if !self.stage_pending(position, start, end, output) {
                 break;
             }
+            self.pending_cursor = next;
         }
     }
 
@@ -1109,6 +1184,14 @@ impl Source {
         };
         if parent.event == Event::Stop {
             return false;
+        }
+        if matches!(parent.channel.role, channel::Role::Header { .. }) {
+            let channel = usize::from(parent.event.channel_control().unwrap());
+            if self.channels.waves[channel].wire.serial != parent.serial {
+                self.remove_finished(position);
+                return true;
+            }
+            return self.stage_work(position, NONE, start, end, output);
         }
         if parent.inline_done && parent.work_remaining == 0 {
             self.remove_finished(position);
@@ -1158,7 +1241,11 @@ impl Source {
             return true;
         }
         let pending = self.resolved(position, child);
-        if pending.disposition || child == NONE && parent.inline_done {
+        if pending.disposition
+            || child == NONE
+                && parent.inline_done
+                && !matches!(parent.channel.role, channel::Role::Header { .. })
+        {
             return true;
         }
         if (self.faults != 0 || pending.serial <= self.cancel_cut) && !pending.event.release() {
@@ -1193,7 +1280,25 @@ impl Source {
             return false;
         }
         let established = life.is_some_and(|life| life.sounded);
-        let shift = if established { life.unwrap().shift.unwrap_or(0) } else { self.wave_shift };
+        if life.is_some() && !established && pending.event.attack().is_none() {
+            return false;
+        }
+        if pending.event.attack().is_none()
+            && !pending.event.release()
+            && life.is_some_and(|life| life.ready_head != work::ready_reference(position, child))
+        {
+            return false;
+        }
+        if pending.event.attack().is_some() && !self.onset_wave_ready(position, start, output) {
+            return false;
+        }
+        let shift = if established {
+            life.unwrap().shift.unwrap_or(0)
+        } else if let Some(channel) = pending.event.channel_control() {
+            self.channels.waves[usize::from(channel)].shift.unwrap_or(self.wave_shift)
+        } else {
+            self.wave_shift
+        };
         let Some(mut due) = pending.input.checked_add(shift) else {
             self.fault(CLOCK_FAULT);
             return false;
@@ -1221,22 +1326,17 @@ impl Source {
             pending.serial,
             if child == NONE { 0 } else { u64::from(child) + 3 },
         ]);
-        let Ok(group) = api::Group::single(token, api::Lane::Normal, time, pending.event.input())
-        else {
+        let group = if let Some(prefix) = self.prefix_reconciliation(pending) {
+            api::Group::velocity_note(token, time, prefix.input(), pending.event.input())
+        } else {
+            api::Group::single(token, api::Lane::Normal, time, pending.event.input())
+        };
+        let Ok(group) = group else {
             self.fault(INPUT_FAULT);
             return false;
         };
         if output.stage(group).is_err() {
             return false;
-        }
-        if !established {
-            if let Some(shift) = callback
-                .steady_time
-                .checked_add(i64::from(time))
-                .and_then(|time| time.checked_sub(pending.input))
-            {
-                self.wave_shift = shift;
-            }
         }
         let mut parent = self.pending.at(position).unwrap();
         parent.staged = true;
@@ -1268,6 +1368,9 @@ impl Source {
 
     pub fn prepare(&mut self, group: api::Group) -> bool {
         assert!(self.permit.is_none());
+        if group.token.0[3] == wave::SETUP_TOKEN {
+            return self.prepare_wave_setup(group);
+        }
         if matches!(group.token.0[3], 1 | 2) {
             return self.prepare_emergency(group);
         }
@@ -1279,6 +1382,9 @@ impl Source {
             return false;
         };
         let pending = self.resolved(position, child);
+        if group.velocity_prefix().is_none() && self.prefix_reconciliation(pending).is_some() {
+            return false;
+        }
         let actual = self.callback.unwrap().steady_time.checked_add(i64::from(group.time));
         if actual.is_none_or(|actual| self.next_stop_sample().is_some_and(|stop| actual >= stop)) {
             return false;
@@ -1309,7 +1415,8 @@ impl Source {
         if !self.clock.valid && !pending.event.release() {
             return false;
         }
-        let report_cells = self.channel_report_cells(pending);
+        let report_cells =
+            self.channel_report_cells(pending) + usize::from(group.velocity_prefix().is_some());
         // Preserve the entire reserved emergency allowance before every normal
         // host acceptance. Exhaustion must occur while terminations can still
         // receive unique factual sequence numbers; clearing a fault cannot wrap.
@@ -1393,6 +1500,10 @@ impl Source {
     }
 
     pub fn complete(&mut self, completion: api::Completion, output: &mut api::Output<'_>) {
+        if completion.group.token.0[3] == wave::SETUP_TOKEN {
+            self.complete_wave_setup(completion, output);
+            return;
+        }
         if matches!(completion.group.token.0[3], 1 | 2) {
             self.complete_emergency(completion);
             self.schedule_emergency(output);
@@ -1425,7 +1536,20 @@ impl Source {
         parent.staged = false;
         self.pending.set(position, parent);
         let permit = self.permit.take();
-        if completion.accepted & 1 != 0 {
+        let prefix = completion.group.velocity_prefix();
+        if let Some(prefix) = prefix.filter(|_| completion.accepted & 1 != 0) {
+            assert!(permit.is_some_and(
+                |permit| permit.position == position && permit.serial == parent.serial
+            ));
+            let event = Event::from_input(prefix).unwrap();
+            let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
+            let delta = self.record(event, NONE, pending.input, actual);
+            self.journal
+                .push(delta)
+                .unwrap_or_else(|_| unreachable!("prepared prefix journal credit"));
+        }
+        let note_bit = if prefix.is_some() { 2 } else { 1 };
+        if completion.accepted & note_bit != 0 {
             let permit = permit.expect("accepted output requires durable preparation");
             assert_eq!((permit.position, permit.serial), (position, parent.serial));
             let actual = self
@@ -1442,22 +1566,45 @@ impl Source {
                 _ => NONE,
             };
             if pending.event.attack().is_some() {
-                self.wave_shift = actual.checked_sub(pending.input).unwrap_or(0);
+                self.accept_onset_wave(pending, actual);
+            }
+            if self.pending_cursor == Some(position) {
+                self.pending_cursor = self.pending.next_position(position);
             }
             if matches!(parent.channel.role, channel::Role::Header { .. }) {
                 let mut target = parent.work_head;
                 while target != NONE {
                     let cell = self.work.at(target);
-                    self.finish_work(position, target);
+                    if self.lives[usize::from(cell.life)].is_some_and(|life| life.sounded) {
+                        self.finish_work(position, target);
+                    }
                     target = cell.next;
                 }
+                self.accept_channel_wire(position, pending);
+                // Queue final replay cleanup before the completion's remaining
+                // visit budget can run out. History retention remains separate.
+                self.remove_finished(position);
             }
-            self.finish_work(position, child);
+            if !parent.inline_done || child != NONE {
+                self.finish_work(position, child);
+            }
             if permit.gate {
                 self.release_gate();
             }
             self.wake_waiters(waiter, output);
             self.wake_channel(pending.event.channel(), output);
+            if pending.life != NONE {
+                self.wake_life(pending.life, actual, output);
+            }
+            self.wake_onset(pending.event.channel(), actual, output);
+            if pending.event.channel_control().is_some() {
+                let callback = self.callback.unwrap();
+                self.schedule_ready(
+                    actual,
+                    callback.steady_time + i64::from(callback.frames),
+                    output,
+                );
+            }
             if self.pending.at(position).is_some_and(|parent| parent.serial == pending.serial)
                 && self.charge(1)
             {
@@ -1482,6 +1629,18 @@ impl Source {
                 || completion.disposition == api::Disposition::MissingOutput
             {
                 self.fault(OUTPUT_FAULT);
+            } else if prefix.is_none()
+                && self.prefix_reconciliation(pending).is_some()
+                && self.charge(1)
+            {
+                let callback = self.callback.unwrap();
+                self.stage_work(
+                    position,
+                    child,
+                    callback.steady_time,
+                    callback.steady_time + i64::from(callback.frames),
+                    output,
+                );
             }
         }
         if parent.serial <= self.cancel_cut
@@ -1583,7 +1742,9 @@ impl Source {
         self.recycle(index);
     }
     fn recycle(&mut self, index: u16) {
-        if self.lives[usize::from(index)].is_some_and(|l| !l.active && !l.reserved && l.refs == 0) {
+        if self.lives[usize::from(index)]
+            .is_some_and(|l| !l.active && !l.reserved && l.refs == 0 && !l.ready_queued)
+        {
             self.lives[usize::from(index)] = None;
             self.free_lives.push(index);
             if let Some(slot) = self.active.iter_mut().find(|i| **i == index) {
@@ -1593,21 +1754,55 @@ impl Source {
     }
     fn compact(&mut self) {
         self.drain_finished();
-        if self.pending.len() == 0
+        if self.obligations == 0
             && self.state.count() == 0
-            && self
-                .state
-                .channels()
-                .iter()
-                .all(|channel| [64, 66, 69].iter().all(|cc| channel.controllers[*cc] < 64))
+            && self.held() == 0
+            && self.journal.len() == 0
+            && self.emergency_output.len() == 0
+            && self.manifest.len() == 0
+            && self.permit.is_none()
+            && self.baseline.is_none()
+            && self.baseline_acked
+            && self.owed_note_off == [NONE; 64]
+            && self.channel_reset == [0; 16]
+            && self.state.channels().iter().zip(&self.channels.waves).all(|(channel, wave)| {
+                wave.shift.is_none()
+                    || [64, 66, 69].into_iter().all(|cc| {
+                        channel.controller_valid[cc / 64] & (1 << (cc % 64)) != 0
+                            && channel.controllers[cc] < 64
+                    })
+            })
         {
             self.wave_shift = 0;
+            for wave in &mut self.channels.waves {
+                wave.shift = None;
+            }
         }
     }
 
     fn schedule_emergency(&mut self, output: &mut api::Output<'_>) {
         if self.sealed {
             return;
+        }
+        // A failed consumer can leave its accepted CC88 waiting at the receiver.
+        // Repair precedes any emergency raw MIDI Off that could consume it.
+        // 64 voice +48 pedal +16 prefix attempts fit the reserved128 exactly.
+        for channel in 0..16 {
+            if self.channel_reset[channel] & 0x40 == 0 {
+                continue;
+            }
+            let event = Event::Midi { port: 0, data: [0xb0 | channel as u8, 88, 0], flags: 0 };
+            let group = api::Group::single(
+                api::Token([0, channel as u64, 3, 2]),
+                api::Lane::Emergency,
+                output.cursor().max(self.stops.emergency_start),
+                event.input(),
+            )
+            .unwrap();
+            if output.stage(group).is_err() {
+                return;
+            }
+            self.channel_reset[channel] = (self.channel_reset[channel] & !0x40) | 0x80;
         }
         for index in 0..64 {
             let Some(mut release) = self.emergency[index] else {
@@ -1663,6 +1858,11 @@ impl Source {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
             return false;
         }
+        if matches!(group.event(0), Some(InputValue::Midi { data: [status, _, _], .. })
+            if matches!(status & 0xf0, 0x80 | 0x90) && self.channel_reset[usize::from(status & 15)] & 0xc0 != 0)
+        {
+            return false;
+        }
         self.permit = Some(Permit {
             position: group.token.0[1] as usize,
             serial: group.token.0[2],
@@ -1713,16 +1913,23 @@ impl Source {
             self.emergency[index] = Some(release);
         } else {
             let bit = completion.group.token.0[2] as u8;
-            self.channel_reset[index] &= !(1 << (bit + 3));
+            let (pending_bit, staged_bit) =
+                if bit == 3 { (0x40, 0x80) } else { (1 << bit, 1 << (bit + 3)) };
+            self.channel_reset[index] &= !staged_bit;
             if completion.accepted & 1 != 0 {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let delta = self.record(event, NONE, actual, actual);
+                if bit == 3 {
+                    self.accept_prefix_neutralization(index);
+                } else {
+                    self.accept_wave_neutralization(index, bit);
+                }
                 self.emergency_output
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("prepared emergency cell"));
             } else {
-                self.channel_reset[index] |= 1 << bit;
+                self.channel_reset[index] |= pending_bit;
             }
         }
     }
@@ -2006,6 +2213,7 @@ impl Source {
         self.visits = 0;
         self.receive();
         self.cancel_slice();
+        self.drain_ready_work();
         self.compact();
         if !self.detaching {
             self.transfer();

@@ -118,6 +118,9 @@ Joined hub retirement retains the original publication owner and an independent 
 
 ## Executed verification so far
 
+The follow-on [ordinary channel-wave slice](adaptive-tuning-channel-waves.md) adds known-state setup/history replay, indexed established-voice readiness and CC88 consumer reconciliation to this forwarding path.
+Its functional and allocation evidence remains separate from outstanding full assignment, sequencing and timing integration.
+
 The [physical allocation ledger](adaptive-tuning-aggregation-memory.md) reconciles the actual pools and measured factory increments with the constrained future 144 MiB session plan.
 It preserves the absent assignment/history/policy reservations and identifies the remaining integration allowance.
 

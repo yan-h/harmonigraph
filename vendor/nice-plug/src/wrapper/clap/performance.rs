@@ -120,11 +120,11 @@ pub enum Lane {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Events {
     Single(InputValue),
-    Onset { note: InputValue, tuning: InputValue },
+    Pair { first: InputValue, second: InputValue },
 }
 
-/// A single event or an onset plus same-address initial tuning. Construction
-/// validates the value family; staging validates the enclosing output interval.
+/// A single event or one of two narrowly validated pairs: note-on/tuning or
+/// CC88/raw MIDI consumer. Staging validates the enclosing output interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Group {
     pub token: Token,
@@ -141,6 +141,33 @@ pub enum StageError {
 }
 
 impl Group {
+    /// Reconcile a known velocity prefix immediately before its raw MIDI
+    /// consumer under one caller permit, retaining each independent host result.
+    pub fn velocity_note(
+        token: Token,
+        time: u32,
+        prefix: InputValue,
+        note: InputValue,
+    ) -> Result<Self, StageError> {
+        let matching = matches!((prefix, note),
+            (InputValue::Midi { port: pp, data: [ps, 88, value], .. },
+             InputValue::Midi { port: np, data: [ns, key, velocity], .. })
+                if pp == np && ps & 0xf0 == 0xb0 && ps & 15 == ns & 15
+                    && matches!(ns & 0xf0, 0x80 | 0x90)
+                    && value < 128 && key < 128 && velocity < 128);
+        if !matching {
+            return Err(StageError::Invalid);
+        }
+        Ok(Self { token, lane: Lane::Normal, time, events: Events::Pair { first: prefix, second: note } })
+    }
+
+    pub fn velocity_prefix(&self) -> Option<InputValue> {
+        match self.events {
+            Events::Pair { first: prefix @ InputValue::Midi { .. }, .. } => Some(prefix),
+            _ => None,
+        }
+    }
+
     pub fn single(
         token: Token,
         lane: Lane,
@@ -176,21 +203,21 @@ impl Group {
         if !matching || !valid_event(note) || !valid_event(tuning) {
             return Err(StageError::Invalid);
         }
-        Ok(Self { token, lane: Lane::Normal, time, events: Events::Onset { note, tuning } })
+        Ok(Self { token, lane: Lane::Normal, time, events: Events::Pair { first: note, second: tuning } })
     }
 
     pub fn event_count(&self) -> usize {
         match self.events {
             Events::Single(_) => 1,
-            Events::Onset { .. } => 2,
+            Events::Pair { .. } => 2,
         }
     }
 
     pub fn event(&self, index: usize) -> Option<InputValue> {
         match (self.events, index) {
             (Events::Single(e), 0)
-            | (Events::Onset { note: e, .. }, 0)
-            | (Events::Onset { tuning: e, .. }, 1) => Some(e),
+            | (Events::Pair { first: e, .. }, 0)
+            | (Events::Pair { second: e, .. }, 1) => Some(e),
             _ => None,
         }
     }
@@ -222,9 +249,10 @@ pub enum Disposition {
     ProcessError,
 }
 
-/// Bit zero is the single/onset event, bit one the initial tuning. A rejected
-/// onset leaves tuning unattempted. Accepted onset always attempts tuning under
-/// the SAME caller permit, even if a fence closes inside the first host call.
+/// Bits follow event order: single; note-on then tuning; or CC88 then raw MIDI
+/// consumer. First-event rejection leaves the second unattempted. An accepted
+/// first event always attempts its second under the SAME caller permit, even
+/// if a fence closes inside the first host call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Completion {
     pub group: Group,

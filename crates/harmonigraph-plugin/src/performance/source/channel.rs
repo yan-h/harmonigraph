@@ -17,6 +17,10 @@ impl Default for Reference {
 pub(super) enum Role {
     #[default]
     Wire,
+    Onset {
+        previous: u16,
+        next: u16,
+    },
     Stop {
         previous: u16,
         next: u16,
@@ -34,11 +38,14 @@ pub(super) struct Cell {
     pub dependency: Reference,
     pub next_waiter: Option<u16>,
     pub previous_waiter: Option<u16>,
+    pub accepted: bool,
+    pub velocity_prefix: Option<u8>,
 }
 #[derive(Default)]
 pub(super) struct Channels {
     pub head: [Option<Reference>; 16],
     pub tail: [Option<Reference>; 16],
+    pub waves: [wave::Wave; 16],
 }
 
 impl Source {
@@ -55,6 +62,13 @@ impl Source {
         self.pending.set(head, header);
         self.link_channel(head);
         let reference = Reference { index: head as u16, serial: header.serial };
+        let wave = &mut self.channels.waves[channel];
+        if wave.wire.index == NONE {
+            wave.wire = reference;
+        }
+        if wave.prelude == 0 && wave::transaction(header.event) {
+            wave.prelude = header.serial;
+        }
         if let Some(tail) = previous {
             let mut prior = self.pending.at(usize::from(tail.index)).unwrap();
             let Role::Header { ref mut next_header, .. } = prior.channel.role else {
@@ -104,31 +118,44 @@ impl Source {
         self.pending.set(position, pending);
     }
     pub(super) fn channel_ready(&mut self, pending: Pending) -> bool {
-        if self.reference_pending(pending.channel.dependency) {
-            return false;
+        if pending.event.release() {
+            return true;
         }
-        let Role::Header { .. } = pending.channel.role else {
+        let Some(channel) = pending.event.channel().map(usize::from) else {
             return true;
         };
-        if !self.charge(usize::from(pending.work_count)) {
-            return false;
-        }
-        let mut targets = pending.work_head;
-        for _ in 0..64 {
-            if targets == NONE {
-                return true;
+        let wave = &self.channels.waves[channel];
+        if matches!(pending.channel.role, Role::Header { .. }) {
+            let before_onset = self
+                .pending
+                .at(usize::from(wave.first))
+                .is_none_or(|onset| onset.serial > pending.serial);
+            let neutral = matches!(pending.event, Event::Midi { data: [status, 64 | 66 | 69, value], .. } if status & 0xf0 == 0xb0 && value < 64);
+            if wave.setup.index != NONE
+                || wave.wire.serial != pending.serial
+                || !(before_onset
+                    || wave.shift.is_some() && (neutral || self.established_channel(channel)))
+            {
+                return false;
             }
-            let target = self.work.at(targets);
-            if target.phase & work::DONE == 0 {
-                let life = self.lives[usize::from(target.life)].unwrap();
-                assert_eq!(life.serial, target.serial);
-                if !life.sounded && !life.canceled {
+            if !self.charge(usize::from(pending.work_count)) {
+                return false;
+            }
+            let mut child = pending.work_head;
+            while child != NONE {
+                let cell = self.work.at(child);
+                if cell.phase & work::DONE == 0
+                    && self.lives[usize::from(cell.life)].is_some_and(|life| {
+                        life.sounded && life.terminal.is_none() && life.ready_head != child
+                    })
+                {
                     return false;
                 }
+                child = cell.next;
             }
-            targets = target.next;
+            return true;
         }
-        targets == NONE
+        wave.wire.index == NONE || wave.wire.serial >= pending.serial
     }
     pub(super) fn channel_wire_bindings_available(&self, pending: Pending) -> bool {
         if pending.event.channel_termination() != Some(true) {
@@ -167,7 +194,7 @@ impl Source {
         }
     }
     pub(super) fn wake_channel(&mut self, channel: Option<u8>, output: &mut api::Output<'_>) {
-        let Some(reference) = channel.and_then(|channel| self.channels.head[usize::from(channel)])
+        let Some(reference) = channel.map(|channel| self.channels.waves[usize::from(channel)].wire)
         else {
             return;
         };
@@ -258,6 +285,9 @@ impl Source {
         }
     }
     pub(super) fn channel_done(&mut self, position: usize, pending: Pending) {
+        if let Role::Onset { previous, next } = pending.channel.role {
+            self.unlink_onset(pending, previous, next);
+        }
         if let Role::Stop { previous, next } = pending.channel.role {
             self.unlink_stop(previous, next);
             return;
@@ -291,6 +321,10 @@ impl Source {
             return;
         };
         let channel = usize::from(pending.event.channel_control().unwrap());
+        self.fold_channel_header(pending);
+        if self.channels.waves[channel].wire.serial == pending.serial {
+            self.channels.waves[channel].wire = self.pending_reference(next_header);
+        }
         if previous_header != NONE {
             let mut previous = self.pending.at(usize::from(previous_header)).unwrap();
             let Role::Header { ref mut next_header, .. } = previous.channel.role else {

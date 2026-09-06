@@ -145,6 +145,15 @@ impl State {
     /// accepted output, settled host acceptance. A wildcard is applied to the
     /// lifetime set resolved at its original stream position by that caller.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
+        if let Event::Midi { port: 0, data: [status, _, _], .. } = event {
+            if matches!(status & 0xf0, 0x80 | 0x90) {
+                // MIDI Association CA-031: an accepted raw NoteOn/Off clears
+                // the prefix. Derivation creates no extra wire CC record.
+                let channel = &mut self.channels[usize::from(status & 15)];
+                channel.controllers[88] = 0;
+                channel.controller_valid[1] |= 1 << 24;
+            }
+        }
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
             let index = self

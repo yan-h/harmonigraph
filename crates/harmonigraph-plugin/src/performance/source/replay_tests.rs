@@ -36,7 +36,7 @@ impl Source {
         );
     }
     pub fn test_stale_prepare(&mut self, group: api::Group) {
-        if group.token.0[3] < 3 {
+        if !(3..3 + work::CAPACITY as u64).contains(&group.token.0[3]) {
             return;
         }
         let replay = REPLAY.with(|state| *state.borrow());
@@ -61,7 +61,9 @@ impl Source {
         completion: api::Completion,
         output: &mut api::Output<'_>,
     ) {
-        if completion.group.token.0[3] < 3 || completion.accepted != 1 {
+        if !(3..3 + work::CAPACITY as u64).contains(&completion.group.token.0[3])
+            || completion.accepted != 1
+        {
             return;
         }
         let replay = REPLAY.with(|state| {

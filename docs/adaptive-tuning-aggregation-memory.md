@@ -1,6 +1,6 @@
 # Aggregation storage and the future session budget
 
-This is the allocation account for the in-progress [companion aggregation branch](adaptive-tuning-companion-aggregation.md).
+This is the allocation account for [companion aggregation](adaptive-tuning-companion-aggregation.md) and its [ordinary channel-wave replay slice](adaptive-tuning-channel-waves.md).
 The hard ceiling remains 144 MiB, or 150,994,944 bytes, of additional adaptive-session storage.
 It is not a limit on the whole plugin's RSS.
 The current layout and constructor measurements below come from the isolated production factory fixture on macOS arm64 with the pinned toolchain.
@@ -16,9 +16,9 @@ The separate child process reaches all four actual enrolled sessions and avoids 
 
 | Allocated cell | Bytes | Cells per owner | Backing bytes |
 | --- | ---: | ---: | ---: |
-| Pending `Linked<Pending>` | 120 | 8,192 | 983,040 |
+| Pending `Linked<Pending>` | 128 | 8,192 | 1,048,576 |
 | Pending free index | 2 | 8,192 | 16,384 |
-| `Option<Life>` | 88 | 8,192 | 720,896 |
+| `Option<Life>` | 96 | 8,192 | 786,432 |
 | Lifetime free index | 2 | 8,192 | 16,384 |
 | Work reference, with embedded free chain | 16 | 32,768 | 524,288 |
 | Ordinary `Option<OutputDelta>` journal | 112 | 4,096 | 458,752 |
@@ -39,8 +39,17 @@ Observed DIRECT input additionally owns its distinct rich State and 2,048-cell h
 The 16 receiver Rows each hold another rich State and a complete cached baseline.
 These are actual separate allocations/copies despite the session's 256-voice musical credit limit.
 
-One Source Box is 25,240 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel dependencies, permits and pool headers.
-Its eight backing allocations plus its Box total 2,761,880 bytes.
+One Source Box is 29,608 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel waves, permits and pool headers.
+Its eight backing allocations plus its Box total 2,897,320 bytes.
+The channel owner is5,120 inline bytes, including16 wave/checkpoint/prefix owners and the existing channel history indices.
+Replay adds4,368 bytes per Source Box, or74,256 bytes across all17 forwarding owners.
+Pending and lifetime backing cells each grow8 bytes, adding2,228,224 measured bytes per session within their already reserved128/256-byte future ceilings.
+Those physical cell increases are not a second future debit.
+The complete measured ordinary increase is2,302,480 bytes per session.
+Packed Work storage stays16 bytes per allocated cell;
+single-target ready links reuse their existing inline envelope's otherwise unused Work-tail field.
+No ready-link slab is added.
+The private two-event wrapper representation keeps `Option<Group>` at232 bytes, below the separately reserved256-byte future ceiling.
 The retained Stop queue adds eight inline bytes per Source and uses existing pending envelopes;
 it adds no backing allocation or larger pool cell.
 The joined-producer flags add eight further bytes per Source and 16 per receiver Row, or 392 bytes per session.
@@ -66,21 +75,21 @@ each ring's measured Arc/header allocation is 512 bytes.
 
 | Actual constructor/factory measurement | Calling-thread retained bytes |
 | --- | ---: |
-| One Tune constructor | 2,763,037 |
-| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,715,144 |
+| One Tune constructor | 2,898,477 |
+| Hub constructor, including DIRECT forwarding Source and receiver Rows | 7,850,584 |
 | Actual 16 endpoint triples and controls | 5,894,848 |
-| Ordinary constructor subtotal | 57,818,584 |
-| Full-HG exported factory | 28,154,029 |
+| Ordinary constructor subtotal | 60,121,064 |
+| Full-HG exported factory | 28,289,469 |
 | Full-HG activation | 760 |
-| Sixteen exported Tune factories plus activation | 55,009,195 |
-| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 331,865,246 |
-| Refused sixty-fifth Tune factory | 3,429,825 |
+| Sixteen exported Tune factories plus activation | 57,176,235 |
+| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 341,075,166 |
+| Refused sixty-fifth Tune factory | 3,565,265 |
 
 Factory and constructor rows overlap and must not be added together.
 Each fixture host adds 96 measured bytes outside the plugin.
 Refused instances still construct their own owner/wrapper;
 the counted registry limit is not a claim that creating arbitrary refused instances allocates nothing.
-The four-session retirement interval allocated 9,024 and deallocated 284,769,928 bytes on the measured thread, returning registry counts to zero.
+The four-session retirement interval allocated 9,024 and deallocated 293,979,848 bytes on the measured thread, returning registry counts to zero.
 Other-thread ownership remains outside that counter.
 
 The sixteen new companion wrappers have 2,635,739 bytes of measured additional owners and generic queues after subtracting their constructors, performance boundary arrays/ready indices and fixture hosts.
@@ -116,7 +125,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 
 | Remaining owner/metadata reservation | Bytes charged |
 | --- | ---: |
-| Seventeen Source residual owners after State/emergency cells | 39,440 |
+| Seventeen Source residual owners after State/emergency cells | 113,696 |
 | State flags/padding for 17 source and 16 receiver copies | 264 |
 | Sixteen Tune parameter allocations | 2,384 |
 | Sixteen Row residual owners | 6,528 |
@@ -143,11 +152,23 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 | Future cohort ready/degree/traversal indices | 32,768 |
 | Future remaining fixed plan/history/source metadata | 65,536 |
 
-The complete specified plan is 150,582,699 bytes, leaving 412,245 bytes below the unchanged 144 MiB cap.
+The complete specified plan is 150,656,955 bytes, leaving 337,989 bytes below the unchanged 144 MiB cap.
 That remainder is an allowance, not measured allocator-private overhead.
 The attachment payload/metadata rows conservatively charge the whole process ceiling once in this single-session account;
 HubBridge's 16-byte shrink therefore does not reduce those reserved ceilings.
 The separate policy/cohort drafts still need an integration check against these exact reservations, including transport ownership that is not present yet.
+
+A proposed future CaptureArena owner has a conditional226,304-byte estimate, leaving111,685 bytes if that estimate is validated and charged.
+It is not allocated by this replay implementation.
+The estimate requires an explicit packing and synchronization design that separates immutable published capture fields from mutable readiness/completion fields.
+Current Work updates rewrite one packed word under exclusive Source ownership;
+that is not permission to share the word concurrently with a future reader.
+A feasible proposed16-byte split keeps the64-bit serial and44 immutable index/operation bits in14 bytes, with a separately addressed2-byte ready link and the four reachable phases in the separately budgeted2-bit phase plane.
+The future implementation must validate that layout and access discipline;
+this current exclusive-owner implementation does not establish its concurrent publication safety.
+A separate `u16` ready-link slab would add1,114,112 bytes across17 owners and does not fit this remainder.
+Life's remaining256-byte ceiling must still accommodate the future128-byte resolved configuration and other promised metadata;
+current96-byte storage is not spare space to spend without that reconciliation.
 
 Production assertions use the actual allocated Indexed/Option cells, not just bare payloads.
 Pending's 128-byte ceiling includes its links;

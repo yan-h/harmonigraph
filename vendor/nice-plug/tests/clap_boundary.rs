@@ -564,6 +564,10 @@ unsafe extern "C" fn push(
                 flags: header.flags,
             })
         }
+        CLAP_EVENT_MIDI => {
+            let e = unsafe { &*event.cast::<clap_event_midi>() };
+            Some(InputValue::Midi { port: e.port_index, data: e.data, flags: header.flags })
+        }
         _ => None,
     };
     assert!(sink.attempts.len() < sink.attempts.capacity());
@@ -947,6 +951,28 @@ fn partial_onset_reports_exact_prefix_and_emergency_at_legal_future_cursor() {
     );
     assert_eq!(d.sink.attempts[0].value, Some(note(CLAP_EVENT_NOTE_ON)));
     assert_eq!(d.sink.attempts[1].value, Some(tuning()));
+}
+
+#[test]
+fn velocity_prefix_and_raw_note_keep_separate_acceptance_under_one_permit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let prefix = InputValue::Midi { port: 0, data: [0xb2, 88, 37], flags: CLAP_EVENT_IS_LIVE };
+    let note = InputValue::Midi { port: 0, data: [0x92, 61, 99], flags: CLAP_EVENT_DONT_RECORD };
+    assert_eq!(perf::Group::velocity_note(token(1), 47, prefix, tuning()), Err(perf::StageError::Invalid));
+    assert_eq!(perf::Group::velocity_note(token(1), 47, prefix, InputValue::Midi { port: 0, data: [0x93, 61, 99], flags: 0 }), Err(perf::StageError::Invalid));
+    for (script, expected) in [(vec![false], (1, 0, 2)), (vec![true, false], (3, 1, 0)), (vec![true, true], (3, 3, 0))] {
+        let group = perf::Group::velocity_note(token(1), 47, prefix, note).unwrap();
+        let mut d = Device::new(Control { script: instructions([group]), ..Default::default() }, c"fixture.performance");
+        d.sink.script = script;
+        d.run(0, 64, vec![], true);
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        let completion = o.completions[0];
+        assert_eq!((completion.attempted, completion.accepted, completion.unattempted), expected);
+        assert_eq!(d.sink.attempts[0].value, Some(prefix));
+        if d.sink.attempts.len() == 2 { assert_eq!(d.sink.attempts[1].value, Some(note)); }
+        assert!(d.sink.attempts.iter().all(|attempt| attempt.time == 47));
+        assert!(!d.control.busy.load(Ordering::Acquire));
+    }
 }
 
 #[test]

@@ -113,7 +113,9 @@ Use a single atomic session reservation count with bounded compare-exchange atte
 one acquire load and one `compare_exchange` (`AcqRel` success, `Acquire` failure) per admission attempt, no retry loop.
 A lost race leaves the attack buffered and retries on a later callback;
 it is not proof of exhaustion.
-An unattempted/rejected onset with no accepted prefix returns its reservation exactly once when its attempts settle.
+An unattempted/rejected onset returns its preflight voice reservation exactly once when its attempts settle if no note-on was accepted.
+This includes a control-only CC88 prefix accepted before a rejected raw MIDI note:
+retain that accepted control's journal and repair debt separately, without inventing a held voice or terminal.
 For an accepted onset, termination returns exactly one credit with `fetch_sub(AcqRel)` from its owning source only after accepted release/choke and an acknowledged complete output frontier through that release sample, or an established host termination boundary.
 Host acceptance of a future-offset release alone cannot free a cross-source credit for an earlier-timestamp onset.
 Keep that retiring reservation charged while the complete frontier catches up;
@@ -444,7 +446,8 @@ Partial note-on acceptance cannot be rolled back and may be audible at unintende
 It is a protocol fault outside supported normal operation, **not an allowed unretuned fallback**.
 Do not retry tuning on that sounding voice as reconciliation, resend its note-on, or claim pair atomicity.
 An accepted prefix followed by rejection invokes explicit visible output-fault containment even when storage remains available;
-a rejected note-on with no accepted prefix remains an unsounded request.
+for a CC88/raw-note pair, an accepted control-only prefix creates receiver-prefix repair debt but no accepted onset.
+For the note-on/tuning pair, a rejected note-on with no accepted prefix remains an unsounded request.
 Neither case is an ordinary assignment deadline miss.
 The supported host premise must be validated:
 at the declared workload, Bitwig accepts both onset events at their exact common sample and the configured destinations honor expression.
