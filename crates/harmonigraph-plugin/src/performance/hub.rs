@@ -506,6 +506,7 @@ impl Hub {
     }
     fn collect(&mut self) {
         let sequencing = self.sequences_inputs();
+        let mut divergence: Option<u64> = None;
         let Some(offer) = &mut self.offer else {
             return;
         };
@@ -991,6 +992,13 @@ impl Hub {
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("checked owned output window"));
                 row.received = delta.sequence;
+                if sequencing {
+                    if let Some(from) =
+                        self.sequencer.received_divergence(index, row.lease.unwrap(), delta)
+                    {
+                        divergence = Some(divergence.map_or(from, |old| old.min(from)));
+                    }
+                }
             }
             if let Some((coverage, cut)) = row.report {
                 // Sequence-complete accepted output is monotonically timed by
@@ -1083,10 +1091,20 @@ impl Hub {
             }
         }
         self.rotation = (self.rotation + 1) % TUNERS;
+        if let Some(from) = divergence {
+            self.output_diverged(from);
+        }
     }
 
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
+        // Apply newly known accepted output before any dependent policy call.
+        // Incomplete publication may return early; sequencing still gets its
+        // independent bounded turn to advance input/recovery ownership.
+        self.publish_output(owner, recorder, observation);
         self.sequence_inputs(owner, recorder);
+    }
+
+    fn publish_output(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
         let Some(callback) = self.callback else {
             return;
         };

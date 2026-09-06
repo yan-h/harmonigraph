@@ -55,7 +55,7 @@ pub(super) struct Recovery {
     source: usize,
     preserve: usize,
     pub work: usize,
-    boundary: i64,
+    pub(super) boundary: i64,
     context_cuts: [u64; TUNERS + 1],
     context_clock: ClockId,
     context_membership: u64,
@@ -98,6 +98,32 @@ impl Recovery {
 }
 
 impl Hub {
+    pub(in crate::performance::hub) fn output_diverged(&mut self, from: u64) {
+        if !self.sequences_inputs() || self.sequencer.retired || self.sequencer.terminal_session {
+            return;
+        }
+        self.observe_terminal_faults();
+        if self.sequencer.terminal_session || self.sequencer.recovery.terminal.is_some() {
+            return;
+        }
+        if self.sequencer.recovery.active
+            && from >= self.sequencer.recovery.from
+            && matches!(
+                self.sequencer.recovery.phase,
+                Phase::Prepare
+                    | Phase::Inventory
+                    | Phase::Preserve
+                    | Phase::Status
+                    | Phase::Rebuild
+            )
+        {
+            // The closed transaction has not copied its factual context yet.
+            // These accepted facts are included in that copy and its cuts.
+            return;
+        }
+        self.request_recovery(from);
+    }
+
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_recovery_output_waiting(&self) -> bool {
         self.sequencer.recovery.participants.iter().enumerate().any(|(source, participant)| {
@@ -146,6 +172,11 @@ impl Hub {
                 ))
                 .collect::<Vec<_>>()
         )
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_recovery_identity(&self) -> (bool, u64, Option<u64>, u64) {
+        let recovery = &self.sequencer.recovery;
+        (recovery.active, recovery.transaction, recovery.pending_from, self.sequencer.decision)
     }
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_recovery_progress(&self) -> String {
@@ -616,7 +647,7 @@ impl Hub {
                 plan.key.arena = arena;
                 plan.binding.decision = record.decision;
                 plan.binding.configuration = record.configuration;
-                plan.input = record.input;
+                plan.shift = DELAY;
             }
             plan.inventoried = true;
             plan.accepted |=
@@ -641,7 +672,7 @@ impl Hub {
                     },
                     lifetime: record.lifetime,
                     binding: Assignment::default(),
-                    input: record.input,
+                    shift: DELAY,
                     sent: false,
                     terminal: false,
                     inventoried: true,
@@ -700,7 +731,7 @@ impl Hub {
             if !plan.bound {
                 plan.key = key;
                 plan.binding.configuration = self.sequencer.config.unwrap();
-                plan.input = event.sample;
+                plan.shift = DELAY;
                 plan.bound = true;
             }
         }

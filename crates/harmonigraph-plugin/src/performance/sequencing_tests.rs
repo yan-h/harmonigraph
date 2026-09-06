@@ -71,6 +71,310 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
 }
 
 #[test]
+fn production_late_output_automatically_redecides_bound_successor_and_keeps_held_pitch() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration =
+        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let sources: [Device; 3] = std::array::from_fn(|index| {
+        let mut source = Device::new(true);
+        source.configure_format(
+            uuid,
+            true,
+            Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+        );
+        source.activate_format(44100.0, 512);
+        source
+    });
+    for raw in [0, 512, 1024] {
+        for source in &sources {
+            let inputs = if raw == 0 {
+                [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into()
+            } else {
+                vec![]
+            };
+            source.run_format(raw, inputs, None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    // B's raw1984 maps to2048. In B,A,C,Hub order its raw2496 deadline
+    // is missed, while the three initial notes remain held for recovery.
+    let mut actual: [Vec<(i64, Event)>; 3] = std::array::from_fn(|_| Vec::new());
+    for raw in [1536, 2048] {
+        for index in [1, 0, 2] {
+            let inputs = match (raw, index) {
+                (1536, 1) => vec![note(2, 0, 64, 448, true)],
+                (1536, 0) => vec![note(1, 0, 60, 0, true)],
+                (1536, 2) => vec![note(3, 0, 67, 0, true)],
+                (2048, 2) => vec![
+                    note(4, 1, 69, 400, true),
+                    expression(4, 0.125, 410),
+                    note(4, 1, 69, 420, false),
+                ],
+                _ => vec![],
+            };
+            let sink = sources[index].run_format(raw, inputs, None, None, 512);
+            actual[index].extend(
+                sink.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
+            );
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let request = inspect_source(&sources[2], |source| source.test_capture(5).unwrap());
+    let prior = inspect_hub(&hub, |hub| hub.test_plan_binding(2, request.life).unwrap());
+    assert_eq!(prior.decision, 4, "the successor is bound before accepted divergence");
+    for index in [1, 0] {
+        let sink = sources[index].run_format(2560, vec![], None, None, 512);
+        actual[index]
+            .extend(sink.values.into_iter().map(|(time, event)| (2560 + i64::from(time), event)));
+    }
+    assert_eq!(actual[1][0].0, 2560, "B is exactly64 samples late");
+    assert_eq!(actual.iter().map(Vec::len).sum::<usize>(), 6);
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"),
+        "accepted addressed lateness starts the production protocol without a test request"
+    );
+    assert!(
+        sources[2].run_format(2560, vec![], None, None, 512).values.is_empty(),
+        "the bound successor cannot claim its old generation after known divergence"
+    );
+    let held: Vec<_> = sources
+        .iter()
+        .map(|source| {
+            inspect_source(source, |source| {
+                source.state.voices().next().unwrap().frozen_offset_microcents
+            })
+        })
+        .collect();
+    let mut rebound = None;
+    let mut raw = 2560;
+    for iteration in 0..320 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            let input =
+                if iteration == 0 && index == 0 { vec![note(1, 0, 60, 7, false)] } else { vec![] };
+            let output = source.run_format(raw, input, None, None, 512);
+            if output.values.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 4))
+            {
+                rebound = inspect_source(source, |source| source.test_assignment(request.life));
+            }
+            actual[index].extend(
+                output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
+            );
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        if actual[2]
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 4, .. }))
+            && !inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true")
+        {
+            break;
+        }
+    }
+    let rebound = rebound.expect("retained successor actually sounds");
+    assert!(rebound.decision > prior.decision && rebound.emission > prior.emission);
+    assert_eq!(rebound.configuration, prior.configuration);
+    let gesture: Vec<_> = actual[2]
+        .iter()
+        .filter(|(_, event)| match event {
+            Event::Note { id, .. } | Event::Expression { id, .. } => *id == 4,
+            _ => false,
+        })
+        .collect();
+    assert_eq!(gesture.len(), 4);
+    let onset = gesture[0].0;
+    assert!(gesture[0].1.attack().is_some());
+    let Event::Expression { value: tuning, .. } = gesture[1].1 else { panic!("initial tuning") };
+    let Event::Expression { value: expressed, .. } = gesture[2].1 else {
+        panic!("player expression")
+    };
+    assert_eq!((gesture[1].0, gesture[2].0, gesture[3].0), (onset, onset + 10, onset + 20));
+    assert_eq!(expressed, tuning + 0.125);
+    assert!(gesture[3].1.release());
+    assert_eq!(actual[0].len(), 3);
+    assert!(actual[0][2].1.release());
+    assert_eq!(
+        actual[0][2].0,
+        3072 + 7 + 512,
+        "an established release remains responsive while another Source's onset is fenced"
+    );
+    assert!(actual[0][2].0 < onset);
+    println!(
+        "AUTOMATIC successor onset={onset}, original due=2960, decision={}, emission={}",
+        rebound.decision, rebound.emission
+    );
+    let settled = inspect_hub(&hub, |hub| hub.test_recovery_identity());
+    assert!(!settled.0 && settled.2.is_none(), "{settled:?}");
+    for _ in 0..4 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+            if index == 0 {
+                assert_eq!(source.source_snapshot().held, 0);
+            } else {
+                assert_eq!(
+                    inspect_source(source, |source| source
+                        .state
+                        .voices()
+                        .next()
+                        .unwrap()
+                        .frozen_offset_microcents),
+                    held[index]
+                );
+            }
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        assert_eq!(
+            inspect_hub(&hub, |hub| hub.test_recovery_identity()),
+            settled,
+            "unchanged callbacks do not restart a consumed divergence"
+        );
+    }
+    let observation = |playing: bool, beat: i64| {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags |= CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+        value.song_pos_beats = beat * (1i64 << 31);
+        if !playing {
+            value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
+        value
+    };
+    // A song-position loop wrap changes neither the raw clock nor held pitch.
+    // Capture another bound onset at that wrap, then Stop before its deadline.
+    for (step, beat) in [16, 0].into_iter().enumerate() {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            let input =
+                if step == 1 && index == 1 { vec![note(5, 2, 72, 400, true)] } else { vec![] };
+            assert!(source
+                .run_callback(raw, input, (None, None), (512, false), Some(observation(true, beat)))
+                .values
+                .is_empty());
+            assert_eq!(source.source_snapshot().held, usize::from(index != 0));
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(true, beat)));
+    }
+    let pending = inspect_source(&sources[1], |source| source.test_capture(5).unwrap());
+    assert!(inspect_hub(&hub, |hub| hub.test_plan_binding(1, pending.life)).is_some());
+    raw += 512;
+    let stop_raw = raw;
+    let mut stopped_output = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let input = if index == 1 {
+            vec![note(6, 0, 74, 20, true), expression(6, 0.25, 30), note(6, 0, 74, 40, false)]
+        } else {
+            vec![]
+        };
+        let output = source.run_callback(
+            raw,
+            input,
+            (None, None),
+            (512, false),
+            Some(observation(false, 0)),
+        );
+        assert!(
+            index == 0
+                || output.values.iter().any(|(offset, event)| *offset == 0 && event.release()),
+            "Stop releases the late held voice without its accumulated delay"
+        );
+        stopped_output.extend(
+            output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+        );
+    }
+    hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
+    for _ in 0..160 {
+        raw += 512;
+        for source in &sources {
+            let output = source.run_callback(
+                raw,
+                vec![],
+                (None, None),
+                (512, false),
+                Some(observation(false, 0)),
+            );
+            assert_eq!(source.source_snapshot().faults, 0);
+            stopped_output.extend(
+                output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+            );
+        }
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
+        if sources.iter().all(|source| {
+            let state = source.source_snapshot();
+            state.held == 0 && state.captures == 0 && state.pending == 0
+        }) {
+            break;
+        }
+    }
+    let fresh: Vec<_> = stopped_output
+        .iter()
+        .filter(|(_, event)| match event {
+            Event::Note { id, .. } | Event::Expression { id, .. } => *id == 6,
+            _ => false,
+        })
+        .collect();
+    assert_eq!(fresh.len(), 4, "the same Source's new stopped-live phrase completes once");
+    assert!(fresh[0].0 >= stop_raw + 20 + 512 && fresh[0].1.attack().is_some());
+    assert_eq!(
+        (fresh[1].0, fresh[2].0, fresh[3].0),
+        (fresh[0].0, fresh[0].0 + 10, fresh[0].0 + 20)
+    );
+    let Event::Expression { value: initial, .. } = fresh[1].1 else { panic!("initial tuning") };
+    let Event::Expression { value: player, .. } = fresh[2].1 else { panic!("player expression") };
+    assert_eq!(player, initial + 0.25);
+    assert!(fresh[3].1.release());
+    assert!(
+        !stopped_output.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 5)),
+        "Stop cancels the bound old onset"
+    );
+    raw += 512;
+    let idle_input = raw;
+    let mut idle_output = Vec::new();
+    for step in 0..8 {
+        for (index, source) in sources.iter().enumerate() {
+            let input = if step == 0 && index == 1 {
+                vec![note(7, 0, 76, 7, true), expression(7, 0.125, 17), note(7, 0, 76, 27, false)]
+            } else {
+                vec![]
+            };
+            let output = source.run_callback(
+                raw,
+                input,
+                (None, None),
+                (512, false),
+                Some(observation(false, 0)),
+            );
+            idle_output.extend(
+                output.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+            );
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(observation(false, 0)));
+        raw += 512;
+    }
+    assert_eq!(
+        idle_output.len(),
+        4,
+        "{idle_output:?}; {:?}; {}",
+        sources[1].source_snapshot(),
+        inspect_hub(&hub, |hub| hub.test_recovery_progress())
+    );
+    assert_eq!(
+        idle_output.iter().map(|(sample, _)| *sample).collect::<Vec<_>>(),
+        [idle_input + 519, idle_input + 519, idle_input + 529, idle_input + 539],
+        "the previously late Source returns to exact input+512 after accepted neutral idle"
+    );
+    drop(sources);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
 fn production_hub_recovery_replays_unsounded_originals_with_copied_configuration_and_duration() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -1195,52 +1499,78 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
             .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
     };
     let (context, param) = wrapper.test_gui_context(setup::PARTICIPATING);
-    source.run_format(1536, vec![note(70, 0, 60, 0, true)], None, None, 512);
+    let mut actual = Vec::new();
+    let mut run = |raw, inputs, reject| {
+        let sink = source.run_format(raw, inputs, reject, None, 512);
+        actual.extend(
+            sink.values.into_iter().map(|(offset, event)| (raw + i64::from(offset), event)),
+        );
+    };
+    run(1536, vec![note(69, 0, 59, 0, true)], None);
     hub.run_format(1536, vec![], None, None, 512);
+    run(2048, vec![note(70, 0, 60, 0, true)], None);
+    hub.run_format(2048, vec![], None, None, 512);
     unsafe {
         context.raw_begin_set_parameter(param);
         context.raw_set_parameter_normalized(param, 0.0);
         context.raw_end_set_parameter(param);
     }
-    source.run_format(
-        2048,
+    run(
+        2560,
         vec![note(71, 0, 62, 0, true), source.participation(true, 1), note(72, 0, 64, 2, true)],
         Some(CLAP_EVENT_PARAM_VALUE),
-        None,
-        512,
     );
-    assert!(inspect_source(&source, |source| source.test_capture(1).unwrap().adaptive));
-    assert!(!inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
-    assert!(inspect_source(&source, |source| source.test_capture(3).unwrap().adaptive));
-    hub.run_format(2048, vec![], None, None, 512);
+    assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
+    assert!(!inspect_source(&source, |source| source.test_capture(3).unwrap().adaptive));
+    assert!(inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
+    hub.run_format(2560, vec![], None, None, 512);
     // No host echo follows the native Set. Accepting its old notification now
     // cannot reinsert Off ahead of D or overwrite the newer host On value.
-    source.run_format(2560, vec![note(73, 0, 65, 0, true)], None, None, 512);
-    assert!(inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
+    run(3072, vec![note(73, 0, 65, 0, true)], None);
+    assert!(inspect_source(&source, |source| source.test_capture(5).unwrap().adaptive));
     assert!(inspect_source(&source, |source| source.participating));
     assert!(wrapper.test_inspect_plugin(|plugin| plugin.params.participating.value()));
-    hub.run_format(2560, vec![], None, None, 512);
-    for raw in [3072, 3584] {
-        source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    for raw in [3584, 4096] {
+        run(raw, if raw == 3584 { vec![expression(69, 0.25, 7)] } else { vec![] }, None);
         hub.run_format(raw, vec![], None, None, 512);
     }
-    source.run_format(
-        4096,
+    run(
+        4608,
         vec![
+            note(69, 0, 59, 0, false),
             note(70, 0, 60, 0, false),
             note(71, 0, 62, 0, false),
             note(72, 0, 64, 0, false),
             note(73, 0, 65, 0, false),
         ],
         None,
-        None,
-        512,
     );
-    hub.run_format(4096, vec![], None, None, 512);
-    for raw in (4608..8704).step_by(512) {
-        source.run_format(raw, vec![], None, None, 512);
+    hub.run_format(4608, vec![], None, None, 512);
+    for raw in (5120..9216).step_by(512) {
+        run(raw, vec![], None);
         hub.run_format(raw, vec![], None, None, 512);
     }
+    let attack_ids: Vec<_> =
+        actual.iter().filter_map(|(_, event)| event.attack().map(|(id, ..)| id)).collect();
+    assert_eq!(attack_ids, [69, 70, 71, 72, 73], "rejoin adds no duplicate attacks");
+    let tuning = |id| {
+        actual
+            .iter()
+            .filter_map(|(_, event)| match event {
+                Event::Expression { kind: 2, id: found, value, .. } if *found == id => Some(*value),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        tuning(69),
+        [0.01, 0.26],
+        "the held correction survives Off/rejoin and player expression"
+    );
+    assert_eq!(tuning(70), [0.02], "the pre-Off pending request finishes tuned");
+    assert_eq!(tuning(71), [0.0], "only the newly received Off note deliberately uses zero");
+    assert!(tuning(72)[0] != 0.0 && tuning(73)[0] != 0.0);
     assert_eq!(source.source_snapshot().held, 0);
     assert_eq!(source.source_snapshot().faults, 0);
     drop(context);
@@ -2112,6 +2442,18 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                 assert_eq!(inspect_hub(&hub, |hub| hub.test_terminal_scope()), (false, 0));
             }
             assert_eq!(actual.iter().map(Vec::len).sum::<usize>(), 60);
+            // The real finite recovery reader outlives these short gestures.
+            // Its32-callback inventory scan keeps Originals pinned until ACK.
+            for raw in (7168..7168 + 128 * 512).step_by(512) {
+                for source in &sources {
+                    assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+                    assert_eq!(source.source_snapshot().faults, 0);
+                }
+                hub.run_format(raw, vec![], None, None, 512);
+                if sources.iter().all(|source| source.source_snapshot().captures == 0) {
+                    break;
+                }
+            }
             for index in 0..3 {
                 let onset =
                     actual[index].iter().find(|(_, event)| event.attack().is_some()).unwrap().0;
@@ -2150,7 +2492,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                     (0, 0)
                 );
             }
-            println!("FIFTEEN B{b_offset} favorable={favorable} extra={extra:?}, exact60 accepted events; ordinary prospective repair remains unwired");
+            println!("FIFTEEN B{b_offset} favorable={favorable} extra={extra:?}, exact60 accepted events; automatic recovery ownership settled");
             drop(sources);
             drop(hub);
             assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));

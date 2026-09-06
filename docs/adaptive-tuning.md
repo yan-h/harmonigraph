@@ -11,7 +11,8 @@ That aggregation milestone is still in progress;
 delayed shared-channel replay, final review and host validation remain before it is complete.
 Adaptive assignment and the integrated musical policy remain subsequent work.
 The [ordinary-progress stage](adaptive-tuning-ordinary-progress.md) repairs initial DIRECT forwarding, complete Capture prefixes and factual merge throughput over the reviewed terminal checkpoint;
-automatic ordinary recovery and production musical-policy integration remain unfinished.
+the [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates accepted-output divergence and adds practical transport checks.
+Production musical-policy integration and host qualification remain unfinished, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696).
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
@@ -32,6 +33,10 @@ explicit cancellation and the visible emergency stop are the documented exceptio
 This feature is optimized first for one person's maintained macOS/Bitwig workflow, not for format or host coverage.
 Correct musical state, an inspectable failure mode and one small execution path outrank compatibility that has no current use.
 Add another format, transport, mode or control only when it serves a concrete project and is cheap enough to carry in every later change.
+Implementation prioritizes ordinary use, especially about 15 notes across three tracks and normal Stop, Off, Reset and reopening.
+Do not fix an issue merely because a probe reaches it:
+defer fixes that require a large increase in complexity or address cases unlikely to occur in ordinary use, recording the limitation and reasoning instead.
+Preserve existing physical-output truth and working safety behavior while making that judgment.
 
 Host behavior is evidence rather than architecture.
 Where the design depends on callback order, voice identity or CLAP event delivery, issue [#615](https://github.com/yan-h/harmonigraph/issues/615) measures the premise and either records the supported constraint or stops the downstream work;
@@ -167,7 +172,8 @@ No retained-phrase Status/Rebuild/Replay or automatic Resume is required for thi
 Ordinary callback-order misses, delayed assignments, work-slice exhaustion, ring backpressure, failed gate/credit claims, routine missing callbacks, healthy configuration/Off changes and display/take-only loss with intact audio-owned facts do not establish a serious fault.
 Neither elapsed time nor workload size alone authorizes cancellation.
 Ordinary late divergence still retains and reconciles unsounded performance and its prospective dependencies;
-this never permits retuning a sounding voice, and complete automatic activation remains later #616 work.
+this never permits retuning a sounding voice.
+The [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates addressed accepted-output divergence; complete musical and host qualification remain later work.
 Reserve a failure-signaling path that still works when ordinary queues are full.
 Release/cancellation delivery and its completion tracking must also survive full ordinary queues;
 local state cannot declare a voice terminated before accepted downstream output or a measured host termination boundary.

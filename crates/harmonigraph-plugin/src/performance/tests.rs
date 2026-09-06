@@ -2279,7 +2279,6 @@ fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_ol
     writer.drain(&mut capture);
     let controls = &session.rows[usize::from(old_lease.slot - 1)].to_source;
     controls.publish(old_ack).unwrap();
-    controls.publish(old_ack).unwrap();
     source.run(64, vec![], None);
     assert_eq!(
         source.source_snapshot().complete_through,
@@ -2291,12 +2290,20 @@ fn host_rewind_keeps_old_routes_until_sealed_unmapped_termination_and_rejects_ol
         0,
         "duplicate final acknowledgements settle once"
     );
+    // The ordinary lane has one cell; the second cell is reserved for repair.
+    // Deliver the duplicate only after the Source has consumed the first.
+    controls.publish(old_ack).unwrap();
+    source.run(128, vec![], None);
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    assert_eq!(source.source_snapshot().complete_through, sealed.complete_through);
     source.main();
     hub.main();
     for block in 2..=8 {
         hub.run(block * 64, vec![], None);
         writer.drain(&mut capture);
-        source.run(block * 64, vec![], None);
+        if block != 2 {
+            source.run(block * 64, vec![], None);
+        }
         source.main();
         hub.main();
     }
@@ -3960,7 +3967,7 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
     );
     assert!(snapshot.transfer_cut < snapshot.sequence);
     assert_ne!(
-        snapshot.faults & if withdrawn { source::OUTPUT_FAULT } else { source::STORAGE_FAULT },
+        snapshot.faults & if withdrawn { source::REFERENCE_FAULT } else { source::STORAGE_FAULT },
         0
     );
     if let Some(hub) = hub.as_mut() {

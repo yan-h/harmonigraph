@@ -11,7 +11,9 @@ struct Plan {
     key: super::super::capture::Key,
     lifetime: u64,
     binding: Assignment,
-    input: i64,
+    /// Expected input-to-output translation for this exact decision. Replayed
+    /// plans start at their acknowledged boundary; accepted onsets freeze it.
+    shift: i64,
     sent: bool,
     terminal: bool,
     inventoried: bool,
@@ -139,6 +141,34 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    /// Received accepted output is already factual evidence even when another
+    /// Source has not yet supplied the complete canonical publication frontier.
+    /// Collection deduplicates its exact output sequence before calling this.
+    pub(super) fn received_divergence(
+        &self,
+        source: usize,
+        lease: Lease,
+        output: OutputDelta,
+    ) -> Option<u64> {
+        if !output.mapped
+            || !(output.event.attack().is_some()
+                || output.event.release()
+                || matches!(output.event, super::super::event::Event::Expression { kind: 2, .. }))
+            || usize::from(output.outcome.request) >= LIFETIMES
+        {
+            return None;
+        }
+        let plan = self.plans[source * LIFETIMES + usize::from(output.outcome.request)]?;
+        (plan.bound
+            && plan.key.lease == lease
+            && plan.key.epoch == output.epoch
+            && lease.incarnation == output.incarnation
+            && plan.lifetime == output.lifetime
+            && plan.binding.decision == output.decision
+            && output.input.checked_add(plan.shift).is_some_and(|planned| output.actual != planned))
+        .then_some(plan.binding.decision)
+    }
+
     pub(super) fn can_reset_clock_context(&self) -> bool {
         self.actual_revision.checked_add(1).is_some()
     }
@@ -274,7 +304,7 @@ impl Sequencer {
                     },
                     lifetime,
                     binding: Assignment::default(),
-                    input: 0,
+                    shift: DELAY,
                     sent: false,
                     terminal: true,
                     inventoried: false,
@@ -724,11 +754,21 @@ impl Hub {
                     correction,
                     initial_player: player,
                 };
+                let shift = if replay {
+                    let Some(shift) = self.sequencer.recovery.boundary.checked_sub(event.sample)
+                    else {
+                        return false;
+                    };
+                    shift.max(DELAY)
+                } else {
+                    DELAY
+                };
                 if let Some(plan) = self.sequencer.plans[index].as_mut() {
                     plan.key = key;
                     plan.binding = binding;
                     plan.sent = false;
                     plan.bound = true;
+                    plan.shift = shift;
                 } else {
                     self.sequencer.insert_plan(
                         index,
@@ -736,7 +776,7 @@ impl Hub {
                             key,
                             lifetime: birth.serial,
                             binding,
-                            input: event.sample,
+                            shift,
                             sent: false,
                             terminal: false,
                             inventoried: false,
@@ -862,6 +902,7 @@ impl Hub {
         }
         let plan = self.sequencer.plans[source * LIFETIMES + usize::from(request)].as_mut()?;
         if self.rows[source].lease != Some(plan.key.lease)
+            || !plan.bound
             || output.epoch != plan.key.epoch
             || output.lifetime != plan.lifetime
             || output.decision != plan.binding.decision
@@ -871,13 +912,22 @@ impl Hub {
         if output.event.release() {
             plan.terminal = true;
         }
-        let planned = output.input.checked_add(DELAY)?;
+        let planned = output.input.checked_add(plan.shift)?;
+        let divergence = (output.mapped
+            && output.actual != planned
+            && (output.event.attack().is_some() || plan.accepted))
+            .then_some(plan.binding.decision);
         if output.event.attack().is_some() {
             plan.accepted = true;
+            plan.shift = output.actual.checked_sub(output.input)?;
             self.sequencer.extra_delay =
-                self.sequencer.extra_delay.max(output.actual.saturating_sub(planned).max(0) as u64);
+                self.sequencer.extra_delay.max(plan.shift.saturating_sub(DELAY).max(0) as u64);
         }
-        Some((plan.binding, planned))
+        let binding = plan.binding;
+        if let Some(from) = divergence {
+            self.output_diverged(from);
+        }
+        Some((binding, planned))
     }
 
     pub(super) fn service_plans(&mut self) {

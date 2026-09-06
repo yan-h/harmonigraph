@@ -1067,44 +1067,19 @@ fn reset_cancels_prefix_associations_without_rewriting_actual_receiver_facts() {
             if case >= 2 && block == 4 {
                 assert_eq!(
                     source.source_snapshot().input_cut,
-                    before + if case == 3 { 2 } else { 1 }
+                    before,
+                    "a real rejected repair inhibits new nonrelease input before allocation"
                 );
                 assert!(
                     output
                         .values
                         .iter()
                         .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 0], .. })),
-                    "actual repair accepts after the new consumer was captured"
+                    "actual repair accepts while the attempted new consumer stays inhibited"
                 );
             }
-            let accepted37 = output
-                .values
-                .iter()
-                .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 37], .. }));
             wire.extend(output.values);
             hub.run(block * 64, vec![], None);
-            if case == 3 && accepted37 {
-                let wrapper = unsafe {
-                    &*((*source.plugin)
-                        .plugin_data
-                        .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-                };
-                let (lease, adopted, joined, coverage) = wrapper.test_inspect_plugin(|plugin| {
-                    plugin.source.as_ref().unwrap().test_stream_status()
-                });
-                assert!(
-                    adopted && joined && coverage.is_some(),
-                    "the first new-stream control waits for its real join and current coverage"
-                );
-                let (_, held, received, applied) =
-                    receiver(&hub, usize::from(lease.unwrap().slot - 1));
-                assert_eq!(held, 1);
-                assert_eq!(
-                    (received, applied),
-                    (source.source_snapshot().sequence, source.source_snapshot().sequence),
-                    "Hub retains both the new controller and its actual consumer"
-                );
-            }
         }
         assert!(
             shared.applied.load(Ordering::Acquire) > applied,
@@ -1114,12 +1089,33 @@ fn reset_cancels_prefix_associations_without_rewriting_actual_receiver_facts() {
             wire
         );
         assert_eq!(source.source_snapshot().faults, 0);
-        if case < 2 {
-            wire.extend(source.run(1024, vec![midi(0, 0x90, 60, 64, 4)], None).values);
-        } else {
-            wire.extend(source.run(1024, vec![], None).values);
+        let mut fresh = vec![];
+        if case == 3 {
+            fresh.push(midi(0, 0xb0, 88, 37, 2));
         }
+        fresh.push(midi(0, 0x90, 60, 64, 4));
+        wire.extend(source.run(1024, fresh, None).values);
         hub.run(1024, vec![], None);
+        if case == 3 {
+            let wrapper = unsafe {
+                &*((*source.plugin)
+                    .plugin_data
+                    .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+            };
+            let (lease, adopted, joined, coverage) = wrapper
+                .test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
+            assert!(
+                adopted && joined && coverage.is_some(),
+                "the first new-stream control waits for its real join and current coverage"
+            );
+            let (_, held, received, applied) = receiver(&hub, usize::from(lease.unwrap().slot - 1));
+            assert_eq!(held, 1);
+            assert_eq!(
+                (received, applied),
+                (source.source_snapshot().sequence, source.source_snapshot().sequence),
+                "Hub retains both the new controller and its actual consumer"
+            );
+        }
         assert!(
             wire.iter().any(|(_, event)| event.attack().is_some()),
             "fresh raw On actually sounds after Reset case{case}: {:?}; wire {:?}",
@@ -1222,14 +1218,45 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
         assert_eq!(fixture.target.source_snapshot().faults, source::OUTPUT_FAULT);
         assert!(!fixture.target.source_snapshot().pedals_held);
         fixture.peers(256, false);
-        fixture.target.shared().apply(fixture.target.shared().value().routing, true).unwrap();
-        for block in 5..=10 {
+        let shared = fixture.target.shared();
+        shared.apply(shared.value().routing, true).unwrap();
+        let reset = shared.value().generation;
+        let wrapper = unsafe {
+            &*((*fixture.target.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
+        };
+        let mut fresh_raw = 0;
+        for block in 5..32 {
             fixture.target.main();
             fixture.hub.main();
             assert!(fixture.target.run(block * 64, vec![], None).values.is_empty());
             fixture.peers(block * 64, false);
+            let admitted = wrapper.test_inspect_plugin(|plugin| {
+                let source = plugin.source.as_ref().unwrap();
+                let (_, adopted, joined, coverage) = source.test_stream_status();
+                adopted && joined && coverage.is_some()
+            });
+            if shared.applied.load(Ordering::Acquire) == reset
+                && fixture.target.source_snapshot().faults == 0
+                && admitted
+            {
+                fresh_raw = (block + 1) * 64;
+                break;
+            }
         }
-        assert_eq!(fixture.target.source_snapshot().faults, 0);
+        assert_ne!(
+            fresh_raw,
+            0,
+            "{}; {:?}",
+            wrapper.test_inspect_plugin(|plugin| plugin
+                .source
+                .as_ref()
+                .unwrap()
+                .test_reset_progress()),
+            fixture.target.source_snapshot()
+        );
+
         if !raw_prelude {
             assert_eq!(
                 (
@@ -1240,7 +1267,7 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
                 "the accepted younger bend has retired into the folded checkpoint"
             );
         }
-        let fresh = fixture.target.run(704, vec![note(3, 0, 60, 4, true)], None);
+        let fresh = fixture.target.run(fresh_raw, vec![note(3, 0, 60, 4, true)], None);
         assert!(
             fresh.values.iter().any(|(_, event)| event.attack().is_some()),
             "fresh {:?}; {:?}",
@@ -1248,24 +1275,24 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
             fixture.target.source_snapshot()
         );
         fixture.fillers[0].run(
-            704,
+            fresh_raw,
             (0..64).map(|key| note(key + 1, 0, key as i16, 0, true)).collect(),
             None,
         );
         for source in &fixture.fillers[1..] {
-            source.run(704, vec![], None);
+            source.run(fresh_raw, vec![], None);
         }
-        fixture.hub.run(704, vec![], None);
+        fixture.hub.run(fresh_raw, vec![], None);
         assert_eq!(fixture.session.credits.load(Ordering::Acquire), 256);
         assert!(fixture
             .target
-            .run(768, vec![note(4, 0, 64, 4, true), note(4, 0, 64, 40, false)], None)
+            .run(fresh_raw + 64, vec![note(4, 0, 64, 4, true), note(4, 0, 64, 40, false)], None)
             .values
             .is_empty());
-        fixture.peers(768, false);
-        fixture.target.run(832, vec![note(3, 0, 60, 16, false)], None);
-        fixture.peers(832, true);
-        let recovered = fixture.target.run(896, vec![], None);
+        fixture.peers(fresh_raw + 64, false);
+        fixture.target.run(fresh_raw + 128, vec![note(3, 0, 60, 16, false)], None);
+        fixture.peers(fresh_raw + 128, true);
+        let recovered = fixture.target.run(fresh_raw + 192, vec![], None);
         let onset =
             recovered.values.iter().position(|(_, event)| event.attack().is_some()).unwrap();
         assert!(recovered.values[..onset]
@@ -1284,8 +1311,8 @@ fn rejected_setup_retains_accepted_facts_and_reset_recovers_latest_input_pedal()
                 .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 64, 64], .. })),
             "pedal neutralization must preserve bend8256, not bend64; raw_prelude={raw_prelude}"
         );
-        fixture.peers(896, false);
-        fixture.finish(960);
+        fixture.peers(fresh_raw + 192, false);
+        fixture.finish(fresh_raw + 256);
     }
 }
 
