@@ -30,6 +30,8 @@ mod attachment_tests;
 mod capture_tests;
 #[path = "channel_wave_tests.rs"]
 mod channel_wave_tests;
+#[path = "ordinary_progress_tests.rs"]
+mod ordinary_progress_tests;
 #[path = "publication_tests.rs"]
 mod publication_tests;
 #[path = "sequencing_tests.rs"]
@@ -878,9 +880,10 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
     let mut output = first.values;
     let mut source_raw = 192;
     // The cancellation cursor first passes the 512 completed originals whose
-    // remote capture pins survive. Keep Hub paused until a real full manifest.
+    // remote capture pins survive. Keep Hub paused until the single-disposition
+    // repair lane is occupied, with the rest of the cut still Source-owned.
     for _ in 0..4 {
-        if source.source_snapshot().manifest == 64 {
+        if source.source_snapshot().manifest == 1 {
             break;
         }
         output.extend(
@@ -897,11 +900,13 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
         source_raw += 64;
     }
     let blocked = source.source_snapshot();
-    assert_eq!(blocked.manifest, 64, "the Stop cut reaches the full acknowledgement window");
+    assert_eq!(blocked.manifest, 1, "the Stop cut fills the single-disposition repair lane");
     assert!(blocked.pending > blocked.manifest, "older work remains outside that window");
     assert_eq!(blocked.faults, 0);
     hub.run(128, vec![], None);
-    for block in 3..=22 {
+    let mut hub_raw = 192;
+    let mut callbacks = 0;
+    for _ in 0..(2 * 641 + 32) {
         let next = source.run_callback(
             source_raw,
             vec![],
@@ -911,7 +916,12 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
         );
         output.extend(next.values);
         source_raw += 64;
-        hub.run(block * 64, vec![], None);
+        hub.run(hub_raw, vec![], None);
+        hub_raw += 64;
+        callbacks += 1;
+        if source.source_snapshot().pending == 0 {
+            break;
+        }
     }
     assert!(
         !output.iter().any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64, 127], .. })),
@@ -934,6 +944,9 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
         "new stopped-live input survives the old cut"
     );
     assert_eq!(source.source_snapshot().pending, 0);
+    println!(
+        "Stop641: single-disposition cut drained in {callbacks} callbacks; blocked {blocked:?}"
+    );
     assert_eq!(source.source_snapshot().faults, 0);
     source.run_callback(
         source_raw,
@@ -942,7 +955,7 @@ fn stop_cut_inhibits_older_controllers_until_all_cancellation_acknowledgements_a
         (64, false),
         Some(observation(false, 0)),
     );
-    hub.run(23 * 64, vec![], None);
+    hub.run(hub_raw, vec![], None);
     assert_eq!(source.source_snapshot().faults, 0);
     assert!(!source.source_snapshot().pedals_held);
 }

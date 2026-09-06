@@ -465,8 +465,8 @@ fn stop_cancels_an_unattempted_prefix_before_an_already_captured_new_consumer() 
         .iter()
         .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 55], .. })));
     hub.run(192, vec![], None);
-    let mut sounded = false;
-    for block in 4..36 {
+    let mut raw = 256;
+    for block in 4..(2 * 512 + 64) {
         let next = source.run(
             block * 64,
             if block == 4 {
@@ -479,7 +479,10 @@ fn stop_cancels_an_unattempted_prefix_before_an_already_captured_new_consumer() 
         if block == 4 {
             assert!(next.values.iter().any(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 1, .. })), "canceling an old inline expression must preserve its sounded life's essential original Off when emergency Choke is rejected");
         }
-        sounded |= next.values.iter().any(|(_, event)| event.attack().is_some());
+        assert!(
+            !next.values.iter().any(|(_, event)| event.attack().is_some()),
+            "real rejected Choke inhibits new nonessential input until Reset"
+        );
         assert!(
             !next
                 .values
@@ -488,13 +491,57 @@ fn stop_cancels_an_unattempted_prefix_before_an_already_captured_new_consumer() 
             "unattempted canceled55 cannot escape through the captured note"
         );
         hub.run(block * 64, vec![], None);
+        raw = (block + 1) * 64;
+        if source.source_snapshot().pending == 0 {
+            break;
+        }
     }
-    assert!(sounded, "post-Stop live input resumes: {:?}", source.source_snapshot());
+    assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT);
+    assert_eq!(
+        source.source_snapshot().pending,
+        0,
+        "terminal cancellation must finish independently of the latch: {:?}",
+        source.source_snapshot()
+    );
     source.shared().apply(source.shared().value().routing, true).unwrap();
-    for block in 36..48 {
-        source.run(block * 64, vec![], None);
-        hub.run(block * 64, vec![], None);
+    for _ in 0..16 {
+        source.run(raw, vec![], None);
+        hub.run(raw, vec![], None);
+        raw += 64;
     }
+    assert_eq!(source.source_snapshot().faults, 0);
+    assert!(
+        attachment_tests::lease(&source).is_none(),
+        "Reset returned the settled lease; a main-thread rematch is still requested"
+    );
+    source.main();
+    hub.main();
+    for _ in 0..4 {
+        source.run(raw, vec![], None);
+        hub.run(raw, vec![], None);
+        raw += 64;
+    }
+    assert!(
+        attachment_tests::lease(&source).is_some(),
+        "real host main callbacks prepare the fresh lease"
+    );
+    let new = source.run(raw, vec![midi(0, 0x90, 60, 64, 4), midi(0, 0x80, 60, 0, 12)], None);
+    assert_eq!(
+        new.values.iter().filter(|(_, event)| event.attack().is_some()).count(),
+        1,
+        "fresh post-Reset input resumes: {:?}; accepted {:?}",
+        source.source_snapshot(),
+        new.values
+    );
+    assert!(!new
+        .values
+        .iter()
+        .any(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 88, 55], .. })));
+    hub.run(raw, vec![], None);
+    source.run(raw + 64, vec![], None);
+    hub.run(raw + 64, vec![], None);
+    source.run(raw + 128, vec![], None);
+    hub.run(raw + 128, vec![], None);
     assert_eq!(source.source_snapshot().pending, 0);
     assert_eq!(source.source_snapshot().held, 0);
 }
@@ -541,10 +588,12 @@ fn stop_prefix_associations_preserve_unknown_state_post_cut_input_and_exact_repa
             .map(|(time, event)| (128 + i64::from(time), event))
             .chain(next.values.into_iter().map(|(time, event)| (192 + i64::from(time), event)))
             .collect();
-        let on = values
-            .iter()
-            .position(|(_, event)| event.attack().is_some())
-            .expect("post-Stop raw consumer is eventually accepted");
+        let on = values.iter().position(|(_, event)| event.attack().is_some());
+        assert_eq!(
+            on.is_some(),
+            case != 3,
+            "case{case}: real rejected output remains inhibited; healthy stopped input resumes"
+        );
         let prefixes: Vec<_> = values
             .iter()
             .filter_map(|(time, event)| match event {
@@ -562,19 +611,13 @@ fn stop_prefix_associations_preserve_unknown_state_post_cut_input_and_exact_repa
                 "actual repair must preserve the later original37 association"
             ),
             3 => {
-                assert_eq!(prefixes, [(192, 0), (196, 37)]);
-                assert_eq!(
-                    values[on].0, 192,
-                    "the old deferred consumer binds its own repaired boundary before later37"
-                );
+                assert_eq!(prefixes, [(192, 0)], "the rejected essential neutral repair retries; later37 is canceled by the output fault");
+                assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT);
             }
             _ => unreachable!(),
         }
-        assert_eq!(
-            source.source_snapshot().velocity_prefix[0],
-            Some(if case == 3 { 37 } else { 0 })
-        );
-        assert_eq!(session.credits.load(Ordering::Acquire), 1);
+        assert_eq!(source.source_snapshot().velocity_prefix[0], Some(0));
+        assert_eq!(session.credits.load(Ordering::Acquire), usize::from(case != 3));
         source.shared().apply(source.shared().value().routing, true).unwrap();
         for block in 4..16 {
             source.run(block * 64, vec![], None);

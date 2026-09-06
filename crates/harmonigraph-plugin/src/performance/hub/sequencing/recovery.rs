@@ -648,7 +648,6 @@ impl Hub {
                     accepted: false,
                     bound: false,
                     replay: 0,
-                    actual: NO_VOICE,
                     next: NO_PLAN,
                     previous: NO_PLAN,
                 },

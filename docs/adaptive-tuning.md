@@ -10,6 +10,8 @@ The [companion aggregation implementation](adaptive-tuning-companion-aggregation
 That aggregation milestone is still in progress;
 delayed shared-channel replay, final review and host validation remain before it is complete.
 Adaptive assignment and the integrated musical policy remain subsequent work.
+The [ordinary-progress stage](adaptive-tuning-ordinary-progress.md) repairs initial DIRECT forwarding, complete Capture prefixes and factual merge throughput over the reviewed terminal checkpoint;
+automatic ordinary recovery and production musical-policy integration remain unfinished.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.

@@ -1,7 +1,7 @@
 //! Serialized ordinary performance owner. Storage is allocated before activation;
 //! only actual host completions establish output facts or settle reservations.
 use super::{
-    clock::{Calibration, Clock, Coverage},
+    clock::{Calibration, Clock, Coverage, LocalClock},
     event::Event,
     protocol::*,
     queue::Queue,
@@ -202,6 +202,7 @@ pub struct Source {
     attempt: u64,
     permit: Option<Permit>,
     pub clock: Clock,
+    local_clock: Option<LocalClock>,
     rate: f64,
     max_frames: u32,
     callback: Option<api::Callback>,
@@ -385,6 +386,7 @@ impl Source {
             attempt: 0,
             permit: None,
             clock: Clock::new(Calibration::default(), 0.0, 0),
+            local_clock: None,
             rate: 0.0,
             max_frames: 0,
             callback: None,
@@ -454,12 +456,16 @@ impl Source {
         if !first {
             // Reactivation cannot install accepted setup over a still-owned lease.
             self.clock.valid = false;
+            self.local_clock = None;
             self.shared.publish_clock(&self.clock);
             self.stop();
             return;
         }
         self.apply_setup();
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, max_frames);
+        if self.shared.source.is_none() && !self.clock.calibration.validated {
+            self.local_clock = Some(LocalClock::default());
+        }
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
         self.baseline_needed = true;
@@ -468,6 +474,9 @@ impl Source {
         assert!(self.settled());
         self.epoch = epoch;
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
+        if self.local_clock.is_some() {
+            self.local_clock = Some(LocalClock::default());
+        }
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
         self.complete_through = i64::MIN;
@@ -502,10 +511,24 @@ impl Source {
             })
         })
     }
+    pub(super) fn initial_direct(&self) -> bool {
+        self.local_clock.is_some()
+    }
     pub(super) fn completed_input(&self) -> Option<(Coverage, u64)> {
-        (self.input_complete && self.capture_cursor.is_none() && self.capture_offer.is_none())
-            .then(|| self.coverage.map(|coverage| (coverage, self.next_event)))
-            .flatten()
+        if !self.input_complete {
+            return None;
+        }
+        let coverage = self.coverage?;
+        let next = self.capture_cursor.and_then(|index| self.pending.at(index));
+        // Match the tuner's exclusive prefix proof: the first untransferred
+        // sample is not complete, even if earlier events at that sample moved.
+        let through = if let Some(next) = next {
+            self.clock.calibration.map(next.input)?.min(coverage.through)
+        } else {
+            coverage.through
+        };
+        let cut = next.map_or(self.next_event, |_| self.capture_published);
+        (through > coverage.start).then_some((Coverage { start: coverage.start, through }, cut))
     }
     fn lease_generation(&self) -> Option<u64> {
         self.offer
@@ -712,11 +735,15 @@ impl Source {
             self.fault(INPUT_FAULT);
         }
         let valid = self.clock.valid;
-        let coverage = self.clock.begin(callback.steady_time, callback.frames);
+        let mut coverage = self.clock.begin(callback.steady_time, callback.frames);
+        if let Some(local) = &mut self.local_clock {
+            coverage =
+                local.begin(callback.steady_time, callback.frames, self.rate, self.max_frames);
+        }
         if self.clock.valid != valid {
             self.shared.publish_clock(&self.clock);
         }
-        if self.clock.calibration.validated && coverage.is_none() {
+        if (self.clock.calibration.validated || self.local_clock.is_some()) && coverage.is_none() {
             self.fault(CLOCK_FAULT);
             if let Some(session) = self.session() {
                 session.faults.fetch_or(CLOCK_FAULT, Ordering::AcqRel);
@@ -1044,6 +1071,7 @@ impl Source {
                 break;
             }
             if changes_clock {
+                self.local_clock = None;
                 self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
                 self.coverage = None;
                 self.baseline_needed = true;
@@ -1083,7 +1111,10 @@ impl Source {
 
     pub fn commit_clock_setup(&mut self, update: setup::Update, epoch: u64) {
         assert!(self.direct.is_some() && self.transition_settled());
+        let local_reset =
+            self.initial_direct() && update.reset && !update.routing.calibration().validated;
         self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
+        self.local_clock = local_reset.then(LocalClock::default);
         self.coverage = None;
         self.epoch = epoch;
         self.complete_through = i64::MIN;
@@ -1718,7 +1749,9 @@ impl Source {
         if !self.charge(completion_work) {
             return false;
         }
-        if (!self.clock.valid || !self.ordinary_stream_ready()) && !pending.event.release() {
+        let callback_valid =
+            self.clock.valid || self.local_clock.as_ref().is_some_and(LocalClock::valid);
+        if (!callback_valid || !self.ordinary_stream_ready()) && !pending.event.release() {
             return false;
         }
         let report_cells = self.channel_report_cells(pending)
@@ -2024,12 +2057,13 @@ impl Source {
         player: f64,
     ) -> OutputDelta {
         self.sequence += 1;
-        let mapped = self.clock.valid
-            && self.clock.calibration.map(input).is_some()
-            && self.clock.calibration.map(actual).is_some();
-        let mapped_input = if mapped { self.clock.calibration.map(input).unwrap() } else { input };
-        let mapped_actual =
-            if mapped { self.clock.calibration.map(actual).unwrap() } else { actual };
+        let local = self.local_clock.as_ref().is_some_and(LocalClock::valid);
+        let offset = if local { 0 } else { self.clock.calibration.offset };
+        let mapped = (self.clock.valid || local)
+            && input.checked_add(offset).is_some()
+            && actual.checked_add(offset).is_some();
+        let mapped_input = if mapped { input.checked_add(offset).unwrap() } else { input };
+        let mapped_actual = if mapped { actual.checked_add(offset).unwrap() } else { actual };
         let lifetime = if life == NONE { 0 } else { self.lives.at(life).unwrap().serial };
         let delta = OutputDelta {
             decision: if life == NONE {
@@ -2700,9 +2734,8 @@ impl Source {
         }
         let position = self.capture_cursor?;
         let lease = self.capture_lease()?;
-        let Some(token) =
-            self.pending.offer(position, lease, self.epoch, self.clock.calibration.offset)
-        else {
+        let offset = if self.initial_direct() { 0 } else { self.clock.calibration.offset };
+        let Some(token) = self.pending.offer(position, lease, self.epoch, offset) else {
             self.fault(CLOCK_FAULT);
             return None;
         };
@@ -2782,6 +2815,7 @@ impl Source {
     pub(super) fn take_direct_capture(&mut self) -> Option<super::capture::Token> {
         assert!(self.direct.is_some());
         let token = self.next_capture()?;
+        self.capture_published = token.key.serial;
         self.capture_cursor = self.pending.next_position(token.key.position as usize);
         self.service_revision = self.service_revision.wrapping_add(1);
         Some(token)
@@ -3147,7 +3181,7 @@ const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 // The ledger charges this measured owner including test-support padding.
-const _: () = assert!(std::mem::size_of::<Source>() <= 31256);
+const _: () = assert!(std::mem::size_of::<Source>() <= 31288);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {

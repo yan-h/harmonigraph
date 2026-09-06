@@ -2,6 +2,8 @@
 use super::*;
 use harmonigraph_core::cohort::{self, EventPhase, TargetAccess};
 use harmonigraph_core::configuration::ResolvedConfig;
+#[cfg(all(test, not(feature = "tuning-probe")))]
+mod actual_lookup_tests;
 mod recovery;
 
 #[derive(Clone, Copy)]
@@ -16,13 +18,31 @@ struct Plan {
     accepted: bool,
     bound: bool,
     replay: u8,
-    actual: u16,
     next: u32,
     previous: u32,
 }
 const NO_PLAN: u32 = u32::MAX;
 const NO_VOICE: u16 = u16::MAX;
 const PREFIX: u8 = 1;
+
+/// Physical factual slots are independent of request/Plan ownership and of
+/// State's packed voice array. This directory is only a bounded lookup hint.
+const ACTUAL_KEYS_PER_SOURCE: usize = 16 * 128;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActualKey {
+    lease: Lease,
+    epoch: u64,
+    lifetime: u64,
+}
+fn actual_address(lease: Lease, channel: u8, key: u8) -> usize {
+    usize::from(lease.slot) * ACTUAL_KEYS_PER_SOURCE + usize::from(channel) * 128 + usize::from(key)
+}
+
+pub(super) struct ActualLookup {
+    key: ActualKey,
+    index: u16,
+    address: Option<usize>,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
@@ -70,6 +90,8 @@ pub(super) struct Sequencer {
     plan_work: usize,
     context: Box<[Option<Voice>]>,
     actual: Box<[Option<Voice>]>,
+    actual_keys: Box<[Option<ActualKey>]>,
+    actual_index: Box<[u16]>,
     actual_free: Vec<u16>,
     actual_revision: u64,
     pub work: usize,
@@ -106,6 +128,8 @@ impl Default for Sequencer {
             plan_work: 0,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
             actual: vec![None; HELD_SESSION].into_boxed_slice(),
+            actual_keys: vec![None; HELD_SESSION].into_boxed_slice(),
+            actual_index: vec![NO_VOICE; (TUNERS + 1) * ACTUAL_KEYS_PER_SOURCE].into_boxed_slice(),
             actual_free: (0..HELD_SESSION as u16).rev().collect(),
             actual_revision: 0,
             work: 0,
@@ -115,8 +139,42 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
-    pub(super) fn reset_terminal_context(&mut self) {
-        self.context.fill(None);
+    pub(super) fn can_reset_clock_context(&self) -> bool {
+        self.actual_revision.checked_add(1).is_some()
+    }
+    pub(super) fn clear_clock_context(&mut self) {
+        let revision = self.actual_revision.checked_add(1).expect("preflighted clock boundary");
+        self.actual_free.clear();
+        for index in 0..HELD_SESSION {
+            self.context[index] = None;
+            self.actual[index] = None;
+            self.actual_keys[index] = None;
+            self.actual_free.push((HELD_SESSION - 1 - index) as u16);
+        }
+        self.actual_revision = revision;
+    }
+    pub(super) fn reset_clock_context(&mut self, lease: Lease, epoch: u64, direct: &State) {
+        self.clear_clock_context();
+        // A discontinuous reset has already cleared this observed-input State.
+        // A healthy reanchor preserves it, independently of forwarding's paid
+        // termination. Rebind those same factual lifetimes to the new clock.
+        for voice in direct.voices() {
+            let index = self.actual_free.pop().expect("at most 64 DIRECT voices");
+            let value = Voice {
+                source: 0,
+                lifetime: voice.lifetime,
+                correction: voice.frozen_offset_microcents,
+                player: voice.player_tuning,
+                key: voice.note,
+            };
+            self.actual[usize::from(index)] = Some(value);
+            self.context[usize::from(index)] = Some(value);
+            self.actual_keys[usize::from(index)] =
+                Some(ActualKey { lease, epoch, lifetime: voice.lifetime });
+            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
+        }
+        // Absent identities invalidate old hints without scanning the 34816
+        // address directory. No physical debt may reach this committed cut.
     }
     pub(super) fn recovering(&self) -> bool {
         self.recovery.active
@@ -223,7 +281,6 @@ impl Sequencer {
                     accepted: false,
                     bound: false,
                     replay: 0,
-                    actual: NO_VOICE,
                     next: NO_PLAN,
                     previous: NO_PLAN,
                 },
@@ -233,6 +290,8 @@ impl Sequencer {
 }
 
 const _: () = assert!(std::mem::size_of::<Option<Plan>>() <= 256);
+const _: () = assert!(std::mem::size_of::<Option<ActualKey>>() <= 56);
+const _: () = assert!(std::mem::align_of::<Option<ActualKey>>() <= 8);
 const _: () = assert!(
     std::mem::size_of::<Option<Plan>>() - std::mem::size_of::<ResolvedConfig>() + 128 <= 256
 );
@@ -252,6 +311,14 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 + 16 + 8 <= 256
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
+        println!(
+            "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
+            [
+                std::mem::size_of::<Option<ActualKey>>(),
+                std::mem::size_of_val(&*self.actual_keys),
+                std::mem::size_of_val(&*self.actual_index)
+            ]
+        );
         println!(
             "LEDGER sequencer actual [backing,free_capacity,free_metadata,recovery_owner] {:?}",
             [
@@ -275,6 +342,17 @@ impl Sequencer {
 }
 
 impl Hub {
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_actual_voice(
+        &self,
+        source: u8,
+        lifetime: u64,
+    ) -> Option<(usize, i64, f64)> {
+        self.sequencer.actual.iter().enumerate().find_map(|(index, cell)| {
+            cell.filter(|voice| voice.source == source && voice.lifetime == lifetime)
+                .map(|voice| (index, voice.correction, voice.player))
+        })
+    }
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_service_terminal_plans(&mut self) {
         self.plan_callback();
@@ -321,7 +399,7 @@ impl Hub {
         if self.test_aggregation {
             return false;
         }
-        !self.sequencer.retired
+        !self.sequencer.retired && !self.direct.initial_direct()
     }
 
     fn input_window(&self, source: usize) -> &Window<Intent, INTENT_RING> {
@@ -333,7 +411,10 @@ impl Hub {
     }
 
     fn input_snapshot(&self, owner: &Owner) -> Option<Membership> {
-        let direct = self.direct.completed_input()?.0;
+        let (direct, cut) = self.direct.completed_input()?;
+        if cut > self.sequencer.captured[0] {
+            return None;
+        }
         let cap = owner
             .recording
             .configuration_seed_frontier()
@@ -662,7 +743,6 @@ impl Hub {
                             accepted: false,
                             bound: true,
                             replay: 0,
-                            actual: NO_VOICE,
                             next: NO_PLAN,
                             previous: NO_PLAN,
                         },
@@ -878,151 +958,165 @@ impl Hub {
 }
 
 impl Sequencer {
-    fn actual_hint(&self, source: u8, lifetime: u64, hint: u16) -> bool {
-        hint != NO_VOICE
-            && self.actual[usize::from(hint)]
-                .is_some_and(|old| old.source == source && old.lifetime == lifetime)
+    fn actual_hint(&self, key: ActualKey, hint: u16) -> bool {
+        hint != NO_VOICE && self.actual_keys[usize::from(hint)] == Some(key)
     }
-    pub(super) fn actual_output_cost(
+
+    /// Resolve once under the output grant, including unsuccessful fallback
+    /// searches. The returned slot (or proven absence) is reused by application.
+    fn lookup_actual(
         &self,
-        source: usize,
+        key: ActualKey,
+        address: Option<usize>,
+        new_on: bool,
+        work: &mut usize,
+    ) -> Option<ActualLookup> {
+        if key.lifetime == 0 {
+            return Some(ActualLookup { key, index: NO_VOICE, address });
+        }
+        if *work == 4096 {
+            return None;
+        }
+        *work += 1;
+        let hint = address.map_or(NO_VOICE, |address| self.actual_index[address]);
+        if self.actual_hint(key, hint) {
+            return Some(ActualLookup { key, index: hint, address });
+        }
+        if new_on {
+            return Some(ActualLookup { key, index: NO_VOICE, address });
+        }
+        if *work + HELD_SESSION > 4096 {
+            return None;
+        }
+        *work += HELD_SESSION;
+        let index = self.actual_keys.iter().position(|old| *old == Some(key));
+        Some(ActualLookup { key, index: index.map_or(NO_VOICE, |index| index as u16), address })
+    }
+
+    pub(super) fn lookup_output(
+        &self,
         lease: Lease,
         output: OutputDelta,
-    ) -> usize {
-        if output.lifetime == 0 {
-            return 0;
-        }
-        let hint = (usize::from(output.outcome.request) < LIFETIMES)
-            .then(|| self.plans[source * LIFETIMES + usize::from(output.outcome.request)].as_ref())
-            .flatten()
-            .filter(|plan| {
-                plan.key.lease == lease
-                    && plan.lifetime == output.lifetime
-                    && plan.key.epoch == output.epoch
-            })
-            .map_or(NO_VOICE, |plan| plan.actual);
-        1 + if output.event.attack().is_some()
-            || self.actual_hint(source as u8 + 1, output.lifetime, hint)
-        {
-            0
-        } else {
-            HELD_SESSION
-        }
-    }
-    pub(super) fn actual_direct_cost(delta: harmonigraph_core::canonical::NoteDelta) -> usize {
-        use harmonigraph_core::NoteEventKind;
-        if delta.lifetime == 0 {
-            return 0;
-        }
-        match delta.event.kind {
-            NoteEventKind::On { .. } => 1,
-            NoteEventKind::Off | NoteEventKind::Tuning { .. } => HELD_SESSION + 1,
-            _ => 0,
-        }
-    }
-    fn store_actual(
-        &mut self,
-        source: u8,
-        lifetime: u64,
-        hint: u16,
-        voice: Option<Voice>,
-        new_on: bool,
-    ) -> Result<u16, ()> {
-        // The index is only a hint. Baseline replacement can reuse the cell;
-        // the complete row/lifetime identity still decides every cache access.
-        let index =
-            self.actual_hint(source, lifetime, hint).then_some(usize::from(hint)).or_else(|| {
-                (!new_on)
-                    .then(|| {
-                        self.actual.iter().position(|old| {
-                            old.is_some_and(|old| old.source == source && old.lifetime == lifetime)
-                        })
-                    })
-                    .flatten()
-            });
-        match (index, voice) {
-            (Some(index), voice) => {
-                if self.actual[index] != voice {
-                    self.actual_revision = self.actual_revision.checked_add(1).ok_or(())?;
-                }
-                self.actual[index] = voice;
-                if voice.is_none() {
-                    self.actual_free.push(index as u16);
-                }
-                Ok(if voice.is_some() { index as u16 } else { NO_VOICE })
+        work: &mut usize,
+    ) -> Option<ActualLookup> {
+        use super::super::event::Event;
+        let address = match output.event {
+            Event::Note { channel: channel @ 0..=15, key: key @ 0..=127, .. }
+            | Event::Expression { channel: channel @ 0..=15, key: key @ 0..=127, .. } => {
+                Some(actual_address(lease, channel as u8, key as u8))
             }
-            (None, Some(voice)) => {
-                let revision = self.actual_revision.checked_add(1).ok_or(())?;
-                let index = self.actual_free.pop().ok_or(())?;
-                assert!(self.actual[usize::from(index)].is_none());
-                self.actual[usize::from(index)] = Some(voice);
-                self.actual_revision = revision;
-                Ok(index)
+            Event::Midi { data: [status, key @ 0..=127, _], .. }
+                if matches!(status & 0xf0, 0x80 | 0x90) =>
+            {
+                Some(actual_address(lease, status & 15, key))
             }
-            (None, None) => Ok(NO_VOICE),
+            _ => None,
+        };
+        self.lookup_actual(
+            ActualKey { lease, epoch: output.epoch, lifetime: output.lifetime },
+            address,
+            output.event.attack().is_some(),
+            work,
+        )
+    }
+
+    pub(super) fn lookup_direct(
+        &self,
+        delta: harmonigraph_core::canonical::NoteDelta,
+        work: &mut usize,
+    ) -> Option<ActualLookup> {
+        let clock = delta.timing?.clock;
+        let lease = Lease {
+            session: clock.runtime_session,
+            source: harmonigraph_core::SourceId::DIRECT,
+            incarnation: 0,
+            slot: 0,
+        };
+        self.lookup_actual(
+            ActualKey { lease, epoch: clock.epoch, lifetime: delta.lifetime },
+            Some(actual_address(lease, delta.event.channel, delta.event.note)),
+            matches!(delta.event.kind, harmonigraph_core::NoteEventKind::On { .. }),
+            work,
+        )
+    }
+
+    fn store_actual(&mut self, lookup: ActualLookup, voice: Option<Voice>) -> Result<(), ()> {
+        let ActualLookup { key, index, address } = lookup;
+        if index != NO_VOICE {
+            assert!(self.actual_hint(key, index));
+            let slot = usize::from(index);
+            if self.actual[slot] != voice {
+                self.actual_revision = self.actual_revision.checked_add(1).ok_or(())?;
+            }
+            self.actual[slot] = voice;
+            if voice.is_none() {
+                self.actual_keys[slot] = None;
+                self.actual_free.push(index);
+                if let Some(address) =
+                    address.filter(|address| self.actual_index[*address] == index)
+                {
+                    self.actual_index[address] = NO_VOICE;
+                }
+            } else if let Some(address) = address {
+                self.actual_index[address] = index;
+            }
+        } else if let Some(voice) = voice {
+            let revision = self.actual_revision.checked_add(1).ok_or(())?;
+            let index = self.actual_free.pop().ok_or(())?;
+            let slot = usize::from(index);
+            assert!(self.actual[slot].is_none());
+            self.actual[slot] = Some(voice);
+            self.actual_keys[slot] = Some(key);
+            if let Some(address) = address {
+                self.actual_index[address] = index;
+            }
+            self.actual_revision = revision;
         }
+        Ok(())
     }
 
     pub(super) fn actual_output(
         &mut self,
-        source: usize,
-        lease: Lease,
-        output: OutputDelta,
+        lookup: ActualLookup,
         voice: Option<harmonigraph_core::canonical::VoiceBaseline>,
     ) -> bool {
-        if output.lifetime == 0 {
+        if lookup.key.lifetime == 0 {
             return true;
         }
-        let plan_index = (usize::from(output.outcome.request) < LIFETIMES)
-            .then_some(source * LIFETIMES + usize::from(output.outcome.request));
-        let plan = plan_index.and_then(|index| self.plans[index].as_ref()).filter(|plan| {
-            plan.key.lease == lease
-                && plan.lifetime == output.lifetime
-                && plan.key.epoch == output.epoch
-        });
-        let hint = plan.map_or(NO_VOICE, |plan| plan.actual);
         let voice = voice.map(|voice| Voice {
-            source: source as u8 + 1,
+            source: lookup.key.lease.slot,
             lifetime: voice.lifetime,
             correction: voice.frozen_offset_microcents,
             player: voice.player_tuning,
             key: voice.note,
         });
-        let Ok(index) = self.store_actual(
-            source as u8 + 1,
-            output.lifetime,
-            hint,
-            voice,
-            output.event.attack().is_some(),
-        ) else {
-            return false;
-        };
-        if let Some(plan) = plan_index.and_then(|index| self.plans[index].as_mut()).filter(|plan| {
-            plan.key.lease == lease
-                && plan.lifetime == output.lifetime
-                && plan.key.epoch == output.epoch
-        }) {
-            plan.actual = index;
-        }
-        true
+        self.store_actual(lookup, voice).is_ok()
     }
 
     pub(super) fn actual_baseline(
         &mut self,
-        source: u8,
+        lease: Lease,
+        epoch: u64,
         frame: &harmonigraph_core::canonical::SourceBaseline,
     ) -> bool {
+        let source = lease.slot;
         let mut replaced = false;
         for (index, cell) in self.actual.iter_mut().enumerate() {
             if cell.is_some_and(|voice| voice.source == source) {
                 replaced = true;
                 *cell = None;
+                self.actual_keys[index] = None;
                 self.actual_free.push(index as u16);
             }
         }
+        // Stale directory entries are harmless: full lease/epoch/lifetime
+        // equality is required even when replacement reuses the same cell.
         for voice in frame.voices() {
             replaced = true;
             let Some(index) = self.actual_free.pop() else { return false };
+            let key = ActualKey { lease, epoch, lifetime: voice.lifetime };
+            self.actual_keys[usize::from(index)] = Some(key);
+            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
             self.actual[usize::from(index)] = Some(Voice {
                 source,
                 lifetime: voice.lifetime,
@@ -1038,19 +1132,15 @@ impl Sequencer {
         true
     }
 
-    pub(super) fn actual_direct(&mut self, delta: harmonigraph_core::canonical::NoteDelta) -> bool {
+    pub(super) fn actual_direct(
+        &mut self,
+        delta: harmonigraph_core::canonical::NoteDelta,
+        lookup: ActualLookup,
+    ) -> bool {
         use harmonigraph_core::NoteEventKind;
         if delta.lifetime == 0 {
             return true;
         }
-        let new_on = matches!(delta.event.kind, NoteEventKind::On { .. });
-        let index = (!new_on)
-            .then(|| {
-                self.actual.iter().position(|old| {
-                    old.is_some_and(|old| old.source == 0 && old.lifetime == delta.lifetime)
-                })
-            })
-            .flatten();
         let voice = match delta.event.kind {
             NoteEventKind::On { .. } => Some(Voice {
                 source: 0,
@@ -1061,8 +1151,11 @@ impl Sequencer {
             }),
             NoteEventKind::Off => None,
             NoteEventKind::Tuning { .. } => {
-                let Some(mut voice) = index.and_then(|index| self.actual[index]) else {
+                if lookup.index == NO_VOICE {
                     return true;
+                }
+                let Some(mut voice) = self.actual[usize::from(lookup.index)] else {
+                    return false;
                 };
                 let Some(pitch) = delta.pitch_microcents else { return false };
                 voice.player = (pitch - i64::from(voice.key) * 100_000_000) as f64 / 100_000_000.0;
@@ -1070,18 +1163,6 @@ impl Sequencer {
             }
             _ => return true,
         };
-        // The charged DIRECT search above already proved absence too; avoid a
-        // second whole-cache search on an unmatched terminal.
-        if index.is_none() && voice.is_none() {
-            return true;
-        }
-        self.store_actual(
-            0,
-            delta.lifetime,
-            index.map_or(NO_VOICE, |index| index as u16),
-            voice,
-            new_on,
-        )
-        .is_ok()
+        self.store_actual(lookup, voice).is_ok()
     }
 }

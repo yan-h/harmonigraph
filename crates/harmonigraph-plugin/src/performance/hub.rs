@@ -250,6 +250,16 @@ impl Hub {
         true
     }
     pub fn reset_idle_clock(&mut self, clock: ClockId) {
+        // Plugin::reset has cleared observed input. With an offer, force_reset
+        // also proved idle ownership; without one, clearing this observation
+        // cache must leave forwarding's independent pending/debt state intact.
+        // Host Reset is its own synchronous boundary, not the previous audio
+        // callback's exhausted output grant.
+        if !self.sequencer.can_reset_clock_context() {
+            self.configuration_exhausted();
+            return;
+        }
+        self.sequencer.clear_clock_context();
         let Some(offer) = &self.offer else {
             return;
         };
@@ -382,7 +392,7 @@ impl Hub {
         self.merged = 0;
         self.sequencer.work = 0;
         self.plan_callback();
-        let offset = self.clock.calibration.offset;
+        let offset = if self.direct.initial_direct() { 0 } else { self.clock.calibration.offset };
         owner.recording.hub_offset = offset;
         self.publication_clock = owner.recording.clock;
         owner.direct.offset = offset;
@@ -416,7 +426,13 @@ impl Hub {
         if self.sequencer.terminal_session && !update.reset {
             return;
         }
-        if !update.routing.calibration().matches(self.rate, self.max_frames)
+        if !self.sequencer.can_reset_clock_context() {
+            self.configuration_exhausted();
+            return;
+        }
+        let local_reset =
+            self.direct.initial_direct() && update.reset && !update.routing.calibration().validated;
+        if !(local_reset || update.routing.calibration().matches(self.rate, self.max_frames))
             || !self.direct.transition_settled()
             || owner.direct.pending().is_some()
         {
@@ -438,6 +454,13 @@ impl Hub {
         {
             return;
         }
+        // Both factual identities and prospective context cross this boundary
+        // together, after all old ownership settles. Budget the clear/reseed
+        // before committing anything; the directory itself needs no scan.
+        if self.collected + HELD_SESSION + 64 > 4096 {
+            return;
+        }
+        self.collected += HELD_SESSION + 64;
         // End-of-callback source acknowledgements still use the old clock.
         // Finish every old recording route before changing either offset.
         owner.finish_recording_publication(recorder, observation);
@@ -448,11 +471,12 @@ impl Hub {
             return;
         };
         let clock = ClockId { epoch, ..self.publication_clock };
-        if !owner.recording.commit_clock(clock, update.routing.calibration().offset) {
+        let offset = if local_reset { 0 } else { update.routing.calibration().offset };
+        if !owner.recording.commit_clock(clock, offset) {
             return;
         }
         self.direct.commit_clock_setup(update, epoch);
-        owner.resume_clock(update.routing.calibration().offset, self.invalidated);
+        owner.resume_clock(offset, self.invalidated);
         self.invalidated = false;
         self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
         self.anchor = None;
@@ -461,7 +485,11 @@ impl Hub {
         self.transition = None;
         self.sequencer.terminal_session = false;
         self.sequencer.terminal_sources = 0;
-        self.sequencer.reset_terminal_context();
+        self.sequencer.reset_clock_context(
+            self.direct.capture_lease().unwrap(),
+            epoch,
+            &owner.direct.state,
+        );
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.
         offer.session.faults.store(0, Ordering::Release);
@@ -1134,15 +1162,13 @@ impl Hub {
                             .is_none_or(|baseline| delta.sequence <= baseline.frame.output_cut)
                 })
             }) {
-                let cost = self.sequencer.actual_output_cost(
-                    index,
+                let Some(lookup) = self.sequencer.lookup_output(
                     self.rows[index].lease.unwrap(),
                     self.rows[index].output.front().unwrap(),
-                );
-                if self.collected + cost > 4096 {
+                    &mut self.collected,
+                ) else {
                     break;
-                }
-                self.collected += cost;
+                };
                 let row = &mut self.rows[index];
                 let value = row.output.pop().unwrap();
                 row.channel_witness = None;
@@ -1158,8 +1184,7 @@ impl Hub {
                 row.applied = value.sequence;
                 Self::confirm(row, &mut owner.confirmed);
                 let actual_voice = row.state.voice(value.lifetime).copied();
-                let lease = row.lease.unwrap();
-                if !self.sequencer.actual_output(index, lease, value, actual_voice) {
+                if !self.sequencer.actual_output(lookup, actual_voice) {
                     self.configuration_exhausted();
                 }
                 self.merged += 1;
@@ -1201,25 +1226,24 @@ impl Hub {
             if sample >= through {
                 break;
             }
-            let factual_cost = if index == 0 {
-                sequencing::Sequencer::actual_direct_cost(direct.unwrap())
+            let lookup = if index == 0 {
+                self.sequencer.lookup_direct(direct.unwrap(), &mut self.collected)
             } else if index <= TUNERS {
-                self.sequencer.actual_output_cost(
-                    index - 1,
+                self.sequencer.lookup_output(
                     self.rows[index - 1].lease.unwrap(),
                     self.rows[index - 1].output.front().unwrap(),
+                    &mut self.collected,
                 )
             } else {
-                0
+                None
             };
-            if self.collected + factual_cost > 4096 {
+            if index <= TUNERS && lookup.is_none() {
                 break;
             }
-            self.collected += factual_cost;
             self.merged += 1;
             if index == 0 {
                 let delta = direct.unwrap();
-                if !self.sequencer.actual_direct(delta) {
+                if !self.sequencer.actual_direct(delta, lookup.unwrap()) {
                     self.configuration_exhausted();
                 }
                 let route = owner
@@ -1299,8 +1323,7 @@ impl Hub {
                 }
                 Self::confirm(row, &mut owner.confirmed);
                 let actual_voice = row.state.voice(value.lifetime).copied();
-                let lease = row.lease.unwrap();
-                if !self.sequencer.actual_output(index, lease, value, actual_voice) {
+                if !self.sequencer.actual_output(lookup.unwrap(), actual_voice) {
                     self.configuration_exhausted();
                 }
             }
@@ -1493,7 +1516,7 @@ impl Hub {
                     row.repair |= result.is_err();
                     row.state.replace(&frame);
                     self.collected += HELD_SESSION + 64;
-                    if !self.sequencer.actual_baseline(index as u8 + 1, &frame) {
+                    if !self.sequencer.actual_baseline(lease, row.epoch, &frame) {
                         shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
                     }
                     row.participating = frame.participating;
