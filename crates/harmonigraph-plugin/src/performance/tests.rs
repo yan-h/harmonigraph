@@ -3665,6 +3665,140 @@ fn destroyed_frozen_configuration_drains_a_baseline_between_large_output_prefixe
 }
 
 #[test]
+fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() {
+    let _scope = crate::test_scope::enter();
+    if std::env::var_os("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD").is_none() {
+        for order in ["baseline", "withdrawn"] {
+            assert!(std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals", "--nocapture", "--test-threads=1"])
+            .env("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD", order).status().unwrap().success());
+        }
+        return;
+    }
+    let withdrawn = std::env::var("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD").unwrap() == "withdrawn";
+    let uuid = SavedUuid::default();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.configure(uuid, true);
+    hub.activate();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    capture.arm();
+    assert_eq!(
+        source
+            .run(64, (0..32).map(|key| note(key + 1, 0, key as i16, 0, true)).collect(), None)
+            .values
+            .len(),
+        32
+    );
+    hub.run(64, vec![], None);
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-frozen-emergency-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let midi = |data| {
+        Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
+            port_index: 0,
+            data,
+        })
+    };
+    let mut first = vec![midi([0xb0, 120, 0])];
+    first.extend((0..511).map(|_| midi([0xf8, 0, 0])));
+    assert_eq!(source.run(128, first, None).values.len(), 512);
+    assert_eq!(source.source_snapshot().journal, 544);
+    assert_eq!(source.source_snapshot().note_off_owed, 32);
+    for raw in (192..=512).step_by(64) {
+        assert_eq!(
+            source.run(raw, (0..512).map(|_| midi([0xf8, 0, 0])).collect(), None).values.len(),
+            512
+        );
+    }
+    assert_eq!(
+        source.run(576, (0..480).map(|_| midi([0xf8, 0, 0])).collect(), None).values.len(),
+        480
+    );
+    assert_eq!(source.source_snapshot().journal, 4096);
+    let freeze = |hub: &mut Device, expected_baseline| {
+        let wrapper = unsafe {
+            &*((*hub.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+        };
+        let mailbox = wrapper.configuration_handle().unwrap();
+        for value in 690..707 {
+            mailbox
+                .submit(crate::configuration::packet(
+                    harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
+                ))
+                .unwrap();
+        }
+        hub.run(128, vec![], None);
+        assert_eq!(
+            wrapper.test_inspect_plugin(|plugin| plugin
+                .configuration
+                .as_ref()
+                .unwrap()
+                .recording
+                .prefix),
+            128
+        );
+        let row = wrapper.test_inspect_plugin(|plugin| {
+            plugin.aggregation.as_ref().unwrap().test_row_retirement(0)
+        });
+        assert_eq!(row.3, expected_baseline);
+    };
+    let mut hub = Some(hub);
+    if withdrawn {
+        freeze(hub.as_mut().unwrap(), None);
+        drop(hub.take());
+    }
+    let emergency = source.run(640, vec![midi([0xf8, 0, 0])], None);
+    assert_eq!(emergency.values.len(), 35);
+    assert_eq!(emergency.values.iter().filter(|(_, e)| e.release()).count(), 32);
+    let snapshot = source.source_snapshot();
+    assert_eq!(
+        (snapshot.sequence, snapshot.journal, snapshot.emergency, snapshot.baseline_cut),
+        (4163, if withdrawn { 3584 } else { 4096 }, 35, (!withdrawn).then_some(4163))
+    );
+    assert!(snapshot.transfer_cut < snapshot.sequence);
+    assert_ne!(
+        snapshot.faults & if withdrawn { source::OUTPUT_FAULT } else { source::STORAGE_FAULT },
+        0
+    );
+    if let Some(hub) = hub.as_mut() {
+        freeze(hub, Some((4163, 703)));
+    }
+    drop(hub);
+    drop(source);
+    writer.drain(&mut capture);
+    let counts = registry::global().lock().unwrap().test_counts();
+    assert_eq!(counts, (0, 0, 0));
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    assert!(writer.current_pass().is_none());
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(take.incomplete.is_some());
+    let deltas: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            harmonigraph_take::CanonicalRecord::Delta(delta) => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas.len(), 64);
+    assert!(deltas[..32].iter().all(|delta| delta.timing.unwrap().sample == 64
+        && matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. })));
+    assert!(deltas[32..].iter().all(|delta| delta.timing.unwrap().sample == 128
+        && matches!(delta.event.kind, harmonigraph_take::NoteKind::Off)));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn progress_spanning_more_than_the_output_window_releases_only_complete_timestamp_prefixes() {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};

@@ -178,6 +178,18 @@ the negative control is not shipped.
 Moving 17 commands before the notes was separately measured to prevent observation entirely and was rejected as fixture reach.
 A file-backed recorder fixture holds a failed take open through empty lanes, then fills all 4,096 publication slots and retains one further explicit loss.
 Releasing retirement ownership while the ordinary lane is still full permits closure only after all 4,096 deltas and the exact 4097 loss reach the file.
+The full ordinary/emergency retirement fixture reaches 4,096 ordinary facts plus 35 actual emergency outputs, including 32 owed physical Offs, at accepted cut 4,163. With configuration frozen at sample 128, requiring the complete report cut to transfer first deadlocks against the two 2,048-record receiver windows.
+Destroying the Hub before the final Source callback also reproduces the defect without a pending baseline;
+that callback has already reclaimed 512 factual receipts, leaving 3,584 ordinary and 35 emergency records at the Source while the receiver retains the earlier portion.
+Both orders retain 32 credits, the registry owners and the file writer before correction.
+Completed reports now advertise their original cumulative Coverage and full accepted cut before whole-cut transfer, giving the pending baseline's original pair priority over any later report.
+The unchanged receiver grants full coverage only after receiving the cut;
+otherwise it grants only the exclusive last mapped timestamp prefix under continuous, ordered, same-start coverage.
+Contiguous callbacks cannot overlap a sample, and one callback creates at most 512 normal plus 128 emergency wire facts and 64 derived channel terminals before credits can be recycled.
+The resulting 704-fact same-sample group fits the 2,048-record row, allowing that exclusive prefix to advance without splitting a timestamp group.
+No final joined-producer, publication-hold or musical-credit condition is weakened.
+Both actual destruction orders now release all owners and credits and close an Incomplete file containing exactly the 32 original Ons at sample 64 and 32 logical CC120 terminals at sample 128;
+later source-only history has no original Hub recording route and is not assigned one.
 The Stop/Reset correction passed 121 guarded plugin tests with two test workers and the separately coordinated callback timing fixture excluded.
 The optional probe build follows its existing export selection:
 production Tune/native-editor code and helpers used only by production Tune fixtures are excluded when `tuning-probe` supplies the companion class.
@@ -188,6 +200,7 @@ The retained baseline's saved progress report adds another 16, giving 1,454 belo
 A joined Source owns at most one baseline and creates no new one during retirement.
 Retries wait for already-accounted report/output drainage and publish/consume each advance the service revision;
 there is no new acknowledgement lane.
+Advertising these same baseline/final reports before complete transfer changes their eligibility, not the number of retirement phases or their storage.
 The full 16-owner event/reference fixture still reaches 8,192 inputs and 32,768 references per owner plus 256 actual terminal reservations.
 Temporary diagnostics measured 659 final service rounds, 168 joined publication attempts, 16 successes and 16 consumptions;
 those observed counts are evidence of retry reach, not the worst-case proof.

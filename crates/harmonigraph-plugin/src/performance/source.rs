@@ -46,6 +46,7 @@ pub struct Snapshot {
     pub faults: u32,
     pub epoch: u64,
     pub sequence: u64,
+    pub transfer_cut: u64,
     pub baseline_cut: Option<u64>,
     pub seal: Option<u64>,
     pub complete_through: i64,
@@ -231,6 +232,7 @@ impl Source {
             faults: self.faults,
             epoch: self.epoch,
             sequence: self.sequence,
+            transfer_cut: self.transfer_cut,
             baseline_cut: self.baseline.map(|baseline| baseline.cut),
             seal: self.sealed.then_some(self.sealed_generation),
             complete_through: self.complete_through,
@@ -2129,17 +2131,15 @@ impl Source {
         if self.detaching || !self.adopt_sent {
             return;
         }
-        // The pending snapshot's original report can escape before later
-        // history, which cannot transfer until that same snapshot is acked.
+        // Advertise completed coverage and its full accepted cut before
+        // transfer fills both receiver windows. The Hub grants only the
+        // received timestamp prefix until the complete cut arrives.
+        // A pending snapshot keeps priority: later history cannot transfer
+        // until the snapshot is acknowledged.
         let report = self
-            .coverage
-            .filter(|_| self.transfer_cut == self.sequence)
-            .map(|coverage| (coverage, self.sequence))
-            .or_else(|| {
-                self.baseline
-                    .filter(|baseline| self.transfer_cut >= baseline.cut)
-                    .map(|baseline| (baseline.coverage, baseline.cut))
-            });
+            .baseline
+            .map(|baseline| (baseline.coverage, baseline.cut))
+            .or_else(|| self.coverage.map(|coverage| (coverage, self.sequence)));
         let Some((coverage, cut)) = report else {
             return;
         };
