@@ -3604,23 +3604,23 @@ fn union_fold(m: ptr<function, f32>, s: ptr<function, f32>, v: f32, p: f32) {
 /// lands BETWEEN the two colours while the norm holds the light near the
 /// larger: a dim note crossing a bright one's halo kept the bright coverage
 /// and got a diluted colour, so a second note made an area DARKER. Measured
-/// over the shipped pitch ramp, whose two ends are 3.9x apart in luminance —
-/// meeting at equal coverage those two read 22% under the brighter note ALONE
-/// at a bar reading of +19%, 35% under at the fresh +9% and 42% under at the
-/// top, having crossed from brighter to darker somewhere above +30%. A p-norm
-/// is at least its own largest term, so per channel a second note can no
-/// longer take out what the first laid down.
+/// over the shipped pitch ramp at half coverage, whose two ends are 3.9x apart
+/// in luminance — meeting at equal coverage those two read 22% under the
+/// brighter note ALONE at a bar reading of +19%, 35% under at the fresh +9%
+/// and 42% under at the top, having crossed from brighter to darker at +34%.
+/// A p-norm is at least its own largest term, so per channel a second note can
+/// no longer take out what the first laid down.
 ///
 /// What it can do is ADD, and only by the channels the two do not share: two
 /// hues read brighter than either, bounded by white rather than by the count.
-/// Over the shipped ramp that is worth at most +4.7% of luminance for a pair
-/// and +7.7% for a triple, and both of those are at the TOP of the bar, where
-/// the count's own `n^(1/p)` is smallest; at the fresh exponent and below it is
-/// worth nothing at all, a mixed pair never reading over the same pair in one
-/// hue. Where the two DO share a channel it is the light's own `2^(1/p)` ridge
-/// and nothing new, and where they share nothing there is no crest at all:
-/// pure red over pure blue reads `(a_1, 0, a_2)`, each channel a norm of one
-/// smooth halo.
+/// Over the same ramp and coverage that is worth at most +4.7% of luminance
+/// for a pair and +8.0% for a triple, and both of those are at the TOP of the
+/// bar, where the count's own `n^(1/p)` is smallest; at the fresh exponent and
+/// below it is worth nothing at all, a mixed pair never reading over the same
+/// pair in one hue. Where the two DO share a channel it is the light's own
+/// `2^(1/p)` ridge and nothing new, and where they share nothing there is no
+/// crest at all: pure red over pure blue reads `(a_1, 0, a_2)`, each channel a
+/// norm of one smooth halo.
 ///
 /// `u.glow.lit` and not `arrayLength(&glow_nodes)`: the buffer outlives the
 /// frames that grew it (see the binding).

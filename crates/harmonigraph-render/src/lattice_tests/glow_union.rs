@@ -151,10 +151,12 @@ fn a_lone_halo_is_the_same_frame_at_every_bar_position() {
 /// either. The two are equally far from the column but see it from opposite
 /// directions, so each could in principle lay down its own strip's colour at a
 /// different angle; on THIS fixture they do not, since the strip carries the
-/// lit slot's one colour at every angle and 22abb5c3 measured the two singles
-/// at 15829 against 15829. A per-channel norm of two equal readings is the
-/// scalar norm of one of them, so the summed brightness is that reading scaled
-/// by the norm's own gain, whatever the colour is.
+/// lit slot's one colour at every angle. Measured over the read column, the
+/// two singles agree in every CHANNEL and not merely in the 15829 against
+/// 15829 22abb5c3 read off their sum: 4846, 4519 and 6464 apiece. A
+/// per-channel norm of two equal readings is the scalar norm of one of them,
+/// so the summed brightness is that reading scaled by the norm's own gain,
+/// whatever the colour is.
 ///
 /// Read at the Union bar's two ends as well as at the fresh middle
 /// ([`SWEEP`]), which is the whole of what the bar is: the same two halos meet
@@ -373,10 +375,10 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
 /// two colours while the norm holds the light near the larger: where a dim
 /// note's halo crossed a bright one's, the pixel kept the bright coverage and
 /// got a diluted colour, so adding a note made an area DARKER. The shipped
-/// pitch ramp's two ends are 3.9x apart in luminance, and meeting at equal
-/// coverage they read 22% under the brighter note ALONE at a bar reading of
-/// +19% and 35% under at the fresh +9%. A p-norm is at least its largest term
-/// at every exponent, so a per-channel fold cannot do that to any channel.
+/// pitch ramp's two ends are 3.9x apart in luminance, and two notes meeting at
+/// half coverage apiece read 22% under the brighter one ALONE at a bar reading
+/// of +19% and 35% under at the fresh +9%. A p-norm is at least its largest
+/// term at every exponent, so a per-channel fold cannot do that to any channel.
 ///
 /// The fixture is `two_halos_meeting_read_the_norm_of_one_rather_than_their_sum`'s
 /// with the two nodes given different colours and stood a tenth further apart,
@@ -399,10 +401,12 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
 /// most of it away. Averaged over the run the mean fold reads red at 148.8,
 /// 133.5 and 133.4 over the sweep, against this one's 178.8, 177.5 and 177.5
 /// and against the 177.5 the nearer node lights on its own — 29, 44 and 44
-/// levels of light taken back out by the second note, so it misses the floor
-/// by 29 to 44 times the slack and the value by 60 to 88 tolerances. Its blue
-/// misses by 1.9 tolerances at the two higher exponents and its green passes
-/// everywhere; red is the channel that carries this fixture.
+/// levels of light taken back out by the second note. Read per pixel, where
+/// the floor is, its worst row is 30 levels under at the bottom of the bar and
+/// 46 under at the other two, so it misses that floor by 30 to 46 times the
+/// slack and the mean by 60 to 88 tolerances. Its blue misses by 1.9
+/// tolerances at the two higher exponents and its green passes everywhere; red
+/// is the channel that carries this fixture.
 #[test]
 fn a_second_note_never_takes_light_out_of_any_channel() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -424,8 +428,8 @@ fn a_second_note_never_takes_light_out_of_any_channel() {
     /// two derivatives are `(l/n)^(p-1)` and `(r/n)^(p-1)`, together at most
     /// `2^(1/p)`), and the pair's own byte adds another half. Averaged over 33
     /// pixels of a screen-fixed dither those cancel: the nine readings land
-    /// 0.04 off at worst, so this is a tenth of the per-pixel bound and slack
-    /// for a driver rather than for the claim.
+    /// 0.043 off at worst, a twelfth of this, so it is slack for a driver
+    /// rather than for the claim.
     const TOLERANCE: f64 = 0.5;
     // 1.1 uv each side of the bisector, so the column stands 0.9 uv from the
     // nearer node and 1.3 from the farther, both inside the light's 1.595.
@@ -475,7 +479,10 @@ fn a_second_note_never_takes_light_out_of_any_channel() {
             })
             .collect()
     };
-    let lit_throughout = |pixels: &[[f64; 3]]| pixels.iter().all(|px| px.iter().sum::<f64>() > 0.0);
+    // Per CHANNEL and not per pixel: what the norm below is read on is each
+    // channel's own two terms, and a channel one node leaves at nothing is a
+    // copy of the other rather than a fold of both.
+    let lit_throughout = |pixels: &[[f64; 3]]| pixels.iter().flatten().all(|v| *v > 0.0);
     let means = |pixels: &[[f64; 3]]| -> [f64; 3] {
         pixels.iter().fold([0.0; 3], |mut acc, px| {
             for (a, v) in acc.iter_mut().zip(px) {
@@ -491,8 +498,9 @@ fn a_second_note_never_takes_light_out_of_any_channel() {
     let right = run(&shooter.shot(&at([0.0, 1.0], P)));
     assert!(
         lit_throughout(&left) && lit_throughout(&right),
-        "a pixel of the run gets no light from one of the nodes, so the column is outside its halo \
-         and the fixture measures one light rather than two meeting",
+        "a channel of the run gets no light from one of the nodes, so the column is outside its \
+         halo or that channel carries one term rather than two, and the norm below is read where \
+         it is a copy",
     );
     // The two singles have to DIFFER, or the floor below is the pair's own
     // reading and every fold clears it.
@@ -506,6 +514,8 @@ fn a_second_note_never_takes_light_out_of_any_channel() {
         "the two nodes light the run almost identically (no channel more than {apart:.0}/255 \
          apart), so a fold that drops either of them still clears the floor below",
     );
+
+    let (left_mean, right_mean) = (means(&left), means(&right));
 
     for p in SWEEP {
         let both = run(&shooter.shot(&at([1.0, 1.0], p)));
@@ -522,16 +532,7 @@ fn a_second_note_never_takes_light_out_of_any_channel() {
                 );
             }
         }
-        let (pair_mean, left_mean, right_mean) = (means(&both), means(&left), means(&right));
-        for (ch, ((got, one), other)) in
-            pair_mean.iter().zip(&left_mean).zip(&right_mean).enumerate()
-        {
-            assert!(
-                got >= one && got >= other,
-                "at an exponent of {p} channel {ch} averages {got} over the run with both notes \
-                 lit, under one note's own {one} or {other}",
-            );
-        }
+        let pair_mean = means(&both);
         // THE VALUE, which is what makes the claim above non-vacuous: the pair
         // is not merely at least the larger of the two, it is the p-norm of
         // them — read off the singles' own bytes, so no coverage, no colour and
