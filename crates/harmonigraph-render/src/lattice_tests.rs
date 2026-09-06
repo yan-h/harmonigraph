@@ -7,6 +7,7 @@ mod compose;
 mod contract;
 mod device;
 mod fixtures;
+mod gather_timing;
 mod glow_colour;
 mod glow_markers;
 mod glow_reach;
