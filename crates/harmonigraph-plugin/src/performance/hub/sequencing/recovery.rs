@@ -99,6 +99,17 @@ impl Recovery {
 
 impl Hub {
     #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_recovery_output_waiting(&self) -> bool {
+        self.sequencer.recovery.participants.iter().enumerate().any(|(source, participant)| {
+            participant.cuts.is_some_and(|cuts| self.rows[source].applied < cuts.output)
+        })
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_delivery_owed(&self, source: usize, life: u16) -> bool {
+        self.sequencer.plans[source * LIFETIMES + usize::from(life)]
+            .is_some_and(|plan| !plan.sent && plan.binding.decision > self.sequencer.cohort_floor)
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_reset_progress(&self) -> String {
         format!(
             "transition={:?} invalidated={} shared={:?} direct={} rows={:?}",
@@ -302,7 +313,10 @@ impl Hub {
             // Callback join ended every traversal reader. Inventory ownership
             // still settles normally; a retired Hub never computes new policy.
             self.frozen_captures.abandon();
+            // Retire the count and its decision interval together. Finish may
+            // still wait on old factual output while terminal Plans are paid.
             self.sequencer.cohort_unsent = 0;
+            self.sequencer.cohort_floor = self.sequencer.decision;
             self.sequencer.cohort_recipients = 0;
             self.sequencer.committing = false;
             self.sequencer.config = None;
@@ -750,6 +764,7 @@ impl Hub {
         // queued old replies cannot authorize decisions above the frozen ceiling.
         self.frozen_captures.abandon();
         self.sequencer.cohort_unsent = 0;
+        self.sequencer.cohort_floor = self.sequencer.decision;
         self.sequencer.cohort_recipients = 0;
         self.sequencer.committing = false;
         self.sequencer.membership = None;

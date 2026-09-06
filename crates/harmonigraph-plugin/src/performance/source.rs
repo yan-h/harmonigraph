@@ -522,6 +522,14 @@ impl Source {
         assert!(!self.producer_joined);
         self.joined_unknown_wire = self.unknown_joined_wire_state();
         self.producer_joined = true;
+        if self.joined_unknown_wire {
+            // Destruction removes the only possible owner of further physical
+            // termination. Publish its exact row evidence before the joined
+            // control message can wait behind a full mailbox; the Hub decides
+            // local/session scope from its retained membership. Missing initial
+            // controller state and factual ACK debt alone are not wire loss.
+            self.fault(REFERENCE_FAULT);
+        }
         self.discard_wave_prefix_pins();
     }
     pub fn joined_cut(&self) -> Option<u64> {

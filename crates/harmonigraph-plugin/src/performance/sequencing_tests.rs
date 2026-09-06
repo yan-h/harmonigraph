@@ -2502,3 +2502,238 @@ fn production_reset_requires_fresh_complete_input_after_a_same_class_fault() {
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_terminal_abort_retires_delivery_before_waiting_for_factual_output() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(2048, vec![], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(source.source_snapshot().held, 1);
+    source.run_format(2560, vec![note(2, 1, 64, 0, true)], None, None, 512);
+    let original = inspect_source(&source, |s| s.test_capture(2).unwrap());
+    let hub_wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    let fill = || {
+        hub_wrapper.test_with_plugin(|plugin| {
+            let replies =
+                &mut plugin.aggregation.as_mut().unwrap().offer.as_mut().unwrap().bank.rows[0]
+                    .replies;
+            while replies.slots() != 0 {
+                replies
+                    .push(protocol::Reply::PlanRetired {
+                        incarnation: 0,
+                        epoch: 0,
+                        life: 0,
+                        lifetime: 0,
+                        decision: 0,
+                    })
+                    .unwrap();
+            }
+        })
+    };
+    fill();
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
+    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 1);
+    hub_wrapper
+        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_request_recovery(2));
+    // The Source advances continuously ahead of the Hub. The established Off
+    // is actual accepted output, but the Hub cannot yet publish its time.
+    let mut source_raw = 2560;
+    for _ in 0..96 {
+        source_raw += 512;
+        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
+    }
+    source_raw += 512;
+    assert!(source
+        .run_format(source_raw, vec![note(1, 0, 60, 0, false)], None, None, 512)
+        .values
+        .is_empty());
+    source_raw += 512;
+    let off = source.run_format(source_raw, vec![], None, None, 512);
+    assert_eq!(off.values.iter().filter(|(_, e)| e.release()).count(), 1);
+    let mut hub_raw = 2560;
+    for _ in 0..96 {
+        fill();
+        hub_raw += 512;
+        hub.run_format(hub_raw, vec![], None, None, 512);
+        if inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Rebuild") {
+            break;
+        }
+        source_raw += 512;
+        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
+    }
+    assert!(inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Rebuild"));
+    assert!(inspect_hub(&hub, |h| h.test_recovery_output_waiting()));
+    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 1);
+    assert!(inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
+    // Actual input loss promotes this transaction while its output cut is
+    // still retained and publishes the original On's cancellation.
+    source_raw += 512;
+    source.run_status(
+        source_raw,
+        (0..2049).map(|_| raw_midi([0xf8, 0, 0], 0)).collect(),
+        None,
+        None,
+        512,
+        true,
+    );
+    assert_ne!(source.source_snapshot().faults & source::INPUT_FAULT, 0);
+    assert_eq!(source.source_snapshot().manifest, 1);
+    fill();
+    hub_raw += 512;
+    println!(
+        "TERMINAL ABANDONMENT source={source_raw} hub={hub_raw} output_wait={} unsent={}",
+        inspect_hub(&hub, |h| h.test_recovery_output_waiting()),
+        inspect_hub(&hub, |h| h.test_cohort_delivery().1)
+    );
+    hub.run_format(hub_raw, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |h| h.test_recovery_progress()).contains("phase=Finish"));
+    assert!(inspect_hub(&hub, |h| h.test_recovery_output_waiting()));
+    assert_eq!(
+        inspect_hub(&hub, |h| h.test_plan_state(0, original.life)),
+        Some((true, true, true))
+    );
+    assert_eq!(inspect_hub(&hub, |h| h.test_cohort_delivery().1), 0);
+    assert!(!inspect_hub(&hub, |h| h.test_delivery_owed(0, original.life)));
+    while hub_raw < source_raw {
+        hub_raw += 512;
+        hub.run_format(hub_raw, vec![], None, None, 512);
+    }
+    for _ in 0..256 {
+        source_raw += 512;
+        assert!(source.run_format(source_raw, vec![], None, None, 512).values.is_empty());
+        hub.run_format(source_raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        (
+            source.source_snapshot().pending,
+            source.source_snapshot().lives,
+            source.source_snapshot().held
+        ),
+        (0, 0, 0)
+    );
+    drop(source);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn production_destroyed_held_source_closes_pending_peer_without_fabricating_release() {
+    let _scope = crate::test_scope::enter();
+    if std::env::var_os("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").is_none() {
+        for held in [true, false] {
+            assert!(std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "performance::tests::sequencing_tests::production_destroyed_held_source_closes_pending_peer_without_fabricating_release", "--nocapture", "--test-threads=1"])
+            .env("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD", held.to_string()).status().unwrap().success());
+        }
+        return;
+    }
+    let held = std::env::var("HARMONIGRAPH_TERMINAL_OWNER_LOSS_CHILD").unwrap() == "true";
+    // The real destroyed producer cannot accept an Off. Its physical debt
+    // intentionally retains an owner, isolated from unrelated registry tests.
+    let uuid = SavedUuid::default();
+    let calibration =
+        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let mut a = Device::new(true);
+    a.configure_format(uuid, true, calibration);
+    a.activate_format(44100.0, 512);
+    let mut b = Device::new(true);
+    b.configure_format(uuid, true, calibration);
+    b.activate_format(44100.0, 512);
+    for raw in [0, 512, 1024] {
+        a.run_format(raw, vec![], None, None, 512);
+        b.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    a.run_format(1536, vec![], None, None, 512);
+    b.run_format(
+        1536,
+        if held { vec![note(7, 0, 60, 0, true)] } else { vec![transport(0, 120.0)] },
+        None,
+        None,
+        512,
+    );
+    hub.run_format(1536, vec![], None, None, 512);
+    a.run_format(2048, vec![], None, None, 512);
+    let mut stop = transport(0, 120.0);
+    let Input::Transport(ref mut event) = stop else { unreachable!() };
+    event.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    let b_output = b.run_format(2048, if held { vec![] } else { vec![stop] }, None, None, 512);
+    assert_eq!(
+        b_output.values.iter().filter(|(_, e)| e.attack().is_some()).count(),
+        usize::from(held)
+    );
+    assert_eq!(
+        b.source_snapshot().faults,
+        0,
+        "empty healthy Stop is nonfatal without a controller seed"
+    );
+    hub.run_format(2048, vec![], None, None, 512);
+    a.run_format(
+        2560,
+        vec![note(8, 0, 64, 0, true), expression(8, 0.125, 10), note(8, 0, 64, 20, false)],
+        None,
+        None,
+        512,
+    );
+    let original = inspect_source(&a, |s| s.test_capture(1).unwrap());
+    b.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |h| h.test_plan_binding(0, original.life)).is_some());
+    assert_eq!(b.source_snapshot().held, usize::from(held));
+    let cut = b.source_snapshot().sequence;
+    let id = b.shared().registration().unwrap();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    drop(b);
+    assert_eq!(session.rows[1].faults.load(Ordering::Acquire) & source::REFERENCE_FAULT != 0, held);
+    let mut accepted = Vec::new();
+    for raw in (3072..134_144).step_by(512) {
+        // The Hub observes owner loss before the peer's next emission permit.
+        hub.run_format(raw, vec![], None, None, 512);
+        accepted.extend(
+            a.run_format(raw, vec![], None, None, 512)
+                .values
+                .into_iter()
+                .map(|(time, event)| (raw + i64::from(time), event)),
+        );
+        hub.main();
+        a.main();
+    }
+    assert_eq!(inspect_hub(&hub, |h| h.test_terminal_scope()).0, held);
+    if held {
+        assert!(accepted.is_empty(), "unclaimed peer group cannot emit after the observed close");
+    } else {
+        assert_eq!(
+            accepted.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
+            [3072, 3072, 3082, 3092]
+        );
+        assert_eq!(accepted.iter().filter(|(_, e)| e.attack().is_some()).count(), 1);
+        assert_eq!(accepted.iter().filter(|(_, e)| e.release()).count(), 1);
+        assert_eq!(a.source_snapshot().faults, 0);
+    }
+    assert!(!inspect_hub(&hub, |h| h.test_recovery_progress()).contains("active=true"));
+    assert_eq!((a.source_snapshot().pending, a.source_snapshot().held), (0, 0));
+    if held {
+        let joined = inspect_hub(&hub, |h| h.test_joined_rows()[1]);
+        assert_eq!(joined.1, Some(cut));
+        assert!(joined.2);
+        let retained = registry::global().lock().unwrap().test_retired_source_state(id).unwrap();
+        assert_eq!((retained.held, retained.sequence), (1, cut));
+    }
+    drop(a);
+    drop(hub);
+    assert_eq!(
+        registry::global().lock().unwrap().test_counts(),
+        if held { (1, 1, 1) } else { (0, 0, 0) }
+    );
+}

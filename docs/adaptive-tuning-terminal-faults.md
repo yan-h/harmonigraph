@@ -14,10 +14,20 @@ Only explicit Reset followed by a valid complete-input callback with a live matc
 A newly observed fault consumes that authorization even if its class matches the old latch;
 re-reading previously published fault bits does not.
 
+Actual producer destruction with retained wire state or release debt publishes owner-loss evidence to that Source's fault row before its ProducerJoined message can wait behind a full mailbox.
+The predicate is sampled before fault handling can arm repairs.
+An empty Source with unknown initial controllers, or an accepted Off waiting only for factual acknowledgement, does not satisfy it.
+The Hub uses retained membership to classify scope and close existing emission gates;
+a group that acquired its permit before the close still completes truthfully, while an unclaimed group cannot acquire a permit after the close.
+Physical debt from the destroyed producer remains owned without fabricated termination.
+
 The Hub retains request identities for the whole finite recovery reader.
 Canceled unbound identities survive until their Original is consumed;
 terminal cohort delivery is paid once before a full reply ring or identity hold can delay retirement.
 A DONE Original with a legitimately retired Plan remains valid.
+Abandoning a delivery generation clears both its unsent count and its decision interval in the same owned operation.
+Otherwise Finish can wait for factual output while an old terminal Plan attempts to pay against an already cleared count.
+Ordinary context rebuild retires the same interval when it abandons old deliveries; retained identities and actual output cuts remain separate.
 A local terminal request arriving during ordinary recovery waits behind that reader without closing unrelated participants or discarding its pending continuation.
 The failed nonmember's initial baseline is factually published and acknowledged after its terminal cut, without enrolling it or pinning healthy publication forever.
 
@@ -112,7 +122,7 @@ Exact guarded commands and their results are recorded with the final handoff.
 
 All tests use `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 RUSTC_WRAPPER=''`, this worktree's target and `--offline`.
 The production allocation guard is explicitly enabled with `--features nice-plug/assert_process_allocs`.
-The guarded `production_` group passed all 28 tests after the final accepted-cut Progress correction.
+The guarded `production_` group passed all 30 tests after the owner-loss and delivery-generation review corrections.
 The Capture ownership group passed all 10 tests, including real Pending/Birth reuse and mixed-generation captured targets.
 The live retired-Hub fixture measured 52 callbacks to settle 3,584 accepted Original/output owners after Hub destruction;
 it allows 64 callbacks and keeps the distinct all-joined pump bound above.
@@ -133,6 +143,14 @@ cargo fmt --all
 Workspace Clippy, formatting and semantic Markdown checks pass.
 The broader plugin run remains failed: ordinary credit/publication and controller-replay expectations require their own triage alongside the two issues above.
 Neither the selected groups nor the guarded allocator measurement substitute for full CI, independent review or practical D512 qualification.
+
+The review correction adds two reaching fixtures.
+The owner-loss fixture destroys an enrolled Source with an accepted held note while a peer owns a bound but unclaimed onset, then observes terminal completion with the peer inhibited and the destroyed Source's physical debt still retained.
+Its empty-source variant uses uninitialized controller state and a real healthy Stop, then verifies the peer's complete note, tuning, expression and Off and zero remaining registry owners.
+The accounting fixture keeps a real assignment reply ring full, advances one Source continuously ahead of its Hub, and accepts an established Off at its actual D512 due callback.
+It reaches ordinary Rebuild with one unpaid bound Plan and an unapplied factual cut, then a real input-inspection fault cancels that On and promotes terminal recovery.
+The pre-correction run reached the service_plans assertion inside the actual allocation-guarded Hub callback; the correction retires the old delivery interval while Finish still waits for output.
+Ordinary recovery activation remains outside this checkpoint's qualification.
 
 ## Memory ledger
 
