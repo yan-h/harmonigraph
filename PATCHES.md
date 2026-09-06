@@ -22,6 +22,9 @@ The fixed 512-normal/128-emergency scheduler exposes prepare, actual accepted-pr
 an opted-in plugin cannot infer acceptance from legacy `send_event`.
 Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
 Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
+Joined wrapper destruction takes the configuration runtime and calls `clap_configuration_retire(unfinished)` before `clap_main_destroy` transfers recording ownership.
+The hook disposes unfinished input, command and learning ownership without claiming successful application or advancing a sample prefix;
+the plugin retains original recording routes until joined actual output has a publication disposition.
 Tune's performance-only opt-in creates no configuration mailbox.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.

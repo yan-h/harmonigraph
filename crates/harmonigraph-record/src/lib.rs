@@ -661,6 +661,17 @@ impl Recorder {
     pub fn fail_configuration(&self) {
         self.fence.fail();
     }
+    /// Called after callback join, before retiring configuration can fail.
+    /// Moving this Recorder preserves the unique publication owner's hold.
+    pub fn hold_retired_publication(&self) {
+        self.fence.retirement_hold.store(true, Ordering::Release);
+    }
+    /// Every joined source's immutable final actual cut has a publication
+    /// payload or explicit loss disposition. This does not release note credit.
+    pub fn retired_publication_complete(&mut self) {
+        self.fence.retirement_hold.store(false, Ordering::Release);
+        self._writer_lifetime = None;
+    }
     pub fn configuration_at(
         &mut self,
         address: RecordAddress,
@@ -1138,7 +1149,12 @@ pub fn channel() -> (Recorder, Control) {
             // Failure is pending until both lanes, including the independent
             // loss snapshot, have delivered their retained prefix to its file.
             if thread_fence.failed.load(Ordering::Acquire) {
-                if !failure.contains(thread_fence.epoch())
+                #[cfg(feature = "test-support")]
+                thread_fence.worker_before_retirement_check.reach();
+                // Acquire the terminal ownership release BEFORE checking the
+                // lanes again; the release may follow their last publication.
+                if !thread_fence.retirement_hold.load(Ordering::Acquire)
+                    && !failure.contains(thread_fence.epoch())
                     && consumer.is_empty() && publications.settled()
                     && (open.is_some() || disconnected)
                 {
@@ -1172,7 +1188,8 @@ pub fn channel() -> (Recorder, Control) {
             }
             // Shutdown uses the same cross-lane pump and honors a now-ready
             // Stop first. Only ownership still unresolved after that is lost.
-            if disconnected && consumer.is_empty() {
+            if disconnected && !thread_fence.retirement_hold.load(Ordering::Acquire)
+                && consumer.is_empty() {
                 if publications.settled() {
                     if open.is_some() {
                         thread_fence.fail();
@@ -1273,6 +1290,16 @@ pub mod testing {
         }
         pub fn failed(&self) -> bool {
             self.fence.failed.load(Ordering::Acquire)
+        }
+        pub fn pause_retirement_check(&self) {
+            self.fence.worker_before_retirement_check.entered.store(false, Ordering::Release);
+            self.fence.worker_before_retirement_check.enabled.store(true, Ordering::Release);
+        }
+        pub fn retirement_check_paused(&self) -> bool {
+            self.fence.worker_before_retirement_check.entered.load(Ordering::Acquire)
+        }
+        pub fn resume_retirement_check(&self) {
+            self.fence.worker_before_retirement_check.enabled.store(false, Ordering::Release);
         }
     }
 
@@ -1410,7 +1437,8 @@ pub mod testing {
                 &self.failure,
             );
             if self.fence.failed.load(Ordering::Acquire) {
-                if capture._records.is_empty()
+                if !self.fence.retirement_hold.load(Ordering::Acquire)
+                    && capture._records.is_empty()
                     && capture.publications.settled()
                     && !self.failure.contains(self.fence.epoch())
                 {
@@ -3841,6 +3869,60 @@ mod tests {
             fence.failed.load(Ordering::Acquire),
             "producer closure alone cannot prove deferred configuration complete"
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() {
+        let (mut recorder, mut capture) = testing::channel();
+        recorder.enable_configuration();
+        recorder.enable_canonical();
+        capture.arm();
+        assert!(recorder.is_armed());
+        let address = recorder.configuration_address().unwrap();
+        let directory = std::env::temp_dir()
+            .join(format!("harmonigraph-held-full-publication-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("record.take");
+        let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
+        recorder.hold_retired_publication();
+        recorder.fail_configuration();
+        writer.drain(&mut capture);
+        assert_eq!(writer.current_pass(), Some(1), "empty lanes cannot close a held failed take");
+        let route = publication::Route { address: Some(address), time_offset: 0.0 };
+        for i in 0..publication::PUBLICATION_RING {
+            let time = i as f64 / 48000.0;
+            let event = if i % 2 == 0 {
+                harmonigraph_core::NoteEvent::on(time, SourceId::DIRECT, 0, 60, 0.8)
+            } else {
+                harmonigraph_core::NoteEvent::off(time, SourceId::DIRECT, 0, 60)
+            };
+            recorder.publish_note(event.into(), time, route).unwrap();
+        }
+        assert_eq!(recorder.publication_free(), 0);
+        recorder.publication_lost(4096.0 / 48000.0, route);
+        recorder.retired_publication_complete();
+        assert_eq!(
+            recorder.publication_free(),
+            0,
+            "hold release needs no ordinary publication slot"
+        );
+        writer.drain(&mut capture);
+        assert!(
+            writer.current_pass().is_none(),
+            "full lane and independent loss must drain before failure closes"
+        );
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        assert!(take.incomplete.is_some());
+        assert_eq!(
+            take.events
+                .iter()
+                .filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(_)))
+                .count(),
+            publication::PUBLICATION_RING
+        );
+        assert!(take.events.iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Gap(gap) if gap.first == 4097 && gap.last == 4097)));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

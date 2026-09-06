@@ -175,6 +175,9 @@ pub struct Source {
     wave_shift: i64,
     stopping: bool,
     transport_playing: bool,
+    producer_joined: bool,
+    joined_published: bool,
+    joined_unknown_wire: bool,
     stops: stop::Stops,
     setup_pending: [Option<super::slots::Retained<setup::Update>>; 2],
     manifest: Queue<Manifest, 64>,
@@ -283,6 +286,9 @@ impl Source {
             wave_shift: 0,
             stopping: false,
             transport_playing: false,
+            producer_joined: false,
+            joined_published: false,
+            joined_unknown_wire: false,
             stops: stop::Stops::default(),
             setup_pending: [None, None],
             manifest: Queue::default(),
@@ -356,8 +362,26 @@ impl Source {
     pub fn held(&self) -> usize {
         self.reserved.iter().filter(|v| **v != NONE).count()
     }
+    /// Only the main-thread destroy path may make this immutable no-more-wire
+    /// assertion. Retirement never invokes a host or increments sequence.
+    pub fn join_producer(&mut self) {
+        assert!(!self.producer_joined);
+        self.joined_unknown_wire = self.unknown_joined_wire_state();
+        self.producer_joined = true;
+    }
+    pub fn joined_cut(&self) -> Option<u64> {
+        self.producer_joined.then_some(self.sequence)
+    }
+    pub fn unknown_joined_wire_state(&self) -> bool {
+        self.state.count() != 0
+            || self.state.pedals_held()
+            || self.owed_note_off != [NONE; 64]
+            || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
+            || self.channel_reset != [0; 16]
+    }
     pub fn settled(&self) -> bool {
         self.held() == 0
+            && !self.state.pedals_held()
             && self.owed_note_off == [NONE; 64]
             && self.journal.len() == 0
             && self.emergency_output.len() == 0
@@ -370,6 +394,7 @@ impl Source {
     }
     fn lease_settled(&self) -> bool {
         self.held() == 0
+            && !self.state.pedals_held()
             && self.owed_note_off == [NONE; 64]
             && self.journal.len() == 0
             && self.emergency_output.len() == 0
@@ -1971,6 +1996,24 @@ impl Source {
             self.transfer();
         }
         self.publish_seal();
+        if self.producer_joined && !self.joined_published && self.transfer_cut == self.sequence {
+            if let Some(offer) = &self.offer {
+                if self.adopt_sent
+                    && offer.session.rows[usize::from(offer.lease.slot - 1)]
+                        .to_hub
+                        .publish(Control::ProducerJoined {
+                            incarnation: offer.lease.incarnation,
+                            epoch: self.epoch,
+                            cut: self.sequence,
+                            unknown_wire: self.joined_unknown_wire,
+                        })
+                        .is_ok()
+                {
+                    self.joined_published = true;
+                    self.service_revision = self.service_revision.wrapping_add(1);
+                }
+            }
+        }
         if let Some(offer) = &self.offer {
             let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
             if !self.detaching && self.adopt_sent && self.transfer_cut == self.sequence {
@@ -2100,6 +2143,7 @@ impl Source {
 
     fn publish_seal(&mut self) {
         if self.sealed
+            || self.state.pedals_held()
             || self.owed_note_off != [NONE; 64]
             || self.old_pending != 0
             || self.state.count() != 0

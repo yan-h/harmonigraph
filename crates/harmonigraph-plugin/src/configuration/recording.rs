@@ -45,6 +45,10 @@ pub(crate) struct Recording {
     pub prefix: i64,
     pub block_start: i64,
     pub block_frames: u32,
+    /// Terminal wrapper ownership, separate from successful configuration and
+    /// source prefixes. Original recording routes remain until actual join cuts.
+    pub retired_configuration: Option<bool>,
+    pub retirement_finished: bool,
 }
 impl Default for Recording {
     fn default() -> Self {
@@ -61,10 +65,52 @@ impl Default for Recording {
             prefix: 0,
             block_start: 0,
             block_frames: 0,
+            retired_configuration: None,
+            retirement_finished: false,
         }
     }
 }
 impl Recording {
+    pub fn dispose_retired_configuration(
+        &mut self,
+        recorder: &mut Recorder,
+        timeline: &ConfigTimeline,
+    ) {
+        let unfinished = self.retired_configuration.expect("joined configuration producer");
+        // Retain every already-applied change at its original recording route.
+        self.finish(recorder, timeline);
+        if unfinished
+            && self
+                .segments
+                .iter()
+                .flatten()
+                .any(|segment| segment.address.is_some() && segment.end > self.prefix)
+        {
+            recorder.fail_configuration();
+        }
+    }
+    /// All original source producers have joined/sealed and every final actual
+    /// cut has been published or explicitly lost. No synthetic prefix or seed.
+    pub fn finish_retired_publication(&mut self, recorder: &mut Recorder, unknown_held: bool) {
+        assert!(self.retired_configuration.is_some());
+        if unknown_held
+            || self.changes.iter().any(Option::is_some)
+            || self.passes.iter().flatten().any(|pass| !pass.configuration_complete)
+            || self
+                .segments
+                .iter()
+                .flatten()
+                .any(|segment| segment.address.is_some() && segment.end > self.prefix)
+        {
+            recorder.fail_configuration();
+        }
+        self.segments.fill(None);
+        self.changes.fill(None);
+        self.passes.fill(None);
+        self.current = None;
+        self.retirement_finished = true;
+        recorder.retired_publication_complete();
+    }
     pub fn owns_recording(&self) -> bool {
         self.current.is_some()
             || self.passes.iter().any(Option::is_some)

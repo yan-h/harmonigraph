@@ -187,6 +187,9 @@ impl Direct {
     pub fn pending(&self) -> Option<NoteDelta> {
         self.pending.front()
     }
+    pub fn pending_end(&self) -> Option<i64> {
+        self.pending.get(self.pending.len().checked_sub(1)?)?.timing?.sample.checked_add(1)
+    }
     pub fn published(&mut self) {
         self.pending.pop();
     }

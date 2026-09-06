@@ -217,7 +217,7 @@ impl Registry {
     pub fn test_session(&self, uuid: SavedUuid) -> Arc<SessionControl> {
         self.hubs.iter().flatten().find(|h| h.uuid == uuid && !h.retired).unwrap().session.clone()
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_counts(&self) -> (usize, usize, usize) {
         (
             self.hubs.iter().flatten().count(),
@@ -434,6 +434,7 @@ pub fn retire_source(mut owner: Box<super::source::Source>) {
         return;
     };
     owner.stop();
+    owner.join_producer();
     {
         let mut registry = global().lock().unwrap();
         let entry = registry.sources.iter_mut().flatten().find(|s| s.id == id).unwrap();
@@ -498,7 +499,10 @@ pub fn service_retired() {
     // ceil(8192/256)+ceil((2*(8192+32768)+65*672)/(2048-2*65))=98,
     // including blocked-parent restarts and indivisible cleanup tails.
     // Every outer round services all four sessions independently.2048 rounds
-    // exceed the1422-round sum; missing external proof still exits immediately.
+    // exceed the1438-round sum, including16 serialized joined-producer control
+    // consumptions. Mailbox retries wait only for the reports/output phases
+    // already counted above; joined publication/consumption bump revision and
+    // add no acknowledgement lane. Missing external proof still exits immediately.
     for _ in 0..2048 {
         if !service_retired_once() {
             break;

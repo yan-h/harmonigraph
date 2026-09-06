@@ -692,6 +692,42 @@ fn one_owned_input_pool_reaches_2048_and_refuses_growth_while_work_is_retained()
     assert_eq!(device.mailbox().visible().0.status, 0);
 }
 
+#[test]
+fn destroyed_configuration_owners_settle_without_reset_or_another_callback() {
+    let _scope = crate::test_scope::enter();
+    let mut retained = Vec::new();
+    for commands in [false, true] {
+        let mut device = Device::new();
+        if commands {
+            let mailbox = device.mailbox();
+            device.load(restored(&device, 690.0), false);
+            device.load(restored(&device, 695.0), false);
+            for _ in 0..126 {
+                mailbox.submit(packet(ConfigEdit::default())).unwrap();
+            }
+            device.activate();
+            device.run(0, vec![], false);
+            device.load(restored(&device, 705.0), false);
+            assert!(mailbox.visible().1, "accepted configuration is still owned by the wrapper");
+        } else {
+            device.activate();
+            device.run(
+                0,
+                (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect(),
+                false,
+            );
+            let (status, _) =
+                device.run_status(64, vec![device.param(ParamKey::Three, 695.0, 0)], false);
+            assert_eq!(status, CLAP_PROCESS_ERROR);
+            assert_eq!(device.mailbox().visible().0.status & 2, 2);
+        }
+        drop(device);
+        let counts = crate::performance::registry::global().lock().unwrap().test_counts();
+        retained.push(counts);
+    }
+    assert_eq!(retained, [(0,0,0), (0,0,0)], "actual destruction settles both states without Reset, a rescue callback, or another instance's main-thread service");
+}
+
 #[derive(Default)]
 struct Legacy {
     params: std::sync::Arc<crate::HarmonigraphParams>,

@@ -49,6 +49,8 @@ struct Row {
     ingress: Queue<Intent, 1024>,
     input_coverage: Option<(Coverage, u64)>,
     seal: Option<u64>,
+    producer_joined: Option<u64>,
+    joined_unknown_wire: bool,
     seal_generation: u64,
     last_sealed_ack: Option<(u64, u64)>,
     joining: Option<i64>,
@@ -77,6 +79,8 @@ impl Default for Row {
             ingress: Queue::default(),
             input_coverage: None,
             seal: None,
+            producer_joined: None,
+            joined_unknown_wire: false,
             seal_generation: 0,
             last_sealed_ack: None,
             joining: None,
@@ -406,6 +410,8 @@ impl Hub {
                 row.last_ack = None;
                 row.input_coverage = None;
                 row.seal = None;
+                row.producer_joined = None;
+                row.joined_unknown_wire = false;
                 row.last_sealed_ack = None;
                 row.joining = None;
             }
@@ -456,6 +462,17 @@ impl Hub {
                     {
                         row.seal = Some(cut);
                         row.seal_generation = generation;
+                        row.joining = None;
+                    }
+                    Control::ProducerJoined { incarnation, epoch, cut, unknown_wire }
+                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                            && epoch == row.epoch
+                            && shared.withdrawn.load(Ordering::Acquire)
+                            && row.received <= cut
+                            && row.producer_joined.is_none_or(|old| old == cut) =>
+                    {
+                        row.producer_joined = Some(cut);
+                        row.joined_unknown_wire = unknown_wire;
                         row.joining = None;
                     }
                     Control::Detach { incarnation, epoch, cut }
@@ -702,7 +719,11 @@ impl Hub {
                 through = through.min(start);
             }
             if member {
-                if self.rows[index].seal.is_some_and(|cut| self.rows[index].received >= cut) {
+                if self.rows[index]
+                    .seal
+                    .or(self.rows[index].producer_joined)
+                    .is_some_and(|cut| self.rows[index].received >= cut)
+                {
                     continue;
                 }
                 let Some(coverage) = self.rows[index].coverage else {
@@ -885,7 +906,7 @@ impl Hub {
             && owner.direct.pending().is_none()
             && self.rows.iter().all(|row| {
                 row.lease.is_none()
-                    || row.seal == Some(row.applied)
+                    || row.seal.or(row.producer_joined) == Some(row.applied)
                         && row.output.len() == 0
                         && row.baseline.is_none()
             })
@@ -1166,11 +1187,10 @@ impl Hub {
         self.input_work = 0;
         self.merged = 0;
         self.collect();
-        if self
-            .rows
-            .iter()
-            .all(|row| row.lease.is_none() || row.seal.is_some_and(|cut| row.received >= cut))
-        {
+        if self.rows.iter().all(|row| {
+            row.lease.is_none()
+                || row.seal.or(row.producer_joined).is_some_and(|cut| row.received >= cut)
+        }) {
             let mut through = self.publication_through.unwrap_or(i64::MIN);
             for row in &*self.rows {
                 if let Some(last) =
@@ -1182,10 +1202,26 @@ impl Hub {
             self.retired_through = Some(through);
         }
         if let Some((mut owner, mut recorder, observation)) = self.retired_publication.take() {
-            self.publish(&mut owner, &mut recorder, observation);
-            owner.finish_recording_publication(&mut recorder, observation);
-            if owner.direct.pending().is_none() {
-                self.direct.acknowledge_seal();
+            if !owner.recording.retirement_finished {
+                if let (Some(through), Some(end)) =
+                    (self.retired_through.as_mut(), owner.direct.pending_end())
+                {
+                    *through = (*through).max(end);
+                }
+                self.publish(&mut owner, &mut recorder, observation);
+                owner.finish_recording_publication(&mut recorder, observation);
+                if owner.direct.pending().is_none() {
+                    self.direct.acknowledge_seal();
+                }
+                if self.retired_streams_published(&owner) {
+                    let unknown_held = self.direct.unknown_joined_wire_state()
+                        || self.rows.iter().any(|row| {
+                            row.joined_unknown_wire
+                                || row.state.count() != 0
+                                || row.state.pedals_held()
+                        });
+                    owner.recording.finish_retired_publication(&mut recorder, unknown_held);
+                }
             }
             self.retired_publication = Some((owner, recorder, observation));
         }
@@ -1248,14 +1284,51 @@ impl Hub {
             })
     }
 
-    pub fn retire_publication(&mut self, owner: Box<Owner>, recorder: Recorder, observation: f64) {
+    fn retired_streams_published(&self, owner: &Owner) -> bool {
+        self.direct.joined_cut().is_some()
+            && !self.clock_loss_pending
+            && owner.direct.pending().is_none()
+            && self.rows.iter().enumerate().all(|(index, row)| {
+                if row.lease.is_none() {
+                    return self.offer.as_ref().is_none_or(|offer| {
+                        offer.session.rows[index].source_detached.load(Ordering::Acquire)
+                    });
+                }
+                row.seal.or(row.producer_joined).is_some_and(|cut| row.applied == cut)
+                    && row.output.len() == 0
+                    && row.baseline.is_none()
+            })
+    }
+    pub fn retire_publication(
+        &mut self,
+        mut owner: Box<Owner>,
+        mut recorder: Recorder,
+        observation: f64,
+    ) {
         assert!(self.retired_publication.is_none());
+        self.direct.join_producer();
+        recorder.hold_retired_publication();
+        owner.recording.dispose_retired_configuration(&mut recorder, &owner.timeline);
+        if self.shared.registration().is_none() {
+            assert!(self.offer.is_none());
+            owner.publish_retired_direct(&mut recorder, observation);
+            owner
+                .recording
+                .finish_retired_publication(&mut recorder, self.direct.unknown_joined_wire_state());
+            return;
+        }
         self.retired_publication = Some((owner, recorder, observation));
     }
 }
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Hub {
+    pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
+        std::array::from_fn(|index| {
+            let row = &self.rows[index];
+            (row.lease, row.producer_joined, row.joined_unknown_wire, row.applied)
+        })
+    }
     pub fn test_rebase_output_prefix(&mut self, lease: Lease, prefix: u64) {
         let row = self.rows.iter_mut().find(|row| row.lease == Some(lease)).unwrap();
         assert_eq!(row.output.len(), 0);

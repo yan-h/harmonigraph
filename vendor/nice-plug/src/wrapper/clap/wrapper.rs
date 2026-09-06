@@ -2115,6 +2115,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         let this = unsafe { Arc::from_raw((*plugin).plugin_data as *mut Self) };
         crate::nice_debug_assert_eq!(Arc::strong_count(&this), 1);
 
+        this.retire_configuration();
         if P::CLAP_PERFORMANCE { this.plugin.lock().clap_main_destroy(); }
         drop(this);
     }

@@ -156,19 +156,40 @@ Concurrency deliberately created inside a fixture remains active.
 The two configuration-capacity fixtures invoke actual host Reset after their assertions, with accepted commands drained through bounded callbacks;
 scratch occupancy measurements confirmed every ordinary fixture returns registry counts to zero.
 Fixtures that intentionally retain unresolved owners remain isolated in child processes.
-This fixture cleanup does not repair the production destruction case:
-[issue #672](https://github.com/yan-h/harmonigraph/issues/672) records a retired Hub pinned by configuration work whose wrapper has already been destroyed.
-Its ownership/disposition repair remains required before final aggregation retirement clearance.
+[Issue #672](https://github.com/yan-h/harmonigraph/issues/672) now has a separate destruction repair:
+the joined wrapper explicitly disposes unfinished configuration input, commands and learning work while preserving applied configuration and original recording routes.
+It does not advance successful configuration/source prefixes or fabricate a seed.
+A Recorder-owned retirement hold prevents a failed take from closing while actual accepted Source output is still in transit.
+Joined sources publish an incarnation/epoch/final-sequence fact through the existing fixed control slots;
+that fact permits publication closure through actual output, independently of musical release and credit settlement.
+The worker observes hold release before checking its queues and independent loss snapshot again.
+Refused Hubs drain their joined observed DIRECT history and release this ownership synchronously because no registry entry can retain them.
+The original two configuration-capacity states now destroy without Reset or another audio callback and return registry capacity.
+Actual recording fixtures preserve On/Off at 67/87, retain all 16 applied 690..705 configuration values at sample 128 and omit unapplied 706. Additional joined On-only, owed CC120 physical-Off and pedal-only cases close Incomplete files while retaining unresolved musical owners.
+The pedal-only fixture also exposed a prerequisite defect:
+a source could previously seal a held pedal when no voices remained, so seal and settlement now require factual pedal neutralization.
+A real reused source slot has the same old/new accepted cut 2 but a new incarnation and no inherited joined proof.
+An actual refused fifth Hub closes its incomplete recording while the four registered Hubs remain alive.
+A file-backed recorder fixture holds a failed take open through empty lanes, then fills all 4,096 publication slots and retains one further explicit loss.
+Releasing retirement ownership while the ordinary lane is still full permits closure only after all 4,096 deltas and the exact 4097 loss reach the file.
 The Stop/Reset correction passed 121 guarded plugin tests with two test workers and the separately coordinated callback timing fixture excluded.
 The optional probe build follows its existing export selection:
 production Tune/native-editor code and helpers used only by production Tune fixtures are excluded when `tuning-probe` supplies the companion class.
 Stop markers share the existing 8,192 pending cells and use constant-time unlinking during the existing retirement cleanup phase;
-they add no retirement handshake or pool beyond the established 1,422-round bound.
-The full 16-owner event/reference retirement fixture and actual four-session factory retirement passed again.
+they add no retirement handshake or pool.
+Joined-producer publication adds 16 conservatively serialized control-consumption rounds to the former 1,422-round bound, giving 1,438 below the existing 2,048-round ceiling.
+Retries wait for already-accounted report/output drainage and publish/consume each advance the service revision;
+there is no new acknowledgement lane.
+The full 16-owner event/reference fixture still reaches 8,192 inputs and 32,768 references per owner plus 256 actual terminal reservations.
+Temporary diagnostics measured 659 final service rounds, 168 joined publication attempts, 16 successes and 16 consumptions;
+those observed counts are evidence of retry reach, not the worst-case proof.
+The diagnostics are not shipped.
+The actual four-session factory retirement also returns registry counts to zero.
 Native interaction checks used an isolated local CLAP host and actual AppKit controls, with saved state and host-callback receipts confirming the action;
 they did not load or modify Bitwig.
-These corrections address the first-checkpoint findings and the follow-up Stop sample-boundary and unpaired Reset-cut findings, and await committed-head re-review;
-they do not complete the remaining integration below.
+The Stop sample-boundary, unpaired Reset-cut and optional-probe export corrections cleared both scoped independent reviews and CI at 3c529a1a.
+The separate issue #672 repair awaits committed-head review;
+neither checkpoint completes the remaining integration below.
 
 ## Remaining integration boundary
 

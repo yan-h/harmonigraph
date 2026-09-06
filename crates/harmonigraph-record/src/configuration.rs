@@ -21,6 +21,9 @@ pub(crate) struct RecordFence {
     pub failed: AtomicBool,
     pub configuration_closed: AtomicU64,
     pub source_closed: AtomicU64,
+    /// The joined plugin still owns actual source history not yet published.
+    /// Only its retired publication owner may release this failure-close hold.
+    pub retirement_hold: AtomicBool,
     #[cfg(feature = "test-support")]
     pub worker_after_empty: TestPause,
     #[cfg(feature = "test-support")]
@@ -29,6 +32,8 @@ pub(crate) struct RecordFence {
     pub worker_finished: AtomicBool,
     #[cfg(feature = "test-support")]
     pub worker_empty_visits: AtomicU64,
+    #[cfg(feature = "test-support")]
+    pub worker_before_retirement_check: TestPause,
     #[cfg(all(test, feature = "test-support"))]
     pub worker_failure_accounted: AtomicBool,
     #[cfg(feature = "test-support")]

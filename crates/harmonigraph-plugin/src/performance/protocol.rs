@@ -109,10 +109,36 @@ pub struct OutputDelta {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
-    Adopt { lease: Lease, epoch: u64, start: i64 },
-    Progress { incarnation: u64, epoch: u64, coverage: Coverage, output_cut: u64 },
-    Seal { incarnation: u64, epoch: u64, generation: u64, cut: u64 },
-    Detach { incarnation: u64, epoch: u64, cut: u64 },
+    Adopt {
+        lease: Lease,
+        epoch: u64,
+        start: i64,
+    },
+    Progress {
+        incarnation: u64,
+        epoch: u64,
+        coverage: Coverage,
+        output_cut: u64,
+    },
+    Seal {
+        incarnation: u64,
+        epoch: u64,
+        generation: u64,
+        cut: u64,
+    },
+    /// Callback join fixes the last actually accepted output, even when a
+    /// missing physical release still pins musical credit. No sample coverage.
+    ProducerJoined {
+        incarnation: u64,
+        epoch: u64,
+        cut: u64,
+        unknown_wire: bool,
+    },
+    Detach {
+        incarnation: u64,
+        epoch: u64,
+        cut: u64,
+    },
 }
 
 #[derive(Clone, Copy)]

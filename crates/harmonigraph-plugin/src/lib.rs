@@ -782,6 +782,9 @@ impl ClapPlugin for Harmonigraph {
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         true
     }
+    fn clap_configuration_retire(&mut self, unfinished: bool) {
+        self.configuration.as_mut().unwrap().recording.retired_configuration = Some(unfinished);
+    }
     fn clap_main_destroy(&mut self) {
         let mut hub = self.aggregation.take().unwrap();
         hub.retire_publication(

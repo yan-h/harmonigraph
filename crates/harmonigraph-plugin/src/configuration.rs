@@ -391,13 +391,33 @@ impl Owner {
         recorder: &mut harmonigraph_record::Recorder,
         observation_time: f64,
     ) {
-        use harmonigraph_record::publication::PublishError;
         let Some(end) =
             self.recording.block_start.checked_add(i64::from(self.recording.block_frames))
         else {
             recorder.fail_configuration();
             return;
         };
+        self.publish_direct_history(recorder, observation_time, Some(end));
+        self.publish_direct_repair(recorder, observation_time);
+    }
+
+    /// A refused Hub has no peer or registry retirement owner. Its joined
+    /// wrapper still owes every observed DIRECT delta at its original route.
+    pub fn publish_retired_direct(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        observation_time: f64,
+    ) {
+        self.publish_direct_history(recorder, observation_time, None);
+        self.publish_direct_repair(recorder, observation_time);
+    }
+
+    fn publish_direct_history(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        observation_time: f64,
+        end: Option<i64>,
+    ) {
         // The Hub is the sole dispatcher of aggregation resync requests. A
         // later hint must remain pending for its next all-source collection.
         for _ in 0..crate::performance::direct::OUTPUT_WINDOW {
@@ -406,9 +426,11 @@ impl Owner {
             };
             let Some(timing) = delta.timing else {
                 recorder.fail_configuration();
-                break;
+                recorder.publication_lost(observation_time, Default::default());
+                self.direct.published();
+                continue;
             };
-            if timing.sample >= end {
+            if end.is_some_and(|end| timing.sample >= end) {
                 break;
             }
             let route = match self.recording_route(timing, delta.event.time) {
@@ -423,6 +445,13 @@ impl Owner {
             }
             self.direct.published();
         }
+    }
+    fn publish_direct_repair(
+        &mut self,
+        recorder: &mut harmonigraph_record::Recorder,
+        observation_time: f64,
+    ) {
+        use harmonigraph_record::publication::PublishError;
         // All available earlier history precedes this complete current-state
         // frame. Old onset metadata carries its original exact clock already;
         // only the baseline's present cut is routed through the current segment.

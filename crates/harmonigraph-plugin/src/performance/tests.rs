@@ -1687,12 +1687,36 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
 fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() {
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
+    if std::env::var_os("HARMONIGRAPH_JOINED_RECORDING_CHILD").is_none() {
+        for mode in 0..5 {
+            assert!(std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "performance::tests::retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer", "--nocapture", "--test-threads=1"])
+                .env("HARMONIGRAPH_JOINED_RECORDING_CHILD", mode.to_string()).status().unwrap().success());
+        }
+        return;
+    }
+    // Unknown wire state intentionally pins its musical owner after the actual
+    // recording stream closes. Each case owns a separate process.
+    let mode: usize =
+        std::env::var("HARMONIGRAPH_JOINED_RECORDING_CHILD").unwrap().parse().unwrap();
+    let blocked_configuration = matches!(mode, 1 | 2);
+    let unknown_held = mode == 2;
+    let owed_off = mode == 3;
+    let pedal_only = mode == 4;
+    let unknown_wire = unknown_held || owed_off || pedal_only;
     let uuid = SavedUuid::default();
-    let directory =
-        std::env::temp_dir().join(format!("harmonigraph-paused-retirement-{}", std::process::id()));
+    let directory = std::env::temp_dir()
+        .join(format!("harmonigraph-paused-retirement-{}-{mode}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let (recorder, control) = harmonigraph_record::channel();
     let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    struct ResumeWriter<'a>(&'a harmonigraph_record::testing::WorkerProbe);
+    impl Drop for ResumeWriter<'_> {
+        fn drop(&mut self) {
+            self.0.resume_retirement_check();
+        }
+    }
+    let _resume_writer = ResumeWriter(&writer);
     crate::configuration::inject_recorder(recorder);
     let mut hub = Device::new(false);
     hub.configure(uuid, true);
@@ -1721,37 +1745,101 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
             // The original factory Device and host outlive this joined callback.
             // Main operates only the independent hub while the source is paused.
             let source = unsafe { &*(address as *const Device) };
-            source.run(64, vec![note(91, 5, 60, 3, true), note(91, 5, 60, 23, false)], None)
+            let cc = |controller, value, time| {
+                Input::Midi(clap_event_midi {
+                    header: header::<clap_event_midi>(CLAP_EVENT_MIDI, time),
+                    port_index: 0,
+                    data: [0xb5, controller, value],
+                })
+            };
+            let notes = if pedal_only {
+                vec![cc(64, 127, 3)]
+            } else if owed_off {
+                vec![note(91, 5, 60, 3, true), cc(120, 0, 23)]
+            } else if unknown_held {
+                vec![note(91, 5, 60, 3, true)]
+            } else {
+                vec![note(91, 5, 60, 3, true), note(91, 5, 60, 23, false)]
+            };
+            source.run(64, notes, None)
         });
         wait_until(|| shared.before_transfer.entered.load(Ordering::Acquire));
-        assert_eq!(session.credits.load(Ordering::Acquire), 1);
+        assert_eq!(session.credits.load(Ordering::Acquire), usize::from(!pedal_only));
         hub.run(64, vec![], None); // owns the original recorded span of those accepted events
+        let mailbox = if blocked_configuration {
+            let wrapper = unsafe {
+                &*((*hub.plugin)
+                    .plugin_data
+                    .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+            };
+            let mailbox = wrapper.configuration_handle().unwrap();
+            for value in 690..707 {
+                mailbox
+                    .submit(crate::configuration::packet(
+                        harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
+                    ))
+                    .unwrap();
+            }
+            hub.run(128, vec![], None);
+            Some(mailbox)
+        } else {
+            None
+        };
         control.stop(None);
-        hub.run(128, vec![], None); // producer/config closure; actual source history is still paused
+        hub.run(if blocked_configuration { 192 } else { 128 }, vec![], None); // producer/config closure; actual source history is still paused
+        if let Some(mailbox) = &mailbox {
+            assert!(mailbox.visible().1);
+            assert!(
+                mailbox.visible().0.applied_id < mailbox.accepted_command.load(Ordering::Acquire),
+                "one real command remains after two callback budgets"
+            );
+            assert_eq!(mailbox.visible().0.raw[1], 705.0);
+        }
+        drop(mailbox);
         drop(control);
         drop(hub);
         assert!(registry::global().lock().unwrap().test_retained_hub(session.runtime));
         let visits = writer.empty_visits();
-        wait_until(|| writer.empty_visits() > visits + 1);
+        wait_until(|| writer.empty_visits() > visits + 2);
         assert!(!writer.finished(), "empty queues cannot destroy the writer while the actual source callback owns untransferred history");
+        if blocked_configuration {
+            // Freeze the actual worker after its drain, just before it reads
+            // the retirement hold. Publish the final notes and release the
+            // hold while frozen; it must recheck the lanes after Acquire.
+            writer.pause_retirement_check();
+            wait_until(|| writer.retirement_check_paused());
+        }
         let wakes = source._stats.callbacks.load(Ordering::Acquire);
         shared.before_transfer.enabled.store(false, Ordering::Release);
-        assert_eq!(callback.join().unwrap().values.len(), 2);
+        assert_eq!(
+            callback.join().unwrap().values.len(),
+            if unknown_held || pedal_only { 1 } else { 2 }
+        );
         assert!(
             source._stats.callbacks.load(Ordering::Acquire) > wakes,
             "surviving source requests its own valid main service"
         );
     });
-    source.main();
-    assert!(
-        registry::global().lock().unwrap().test_retained_hub(session.runtime),
-        "history publication alone does not settle the other endpoint user"
-    );
-    source.run(128, vec![], None);
-    source.main();
+    assert_eq!(source.source_snapshot().note_off_owed, usize::from(owed_off));
+    assert_eq!(source.source_snapshot().pedals_held, pedal_only);
+    let source = if blocked_configuration || unknown_wire {
+        // Callback join, then actual destruction: no rescue audio callback.
+        drop(source);
+        None
+    } else {
+        source.main();
+        assert!(
+            registry::global().lock().unwrap().test_retained_hub(session.runtime),
+            "history publication alone does not settle the other endpoint user"
+        );
+        source.run(128, vec![], None);
+        source.main();
+        Some(source)
+    };
+    writer.resume_retirement_check();
     wait_until(|| writer.finished());
-    assert!(!writer.failed());
-    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    assert_eq!(writer.failed(), blocked_configuration || unknown_wire);
+    assert_eq!(session.credits.load(Ordering::Acquire), usize::from(unknown_held));
     let file = std::fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1760,7 +1848,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         })
         .unwrap();
     let take = harmonigraph_take::Take::read(&file).unwrap();
-    assert!(take.incomplete.is_none());
+    assert_eq!(take.incomplete.is_some(), blocked_configuration || unknown_wire);
     let notes: Vec<_> = take
         .events
         .iter()
@@ -1769,16 +1857,169 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
             _ => None,
         })
         .collect();
-    assert_eq!(notes.len(), 2);
-    assert!(
-        matches!(notes[0].event.kind, NoteKind::On { .. })
-            && matches!(notes[1].event.kind, NoteKind::Off)
+    assert_eq!(
+        notes.len(),
+        if pedal_only {
+            0
+        } else if unknown_held {
+            1
+        } else {
+            2
+        }
     );
-    assert_eq!((notes[0].timing.unwrap().sample, notes[1].timing.unwrap().sample), (67, 87));
-    assert!((notes[0].event.t - 67.0 / 48000.0).abs() < 1e-12);
-    assert!((notes[1].event.t - 87.0 / 48000.0).abs() < 1e-12);
+    if !pedal_only {
+        assert!(matches!(notes[0].event.kind, NoteKind::On { .. }));
+        assert_eq!(notes[0].timing.unwrap().sample, 67);
+        assert!((notes[0].event.t - 67.0 / 48000.0).abs() < 1e-12);
+        if !unknown_held {
+            assert!(matches!(notes[1].event.kind, NoteKind::Off));
+            assert_eq!(notes[1].timing.unwrap().sample, 87);
+            assert!((notes[1].event.t - 87.0 / 48000.0).abs() < 1e-12);
+        }
+    }
+    if blocked_configuration {
+        let changes: Vec<_> = take
+            .configurations
+            .iter()
+            .filter(|config| config.t == 128.0 / 48000.0)
+            .map(|config| config.axes[1])
+            .collect();
+        assert_eq!(
+            changes,
+            (690..706).map(|value| value * 1_000_000).collect::<Vec<_>>(),
+            "all16 actually-applied commands retain their original route and time"
+        );
+        assert!(
+            !take.configurations.iter().any(|config| config.axes[1] == 706_000_000),
+            "the discarded last command is not fabricated"
+        );
+    }
     drop(source);
+    assert_eq!(
+        registry::global().lock().unwrap().test_counts(),
+        if unknown_wire { (1, 1, 1) } else { (0, 0, 0) }
+    );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn refused_hub_destruction_releases_its_recording_hold_without_a_registry_owner() {
+    let _scope = crate::test_scope::enter();
+    let registered: Vec<_> = (0..4).map(|_| Device::new(false)).collect();
+    let directory = std::env::temp_dir()
+        .join(format!("harmonigraph-refused-retirement-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let (recorder, control) = harmonigraph_record::channel();
+    let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    crate::configuration::inject_recorder(recorder);
+    let mut refused = Device::new(false);
+    refused.activate();
+    assert!(refused.shared().registration().is_none());
+    control.start(48000.0, String::new(), false);
+    refused.run(0, vec![], None);
+    refused.run(64, vec![note(81, 0, 60, 3, true), note(81, 0, 60, 23, false)], None);
+    let wrapper = unsafe {
+        &*((*refused.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    let mailbox = wrapper.configuration_handle().unwrap();
+    for value in 690..707 {
+        mailbox
+            .submit(crate::configuration::packet(
+                harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
+            ))
+            .unwrap();
+    }
+    refused.run(128, vec![], None);
+    control.stop(None);
+    refused.run(192, vec![], None);
+    assert!(mailbox.visible().1);
+    assert_eq!(mailbox.visible().0.raw[1], 705.0);
+    drop(mailbox);
+    drop(control);
+    drop(refused);
+    wait_until(|| writer.finished());
+    assert!(writer.failed());
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (4, 0, 0));
+    let file = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == harmonigraph_take::EXTENSION))
+        .unwrap();
+    let take = harmonigraph_take::Take::read(&file).unwrap();
+    assert!(take.incomplete.is_some());
+    let samples: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            harmonigraph_take::CanonicalRecord::Delta(delta) => Some(delta.timing.unwrap().sample),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(samples, [67, 87]);
+    drop(registered);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn joined_producer_fact_is_cleared_when_the_actual_source_row_is_reused() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let rows = || {
+        let wrapper = unsafe {
+            &*((*hub.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+        };
+        wrapper
+            .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().test_joined_rows())
+    };
+    let mut old = Device::new(true);
+    old.configure(uuid, true);
+    old.activate();
+    old.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    assert_eq!(
+        old.run(64, vec![note(1, 0, 60, 3, true), note(1, 0, 60, 23, false)], None).values.len(),
+        2
+    );
+    hub.run(64, vec![], None);
+    let old_lease = rows().iter().find_map(|row| row.0).unwrap();
+    drop(old);
+    for block in 2..8 {
+        hub.run(block * 64, vec![], None);
+        hub.main();
+    }
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (1, 0, 0));
+    let old_row = rows()[usize::from(old_lease.slot - 1)];
+    assert_eq!(
+        (old_row.1, old_row.3),
+        (Some(2), 2),
+        "the fixture must store a real joined cut before actual slot reuse"
+    );
+    let mut new = Device::new(true);
+    new.configure(uuid, true);
+    new.activate();
+    new.run(512, vec![], None);
+    hub.run(512, vec![], None);
+    assert_eq!(
+        new.run(576, vec![note(2, 0, 62, 3, true), note(2, 0, 62, 23, false)], None).values.len(),
+        2
+    );
+    hub.run(576, vec![], None);
+    let reused = rows()[usize::from(old_lease.slot - 1)];
+    let lease = reused.0.unwrap();
+    assert_eq!(lease.slot, old_lease.slot);
+    assert_ne!(lease.incarnation, old_lease.incarnation);
+    assert_eq!((reused.1, reused.2, reused.3), (None, false, 2), "equal sequence cuts in a new incarnation must not inherit the old producer's terminal proof");
+    drop(new);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
 #[test]
