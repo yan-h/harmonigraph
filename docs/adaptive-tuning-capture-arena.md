@@ -32,6 +32,9 @@ This allows a later physical onset or controller wave to advance while a frozen 
 The original Pending, complete Work span and referenced Birth cells stay pinned until exact remote retirement is also acquired.
 Only then does the Source reclaim that backing and decrement its original lifetime pins.
 An unpublished, unpaired input can settle locally because no receiver can read it.
+After the producer has joined, local cancellation can also reclaim an unpublished original whose sample mapping prevented a token from being minted.
+An offered token remains pinned even when its ring push failed;
+producer join does not replace its exact retirement acknowledgement.
 
 ## Receiver and frozen ownership
 
@@ -57,10 +60,15 @@ duplicate or mismatched epoch, incarnation or arena keys do nothing.
 DIRECT uses its prepaid ingress window and the same permission/retirement protocol within the serialized Hub owner.
 Joined retired owners may abandon a frozen traversal only after callbacks have ended;
 this is storage disposal, not fabricated musical completion.
+A retired Hub waits for the Source's enclosing Detach boundary before ending receiver service.
+A musical Seal closes an output cut but does not prevent a live Source from capturing more input before Detach.
 
 ## Bounded service and acceptance
 
 Capture installation and retirement charge one parent visit plus its original Work count against the Hub's shared 4,096 input-work grant.
+Capture, disposition and coverage publications share one Source grant of 512 successful intent pushes per enclosing callback or joined-owner service round.
+Sub-blocks and repeated transfer attempts do not replenish it;
+a refused push preserves its owned value and cursor.
 Each Tune row and DIRECT parse at most 64 ingress cells per callback.
 One scalar remaining-cell count bounds each sweep to the cells present at its start;
 later appends cannot keep its cursor moving forever without revisiting an older frozen capture or blocked retirement.
@@ -70,6 +78,8 @@ it seeds from the first valid transaction in FIFO receipt order, and advances on
 Younger dispositions stay owned until their predecessor is acknowledged.
 Source cleanup retains its existing bounded visit grant and charges complete original-group cleanup.
 These are work-count bounds, not a measured callback deadline or WCET claim.
+The all-retired service bound reserves grant-saturated capture rounds separately from the 128-round per-row parse tail, plus retained-window revisits.
+Its conservative 1,964-round sum remains below the existing 2,048-round service limit.
 
 The exported-factory fixtures run actual CLAP callbacks under the process allocation/deallocation guard.
 They cover an offered cohort across real accepted Note-Offs and exact output ACKs in both source callback orders, original two-target wildcard traversal, Pending/Birth reuse after exact retirement, stale frozen bindings and retirement replays, a mixed-generation partially canceled wildcard, DIRECT ownership, and a full 1,024-cell retirement reply lane followed by destruction of both peers without rescue callbacks.
@@ -77,4 +87,7 @@ A reply-pressure fixture places the first of two real canceled inputs at the las
 it reproduces lost disposition debt before the FIFO correction and settles both after it.
 The continuous-arrival fixture starts with more than 64 retained captures and adds 64 real MIDI events per source per callback while both older Tune and DIRECT owners retire.
 The mixed-generation fixture positively reaches an old disposition obligation after a newer child has settled, before the old manifest is acknowledged.
+The review fixtures reproduce a 513th intent push, a retired Hub detaching before real post-Seal input, and an unpublished original stranded after sample-mapping overflow and producer join.
+They verify the corrected shared grant, exact Detach boundary and joined local reclamation;
+an additional backlog fixture reaches Seal while original inputs remain unpublished and drains them through the same receiver.
 The [allocation account](adaptive-tuning-aggregation-memory.md) retains every future plan, history, configuration and policy reservation.

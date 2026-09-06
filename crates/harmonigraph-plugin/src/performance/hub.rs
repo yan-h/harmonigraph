@@ -1392,7 +1392,10 @@ impl Hub {
                 });
                 row.baseline = None;
             }
-            if row.seal.is_some_and(|cut| row.applied == cut)
+            // A musical seal does not close input publication. The live
+            // producer can still capture post-cut input before its enclosing
+            // detach boundary; only Detach certifies that transfer has ended.
+            if row.detach.is_some_and(|cut| row.seal == Some(cut) && row.applied == cut)
                 && row.output.len() == 0
                 && row.state.count() == 0
                 && row.baseline.is_none()

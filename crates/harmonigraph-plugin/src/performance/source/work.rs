@@ -394,9 +394,7 @@ impl Source {
             return;
         }
         if self.pending.local_done(position) {
-            if self.pending.remote_pending(position)
-                || self.pending.unpublished(position) && self.session().is_some()
-            {
+            if self.capture_retained(position) {
                 return;
             }
         } else {
@@ -455,9 +453,7 @@ impl Source {
                     }
                 }
             }
-            if self.pending.remote_pending(position)
-                || self.pending.unpublished(position) && self.session().is_some()
-            {
+            if self.capture_retained(position) {
                 continue;
             }
             if self.cancel_cursor == Some(position) {
@@ -490,6 +486,17 @@ impl Source {
             }
         }
         self.draining_finished = false;
+    }
+
+    fn capture_retained(&self, position: usize) -> bool {
+        // READY has never minted a token. After producer join and local
+        // cancellation it has no possible reader, even if sample mapping made
+        // publication impossible. OFFERED also covers a failed Source push;
+        // its unique token still requires exact retirement before reclamation.
+        self.pending.remote_pending(position)
+            || self.pending.unpublished(position)
+                && self.session().is_some()
+                && !self.producer_joined
     }
 
     fn queue_ready_cleanup(&mut self, index: u16) {

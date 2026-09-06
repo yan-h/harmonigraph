@@ -42,8 +42,8 @@ Observed DIRECT input additionally owns its distinct rich State and 2,048-cell h
 The 16 receiver Rows each hold another rich State and a complete cached baseline.
 These are actual separate allocations/copies despite the session's 256-voice musical credit limit.
 
-One Source Box is 29,856 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel waves, permits and pool headers.
-Its ten backing allocations, including the arena Arc and phase plane, plus its Box total 2,905,824 bytes.
+One Source Box is 29,864 bytes, including State15,240, 64 emergency `Option<Release>` cells of 120 bytes, indices, channel waves, permits and pool headers.
+Its ten backing allocations, including the arena Arc and phase plane, plus its Box total 2,905,832 bytes.
 The channel owner is5,248 inline bytes, including16 wave/checkpoint/prefix owners and the existing channel history indices.
 Replay adds4,504 bytes per Source Box, or76,568 bytes across all17 forwarding owners.
 Pending and lifetime backing cells each grow8 bytes, adding2,228,224 measured bytes per session within their already reserved128/256-byte future ceilings.
@@ -66,7 +66,8 @@ Compiling the actual previous and current RecordFence definitions without test-s
 the retirement hold fits existing padding too.
 ProducerJoined remains within the 56-byte Control cell and reuses the existing two-slot mailbox.
 No new backing allocation is introduced.
-CaptureArena adds 112 bytes per Source Box and a 64-byte arena Arc allocation per forwarding Source.
+CaptureArena adds 120 bytes per Source Box and a 64-byte arena Arc allocation per forwarding Source.
+The shared intent-push counter accounts for eight of those owner bytes, or 136 bytes across all 17 Sources.
 Pending, Life and Work allocated cells remain 128, 96 and 16 bytes respectively;
 the lifetime assertion additionally reserves the future 128-byte resolved configuration within its 256-byte ceiling.
 A Hub Box is 1,104 bytes;
@@ -90,23 +91,23 @@ each ring's measured Arc/header allocation is 512 bytes.
 
 | Actual constructor/factory measurement | Calling-thread retained bytes |
 | --- | ---: |
-| One Tune constructor | 2,906,997 |
-| Hub constructor, including DIRECT forwarding Source and receiver Rows | 9,255,936 |
+| One Tune constructor | 2,907,005 |
+| Hub constructor, including DIRECT forwarding Source and receiver Rows | 9,255,944 |
 | Actual 16 endpoint triples and controls | 6,943,936 |
-| Ordinary constructor subtotal | 62,711,824 |
-| Full-HG exported factory | 30,743,909 |
+| Ordinary constructor subtotal | 62,711,960 |
+| Full-HG exported factory | 30,743,917 |
 | Full-HG activation | 760 |
-| Sixteen exported Tune factories plus activation | 57,312,555 |
-| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 351,438,206 |
-| Refused sixty-fifth Tune factory | 3,573,785 |
+| Sixteen exported Tune factories plus activation | 57,312,683 |
+| Actually constructed, activated and enrolled four HG plus 64 Tune instances | 351,438,750 |
+| Refused sixty-fifth Tune factory | 3,573,793 |
 
-CaptureArena increases the ordinary subtotal by 2,588,448 bytes and the measured four-factory population by 10,353,792 bytes.
+CaptureArena increases the ordinary subtotal by 2,588,584 bytes and the measured four-factory population by 10,354,336 bytes.
 Those physical increases include growth inside already prepaid future cells.
 Factory and constructor rows overlap and must not be added together.
 Each fixture host adds 96 measured bytes outside the plugin.
 Refused instances still construct their own owner/wrapper;
 the counted registry limit is not a claim that creating arbitrary refused instances allocates nothing.
-The four-session retirement interval allocated 9,024 and deallocated 304,342,888 bytes on the measured thread, returning registry counts to zero.
+The four-session retirement interval allocated 9,216 and deallocated 303,837,104 bytes on the measured thread, returning registry counts to zero.
 Other-thread ownership remains outside that counter.
 
 The sixteen new companion wrappers have 2,635,739 bytes of measured additional owners and generic queues after subtracting their constructors, performance boundary arrays/ready indices and fixture hosts.
@@ -142,7 +143,7 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 
 | Remaining owner/metadata reservation | Bytes charged |
 | --- | ---: |
-| Seventeen Source residual owners after State/emergency cells | 117,912 |
+| Seventeen Source residual owners after State/emergency cells | 118,048 |
 | State flags/padding for 17 source and 16 receiver copies | 264 |
 | Sixteen Tune parameter allocations | 2,384 |
 | Sixteen Row residual owners | 7,680 |
@@ -172,8 +173,8 @@ The 8.5 MiB reference debit has already consumed part of the nominal 16 MiB over
 | Seventeen receiver Work/Pending permission planes | 87,040 |
 | Seventeen CaptureArena Arc/header allocations | 1,088 |
 
-The complete specified plan is 150,889,955 bytes, leaving 104,989 bytes below the unchanged 144 MiB cap.
-The 230,688-byte increase over replay's 150,659,267-byte plan includes 226,304 bytes of phase/permission planes, 1,088 bytes of arena Arcs and 3,296 bytes of measured Source/Row/Hub owner growth.
+The complete specified plan is 150,890,091 bytes, leaving 104,853 bytes below the unchanged 144 MiB cap.
+The 230,824-byte increase over replay's 150,659,267-byte plan includes 226,304 bytes of phase/permission planes, 1,088 bytes of arena Arcs and 3,432 bytes of measured Source/Row/Hub owner growth.
 That remainder is an allowance, not measured allocator-private overhead.
 The attachment payload/metadata rows conservatively charge the whole process ceiling once in this single-session account;
 the additional OnceLock base pins remain inside that existing metadata ceiling.

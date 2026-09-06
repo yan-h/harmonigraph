@@ -234,6 +234,16 @@ impl Registry {
         self.sources.iter().flatten().any(|s| s.id == id)
     }
     #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub fn test_retired_source_state(&self, id: u64) -> Option<super::source::Snapshot> {
+        self.sources
+            .iter()
+            .flatten()
+            .find(|source| source.id == id)?
+            .owner
+            .as_ref()
+            .map(|owner| owner.test_snapshot())
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub fn test_retained_hub(&self, id: u64) -> bool {
         self.hubs.iter().flatten().any(|h| h.id == id && h.retired && h.owner.is_some())
     }
@@ -508,11 +518,15 @@ pub fn service_retired() {
     // most one baseline and cannot create another. Mailbox retries wait only
     // for already-counted report/output drainage; successful publication and
     // consumption bump revision. Capture installation and retirement add at
-    // most2*17*(8192+32768) charged input units.350 further rounds cover that
-    // population with the4096 grant and an indivisible tail of at most64.
+    // most2*17*(8192+32768) charged input units.350 further grant-saturated
+    // rounds cover that population with4096 units and at most64 unused tail
+    // units. Separately reserve128 rounds for the per-row64-cell parse tail
+    // (8192/64), which can leave the aggregate grant unused. Source's shared
+    // 512 intent grant leaves at least448 capture pushes after at most64
+    // dispositions, so its ceil(8192/448)=19 publication rounds fit there.
     // Reserve32 more rounds for a retained ingress sweep and its oldest-cell
     // revisit once reply capacity returns (1024/64 visits each). These added
-    // phases keep the conservative sum1836 below2048. Capture retirement uses
+    // phases keep the conservative sum1964 below2048. Capture retirement uses
     // the existing reply lane; the full16-source capacity fixture drains both
     // ordinary dispositions and these capture owners without rescue callbacks.
     // Missing external proof still exits immediately.

@@ -193,6 +193,7 @@ pub struct Source {
     max_frames: u32,
     callback: Option<api::Callback>,
     visits: usize,
+    intent_pushed: usize,
     cancel_cursor: Option<usize>,
     pub faults: u32,
     pub participating: bool,
@@ -331,6 +332,7 @@ impl Source {
             max_frames: 0,
             callback: None,
             visits: 0,
+            intent_pushed: 0,
             cancel_cursor: None,
             faults: 0,
             participating: true,
@@ -579,6 +581,7 @@ impl Source {
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
+        self.intent_pushed = 0;
         self.callback = Some(callback);
         self.stops.emergency_start = 0;
         self.visits = 0;
@@ -2274,16 +2277,19 @@ impl Source {
             return;
         }
         for _ in 0..512 {
+            if self.intent_pushed == 512 {
+                break;
+            }
             let Some(token) = self.next_capture() else {
                 break;
             };
             let position = token.key.position as usize;
-            match self.offer.as_mut().unwrap().endpoints.intents.push(Intent::Capture(token)) {
+            match self.push_intent(Intent::Capture(token)) {
                 Ok(()) => {
                     self.capture_cursor = self.pending.next_position(position);
                     self.service_revision = self.service_revision.wrapping_add(1);
                 }
-                Err(rtrb::PushError::Full(Intent::Capture(token))) => {
+                Err(Intent::Capture(token)) => {
                     self.capture_offer = Some(token);
                     break;
                 }
@@ -2308,6 +2314,24 @@ impl Source {
     }
     fn last_sent_sequence(&self) -> u64 {
         self.transfer_cut
+    }
+
+    /// All intent kinds spend the same enclosing-callback grant. A refusal
+    /// returns the exact caller-owned value without advancing its cursor.
+    fn push_intent(&mut self, intent: Intent) -> Result<(), Intent> {
+        if self.intent_pushed == 512 {
+            return Err(intent);
+        }
+        let Some(offer) = &mut self.offer else {
+            return Err(intent);
+        };
+        match offer.endpoints.intents.push(intent) {
+            Ok(()) => {
+                self.intent_pushed += 1;
+                Ok(())
+            }
+            Err(rtrb::PushError::Full(intent)) => Err(intent),
+        }
     }
 
     fn dispose_work(&mut self, position: usize, child: u16) -> bool {
@@ -2338,7 +2362,7 @@ impl Source {
             lifetime,
             canceled: true,
         };
-        if offer.endpoints.intents.push(message).is_err() {
+        if self.push_intent(message).is_err() {
             return false;
         }
         self.next_disposition = transaction;
@@ -2373,6 +2397,7 @@ impl Source {
         )
     }
     pub fn retired_pump(&mut self) -> bool {
+        self.intent_pushed = 0;
         self.visits = 0;
         self.receive();
         self.cancel_slice();
@@ -2433,10 +2458,9 @@ impl Source {
         if self.sealed {
             return;
         }
-        let Some(offer) = self.offer.as_mut() else {
+        let Some(lease) = self.offer.as_ref().map(|offer| offer.lease) else {
             return;
         };
-        let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
         let Some(coverage) = self.coverage else {
             return;
         };
@@ -2444,11 +2468,9 @@ impl Source {
             && self.capture_cursor.is_none()
             && self.capture_offer.is_none()
             && self.input_reported != Some(coverage.through)
-            && offer
-                .endpoints
-                .intents
-                .push(Intent::Coverage {
-                    incarnation: offer.lease.incarnation,
+            && self
+                .push_intent(Intent::Coverage {
+                    incarnation: lease.incarnation,
                     epoch: self.epoch,
                     coverage,
                     input_cut: self.next_event,
@@ -2457,6 +2479,8 @@ impl Source {
         {
             self.input_reported = Some(coverage.through);
         }
+        let offer = self.offer.as_mut().unwrap();
+        let row = &offer.session.rows[usize::from(lease.slot - 1)];
         if !self.adoption.sent()
             && row
                 .to_hub
@@ -2590,7 +2614,7 @@ const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 // The ledger charges this measured owner including test-support padding.
-const _: () = assert!(std::mem::size_of::<Source>() <= 29856);
+const _: () = assert!(std::mem::size_of::<Source>() <= 29864);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {

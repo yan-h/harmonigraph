@@ -664,3 +664,207 @@ fn failed_last_disposition_in_a_slice_cannot_be_overtaken_after_reply_capacity_r
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
+    let _scope = crate::test_scope::enter();
+    for cancel in [false, true] {
+        let uuid = SavedUuid::default();
+        let mut hub = Device::new(false);
+        hub.configure(uuid, true);
+        hub.activate();
+        let mut source = Device::new(true);
+        source.configure(uuid, true);
+        source.activate();
+        source.run(0, vec![], None);
+        hub.run(0, vec![], None);
+        let raw = if cancel {
+            source.run(
+                64,
+                (0..64).map(|id| note(id, 0, id as i16, 0, true)).collect(),
+                Some(CLAP_EVENT_NOTE_ON),
+            );
+            hub.run(64, vec![], None);
+            128
+        } else {
+            64
+        };
+        let before = source.source_snapshot().intent_slots;
+        let clocks = (0..512)
+            .map(|_| {
+                Input::Midi(clap_event_midi {
+                    header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
+                    port_index: 0,
+                    data: [0xf8, 0, 0],
+                })
+            })
+            .collect();
+        let accepted = source.run(raw, clocks, None);
+        assert_eq!(accepted.values.len(), if cancel { 0 } else { 512 });
+        let after = source.source_snapshot();
+        if cancel {
+            assert_eq!(after.manifest, 64);
+        }
+        assert_eq!(before - after.intent_slots, 512, "all intent kinds share one callback grant");
+        for block in 1..=32 {
+            hub.run(raw + (block - 1) * 64, vec![], None);
+            source.run(raw + block * 64, vec![], None);
+        }
+        // New post-fault originals are retained until explicit local recovery.
+        if cancel {
+            let shared = source.shared();
+            shared.apply(shared.value().routing, true).unwrap();
+            for block in 33..=64 {
+                hub.run(raw + (block - 1) * 64, vec![], None);
+                source.run(raw + block * 64, vec![], None);
+            }
+        }
+        assert_eq!(source.source_snapshot().captures, 0);
+        drop(source);
+        drop(hub);
+        assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn retired_hub_waits_for_source_detach_after_seal_and_post_cut_capture() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    assert_eq!(source.run(64, vec![note(1, 0, 60, 0, true)], None).values.len(), 1);
+    hub.run(64, vec![], None);
+    drop(hub);
+    let terminal = source.run(128, vec![note(1, 0, 60, 0, false)], None);
+    assert_eq!(terminal.values.iter().filter(|(_, event)| event.release()).count(), 1);
+    source.main();
+    assert!(source.run(192, vec![], None).values.is_empty());
+    let before = source.source_snapshot();
+    assert!(before.seal.is_some(), "{before:?}");
+    assert!(
+        session.rows[0].to_hub.reserve().is_none(),
+        "real Progress and Seal occupy both control slots"
+    );
+    assert!(!with_source(&source, |source| source.service_position().3[1]));
+    source.main();
+    // A genuine new input is captured after the old musical seal and before
+    // the live producer's enclosing detach boundary. It remains owned input.
+    assert!(source.run(256, vec![note(2, 0, 62, 1, true)], None).values.is_empty());
+    assert!(with_source(&source, |source| source.test_capture(3).unwrap().remote_pending));
+    for block in 5..=13 {
+        source.main();
+        assert!(source.run(block * 64, vec![], None).values.is_empty());
+    }
+    source.main();
+    assert_eq!(source.source_snapshot().captures, 0, "post-seal capture receives exact retirement");
+    assert_eq!(source.source_snapshot().local_pending, 1, "post-cut input remains Source-owned");
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    drop(source);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn retired_hub_drains_originals_still_unpublished_when_the_output_seal_arrives() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let mut source = Device::new(true);
+    source.configure(uuid, true);
+    source.activate();
+    let session = registry::global().lock().unwrap().test_session(uuid);
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    for block in 1..=7 {
+        let clocks = (0..512)
+            .map(|_| {
+                Input::Midi(clap_event_midi {
+                    header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
+                    port_index: 0,
+                    data: [0xf8, 0, 0],
+                })
+            })
+            .collect();
+        assert_eq!(source.run(block * 64, clocks, None).values.len(), 512);
+    }
+    assert_eq!(source.source_snapshot().intent_slots, 0);
+    assert!(with_source(&source, |source| !source.test_capture(3584).unwrap().remote_pending));
+    drop(hub);
+    let mut saw_sealed_unpublished = false;
+    for block in 8..=40 {
+        assert!(source.run(block * 64, vec![], None).values.is_empty());
+        if source.source_snapshot().seal.is_some()
+            && with_source(&source, |source| {
+                source.test_capture(3584).is_some_and(|capture| !capture.remote_pending)
+            })
+        {
+            saw_sealed_unpublished = true;
+        }
+        source.main();
+    }
+    assert!(saw_sealed_unpublished, "musical seal precedes the original input tail");
+    let settled = source.source_snapshot();
+    assert_eq!((settled.pending, settled.captures, settled.journal), (0, 0, 0));
+    assert_eq!(session.credits.load(Ordering::Acquire), 0);
+    drop(source);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn joined_source_reclaims_canceled_original_that_cannot_map_to_a_capture_sample() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let mut hub = Device::new(false);
+    hub.configure(uuid, true);
+    hub.activate();
+    let mut source = Device::new(true);
+    source.configure_offset(uuid, true, i64::MAX - 128);
+    source.activate();
+    source.run(0, vec![], None);
+    hub.run(0, vec![], None);
+    source.run(64, vec![], None);
+    assert!(with_source(&source, |source| source.test_stream_status().1));
+    let wire = source.run(
+        128,
+        vec![Input::Midi(clap_event_midi {
+            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 1),
+            port_index: 0,
+            data: [0xf8, 0, 0],
+        })],
+        None,
+    );
+    assert!(wire.values.is_empty());
+    assert_eq!(source.source_snapshot().captures, 0, "mapping overflow mints no token");
+    assert!(with_source(&source, |source| !source.test_capture(1).unwrap().remote_pending));
+    assert_ne!(source.source_snapshot().faults & source::CLOCK_FAULT, 0);
+    let registration = source.shared().registration().unwrap();
+    drop(source);
+    for block in 1..=12 {
+        hub.run(block * 64, vec![], None);
+        hub.main();
+    }
+    // Joining the receiver settles its separate empty baseline at the exact
+    // owned boundary; this assertion isolates only the unpublished original.
+    drop(hub);
+    let retained = registry::global().lock().unwrap().test_retired_source_state(registration);
+    if let Some(state) = &retained {
+        assert!(state.baseline_cut.is_none());
+        assert_eq!(
+            (state.local_pending, state.old_obligations, state.manifest, state.captures),
+            (0, 0, 0, 0)
+        );
+    }
+    assert!(
+        retained.is_none(),
+        "locally canceled unpublished input needs no remote retirement: {retained:?}"
+    );
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
