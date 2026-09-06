@@ -2,16 +2,21 @@
 //! the halos with.
 //!
 //! What a note gives off on its own, what two of them come to where they meet,
-//! and what a cluster of them comes to — the three readings the Union bar
-//! moves, and the first of them is the one it must not move at all.
+//! what a cluster of them comes to, and what COLOUR two of them meet in — the
+//! four readings the Union bar is answerable for. The first of them is the one
+//! it must not move at all, and so is the last: the colour is folded apart from
+//! the norm and never sees the exponent.
 //!
-//! The two RATIOS are read on a BARE part of the frame — outside every node's
-//! ink, over a black ground, with the Shadow off — so a pixel is the light and
-//! nothing else, and each fixture's first assertion is that the reading really
-//! is zero without it. Both are read off SUMS over many pixels rather than one,
-//! because the effect they measure is a few percent and a single 8-bit pixel is
-//! worth half a level either way. The lone note is read the other way about,
-//! over every byte of the frame, for the reason its own doc gives.
+//! The three readings that need more than one node are taken on a BARE part of
+//! the frame — outside every node's ink, over a black ground, with the Shadow
+//! off — so a pixel is the light and nothing else, and each fixture's first
+//! assertion is that the reading really is zero without it. The two RATIOS are
+//! read off SUMS over many pixels rather than one, because the effect they
+//! measure is a few percent and a single 8-bit pixel is worth half a level
+//! either way; the colour is read off each pixel's own shares averaged over the
+//! run instead, which is what keeps that rounding from biasing a ratio of sums.
+//! The lone note is read the other way about, over every byte of the frame, for
+//! the reason its own doc gives.
 
 use super::fixtures::*;
 use crate::*;
@@ -376,17 +381,17 @@ fn a_cluster_of_nodes_spreads_its_light_without_brightening_it() {
 /// the two weightings disagree by most of the distance between the hues, near
 /// enough that every pixel of the run still sees both halos, and — with the
 /// extra spacing — clear of the nearer node's own rings, which end at 0.795
-/// uv and would otherwise put ink on the column. Chromaticity is averaged over the run pixel
-/// by pixel, so the frame's stochastic rounding averages out instead of
-/// biasing a ratio of sums.
+/// uv and would otherwise put ink on the column. Chromaticity is averaged
+/// over the run pixel by pixel, so the frame's stochastic rounding averages
+/// out instead of biasing a ratio of sums.
 ///
 /// Reach: the two singles' chromaticities have to differ by well over the
 /// tolerance, since a pair of one colour passes any weighting; and the nearer
 /// node's chromaticity alone has to be outside it by a margin, since that is
 /// what the old fold read here. Measured on it, with the coverages 2.03 to 1:
 /// 0.805 red at the bottom of the bar against the coverage-weighted 0.670,
-/// and at the fresh exponent the nearer node's own red within a third of a
-/// percent — thirteen and thirty-three tolerances out.
+/// and at the fresh exponent 0.996, the nearer node's own red to within four
+/// tenths of a percent — thirteen and thirty-three tolerances out.
 #[test]
 fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -397,7 +402,9 @@ fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
     /// Rows read either side of the middle one.
     const RUN: usize = 16;
     /// The most a channel's share of the pixel may differ from the singles'
-    /// sum's by, averaged over the run.
+    /// sum's by, averaged over the run. Slack for a driver and not for the
+    /// claim: the three readings land 0.0001, 0.0001 and 0.0002 off, and the
+    /// fold this replaces is thirteen of these out at its closest.
     const TOLERANCE: f64 = 0.01;
     // 1.1 uv each side of the bisector, so the column stands 0.9 uv from the
     // nearer node and 1.3 from the farther, both inside the light's 1.595.
@@ -409,8 +416,8 @@ fn two_hues_meeting_mix_in_proportion_to_their_coverage() {
         // so the table is cut in two — saturated red up to the middle of it,
         // saturated blue above — and the right node is pitched eleven
         // semitones over the left, across the cut. The fixture's own table is
-        // a sweep with 0.4 of green under all of it, and two pitches on it
-        // are a few hundredths of chroma apart.
+        // a sweep with 0.4 of green under all of it, and these two pitches on
+        // it read 0.09 apart, under half the fifth the reach check asks for.
         scene.pitch_lut = std::array::from_fn(|k| {
             if k * 2 < harmonigraph_scene::PITCH_LUT_N {
                 glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
