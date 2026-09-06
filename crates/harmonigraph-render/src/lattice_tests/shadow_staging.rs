@@ -186,5 +186,11 @@ fn prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes() {
             images.push(picture(&shooter, &cb));
         }
         assert_eq!(images[0], images[1], "pane {pane}, nodes {nodes}, labels {labels}");
+        if nodes > 0 {
+            assert!(
+                images[0].chunks_exact(4).any(|pixel| pixel[..3] != images[0][..3]),
+                "a drawable frame must contain more than a flat background",
+            );
+        }
     }
 }

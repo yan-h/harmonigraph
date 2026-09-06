@@ -131,6 +131,7 @@ The retention decision rests on measured allocation removal with minimal ownersh
 ## Integration acceptance
 
 The maintained `prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes` fixture runs both actual prepare sites, checks emitted counts and exact contiguous glyph ranges, reads back the uploaded prefixes and untouched tails, and compares rendered pixels against the parent's collected-vector bytes queued before the same draws execute.
+Every nonempty node frame must contain varying RGB pixels so two flat backgrounds cannot pass as preserved geometry.
 It alternates two pane IDs through font absence/arrival, 6→273 node growth, 7→75 glyph growth, empty frames, shrink, `NO_CELL` mapping and a glyph-empty frame whose packed boxes remain nonempty.
 Only the two test buffers gain `COPY_SRC` and one sentinel cell;
 their production capacity metadata and upload paths remain in use.
