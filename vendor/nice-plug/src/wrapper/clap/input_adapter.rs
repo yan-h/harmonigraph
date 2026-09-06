@@ -91,6 +91,12 @@ impl<P: ClapPlugin> Wrapper<P> {
         boundary: Option<(i64, u32)>,
         transport: Option<clap_event_transport>,
     ) -> InputStatus {
+        // One finite snapshot, before any host callback. Sub-block output drains
+        // never admit GUI arrivals. Keep this count relative to the unreclaimed
+        // notification head until the complete host batch has validated.
+        let gui_snapshot = if P::CLAP_PERFORMANCE {
+            self.output_parameter_events.borrow_mut().events.slots()
+        } else { 0 };
         let (cut, batch, original_len) = {
             let mut guard = self.owned_input.lock();
             let input = guard.as_mut().unwrap();
@@ -119,7 +125,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             (unsafe { size(host) }) as usize
         };
         let marker = usize::from(P::CLAP_PERFORMANCE && transport.is_some());
-        if count > INPUT_SCAN
+        if count + marker > INPUT_SCAN
             || count + marker > self.owned_input.lock().as_ref().unwrap().storage.available()
         {
             return InputStatus::Full;
@@ -147,6 +153,30 @@ impl<P: ClapPlugin> Wrapper<P> {
                     .unwrap();
             }
         }
+        // Reserve the accepted host batch first. Every visited GUI entry costs
+        // one unit (including gestures); conservatively require a free input
+        // cell for each visit so no unadmitted entry advances under full storage.
+        let gui_admitted = if P::CLAP_PERFORMANCE {
+            let mut gui = self.output_parameter_events.borrow_mut();
+            let admitted = gui.admitted;
+            let mut guard = self.owned_input.lock();
+            let input = guard.as_mut().unwrap();
+            let visits = (gui_snapshot - admitted)
+                .min(INPUT_SCAN - count - marker)
+                .min(input.storage.available() - count);
+            let chunk = gui.events.read_chunk(admitted + visits).expect("GUI snapshot retained");
+            let (first, second) = chunk.as_slices();
+            for index in admitted..admitted + visits {
+                let change = if index < first.len() { first[index] } else { second[index - first.len()] };
+                if let OutputParamEvent::SetValue { param_hash, clap_plain_value } = change {
+                    input.storage.push(make(InputValue::Parameter {
+                        id: param_hash, value: clap_plain_value, modulation: false,
+                    }, u32::MAX, 0)).unwrap();
+                }
+            }
+            // Dropping a read chunk does not reclaim notifications.
+            admitted + visits
+        } else { 0 };
         let mut status = InputStatus::Complete;
         let mut previous_time = 0;
         for index in 0..count {
@@ -182,6 +212,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             let input = guard.as_mut().unwrap();
             if status != InputStatus::Complete {
                 input.storage.truncate(original_len);
+            } else if P::CLAP_PERFORMANCE {
+                self.output_parameter_events.borrow_mut().admitted = gui_admitted;
             }
         }
         status

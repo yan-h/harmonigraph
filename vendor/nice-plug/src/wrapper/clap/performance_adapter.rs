@@ -71,13 +71,12 @@ impl<P: ClapPlugin> Wrapper<P> {
             } else {
                 self.next_configuration_notification(through, cursor)
             };
-            let ordinary_ready = !parameters_blocked && {
-                let mut pending = self.pending_parameter.lock();
-                if pending.is_none() {
-                    *pending = self.output_parameter_events.pop();
-                }
-                pending.is_some()
+            // Copy before host callbacks. Only the captured/admitted prefix can
+            // notify; a GUI arrival during this callback waits for its next one.
+            let ordinary = if parameters_blocked { None } else {
+                self.output_parameter_events.borrow_mut().notification()
             };
+            let ordinary_ready = ordinary.is_some();
             let parameter_time =
                 if ordinary_ready { Some(cursor) } else { notification.map(|n| n.time) };
             if parameter_time.is_some_and(|time| next.is_none_or(|(_, g)| time <= g.time)) {
@@ -88,7 +87,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 }
                 let time = parameter_time.unwrap();
                 let accepted = if ordinary_ready {
-                    let change = self.pending_parameter.lock().as_ref().copied().unwrap();
+                    let change = ordinary.unwrap();
                     unsafe { self.push_parameter(output.unwrap(), change, time) }
                 } else {
                     unsafe { notification.unwrap().push(output.unwrap()) }
@@ -96,7 +95,7 @@ impl<P: ClapPlugin> Wrapper<P> {
                 self.performance.lock().as_mut().unwrap().attempted(Lane::Normal, time, accepted);
                 if ordinary_ready {
                     if accepted {
-                        self.pending_parameter.lock().take();
+                        self.output_parameter_events.borrow_mut().accept();
                     } else {
                         parameters_blocked = true;
                     }
@@ -186,11 +185,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                 (param_hash, CLAP_EVENT_PARAM_GESTURE_END)
             }
             OutputParamEvent::SetValue { param_hash, clap_plain_value } => {
-                self.update_plain_value_by_hash(
-                    param_hash,
-                    ClapParamUpdate::PlainValueSet(clap_plain_value),
-                    self.current_buffer_config.load().map(|c| c.sample_rate),
-                );
                 let event = clap_event_param_value {
                     header: clap_event_header {
                         size: mem::size_of::<clap_event_param_value>() as u32,

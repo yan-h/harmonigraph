@@ -144,7 +144,6 @@ pub struct Wrapper<P: ClapPlugin> {
     deferred_host_callback: AtomicBool,
     #[cfg(feature = "clap-boundary-tests")]
     deferred_gui_observation: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
-    pending_parameter: Mutex<Option<OutputParamEvent>>,
     configuration_mailbox: std::sync::OnceLock<Arc<super::configuration::ConfigurationMailbox>>,
     host_state: AtomicRefCell<Option<ClapPtr<clap_host_state>>>,
     /// A reference to this object, upgraded to an `Arc<Self>` for the GUI context.
@@ -268,13 +267,10 @@ pub struct Wrapper<P: ClapPlugin> {
     /// the parameter's poly modulation ID. These IDs are then passed to the plugin, so it can
     /// quickly refer to parameter by matching on constant IDs.
     poly_mod_ids_by_hash: HashMap<u32, u32>,
-    /// A queue of parameter changes and gestures that should be output in either the next process
-    /// call or in the next parameter flush.
-    ///
-    /// XXX: There's no guarantee that a single parameter doesn't occur twice in this queue, but
-    ///      even if it does then that should still not be a problem because the host also reads it
-    ///      in the same order, right?
-    output_parameter_events: ArrayQueue<OutputParamEvent>,
+    /// Main-side submission and serialized process/flush consumption of the one
+    /// GUI notification bank. Host acceptance and local admission are independent.
+    output_parameter_sender: Mutex<rtrb::Producer<OutputParamEvent>>,
+    output_parameter_events: GuiParameterEvents,
 
     host_thread_check: AtomicRefCell<Option<ClapPtr<clap_host_thread_check>>>,
 
@@ -364,6 +360,43 @@ pub enum OutputParamEvent {
     /// events.
     EndGesture { param_hash: u32 },
 }
+
+/// One notification bank, with independent local admission and host acceptance.
+/// Only the serialized process/flush owner borrows the consumer; audio never
+/// takes the producer mutex. An admitted Set has entered InputStorage, so a
+/// rejected Begin pins this bank without pinning later musical input.
+pub(super) struct GuiParameterConsumer {
+    events: rtrb::Consumer<OutputParamEvent>,
+    admitted: usize,
+}
+struct GuiParameterEvents(AtomicRefCell<GuiParameterConsumer>);
+// SAFETY: rtrb's Consumer is Send but not Sync. This owner exposes only an
+// exclusive, atomically checked borrow, never AtomicRefCell::borrow(). A
+// concurrent/reentrant consumer attempt panics instead of racing or waiting.
+unsafe impl Sync for GuiParameterEvents {}
+impl GuiParameterEvents {
+    fn borrow_mut(&self) -> atomic_refcell::AtomicRefMut<'_, GuiParameterConsumer> {
+        self.0.borrow_mut()
+    }
+}
+impl GuiParameterConsumer {
+    fn notification(&self) -> Option<OutputParamEvent> {
+        (self.admitted > 0).then(|| *self.events.peek().expect("admitted GUI head"))
+    }
+    fn accept(&mut self) {
+        assert!(self.admitted > 0);
+        self.events.pop().expect("admitted GUI head");
+        self.admitted -= 1;
+    }
+}
+
+const _: () = {
+    assert!(mem::size_of::<OutputParamEvent>() <= 16);
+    assert!(mem::align_of::<OutputParamEvent>() <= 8);
+    assert!(mem::size_of::<Mutex<rtrb::Producer<OutputParamEvent>>>() <= 32);
+    assert!(mem::size_of::<GuiParameterEvents>() <= 40);
+    assert!(mem::size_of::<rtrb::RingBuffer<OutputParamEvent>>() <= 384);
+};
 
 /// Because CLAP has this [`clap_host::request_host_callback()`] function, we don't need to use
 /// `OsEventLoop` and can instead just request a main thread callback directly.
@@ -530,6 +563,16 @@ impl<P: ClapPlugin> Wrapper<P> {
 
     #[cfg(feature = "clap-boundary-tests")]
     #[doc(hidden)]
+    pub fn test_gui_context(&self, id: &str) -> (Arc<dyn crate::context::gui::GuiContext>, ParamPtr) {
+        // Main-thread fixtures invoke the raw methods on this actual context,
+        // then drop it before destroying the device that owns its host callback.
+        let wrapper = self.this.borrow().upgrade().expect("live wrapper");
+        let param = self.param_by_hash[&self.param_id_to_hash[id]];
+        (wrapper.make_gui_context(), param)
+    }
+
+    #[cfg(feature = "clap-boundary-tests")]
+    #[doc(hidden)]
     pub fn test_on_deferred_gui_observation(&self, observe: impl Fn() + Send + Sync + 'static) {
         assert!(self.deferred_gui_observation.set(Box::new(observe)).is_ok());
     }
@@ -646,6 +689,8 @@ impl<P: ClapPlugin> Wrapper<P> {
             &param_ptr_to_hash,
         );
 
+        let (output_parameter_sender, output_parameter_events) =
+            rtrb::RingBuffer::new(OUTPUT_EVENT_QUEUE_CAPACITY);
         let wrapper = Self {
             setup: plugin.clap_setup(),
             setup_pending: AtomicBool::new(false),
@@ -657,7 +702,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             deferred_host_callback: AtomicBool::new(false),
             #[cfg(feature = "clap-boundary-tests")]
             deferred_gui_observation: std::sync::OnceLock::new(),
-            pending_parameter: Mutex::new(None),
             configuration_mailbox: std::sync::OnceLock::new(),
             host_state: AtomicRefCell::new(None),
             this: AtomicRefCell::new(Weak::new()),
@@ -771,7 +815,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             param_id_to_hash,
             param_ptr_to_hash,
             poly_mod_ids_by_hash,
-            output_parameter_events: ArrayQueue::new(OUTPUT_EVENT_QUEUE_CAPACITY),
+            output_parameter_sender: Mutex::new(output_parameter_sender),
+            output_parameter_events: GuiParameterEvents(AtomicRefCell::new(GuiParameterConsumer {
+                events: output_parameter_events,
+                admitted: 0,
+            })),
 
             host_thread_check: AtomicRefCell::new(None),
 
@@ -918,13 +966,13 @@ impl<P: ClapPlugin> Wrapper<P> {
 
     /// Queue a parameter output event to be sent to the host at the end of the audio processing
     /// cycle, and request a parameter flush from the host if the plugin is not currently processing
-    /// audio. The parameter's actual value will only be updated at that point so the value won't
-    /// change in the middle of a processing call.
+    /// audio. The performance opt-in admits values at the next enclosing input
+    /// capture; its ordered input walker applies them independently of output.
     ///
     /// Returns `false` if the parameter value queue was full and the update will not be sent to the
-    /// host (it will still be set on the plugin either way).
+    /// host or admitted locally.
     pub fn queue_parameter_event(&self, event: OutputParamEvent) -> bool {
-        let result = self.output_parameter_events.push(event).is_ok();
+        let result = self.output_parameter_sender.lock().push(event).is_ok();
 
         // Requesting a flush is fine even during audio processing. This avoids a race condition.
         match &*self.host_params.borrow() {
@@ -1149,7 +1197,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         // shouldn't have to think about interleaving events here
         if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, current_sample_idx as u32); } }
         let sample_rate = self.current_buffer_config.load().map(|c| c.sample_rate);
-        while let Some(change) = self.output_parameter_events.pop() {
+        loop {
+            let change = self.output_parameter_events.borrow_mut().events.pop();
+            let Ok(change) = change else { break; };
             let push_successful = match change {
                 OutputParamEvent::BeginGesture { param_hash } => {
                     let event = clap_event_param_gesture {

@@ -17,6 +17,8 @@ use std::{
     },
 };
 
+type GuiEdit = Box<dyn Fn(&[f32])>;
+
 static SERIAL: Mutex<()> = Mutex::new(());
 static CONSTRUCTION: Mutex<Option<Arc<Control>>> = Mutex::new(None);
 #[derive(Params)]
@@ -38,6 +40,7 @@ struct Control {
     plugin: AtomicUsize,
     host_cache: AtomicU64,
     pause_audio: AtomicBool,
+    pause_begin: AtomicBool,
     audio_entered: AtomicBool,
     audio_resume: AtomicBool,
     pause_value: AtomicBool,
@@ -82,6 +85,7 @@ impl Default for Control {
             plugin: AtomicUsize::new(0),
             host_cache: AtomicU64::new(0),
             pause_audio: AtomicBool::new(false),
+            pause_begin: AtomicBool::new(false),
             audio_entered: AtomicBool::new(false),
             audio_resume: AtomicBool::new(false),
             pause_value: AtomicBool::new(false),
@@ -254,6 +258,12 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
     fn clap_performance_begin(&mut self, callback: perf::Callback, _: &mut perf::Output<'_>) {
         self.callback += 1;
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks.push(callback);
+        if self.control.pause_begin.swap(false, Ordering::AcqRel) {
+            self.control.audio_entered.store(true, Ordering::Release);
+            while !self.control.audio_resume.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+        }
     }
     fn clap_performance_input(&mut self, input: OwnedInput) -> perf::Consumption {
         if self.control.pending.load(Ordering::Acquire) {
@@ -591,6 +601,21 @@ struct Device {
 // device before main-thread lifecycle/destruction. The host/owned sink stay pinned.
 unsafe impl Send for Device {}
 impl Device {
+    fn gui<const C: bool, const P: bool>(&self) -> impl Fn(&[f32]) + use<C, P> {
+        let wrapper = unsafe {
+            &*((*self.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<C, P>>>())
+        };
+        let (context, param) = wrapper.test_gui_context("axis");
+        move |values| unsafe {
+            context.raw_begin_set_parameter(param);
+            for &value in values {
+                context.raw_set_parameter_normalized(param, value);
+            }
+            context.raw_end_set_parameter(param);
+        }
+    }
     fn new(control: Control, id: &CStr) -> Self {
         let control = Arc::new(control);
         *CONSTRUCTION.lock().unwrap_or_else(|e| e.into_inner()) = Some(control.clone());
@@ -740,6 +765,294 @@ impl Drop for Device {
 }
 fn instructions(groups: impl IntoIterator<Item = perf::Group>) -> Vec<Instruction> {
     groups.into_iter().map(|group| Instruction { callback: 1, block: 0, group }).collect()
+}
+
+#[test]
+fn native_gui_admission_survives_missing_output_and_rejected_notification_retries() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for combined in [false, true] {
+        let mut d = Device::new(
+            Control::default(),
+            if combined { c"fixture.combined" } else { c"fixture.performance" },
+        );
+        let gui: GuiEdit = if combined {
+            Box::new(d.gui::<true, true>())
+        } else {
+            Box::new(d.gui::<false, true>())
+        };
+        gui(&[1.0]);
+        d.run(0, 8, vec![], true);
+        d.sink.attempts.clear();
+        gui(&[0.0]);
+        let Input::Param(mut host_on) = d.param(1) else { unreachable!() };
+        host_on.value = 1.0;
+        d.run(8, 8, vec![Input::Param(host_on), on(2)], false);
+        assert!(d.sink.attempts.is_empty());
+        assert_eq!(d.parameter_value(host_on.param_id), 1.0);
+        // Repeated Begin refusal cannot hide the Off from local input or pin
+        // the following host On/note. Then reject the old Set twice as well.
+        d.sink.script = vec![false, false, true, false, false, true, true];
+        for start in [16, 24, 32, 40, 48, 56] {
+            d.run(start, 8, vec![], true);
+            assert_eq!(d.parameter_value(host_on.param_id), 1.0);
+        }
+        assert_eq!(
+            d.sink.attempts.iter().map(|a| (a.kind, a.accepted)).collect::<Vec<_>>(),
+            vec![
+                (CLAP_EVENT_PARAM_GESTURE_BEGIN, false),
+                (CLAP_EVENT_PARAM_GESTURE_BEGIN, false),
+                (CLAP_EVENT_PARAM_GESTURE_BEGIN, true),
+                (CLAP_EVENT_PARAM_VALUE, false),
+                (CLAP_EVENT_PARAM_VALUE, false),
+                (CLAP_EVENT_PARAM_VALUE, true),
+                (CLAP_EVENT_PARAM_GESTURE_END, true),
+            ]
+        );
+        let observed = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(observed.inputs.len(), 4);
+        assert_eq!(
+            observed.inputs[1].value,
+            InputValue::Parameter { id: host_on.param_id, value: 0.0, modulation: false }
+        );
+        assert_eq!(observed.inputs[1].sample, Some(8));
+        assert_eq!(
+            observed.inputs[2].value,
+            InputValue::Parameter { id: host_on.param_id, value: 1.0, modulation: false }
+        );
+        assert!(matches!(observed.inputs[3].value, InputValue::Note { .. }));
+        if combined {
+            assert_eq!(observed.configuration, observed.inputs);
+        }
+        drop(observed);
+        drop(gui);
+    }
+}
+
+#[test]
+fn native_gui_waits_behind_full_input_and_gestures_spend_capture_budget() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.performance");
+    let gui = d.gui::<false, true>();
+    d.control.pending.store(true, Ordering::Release);
+    d.run(0, 8, vec![on(0); INPUT_SCAN], false);
+    gui(&[0.25]);
+    d.control.pending.store(false, Ordering::Release);
+    d.run(8, 8, vec![], true);
+    assert!(d.sink.attempts.is_empty());
+    assert_eq!(
+        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
+        INPUT_SCAN
+    );
+    // Only one work/cell remains after reserving this host batch: Begin uses
+    // that credit, so Set must wait even though Begin needs no payload cell.
+    d.run(16, 8, vec![on(0); INPUT_SCAN - 1], true);
+    assert_eq!(d.sink.attempts.len(), 1);
+    assert_eq!(d.sink.attempts[0].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
+    assert_eq!(
+        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
+        2 * INPUT_SCAN - 1
+    );
+    let Input::Transport(t) = transport(0, true, 42) else { unreachable!() };
+    d.transport = Some(t);
+    d.run(24, 8, vec![on(1)], true);
+    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+    let tail = &o.inputs[2 * INPUT_SCAN - 1..];
+    assert_eq!(tail.len(), 3);
+    assert!(matches!(tail[0].value, InputValue::Transport(_)));
+    assert!(matches!(tail[1].value, InputValue::Parameter { value: 0.25, .. }));
+    assert!(matches!(tail[2].value, InputValue::Note { .. }));
+    assert_eq!(tail[1].sample, Some(24));
+    drop(o);
+    drop(gui);
+}
+
+#[test]
+fn native_gui_flush_is_untimed_and_invalid_host_capture_does_not_commit_admission() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.performance");
+    let gui = d.gui::<false, true>();
+    gui(&[0.25]);
+    assert_eq!(
+        d.run(
+            0,
+            8,
+            vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))],
+            true
+        ),
+        CLAP_PROCESS_ERROR
+    );
+    assert!(d.sink.attempts.is_empty());
+    d.flush(vec![d.param(57)]);
+    assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
+    let Input::Param(host) = d.param(1) else { unreachable!() };
+    assert_eq!(d.parameter_value(host.param_id), 0.0);
+    d.run(100, 8, vec![on(2)], true);
+    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(o.inputs.len(), 3);
+    assert!(matches!(o.inputs[0].value, InputValue::Parameter { value: 0.25, .. }));
+    assert!(o.inputs[0].flush);
+    assert_eq!(o.inputs[0].sample, Some(100));
+    assert_eq!(o.inputs[0].enclosing_start, None);
+    assert_eq!(o.inputs[0].enclosing_frames, 0);
+    assert_eq!(o.inputs[0].offset, 0);
+    assert_eq!(o.inputs[1].offset, 57);
+    assert_eq!(d.parameter_value(host.param_id), 0.5);
+    drop(o);
+    d.run(108, 8, vec![], true);
+    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(), 3);
+    drop(gui);
+}
+
+#[test]
+fn native_gui_arrival_after_snapshot_waits_through_configuration_subblocks_and_error_exit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for mode in 0..3 {
+        let early_error = mode == 2;
+        let mut d = Device::new(
+            Control { process_error: mode != 0, ..Default::default() },
+            c"fixture.combined",
+        );
+        let gui = d.gui::<true, true>();
+        let control = d.control.clone();
+        if early_error {
+            control.pause_begin.store(true, Ordering::Release);
+        } else {
+            control.pause_audio.store(true, Ordering::Release);
+        }
+        let input = if early_error {
+            vec![Input::Header(header::<clap_event_header>(CLAP_EVENT_MIDI_SYSEX, 0))]
+        } else {
+            vec![d.param(2), transport(4, true, 99), on(6)]
+        };
+        let worker = std::thread::spawn(move || {
+            assert_eq!(
+                d.run(0, 8, input, true),
+                if mode == 0 { CLAP_PROCESS_CONTINUE_IF_NOT_QUIET } else { CLAP_PROCESS_ERROR }
+            );
+            d
+        });
+        while !control.audio_entered.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        gui(&[0.25]);
+        control.audio_resume.store(true, Ordering::Release);
+        let mut d = worker.join().unwrap();
+        let previous = {
+            let o = control.observed.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                o.inputs
+                    .iter()
+                    .all(|i| !matches!(i.value, InputValue::Parameter { value: 0.25, .. }))
+            );
+            assert_eq!(o.configuration, o.inputs);
+            if mode == 0 {
+                assert_eq!(o.blocks.iter().map(|b| b.1).collect::<Vec<_>>(), vec![0, 2, 4]);
+            }
+            if mode == 1 {
+                assert_eq!(o.blocks.iter().map(|b| b.1).collect::<Vec<_>>(), vec![0]);
+            }
+            o.inputs.len()
+        };
+        assert!(d.sink.attempts.is_empty());
+        let Input::Transport(t) = transport(0, true, 100) else { unreachable!() };
+        d.transport = Some(t);
+        d.run(8, 8, vec![d.param(1), on(2)], true);
+        let o = control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        let next = &o.inputs[previous..];
+        assert_eq!(next.len(), 4);
+        assert!(matches!(next[0].value, InputValue::Transport(_)));
+        assert!(matches!(next[1].value, InputValue::Parameter { value: 0.25, .. }));
+        assert_eq!(next[1].sample, Some(8));
+        assert!(matches!(next[2].value, InputValue::Parameter { value: 0.5, .. }));
+        assert!(matches!(next[3].value, InputValue::Note { .. }));
+        assert_eq!(o.configuration, o.inputs);
+        drop(o);
+        d.run(16, 8, vec![], true);
+        assert_eq!(
+            control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
+            previous + 5
+        );
+        drop(gui);
+    }
+}
+
+#[test]
+fn native_gui_nonperformance_paths_keep_direct_parameter_delivery() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for configuration in [false, true] {
+        let mut d = Device::new(
+            Control::default(),
+            if configuration { c"fixture.configuration" } else { c"fixture.legacy" },
+        );
+        let gui: GuiEdit = if configuration {
+            Box::new(d.gui::<true, false>())
+        } else {
+            Box::new(d.gui::<false, false>())
+        };
+        gui(&[0.25]);
+        d.run(0, 8, vec![], true);
+        assert_eq!(
+            d.sink.attempts.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            vec![
+                CLAP_EVENT_PARAM_GESTURE_BEGIN,
+                CLAP_EVENT_PARAM_VALUE,
+                CLAP_EVENT_PARAM_GESTURE_END
+            ]
+        );
+        assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy, 0);
+        // Configuration-only keeps its existing configuration snapshot readback;
+        // inspect the generic Param directly to prove the legacy output applies.
+        if configuration {
+            let w = unsafe {
+                &*((*d.plugin)
+                    .plugin_data
+                    .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, false>>>())
+            };
+            assert_eq!(w.test_inspect_plugin(|p| p.params.axis.value()), 0.25);
+        } else {
+            let Input::Param(p) = d.param(0) else { unreachable!() };
+            assert_eq!(d.parameter_value(p.param_id), 0.25);
+        }
+        drop(gui);
+    }
+}
+
+#[test]
+fn native_gui_full_notification_bank_wraps_without_reapplying_its_admitted_prefix() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.performance");
+    let gui = d.gui::<false, true>();
+    // Exactly 2,048 notification entries: Begin + 2,046 Sets + End.
+    gui(&vec![0.25; INPUT_SCAN - 2]);
+    d.run(0, 8, vec![], true);
+    assert_eq!(d.sink.attempts.len(), 512);
+    assert_eq!(
+        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
+        INPUT_SCAN - 2
+    );
+    // Refill all 512 released cells across the physical wrap. The original
+    // 1,536 notifications still await the host but have already entered input.
+    gui(&vec![0.75; 510]);
+    for start in [8, 16, 24, 32, 40] {
+        d.run(start, 8, vec![], true);
+    }
+    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(o.inputs.len(), INPUT_SCAN - 2 + 510);
+    assert!(
+        o.inputs[..INPUT_SCAN - 2]
+            .iter()
+            .all(|i| matches!(i.value, InputValue::Parameter { value: 0.25, .. })
+                && i.sample == Some(0))
+    );
+    assert!(
+        o.inputs[INPUT_SCAN - 2..]
+            .iter()
+            .all(|i| matches!(i.value, InputValue::Parameter { value: 0.75, .. })
+                && i.sample == Some(8))
+    );
+    assert_eq!(d.sink.attempts.len(), INPUT_SCAN + 512);
+    drop(o);
+    drop(gui);
 }
 
 #[test]
