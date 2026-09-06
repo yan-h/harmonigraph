@@ -207,7 +207,7 @@ struct GlowNode {
     // ink strip, which is where its colour is (`Instance::glow` y).
     light: vec2<f32>,
     // x: how much of a MARK the light still has this node wearing, which is
-    // what sizes its halo (`glow_rim`). y: unused.
+    // what sizes its halo (`glow_rim`). y: conservative pixel radius for CPU tiling.
     mark: vec2<f32>,
 };
 
@@ -220,8 +220,16 @@ struct GlowNode {
 //
 // The buffer is allocated at a capacity this frame's count may be well under
 // (`PaneTargets::glow_nodes`), so `arrayLength` is NOT the bound to walk —
-// past the count sit entries some earlier frame wrote. `u.glow.lit` is.
+// past the count sit entries some earlier frame wrote. The tile lists below
+// reference only this frame's nodes; `u.glow.lit` also guards an empty frame.
 @group(2) @binding(0) var<storage, read> glow_nodes: array<GlowNode>;
+
+// Tile offsets and two sorted node lists: one local to the tile and one for
+// large halos. The latter avoids copying a full-screen glow into every tile.
+// Group 3 shares its slot with shadow_casters in other entry points.
+// Layout and tile width must agree with glow_tiles.rs.
+@group(3) @binding(0) var<storage, read> glow_tiles: array<u32>;
+const GLOW_TILE_SIZE: u32 = 32u;
 
 // The geometry group's Shadow: how wide a node's shadow is, as a share of its
 // radius. A resting marker takes the same units from `u.marker_shadow`, inherited
@@ -3548,6 +3556,9 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
 /// restores its per-channel colour mixing. Skip the unused fold at either end.
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    if u.glow.lit <= 0.0 {
+        return vec4<f32>(0.0);
+    }
     let accumulation = clamp(u.glow.accumulation, 0.0, 1.0);
     let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
     if peak <= 0.0 {
@@ -3563,8 +3574,25 @@ fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     var accumulated = vec4<f32>(0.0);
     var sole = vec4<f32>(0.0);
     var count = 0u;
-    let lit = u32(max(u.glow.lit, 0.0));
-    for (var i = 0u; i < lit; i = i + 1u) {
+    let tile_xy = vec2<u32>(pos.xy) / GLOW_TILE_SIZE;
+    let tile = tile_xy.y * glow_tiles[0] + tile_xy.x;
+    var local = glow_tiles[3u + tile];
+    let local_end = glow_tiles[4u + tile];
+    var global = glow_tiles[1];
+    let global_end = glow_tiles[2];
+    // Merge in original node order: the fold then keeps its original rounding
+    // as a halo crosses a tile boundary or switches between local and global.
+    while local < local_end || global < global_end {
+        var i = 0xffffffffu;
+        if local < local_end {
+            i = glow_tiles[local];
+        }
+        if global < global_end && glow_tiles[global] < i {
+            i = glow_tiles[global];
+            global = global + 1u;
+        } else {
+            local = local + 1u;
+        }
         let node = glow_nodes[i];
         let delta = pos.xy - node.centre;
         let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
