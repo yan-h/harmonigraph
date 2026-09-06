@@ -1470,11 +1470,15 @@ pub(crate) mod tests {
         (-harmonigraph_scene::SHADOW_TAIL * t).exp() * (1.0 - w * w * (3.0 - 2.0 * w))
     }
 
-    /// `shadow_stop` transcribed from common.wgsl, on the same terms.
+    /// `shadow_stop` transcribed from common.wgsl, on the same terms —
+    /// including the branch, which is where a wrong crossover would show.
     fn reference_stop(falloff: f32) -> f32 {
-        let folds: f32 = shader_const(&crate::with_common(""), "SHADOW_INVISIBLE_FOLDS")
-            .parse()
-            .expect("a number");
+        let common = crate::with_common("");
+        let folds: f32 = shader_const(&common, "SHADOW_INVISIBLE_FOLDS").parse().expect("a number");
+        let free: f32 = shader_const(&common, "SHADOW_FALLOFF_FREE").parse().expect("a number");
+        if falloff >= free {
+            return harmonigraph_scene::SHADOW_STOP;
+        }
         harmonigraph_scene::SHADOW_STOP.max(folds.powf(1.0 / falloff))
     }
 
@@ -1496,6 +1500,16 @@ pub(crate) mod tests {
         assert!(
             (folds - want).abs() < 1.0e-6,
             "common.wgsl folds the threshold at {folds} where the scene solves {want}",
+        );
+        // The crossover both sides BRANCH on. A drift here is a step in the
+        // stop at exactly the falloff where the two expressions are supposed to
+        // meet, which the sweep below would have to land on to see.
+        let free: f32 = shader_const(&common, "SHADOW_FALLOFF_FREE").parse().expect("a number");
+        assert_eq!(
+            free,
+            harmonigraph_scene::SHADOW_FALLOFF_FREE,
+            "common.wgsl takes the floor from {free} where the scene takes it from {}",
+            harmonigraph_scene::SHADOW_FALLOFF_FREE,
         );
         for step in 0..=12 {
             let falloff = harmonigraph_scene::SHADOW_FALLOFF_MIN

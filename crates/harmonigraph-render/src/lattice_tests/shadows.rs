@@ -1997,7 +1997,11 @@ fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
     let width = 2.0 * sigma(&scene);
     let at = |u: f32| (centre.x + ink_radius(&scene) + u * width).round() as u32;
     let (half, whole) = (at(0.5), at(1.0));
-    assert!(whole < SIZE[0], "the pair runs off the pane at {whole}");
+    // The GROUND reading below is the widest of the three, and `bright_at`
+    // indexes a flat buffer: an x past the row wraps into the next row and
+    // reads a plausible number rather than panicking, so the guard is on the
+    // furthest sample and not on the pair.
+    assert!(at(1.9) < SIZE[0], "the readings run off the pane at {}", at(1.9));
 
     let (sharp, plateau) = (shot(SHADOW_FALLOFF_MIN), shot(SHADOW_FALLOFF_MAX));
     let ground = bright_at(&shot(SHADOW_FALLOFF_MIN), at(1.9), row);

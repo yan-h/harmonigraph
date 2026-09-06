@@ -500,8 +500,11 @@ pub enum NoteNames {
 /// by, and which kernel a caster is drawn by is the scene's to say.
 pub const REACH_SIGMAS: f32 = 3.0;
 
-/// How many Shadow widths out the standoff's curve is windowed to nothing, and
-/// so how far a [`ShadowKernel::Distance`] cell is padded.
+/// The FLOOR on how many Shadow widths out the standoff's curve is windowed to
+/// nothing, and so on how far a [`ShadowKernel::Distance`] cell is padded —
+/// [`shadow_stop`] is what solves for the radius a given
+/// [`ShadowStyle::falloff`] actually needs, and this is what it never goes
+/// below.
 ///
 /// A decay has no radius at which it stops and a quad does, so this is where
 /// that difference is settled rather than left to the billboard: the coverage
@@ -510,9 +513,10 @@ pub const REACH_SIGMAS: f32 = 3.0;
 /// it happens to hold there — a hard step at a SCREEN-ALIGNED square, which is
 /// the worst closed contour a smooth field can carry.
 ///
-/// TWO, where the fixed exponential is under half a code value of the deepest
-/// shadow before the window closes it. `SHADOW_STOP` in common.wgsl is the
-/// shader's copy, pinned by
+/// TWO, where the plain exponential — the falloff at 1, and every falloff
+/// above 0.64 sooner — is under half a code value ([`SHADOW_INVISIBLE`]) of
+/// the deepest shadow before the window closes it. `SHADOW_STOP` in
+/// common.wgsl is the shader's copy, pinned by
 /// `the_shaders_distance_kind_and_window_are_the_packers`.
 pub const SHADOW_STOP: f32 = 2.0;
 
@@ -536,6 +540,22 @@ pub const SHADOW_TAIL: f32 = 4.0;
 /// The threshold [`SHADOW_STOP`] was chosen against, named here because
 /// [`shadow_stop`] now solves for a radius rather than checking a fixed one.
 pub const SHADOW_INVISIBLE: f32 = 0.5 / 255.0;
+
+/// The falloff at and above which a group's shadow costs exactly what it always
+/// did: where [`shadow_stop`]'s solve meets the [`SHADOW_STOP`] floor, so the
+/// cell is padded and the window shuts precisely as they did before the bar
+/// existed.
+///
+/// `ln(SHADOW_INVISIBLE_FOLDS) / ln(SHADOW_STOP)`, which is the falloff whose
+/// decay reaches [`SHADOW_INVISIBLE`] at exactly [`SHADOW_STOP`] widths. A
+/// literal because `ln` is not available in a `const fn`;
+/// `every_falloff_shuts_its_window_on_nothing` holds it to the algebra.
+///
+/// Named because the whole cost story turns on it — the bar is free above it
+/// and buys atlas below it — and because it is the branch both spellings of
+/// `shadow_stop` take, rather than computing a `pow` whose answer the floor
+/// then discards.
+pub const SHADOW_FALLOFF_FREE: f32 = 0.640_253_25;
 
 /// The bottom of [`ShadowStyle::falloff`], and what the shader floors a
 /// caster's own at (`SHADOW_FALLOFF_FLOOR` in common.wgsl).
@@ -594,6 +614,14 @@ pub fn shadow_stop(falloff: f32) -> f32 {
     } else {
         1.0
     };
+    // Above the crossover the solve lands under the floor and the floor is the
+    // answer, so the `powf` is skipped rather than computed and discarded —
+    // which is what makes "free above SHADOW_FALLOFF_FREE" true of a fragment
+    // and not only of the atlas. The `max` still guards the other branch: the
+    // constant is a rounded literal, and the floor is the thing that must hold.
+    if falloff >= SHADOW_FALLOFF_FREE {
+        return SHADOW_STOP;
+    }
     SHADOW_STOP.max(((1.0 / SHADOW_INVISIBLE).ln() / SHADOW_TAIL).powf(1.0 / falloff))
 }
 
@@ -667,8 +695,8 @@ impl ShadowKernel {
     /// The two renderers end at different multiples of their own width, and
     /// both end EXACTLY: a Gaussian is lowered onto zero at [`REACH_SIGMAS`] σ
     /// (`PEDESTAL` in shadow.wgsl) and the standoff's curve is windowed to zero
-    /// at [`SHADOW_STOP`] Shadow widths, which is `2 · SHADOW_STOP` σ because a
-    /// width is 2σ.
+    /// at [`shadow_stop`] Shadow widths, which is `2 · shadow_stop(falloff)` σ
+    /// because a width is 2σ.
     ///
     /// One expression for both, so a quad and its cell's padding are sized off
     /// one number — a cell padded short of what its quad reaches is a shadow
@@ -747,10 +775,18 @@ pub struct ShadowStyle {
     ///
     /// The width keeps its exact meaning at every value, because `1^f` is 1
     /// whatever `f` is: one Shadow width out the decay stands at
-    /// `exp(-SHADOW_TAIL)` — the fiftieth [`SHADOW_TAIL`] names — and the
-    /// window still shuts at [`SHADOW_STOP`] widths on a cell padded for
-    /// exactly that. So this bar redistributes a reach it never changes, and
-    /// costs neither an atlas texel nor a fragment more.
+    /// `exp(-SHADOW_TAIL)` — the fiftieth [`SHADOW_TAIL`] names — whatever this
+    /// is dialled to. So the bar redistributes the near field rather than
+    /// respelling the width, and the Shadow bar never has to be re-dialled
+    /// after it.
+    ///
+    /// What it does move is where the decay ENDS, and so what the cell costs.
+    /// From 0.64 up the window still shuts at [`SHADOW_STOP`] widths on the
+    /// cell that was already padded for it, and the bar is free; below that
+    /// [`shadow_stop`] solves for a longer radius and the cell grows to hold
+    /// it — 1.8× the pad and 3.2× the cell AREA at [`SHADOW_FALLOFF_MIN`].
+    /// That is the price of not cutting the tail off at a fixed radius, and
+    /// [`SHADOW_FALLOFF_MIN`] is where it stops being worth paying.
     ///
     /// 1 is the plain exponential, and below it a sharp edge against the ink
     /// paid for with a long low tail; above it the shadow holds most of its

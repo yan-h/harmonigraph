@@ -137,10 +137,21 @@ fn every_falloff_shuts_its_window_on_nothing() {
             "at falloff {falloff} the shadow is still standing where its cell stops",
         );
     }
+    // The crossover is where the solve meets the floor, and it is a rounded
+    // literal because `ln` is not a `const fn` — so it is held to its own
+    // algebra here rather than trusted. Both spellings of `shadow_stop` BRANCH
+    // on it, so a drift would put a step in the stop exactly where the two
+    // expressions are supposed to agree.
+    let solved = ((1.0f32 / SHADOW_INVISIBLE).ln() / SHADOW_TAIL).powf(1.0 / SHADOW_FALLOFF_FREE);
+    assert!(
+        (solved - SHADOW_STOP).abs() < 1.0e-4,
+        "at the crossover {SHADOW_FALLOFF_FREE} the solve reaches {solved}, not the \
+         {SHADOW_STOP} it is supposed to meet",
+    );
     // The fixed stop is a FLOOR and holds wherever it is already generous, so
     // a fresh picture is padded and windowed exactly as it was before the bar
     // existed. Everything from the crossover up pays nothing.
-    for falloff in [0.65, 0.8, 1.0, 2.0, SHADOW_FALLOFF_MAX] {
+    for falloff in [SHADOW_FALLOFF_FREE, 0.65, 0.8, 1.0, 2.0, SHADOW_FALLOFF_MAX] {
         assert_eq!(
             shadow_stop(falloff),
             SHADOW_STOP,
