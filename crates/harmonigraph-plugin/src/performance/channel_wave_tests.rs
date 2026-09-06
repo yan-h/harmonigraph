@@ -339,7 +339,7 @@ fn each_setup_claims_the_actual_lease_before_host_acceptance() {
 }
 
 #[test]
-fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
+fn latched_fault_inhibits_new_velocity_prefix_while_retrying_owed_release() {
     let _scope = crate::test_scope::enter();
     for invalid_clock in [false, true] {
         let uuid = SavedUuid::default();
@@ -386,8 +386,8 @@ fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
             vec![midi(0, 0xb0, 88, 55, 0), midi(0, 0x80, 60, 2, 1)],
             acceptance,
         );
-        assert_eq!(partial.values, [(1, Event::Midi { port: 0, data: [0xb0, 88, 55], flags: 0 })]);
-        assert_eq!(fixture.target.source_snapshot().velocity_prefix[0], Some(55));
+        assert_eq!(partial.values, [(1, Event::Midi { port: 0, data: [0xb0, 88, 0], flags: 0 })]);
+        assert_eq!(fixture.target.source_snapshot().velocity_prefix[0], Some(0));
         assert_eq!(fixture.target.source_snapshot().note_off_owed, 1);
         if invalid_clock {
             assert!(fixture.target.source_snapshot().unmapped_reports > 0);
@@ -398,8 +398,8 @@ fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
             let (prefix, held, received, applied) = receiver(&fixture.hub, slot);
             assert_eq!(
                 (prefix, held),
-                (Some(55), 0),
-                "Hub retains the actual unmapped nonzero correction before its rejected consumer"
+                (Some(0), 0),
+                "Hub retains the actual unmapped neutral prefix before its rejected consumer"
             );
             assert_eq!(
                 (received, applied),
@@ -412,11 +412,8 @@ fn a_new_partial_prefix_rearms_repair_after_output_fault_is_already_latched() {
         let repaired = fixture.target.run(raw + 64, vec![], None);
         assert_eq!(
             repaired.values,
-            [
-                (0, Event::Midi { port: 0, data: [0xb0, 88, 0], flags: 0 }),
-                (0, Event::Midi { port: 0, data: [0x80, 60, 0], flags: 0 }),
-            ],
-            "a second real prefix/consumer failure owns a fresh repair before its emergency Off"
+            [(0, Event::Midi { port: 0, data: [0x80, 60, 0], flags: 0 })],
+            "the accepted neutral prefix needs no repeat; the rejected essential Off remains owed"
         );
         assert_eq!(fixture.target.source_snapshot().velocity_prefix[0], Some(0));
         assert_eq!(fixture.target.source_snapshot().note_off_owed, 0);

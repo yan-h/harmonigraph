@@ -79,7 +79,9 @@ Younger dispositions stay owned until their predecessor is acknowledged.
 Source cleanup retains its existing bounded visit grant and charges complete original-group cleanup.
 These are work-count bounds, not a measured callback deadline or WCET claim.
 The all-retired service bound reserves grant-saturated capture rounds separately from the 128-round per-row parse tail, plus retained-window revisits.
-Its conservative 1,964-round sum remains below the existing 2,048-round service limit.
+The former 1,964/2,048-round bound predates the one-record repair lane and terminal inventory.
+Terminal settlement charges that serialized traffic separately;
+its revised finite ownership bound does not claim callback latency or successful unknown physical termination.
 
 The exported-factory fixtures run actual CLAP callbacks under the process allocation/deallocation guard.
 They cover an offered cohort across real accepted Note-Offs and exact output ACKs in both source callback orders, original two-target wildcard traversal, Pending/Birth reuse after exact retirement, stale frozen bindings and retirement replays, a mixed-generation partially canceled wildcard, DIRECT ownership, and a full 1,024-cell retirement reply lane followed by destruction of both peers without rescue callbacks.

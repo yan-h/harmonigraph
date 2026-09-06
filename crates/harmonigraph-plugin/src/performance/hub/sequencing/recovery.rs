@@ -35,6 +35,7 @@ enum Phase {
     Rebuild,
     Replay,
     Resume,
+    Finish,
 }
 
 #[derive(Default)]
@@ -43,6 +44,8 @@ pub(super) struct Recovery {
     transaction: u64,
     from: u64,
     pending_from: Option<u64>,
+    terminal: Option<u16>,
+    pending_terminal: Option<u16>,
     ceiling: u64,
     horizon: Option<i64>,
     phase: Phase,
@@ -96,6 +99,44 @@ impl Recovery {
 
 impl Hub {
     #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_reset_progress(&self) -> String {
+        format!(
+            "transition={:?} invalidated={} shared={:?} direct={} rows={:?}",
+            self.transition,
+            self.invalidated,
+            self.offer.as_ref().map(|o| (
+                o.session.closing.load(Ordering::Acquire),
+                o.session.credits.load(Ordering::Acquire),
+                o.session
+                    .rows
+                    .iter()
+                    .filter(|r| r.expected_incarnation.load(Ordering::Acquire) != 0)
+                    .map(|r| (
+                        r.withdrawn.load(Ordering::Acquire),
+                        r.source_detached.load(Ordering::Acquire),
+                        r.hub_detached.load(Ordering::Acquire),
+                        r.emission_gate.load(Ordering::Acquire)
+                    ))
+                    .collect::<Vec<_>>()
+            )),
+            self.direct.test_reset_progress(),
+            self.rows
+                .iter()
+                .filter(|r| r.lease.is_some())
+                .map(|r| (
+                    r.lease,
+                    r.member,
+                    r.baseline.is_some(),
+                    r.ingress.len(),
+                    r.output.len(),
+                    r.state.count(),
+                    r.seal,
+                    r.detach
+                ))
+                .collect::<Vec<_>>()
+        )
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_recovery_progress(&self) -> String {
         format!("active={} phase={:?} work={} heads={:?} waiting={:?} cuts={:?} plans={} decision={} frozen={}/{}/{}",
             self.sequencer.recovery.active, self.sequencer.recovery.phase, self.sequencer.recovery.work,
@@ -103,6 +144,59 @@ impl Hub {
             self.sequencer.plan_count, self.sequencer.decision, self.frozen_captures.active,
             self.frozen_captures.sample, self.frozen_captures.len())
     }
+    pub(in crate::performance::hub) fn observe_terminal_faults(&mut self) {
+        if !self.sequences_inputs() && !self.sequencer.retired {
+            return;
+        }
+        let Some(offer) = &self.offer else { return };
+        let mut faults = offer.session.faults.load(Ordering::Acquire)
+            & !super::super::super::source::TIMING_FAILURE;
+        let mut local = 0u16;
+        for (source, row) in self.rows.iter().enumerate() {
+            let bits = offer.session.rows[source].faults.load(Ordering::Acquire)
+                & !super::super::super::source::TIMING_FAILURE;
+            if row.lease.is_none()
+                || bits == 0
+                || self.sequencer.terminal_sources & (1 << source) != 0
+            {
+                continue;
+            }
+            if row.member
+                || self
+                    .sequencer
+                    .membership
+                    .is_some_and(|membership| membership.leases[source].is_some())
+            {
+                faults |= bits;
+            } else {
+                local |= 1 << source;
+            }
+        }
+        if faults != 0 && !self.sequencer.terminal_session {
+            offer.session.faults.fetch_or(faults, Ordering::AcqRel);
+            self.sequencer.terminal_session = true;
+            local = u16::MAX;
+            self.direct.fault(faults);
+        }
+        if local == 0 {
+            return;
+        }
+        self.sequencer.terminal_sources |= local;
+        for source in 0..TUNERS {
+            if local & (1 << source) != 0 {
+                self.offer.as_ref().unwrap().session.rows[source]
+                    .emission_gate
+                    .fetch_or(CLOSED, Ordering::AcqRel);
+            }
+        }
+        if self.sequencer.recovering() {
+            let pending = &mut self.sequencer.recovery.pending_terminal;
+            *pending = Some(pending.unwrap_or(0) | local);
+        } else {
+            self.start_recovery(1, Some(local));
+        }
+    }
+
     pub(in crate::performance::hub) fn request_recovery(&mut self, from: u64) {
         let from = from.max(1);
         if self.sequencer.recovery.active {
@@ -110,6 +204,10 @@ impl Hub {
             *pending = Some(pending.map_or(from, |old| old.min(from)));
             return;
         }
+        self.start_recovery(from, None);
+    }
+
+    fn start_recovery(&mut self, from: u64, terminal: Option<u16>) {
         let Some(transaction) = self.sequencer.recovery.transaction.checked_add(1) else {
             self.configuration_exhausted();
             return;
@@ -118,6 +216,12 @@ impl Hub {
         let mut participants: [Participant; TUNERS] =
             std::array::from_fn(|_| Participant::default());
         for (index, row) in self.rows.iter().enumerate() {
+            if terminal.is_some_and(|mask| mask & (1 << index) == 0) {
+                continue;
+            }
+            if terminal.is_none() && self.sequencer.terminal_sources & (1 << index) != 0 {
+                continue;
+            }
             let Some(lease) = row.lease else { continue };
             let shared = &offer.session.rows[index];
             if shared.source_detached.load(Ordering::Acquire)
@@ -143,19 +247,29 @@ impl Hub {
                 transaction,
                 generation,
                 from_decision: from,
+                terminal: terminal.is_some(),
             });
         }
+        let terminal = terminal.map(|mask| {
+            participants.iter().enumerate().fold(0, |selected, (source, participant)| {
+                selected | if participant.fence.is_some() { mask & (1 << source) } else { 0 }
+            })
+        });
         self.sequencer.recovery = Recovery {
             active: true,
             transaction,
             from,
             pending_from: None,
+            terminal,
+            pending_terminal: None,
             ceiling: self.sequencer.decision,
             horizon: (self.frozen_captures.id.0 != 0).then_some(self.frozen_captures.sample),
             phase: Phase::Prepare,
             participants,
-            plan_cursor: self.sequencer.plan_head,
-            plan_left: self.sequencer.plan_count,
+            plan_cursor: terminal
+                .map_or(self.sequencer.plan_head, |mask| mask.trailing_zeros() * LIFETIMES as u32),
+            plan_left: terminal
+                .map_or(self.sequencer.plan_count, |mask| mask.count_ones() as usize * LIFETIMES),
             source: 0,
             preserve: 0,
             work: self.sequencer.recovery.work,
@@ -177,7 +291,9 @@ impl Hub {
         if !self.sequencer.recovery.active {
             return;
         }
-        if self.sequencer.retired
+        if (self.sequencer.retired
+            || self.sequencer.terminal_session
+                && self.sequencer.recovery.pending_terminal.is_some())
             && matches!(
                 self.sequencer.recovery.phase,
                 Phase::Status | Phase::Rebuild | Phase::Replay
@@ -191,7 +307,7 @@ impl Hub {
             self.sequencer.committing = false;
             self.sequencer.config = None;
             self.sequencer.membership = None;
-            self.sequencer.recovery.phase = Phase::Resume;
+            self.sequencer.recovery.phase = Phase::Finish;
             self.service_revision = self.service_revision.wrapping_add(1);
         }
         // The repair cell is independent of a full Capture window. Ordinary
@@ -220,11 +336,23 @@ impl Hub {
                         continue;
                     }
                     let index = self.sequencer.recovery.plan_cursor as usize;
-                    let plan = self.sequencer.plans[index].as_mut().unwrap();
-                    self.sequencer.recovery.plan_cursor = plan.next;
+                    if let Some(mask) = self.sequencer.recovery.terminal {
+                        // Each locally faulted Source is selected once before
+                        // Reset. Scan only its indexed row; sixteen separate
+                        // local transactions cost one full pool, not sixteen.
+                        let mut next = index + 1;
+                        while next < TUNERS * LIFETIMES && mask & (1 << (next / LIFETIMES)) == 0 {
+                            next = (next / LIFETIMES + 1) * LIFETIMES;
+                        }
+                        self.sequencer.recovery.plan_cursor = next as u32;
+                    } else {
+                        self.sequencer.recovery.plan_cursor =
+                            self.sequencer.plans[index].as_ref().unwrap().next;
+                    }
                     self.sequencer.recovery.plan_left -= 1;
                     self.sequencer.recovery.work += 1;
                     self.service_revision = self.service_revision.wrapping_add(1);
+                    let Some(plan) = self.sequencer.plans[index].as_mut() else { continue };
                     plan.inventoried = false;
                     plan.replay = if plan.binding.decision != 0
                         && plan.binding.decision < self.sequencer.recovery.from
@@ -238,7 +366,14 @@ impl Hub {
                     if !self.collect_inventory() {
                         return;
                     }
-                    self.sequencer.recovery.phase = Phase::Preserve;
+                    self.sequencer.recovery.phase = if self.sequencer.recovery.terminal.is_some()
+                        || self.sequencer.terminal_session
+                            && self.sequencer.recovery.pending_terminal.is_some()
+                    {
+                        Phase::Finish
+                    } else {
+                        Phase::Preserve
+                    };
                     self.service_revision = self.service_revision.wrapping_add(1);
                 }
                 Phase::Preserve => {
@@ -271,12 +406,67 @@ impl Hub {
                     }
                     self.sequencer.recovery.phase = Phase::Resume;
                 }
+                Phase::Finish => {
+                    if !self.finish_closed(owner) {
+                        return;
+                    }
+                    self.sequencer.recovery.phase = Phase::Resume;
+                }
                 Phase::Resume => {
                     self.resume_emission();
                     return;
                 }
             }
         }
+    }
+
+    fn finish_closed(&mut self, owner: &mut Owner) -> bool {
+        for (source, participant) in self.sequencer.recovery.participants.iter().enumerate() {
+            if participant.fence.is_some()
+                && participant.cuts.is_none_or(|cuts| self.rows[source].applied < cuts.output)
+            {
+                return false;
+            }
+        }
+        let shared = self.sequencer.recovery.terminal.is_none() || self.sequencer.terminal_session;
+        if shared
+            && self.sequencer.config.is_some()
+            && !self.sequencer.retired
+            && owner
+                .abandon_input_cohort(
+                    self.sequencer.recovery.context_clock,
+                    self.sequencer.binding_sample,
+                )
+                .is_err()
+        {
+            return false;
+        }
+        // Inventory ended the finite recovery reader. Each original token still
+        // owns its separate local completion/status and exact retirement proof.
+        if shared {
+            self.frozen_captures.abandon();
+            self.sequencer.config = None;
+            self.sequencer.membership = None;
+            self.sequencer.committing = false;
+            self.sequencer.cohort_unsent = 0;
+            self.sequencer.cohort_floor = self.sequencer.decision;
+            self.sequencer.cohort_recipients = 0;
+        }
+        for (source, participant) in self.sequencer.recovery.participants.iter().enumerate() {
+            if participant.fence.is_some_and(|fence| fence.terminal) {
+                self.rows[source].terminal_cut = Some(participant.cuts.unwrap().input);
+                if !self.rows[source].member {
+                    // A refused provisional join never contributed coverage.
+                    // Once its exact cuts close, its proposed floor cannot pin
+                    // independent Sources' factual publication/credit frontier.
+                    self.rows[source].joining = None;
+                }
+            }
+        }
+        // This path deliberately neither rebuilds prospective musical state nor
+        // depends on physical debt becoming accepted. Explicit Reset establishes
+        // the fresh state before a new performance may use this context.
+        true
     }
 
     fn collect_inventory(&mut self) -> bool {
@@ -623,29 +813,6 @@ impl Hub {
                     continue;
                 }
                 let key = token.key;
-                if source != 0 {
-                    let row = &self.rows[source - 1];
-                    let view = super::super::super::capture::View {
-                        ingress: &row.ingress,
-                        permissions: &row.captures,
-                        lease: row.lease.unwrap(),
-                        epoch: row.epoch,
-                        frozen: token.frozen.unwrap(),
-                    };
-                    if let Some((life, birth)) = view.onset(position) {
-                        if let Some(plan) = self.sequencer.plans
-                            [(source - 1) * LIFETIMES + usize::from(life)]
-                        .as_mut()
-                        .filter(|plan| {
-                            plan.key.lease == key.lease
-                                && plan.key.epoch == key.epoch
-                                && plan.key.serial == key.serial
-                                && plan.lifetime == birth.serial
-                        }) {
-                            plan.replay |= REPLAY_READER;
-                        }
-                    }
-                }
                 if source == 0 {
                     let Some(status) = self.direct.copy_capture_status(key) else { break };
                     let Some(status) = status else {
@@ -832,6 +999,8 @@ impl Hub {
 
     fn resume_emission(&mut self) {
         if !self.sequencer.retired
+            && self.sequencer.recovery.terminal.is_none()
+            && !self.sequencer.terminal_session
             && (self.clock_id() != self.sequencer.recovery.context_clock
                 || self.membership != self.sequencer.recovery.context_membership
                 || self.sequencer.actual_revision != self.sequencer.recovery.context_revision)
@@ -859,6 +1028,12 @@ impl Hub {
             let Some(reply) = shared.to_source.reserve_repair() else { continue };
             let next = generation
                 | if self.sequencer.retired
+                    || self.sequencer.recovery.terminal.is_some()
+                    || self
+                        .sequencer
+                        .recovery
+                        .pending_terminal
+                        .is_some_and(|mask| mask & (1 << source) != 0)
                     || self.sequencer.recovery.pending_from.is_some()
                     || shared.withdrawn.load(Ordering::Acquire)
                 {
@@ -897,8 +1072,14 @@ impl Hub {
         }
         self.sequencer.recovery.active = false;
         self.service_revision = self.service_revision.wrapping_add(1);
-        if let Some(from) = self.sequencer.recovery.pending_from.take() {
-            self.request_recovery(from);
+        let pending_from = self.sequencer.recovery.pending_from.take();
+        if let Some(mask) = self.sequencer.recovery.pending_terminal.take() {
+            self.start_recovery(1, Some(mask));
+            self.sequencer.recovery.pending_from = pending_from;
+        } else if !self.sequencer.terminal_session {
+            if let Some(from) = pending_from {
+                self.request_recovery(from);
+            }
         }
     }
 }

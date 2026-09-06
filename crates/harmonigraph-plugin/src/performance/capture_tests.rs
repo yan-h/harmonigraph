@@ -200,6 +200,10 @@ fn offered_capture_survives_real_off_ack_and_cell_reuse_in_both_callback_orders(
             with_source(&a, |source| source.test_capture(5).unwrap().remote_pending),
             "reply has not reached Source yet"
         );
+        // The Hub alone advanced one callback to publish that reply. Resume
+        // each Source at its own next enclosing interval before catching up.
+        a.run(raw - 64, vec![], None);
+        b.run(raw - 64, vec![], None);
         a.run(raw, vec![], None);
         b.run(raw, vec![], None);
         hub.run(raw, vec![], None);
@@ -628,45 +632,7 @@ fn continued_arrivals_cannot_starve_released_tune_or_direct_captures() {
 }
 
 #[test]
-fn failed_last_disposition_in_a_slice_cannot_be_overtaken_after_reply_capacity_returns() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let mut hub = Device::aggregation(false);
-    hub.configure(uuid, true);
-    hub.activate();
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    // Repeated factual coverage positions the first real cancellation at the
-    // last visit of a 64-cell slice. It creates no musical input or outcome.
-    // The two captured onsets and their coverage supply the other three cells.
-    with_source(&source, |source| source.test_pad_disposition_scan(60));
-    source.run(
-        64,
-        vec![note(1, 0, 60, 0, true), note(2, 0, 62, 0, true)],
-        Some(CLAP_EVENT_NOTE_ON),
-    );
-    source.run(128, vec![], None);
-    assert_eq!(source.source_snapshot().manifest, 2);
-    // Repeat the Hub's already-published output ACK in the real 1024-cell lane.
-    with_hub(&hub, |hub| hub.test_fill_reply_with_old_ack());
-    hub.run(64, vec![], None);
-    assert_eq!(with_hub(&hub, |hub| hub.test_disposition_cursor()), (2, Some(2)));
-    for block in 3..=9 {
-        assert!(source.run(block * 64, vec![], None).values.is_empty());
-        hub.run((block - 1) * 64, vec![], None);
-    }
-    let settled = source.source_snapshot();
-    assert_eq!((settled.manifest, settled.obligations, settled.pending), (0, 0, 0));
-    drop(source);
-    drop(hub);
-    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
-}
-
-#[test]
-fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
+fn capture_coverage_grants_and_independent_cancellation_remain_bounded() {
     let _scope = crate::test_scope::enter();
     for cancel in [false, true] {
         let uuid = SavedUuid::default();
@@ -703,21 +669,19 @@ fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
         assert_eq!(accepted.values.len(), if cancel { 0 } else { 512 });
         let after = source.source_snapshot();
         if cancel {
-            assert_eq!(after.manifest, 64);
+            assert_eq!(after.manifest, 1);
+            assert_eq!(after.input_cut, 64, "faulted input does not create new performance");
         }
-        assert_eq!(before - after.intent_slots, 512, "all intent kinds share one callback grant");
-        for block in 1..=32 {
+        if !cancel {
+            assert_eq!(
+                before - after.intent_slots,
+                512,
+                "capture and coverage share one callback grant"
+            );
+        }
+        for block in 1..=128 {
             hub.run(raw + (block - 1) * 64, vec![], None);
             source.run(raw + block * 64, vec![], None);
-        }
-        // New post-fault originals are retained until explicit local recovery.
-        if cancel {
-            let shared = source.shared();
-            shared.apply(shared.value().routing, true).unwrap();
-            for block in 33..=64 {
-                hub.run(raw + (block - 1) * 64, vec![], None);
-                source.run(raw + block * 64, vec![], None);
-            }
         }
         assert_eq!(source.source_snapshot().captures, 0);
         drop(source);
@@ -727,7 +691,7 @@ fn captures_dispositions_and_coverage_share_the_source_intent_push_grant() {
 }
 
 #[test]
-fn retired_hub_waits_for_source_detach_after_seal_and_post_cut_capture() {
+fn retired_hub_waits_for_source_detach_and_inhibits_post_fault_input() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -754,17 +718,17 @@ fn retired_hub_waits_for_source_detach_after_seal_and_post_cut_capture() {
     );
     assert!(!with_source(&source, |source| source.service_position().3[1]));
     source.main();
-    // A genuine new input is captured after the old musical seal and before
-    // the live producer's enclosing detach boundary. It remains owned input.
+    // Loss of the enrolled Hub inhibits new input while the live producer
+    // completes its enclosing detach boundary.
     assert!(source.run(256, vec![note(2, 0, 62, 1, true)], None).values.is_empty());
-    assert!(with_source(&source, |source| source.test_capture(3).unwrap().remote_pending));
+    assert!(with_source(&source, |source| source.test_capture(3).is_none()));
     for block in 5..=13 {
         source.main();
         assert!(source.run(block * 64, vec![], None).values.is_empty());
     }
     source.main();
     assert_eq!(source.source_snapshot().captures, 0, "post-seal capture receives exact retirement");
-    assert_eq!(source.source_snapshot().local_pending, 1, "post-cut input remains Source-owned");
+    assert_eq!(source.source_snapshot().local_pending, 0, "faulted input creates no new owner");
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     drop(source);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
@@ -799,7 +763,8 @@ fn retired_hub_drains_originals_still_unpublished_when_the_output_seal_arrives()
     assert!(with_source(&source, |source| !source.test_capture(3584).unwrap().remote_pending));
     drop(hub);
     let mut saw_sealed_unpublished = false;
-    for block in 8..=40 {
+    let mut settled_after = 0;
+    for block in 8..=71 {
         assert!(source.run(block * 64, vec![], None).values.is_empty());
         if source.source_snapshot().seal.is_some()
             && with_source(&source, |source| {
@@ -809,17 +774,24 @@ fn retired_hub_drains_originals_still_unpublished_when_the_output_seal_arrives()
             saw_sealed_unpublished = true;
         }
         source.main();
+        if source.source_snapshot().pending == 0 {
+            settled_after = block - 7;
+            break;
+        }
     }
     assert!(saw_sealed_unpublished, "musical seal precedes the original input tail");
+    println!(
+        "LIVE RETIRED HUB: 3584 original/output owners settled after {settled_after} callbacks"
+    );
     let settled = source.source_snapshot();
-    assert_eq!((settled.pending, settled.captures, settled.journal), (0, 0, 0));
+    assert_eq!((settled.pending, settled.captures, settled.journal), (0, 0, 0), "{settled:?}");
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     drop(source);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
 
 #[test]
-fn joined_source_reclaims_canceled_original_that_cannot_map_to_a_capture_sample() {
+fn clock_mapping_failure_inhibits_input_before_joined_retirement() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -843,7 +815,8 @@ fn joined_source_reclaims_canceled_original_that_cannot_map_to_a_capture_sample(
     );
     assert!(wire.values.is_empty());
     assert_eq!(source.source_snapshot().captures, 0, "mapping overflow mints no token");
-    assert!(with_source(&source, |source| !source.test_capture(1).unwrap().remote_pending));
+    assert!(with_source(&source, |source| source.test_capture(1).is_none()));
+    assert_eq!(source.source_snapshot().input_cut, 0, "invalid callback coverage inhibits input");
     assert_ne!(source.source_snapshot().faults & source::CLOCK_FAULT, 0);
     let registration = source.shared().registration().unwrap();
     drop(source);

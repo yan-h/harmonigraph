@@ -23,7 +23,6 @@ struct Plan {
 const NO_PLAN: u32 = u32::MAX;
 const NO_VOICE: u16 = u16::MAX;
 const PREFIX: u8 = 1;
-const REPLAY_READER: u8 = 2;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
@@ -39,16 +38,16 @@ struct Voice {
 #[derive(Clone, Copy)]
 struct Membership {
     clock: ClockId,
-    revision: u64,
     leases: [Option<Lease>; TUNERS],
     intervals: [Option<(Coverage, u64)>; TUNERS],
-    direct: Coverage,
     through: i64,
     floor: i64,
 }
 
 pub(super) struct Sequencer {
     pub retired: bool,
+    pub terminal_session: bool,
+    pub terminal_sources: u16,
     pub heads: [Option<usize>; TUNERS + 1],
     pub captured: [u64; TUNERS + 1],
     membership: Option<Membership>,
@@ -81,6 +80,8 @@ impl Default for Sequencer {
     fn default() -> Self {
         Self {
             retired: false,
+            terminal_session: false,
+            terminal_sources: 0,
             heads: [None; TUNERS + 1],
             captured: [0; TUNERS + 1],
             membership: None,
@@ -114,6 +115,9 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    pub(super) fn reset_terminal_context(&mut self) {
+        self.context.fill(None);
+    }
     pub(super) fn recovering(&self) -> bool {
         self.recovery.active
     }
@@ -154,6 +158,27 @@ impl Sequencer {
         }
         self.plan_count -= 1;
     }
+    pub(super) fn consume_terminal_original(
+        &mut self,
+        source: usize,
+        token: &super::super::capture::Token,
+        permissions: &super::super::capture::Permissions,
+    ) {
+        let Some((life, lifetime)) = permissions.original_on(token) else { return };
+        if let Some(plan) = self.plans[source * LIFETIMES + usize::from(life)].as_mut() {
+            if plan.terminal
+                && plan.lifetime == lifetime
+                && plan.key.lease == token.key.lease
+                && plan.key.epoch == token.key.epoch
+                && plan.key.serial == token.key.serial
+                && (plan.key.arena == 0 || plan.key.arena == token.key.arena)
+            {
+                plan.key = token.key;
+                plan.bound = true;
+            }
+        }
+    }
+
     pub(super) fn cancel(
         &mut self,
         source: usize,
@@ -162,9 +187,8 @@ impl Sequencer {
         serial: u64,
         request: u16,
         lifetime: u64,
-        original_on: bool,
     ) {
-        if !original_on || serial == 0 || lifetime == 0 || usize::from(request) >= LIFETIMES {
+        if serial == 0 || lifetime == 0 || usize::from(request) >= LIFETIMES {
             return;
         }
         let index = source * LIFETIMES + usize::from(request);
@@ -229,6 +253,15 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 + 16 + 8 <= 256
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
         println!(
+            "LEDGER sequencer actual [backing,free_capacity,free_metadata,recovery_owner] {:?}",
+            [
+                std::mem::size_of_val(&*self.actual),
+                self.actual_free.capacity() * std::mem::size_of::<u16>(),
+                std::mem::size_of_val(&self.actual_free),
+                std::mem::size_of_val(&self.recovery),
+            ]
+        );
+        println!(
             "LEDGER sequencer [owner,plan_option,plan_backing,voice_option,voice_backing] {:?}",
             [
                 std::mem::size_of::<Self>(),
@@ -242,6 +275,15 @@ impl Sequencer {
 }
 
 impl Hub {
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_service_terminal_plans(&mut self) {
+        self.plan_callback();
+        self.service_plans();
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_terminal_scope(&self) -> (bool, u16) {
+        (self.sequencer.terminal_session, self.sequencer.terminal_sources)
+    }
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_request_recovery(&mut self, from: u64) {
         self.request_recovery(from);
@@ -261,7 +303,7 @@ impl Hub {
         life: u16,
     ) -> Option<(bool, bool, bool)> {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)]
-            .map(|plan| (plan.terminal, plan.bound, plan.replay & REPLAY_READER != 0))
+            .map(|plan| (plan.terminal, plan.bound, self.sequencer.recovering()))
     }
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_cohort_delivery(&self) -> (u64, usize, u16, bool, usize) {
@@ -298,10 +340,8 @@ impl Hub {
             .checked_add(self.clock.calibration.offset)?;
         let mut snapshot = Membership {
             clock: self.clock_id(),
-            revision: self.membership,
             leases: [None; TUNERS],
             intervals: [None; TUNERS],
-            direct,
             through: direct.through.min(cap),
             floor: direct.start,
         };
@@ -310,6 +350,9 @@ impl Hub {
             // Enrollment is an acknowledged new boundary; no old interval is
             // inferred from a large output endpoint or an absent callback.
             if !row.member {
+                if row.terminal_cut.is_some() {
+                    continue;
+                }
                 return None;
             }
             if row.acknowledged_membership == 0
@@ -332,6 +375,9 @@ impl Hub {
     fn next_input_sample(&mut self) -> Option<i64> {
         let mut sample = None;
         for source in 0..=TUNERS {
+            if source != 0 && self.rows[source - 1].terminal_cut.is_some() {
+                continue;
+            }
             while let Some(index) = self.sequencer.heads[source] {
                 if self.input_work == 4096 {
                     return None;
@@ -352,8 +398,14 @@ impl Hub {
     }
 
     pub(super) fn sequence_inputs(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
+        self.observe_terminal_faults();
         if self.sequencer.recovering() {
             self.service_recovery(owner);
+            self.service_plans();
+            return;
+        }
+        if self.sequencer.terminal_session {
+            self.service_plans();
             return;
         }
         if !self.sequences_inputs() || !self.clock.valid || self.invalidated || self.capture_hold {
@@ -528,14 +580,9 @@ impl Hub {
                             self.sequencer.config.unwrap_or(plan.binding.configuration);
                     }
                     plan.bound = true;
-                    plan.replay &= !REPLAY_READER;
                     return true;
                 }
                 if replay && prior.accepted {
-                    self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)]
-                        .as_mut()
-                        .unwrap()
-                        .replay &= !REPLAY_READER;
                     return true;
                 }
                 if !replay && prior.bound {
@@ -545,14 +592,6 @@ impl Hub {
                 return false;
             }
             if done {
-                if let Some(plan) = (source != 0)
-                    .then(|| {
-                        self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)].as_mut()
-                    })
-                    .flatten()
-                {
-                    plan.replay &= !REPLAY_READER;
-                }
                 return true;
             }
             let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
@@ -609,7 +648,6 @@ impl Hub {
                     plan.binding = binding;
                     plan.sent = false;
                     plan.bound = true;
-                    plan.replay &= !REPLAY_READER;
                 } else {
                     self.sequencer.insert_plan(
                         index,
@@ -775,12 +813,22 @@ impl Hub {
             self.sequencer.plan_work += 1;
             let source = index / LIFETIMES;
             let life = (index % LIFETIMES) as u16;
+            // Delivery accounting is independent of retained identity and a
+            // successful terminal reply. Mark it paid before any reader hold.
+            if plan.terminal
+                && !self.sequencer.retired
+                && !plan.sent
+                && plan.binding.decision > self.sequencer.cohort_floor
+            {
+                assert_ne!(self.sequencer.cohort_unsent, 0);
+                self.sequencer.cohort_unsent -= 1;
+                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+            }
             // A canceled unbound Original still has to pass the input cursor.
             // Keep its exact identity until then so normal sequencing cannot
             // resurrect it after an earlier inventory frame was acknowledged.
             if plan.terminal
-                && !self.sequencer.retired
-                && (!plan.bound || plan.replay & REPLAY_READER != 0)
+                && (self.sequencer.recovering() || !self.sequencer.retired && !plan.bound)
             {
                 continue;
             }
@@ -813,6 +861,7 @@ impl Hub {
                 continue;
             }
             if !self.sequencer.retired
+                && !plan.terminal
                 && !plan.sent
                 && plan.binding.decision > self.sequencer.cohort_floor
             {

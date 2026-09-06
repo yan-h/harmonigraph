@@ -775,8 +775,8 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
         );
         assert_eq!(
             source.source_snapshot().faults,
-            0,
-            "a transport Stop is not a permanent output fault"
+            if reject_release { source::OUTPUT_FAULT } else { 0 },
+            "healthy Stop is nonfatal; a real host rejection latches output failure"
         );
         assert!(!source.source_snapshot().pedals_held);
         if reject_release {
@@ -815,19 +815,20 @@ fn a_stop_edge_retries_only_old_release_debt_and_preserves_new_stopped_live_note
             })
             .collect();
         let onset = if reject_release { 192 } else { 148 };
-        assert_eq!(
-            new.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
-            [onset, onset + 12, onset + 32]
-        );
+        let expected = if reject_release { vec![] } else { vec![onset, onset + 12, onset + 32] };
+        assert_eq!(new.iter().map(|(time, _)| *time).collect::<Vec<_>>(), expected);
         assert!(old[0].0 <= onset);
         hub.run_callback(192, vec![], (None, None), (64, false), Some(observation(false, 0)));
         source.run_callback(256, vec![], (None, None), (64, false), Some(observation(false, 0)));
         hub.run(256, vec![], None);
-        assert_eq!(source.source_snapshot().faults, 0);
+        assert_eq!(
+            source.source_snapshot().faults,
+            if reject_release { source::OUTPUT_FAULT } else { 0 }
+        );
         assert_eq!(session.credits.load(Ordering::Acquire), 0);
         let records = capture.drain_canonical();
-        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On {..}))).count(),3);
-        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::Off))).count(),3);
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On {..}))).count(), if reject_release { 2 } else { 3 });
+        assert_eq!(records.iter().filter(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::Off))).count(), if reject_release { 2 } else { 3 });
     }
 }
 
@@ -969,7 +970,12 @@ fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input(
         port_index: 0,
         data: [0xf8, 0, 0],
     });
-    source.run_status(0, vec![malformed], None, None, 64, true);
+    assert!(source
+        .run(0, (0..1024).map(|_| note(7, 0, 60, 5, true)).collect(), None)
+        .values
+        .is_empty());
+    assert_eq!(source.source_snapshot().pending, 1024);
+    source.run_status(64, vec![malformed], None, None, 64, true);
     let pedal = |value, time| {
         Input::Midi(clap_event_midi {
             header: header::<clap_event_midi>(CLAP_EVENT_MIDI, time),
@@ -977,8 +983,7 @@ fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input(
             data: [0xb0, 64, value],
         })
     };
-    assert!(source.run(64, (0..1024).map(|_| pedal(127, 5)).collect(), None).values.is_empty());
-    assert_eq!(source.source_snapshot().pending, 1024);
+    assert!(source.source_snapshot().pending > 0);
     assert_eq!(source.source_snapshot().input_cut, 1024);
     assert_eq!(source.source_snapshot().faults, source::INPUT_FAULT);
     let shared = source.shared();
@@ -994,23 +999,29 @@ fn unpaired_reset_settles_the_local_cut_before_recovery_and_preserves_new_input(
     // The setup hook cuts future input after the observation callback's input
     // batch. This is a genuinely later callback while that cut is still pending.
     assert!(source.run(192, vec![pedal(100, 7)], None).values.is_empty());
-    assert!(source.source_snapshot().pending > 1, "new input arrives before the old cut settles");
-    assert_eq!(source.source_snapshot().input_cut, 1025);
+    assert!(source.source_snapshot().pending > 1, "the old cancellation cut is still retained");
+    assert_eq!(
+        source.source_snapshot().input_cut,
+        1024,
+        "inhibited new performance is not retained"
+    );
     assert!(shared.applied.load(Ordering::Acquire) < shared.value().generation);
     let mut accepted = Vec::new();
     for block in 4..=12 {
         let output = source.run(block * 64, vec![], None);
         if shared.applied.load(Ordering::Acquire) < shared.value().generation {
             assert!(output.values.is_empty(), "recovery is inhibited while pre-cut work remains");
-            assert!(source.source_snapshot().pending > 0, "the new controller remains owned");
         }
         accepted.extend(output.values);
     }
     assert_eq!(source.source_snapshot().faults, 0);
     assert_eq!(shared.applied.load(Ordering::Acquire), shared.value().generation);
-    assert_eq!(accepted, [(0, Event::Midi { port: 0, data: [0xb0, 64, 100], flags: 0 })]);
+    assert!(accepted.is_empty());
     assert_eq!(source.source_snapshot().pending, 0);
-    assert!(source.run(13 * 64, vec![], None).values.is_empty());
+    assert_eq!(
+        source.run(13 * 64, vec![pedal(100, 7)], None).values,
+        [(7, Event::Midi { port: 0, data: [0xb0, 64, 100], flags: 0 })]
+    );
     source.run(14 * 64, vec![pedal(0, 0)], None);
 }
 
@@ -1797,7 +1808,7 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
     // The retained inputs now require both capture retirement and disposition.
     // Separately bounded publication/backpressure and retirement phases
     // include the complete 8192-capture and 8064-disposition populations.
-    for block in 5..=516 {
+    for block in 5..=16516 {
         assert!(
             source.run(block * 64, vec![], None).values.is_empty(),
             "explicit Reset must not emit a retained unsounded onset"
@@ -1813,7 +1824,7 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
         hub.main();
     }
     let state = source.source_snapshot();
-    assert_eq!(largest_manifest, 64, "fixture reaches the actual separate disposition window");
+    assert_eq!(largest_manifest, 1, "fixture reaches the independently owned repair cell");
     assert_eq!(
         (state.pending, state.lives, state.held, state.journal, state.manifest),
         (0, 0, 0, 0, 0)
@@ -2651,13 +2662,13 @@ fn sealed_source_does_not_rearm_neutral_pedals_when_retirement_adds_a_stronger_f
         .all(|(_, event)| matches!(event, Event::Midi { data: [0xb0, 64 | 66 | 69, 0], .. })));
     let sealed = source.source_snapshot();
     assert!(sealed.seal.is_some());
-    assert_eq!(sealed.faults, source::CLOCK_FAULT);
+    assert_eq!(sealed.faults, source::CLOCK_FAULT | source::OUTPUT_FAULT);
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         1,
         "termination awaits final history acknowledgement"
     );
-    drop(source); // Stop adds OUTPUT_FAULT to the already final CLOCK_FAULT cut.
+    drop(source); // Retirement cannot restart the already final fault/release cut.
     assert_eq!(shared.status.load(Ordering::Acquire), source::CLOCK_FAULT | source::OUTPUT_FAULT);
     drop(hub); // both owners are quiesced: there is no future callback to emit new debt
     assert_eq!(session.credits.load(Ordering::Acquire), 0);

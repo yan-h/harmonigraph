@@ -209,6 +209,7 @@ pub struct Source {
     intent_pushed: usize,
     cancel_cursor: Option<usize>,
     pub faults: u32,
+    reset_armed: bool,
     pub participating: bool,
     timing_failed: bool,
     generation: u64,
@@ -391,6 +392,7 @@ impl Source {
             intent_pushed: 0,
             cancel_cursor: None,
             faults: 0,
+            reset_armed: false,
             participating: true,
             timing_failed: false,
             generation: 1,
@@ -691,9 +693,12 @@ impl Source {
                 | self.offer.as_ref().map_or(0, |o| {
                     session.rows[usize::from(o.lease.slot - 1)].faults.load(Ordering::Acquire)
                 });
-            if faults & !TIMING_FAILURE != 0 {
+            if faults & !TIMING_FAILURE & !self.faults != 0 {
                 self.fault(faults & !TIMING_FAILURE);
             }
+        }
+        if self.session().is_some_and(|session| !session.alive.load(Ordering::Acquire)) {
+            self.fault(REFERENCE_FAULT);
         }
         if callback.input_status != api::InputStatus::Complete {
             self.fault(INPUT_FAULT);
@@ -710,6 +715,24 @@ impl Source {
             }
         }
         self.coverage = coverage;
+        if self.reset_armed
+            && callback.input_status == api::InputStatus::Complete
+            && coverage.is_some()
+            && self.recovery.settled()
+            && self.output_settled()
+            && self.local_cancel_cut_settled()
+            && self.session().is_none_or(|session| {
+                session.alive.load(Ordering::Acquire)
+                    && session.epoch.load(Ordering::Acquire) == self.epoch
+                    && session.faults.load(Ordering::Acquire) & !TIMING_FAILURE == 0
+            })
+        {
+            self.reset_armed = false;
+            self.faults = 0;
+            self.timing_failed = false;
+            self.shared.status.store(self.diagnostics(), Ordering::Release);
+            self.baseline_needed = true;
+        }
         if self.session().is_some_and(|s| s.epoch.load(Ordering::Acquire) != self.epoch) {
             self.fault(CLOCK_FAULT);
         }
@@ -746,6 +769,11 @@ impl Source {
         let Some(event) = Event::from_input(input.value) else {
             return api::Consumption::Consumed;
         };
+        // A terminal latch rejects new performance. Essential original releases
+        // can still discharge an existing physical lifetime.
+        if self.faults != 0 && !event.release() {
+            return api::Consumption::Consumed;
+        }
         let Some(raw) = input.sample else {
             self.fault(INPUT_FAULT);
             return api::Consumption::Consumed;
@@ -994,7 +1022,12 @@ impl Source {
             {
                 break;
             }
-            if update.reset && (!self.output_settled() || !self.local_cancel_cut_settled()) {
+            if update.reset
+                && (!update.routing.calibration().matches(self.rate, self.max_frames)
+                    || !self.recovery.settled()
+                    || !self.output_settled()
+                    || !self.local_cancel_cut_settled())
+            {
                 // Explicit recovery clears local inhibition only after the
                 // old cancellation/release obligations have really settled.
                 // The generation guard above waits for the old lease. A new
@@ -1008,9 +1041,9 @@ impl Source {
                 self.baseline_needed = true;
             }
             if update.reset {
-                self.faults = 0;
-                self.timing_failed = false;
-                self.shared.status.store(self.diagnostics(), Ordering::Release);
+                // Applying a valid calibration is not yet observed fresh
+                // callback coverage. Keep the visible latch until begin proves it.
+                self.reset_armed = true;
             }
             self.shared.applied.store(update.generation, Ordering::Release);
             self.shared.publish_clock(&self.clock);
@@ -1051,8 +1084,7 @@ impl Source {
         self.old_pending = self.obligations;
         self.sealed = false;
         self.transition_seen = 0;
-        self.faults = 0;
-        self.timing_failed = false;
+        self.reset_armed = update.reset;
         self.shared.status.store(self.diagnostics(), Ordering::Release);
         self.shared.applied.store(update.generation, Ordering::Release);
         self.shared.publish_clock(&self.clock);
@@ -1089,13 +1121,14 @@ impl Source {
                 channel.controller_valid[1] & (1 << 24) != 0 && channel.controllers[88] != 0
             })
         {
-            self.fault(OUTPUT_FAULT);
+            self.arm_release_debt();
         }
     }
     fn cancel_slice(&mut self) {
         if !self.stopping {
             return;
         }
+        let before = (self.cancel_cursor, self.stopping);
         for _ in 0..256 {
             let Some(position) = self.cancel_cursor else {
                 self.stopping = false;
@@ -1170,9 +1203,23 @@ impl Source {
                 self.cancel_cursor = self.pending.next_position(position);
             }
         }
+        if (self.cancel_cursor, self.stopping) != before {
+            self.service_revision = self.service_revision.wrapping_add(1);
+        }
     }
 
     pub fn fault(&mut self, fault: u32) {
+        // A newly observed failure consumes Reset authorization even when its
+        // class matches the old latch. Re-reading published bits in begin does
+        // not call this method unless they add evidence to this local latch.
+        self.reset_armed = false;
+        if let Some(offer) = &self.offer {
+            offer.session.rows[usize::from(offer.lease.slot - 1)]
+                .faults
+                .fetch_or(fault, Ordering::AcqRel);
+        } else if let Some(session) = &self.direct {
+            session.faults.fetch_or(fault, Ordering::AcqRel);
+        }
         if self.faults & fault == fault {
             return;
         }
@@ -1181,11 +1228,6 @@ impl Source {
         }
         self.faults |= fault;
         self.shared.status.store(self.diagnostics(), Ordering::Release);
-        if let Some(offer) = &self.offer {
-            offer.session.rows[usize::from(offer.lease.slot - 1)]
-                .faults
-                .fetch_or(fault, Ordering::AcqRel);
-        }
         self.arm_release_debt();
     }
 
@@ -1832,11 +1874,8 @@ impl Source {
             );
             let partial = completion.group.initial_tuning().is_some()
                 && completion.accepted & (note_bit << 1) == 0;
-            delta.outcome = Outcome::wire(
-                pending.life,
-                OutputOrigin { parent: position as u16, work: child },
-                partial,
-            );
+            delta.outcome =
+                Outcome::wire(pending.life, OutputOrigin { parent: position as u16 }, partial);
             if partial {
                 self.state.partial(delta.lifetime);
                 self.lives.local_mut(pending.life).unwrap().flags |= PARTIAL_ON;
@@ -2032,7 +2071,7 @@ impl Source {
                 let shift = actual.checked_sub(input);
                 value.shift = shift.unwrap_or_default();
                 value.flags =
-                    (value.flags & !SHIFT_VALID) | u8::from(shift.is_some()) * SHIFT_VALID;
+                    (value.flags & !SHIFT_VALID) | (u8::from(shift.is_some()) * SHIFT_VALID);
             }
             if event.release() {
                 value.terminal = Some((self.sequence, mapped_actual, mapped));
@@ -2219,6 +2258,12 @@ impl Source {
         true
     }
     fn complete_emergency(&mut self, completion: api::Completion) {
+        if completion.accepted == 0
+            && (completion.attempted != 0
+                || completion.disposition == api::Disposition::MissingOutput)
+        {
+            self.fault(OUTPUT_FAULT);
+        }
         let permit = self.permit.take();
         let index = completion.group.token.0[1] as usize;
         if completion.group.token.0[3] == 1 {
@@ -2575,11 +2620,16 @@ impl Source {
         }
         if !self.detaching {
             self.transfer();
-            self.publish_control();
+            // A fresh Progress can occupy the only ordinary control cell on
+            // every callback. Once eligible, the final Seal and Detach must
+            // precede replaceable coverage or a valid Reset never settles.
             self.publish_seal();
         }
         if self.offer.is_some() {
             self.attachment();
+        }
+        if !self.detaching {
+            self.publish_control();
         }
         if self.session().is_some_and(|session| !session.alive.load(Ordering::Acquire)) {
             self.shared.request_main();
@@ -3052,6 +3102,17 @@ impl Source {
         let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
         let generation = offer.session.closing.load(Ordering::Acquire);
         if row.withdrawn.load(Ordering::Acquire)
+            && self.coverage.is_some()
+            && self.last_progress.is_none_or(|(_, cut)| cut < self.sequence)
+        {
+            // The receiver may need the final accepted cut's continuous
+            // timestamp prefix to drain a full output window before Seal.
+            // Publish this finite cut once; later coverage alone must not
+            // regain priority and starve the final seal on every callback.
+            self.publish_output_progress();
+            return;
+        }
+        if row.withdrawn.load(Ordering::Acquire)
             && row
                 .to_hub
                 .publish(Control::Seal {
@@ -3076,7 +3137,7 @@ const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 // The ledger charges this measured owner including test-support padding.
-const _: () = assert!(std::mem::size_of::<Source>() <= 31240);
+const _: () = assert!(std::mem::size_of::<Source>() <= 31256);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {
@@ -3156,22 +3217,6 @@ pub(super) struct CaptureSnapshot {
 }
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {
-    pub fn test_pad_disposition_scan(&mut self, count: usize) {
-        let offer = self.offer.as_mut().unwrap();
-        for _ in 0..count {
-            offer
-                .endpoints
-                .intents
-                .push(Intent::Coverage {
-                    incarnation: offer.lease.incarnation,
-                    epoch: self.epoch,
-                    membership: self.membership,
-                    coverage: self.coverage.unwrap(),
-                    input_cut: self.next_event,
-                })
-                .unwrap();
-        }
-    }
     pub(super) fn test_assignment(&self, life: u16) -> Option<Assignment> {
         self.lives.at(life).map(|life| life.assignment)
     }
@@ -3202,5 +3247,15 @@ impl Source {
         self.visits = 0;
         self.stop();
         self.cancel_slice();
+    }
+    pub(super) fn test_reset_progress(&self) -> String {
+        format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} recovery={} lease={} old={} captures={} query={:?} sealed={}", self.reset_armed,
+            self.setup_pending.each_ref().map(|v| v.as_ref().map(|v| v.value)), self.generation,
+            self.shared.applied.load(Ordering::Acquire), self.setup_started,
+            self.offer.as_ref().map(|o| (o.generation, o.lease)), self.detaching,
+            self.output_settled(), self.recovery.settled(), self.lease_settled(), self.old_pending, self.captures_outstanding, self.status_query, self.sealed)
+    }
+    pub(super) fn test_reset_armed(&self) -> bool {
+        self.reset_armed
     }
 }

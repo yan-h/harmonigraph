@@ -57,6 +57,7 @@ struct Row {
     retirement_scan: Option<(usize, usize, usize)>,
     input_coverage: Option<(Coverage, u64)>,
     input_settled: (u64, u64),
+    terminal_cut: Option<u64>,
     input_membership: u64,
     acknowledged_membership: u64,
     seal: Option<u64>,
@@ -96,6 +97,7 @@ impl Default for Row {
             retirement_scan: None,
             input_coverage: None,
             input_settled: (0, 0),
+            terminal_cut: None,
             input_membership: 0,
             acknowledged_membership: 0,
             seal: None,
@@ -125,6 +127,8 @@ pub struct Hub {
     pub test_aggregation: bool,
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_request: Option<i64>,
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    test_capture_id: Option<harmonigraph_core::cohort::FrozenInputId>,
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_capture_result:
         Option<Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error>>,
@@ -293,6 +297,8 @@ impl Hub {
             #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_request: None,
             #[cfg(all(test, not(feature = "tuning-probe")))]
+            test_capture_id: None,
+            #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_result: None,
             #[cfg(all(test, not(feature = "tuning-probe")))]
             test_capture_commit: false,
@@ -398,6 +404,7 @@ impl Hub {
             self.collect_direct_captures();
         }
         self.collect();
+        self.observe_terminal_faults();
         #[cfg(all(test, not(feature = "tuning-probe")))]
         self.test_capture_tick();
     }
@@ -406,6 +413,9 @@ impl Hub {
         let Some(update) = self.transition else {
             return;
         };
+        if self.sequencer.terminal_session && !update.reset {
+            return;
+        }
         if !update.routing.calibration().matches(self.rate, self.max_frames)
             || !self.direct.transition_settled()
             || owner.direct.pending().is_some()
@@ -449,6 +459,9 @@ impl Hub {
         self.publication_through = None;
         self.publication_clock = clock;
         self.transition = None;
+        self.sequencer.terminal_session = false;
+        self.sequencer.terminal_sources = 0;
+        self.sequencer.reset_terminal_context();
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.
         offer.session.faults.store(0, Ordering::Release);
@@ -508,6 +521,8 @@ impl Hub {
                 row.last_ack = None;
                 row.input_coverage = None;
                 row.input_settled = (0, 0);
+                row.terminal_cut = None;
+                self.sequencer.terminal_sources &= !(1 << index);
                 row.input_membership = 0;
                 row.acknowledged_membership = 0;
                 self.sequencer.heads[index + 1] = None;
@@ -560,8 +575,8 @@ impl Hub {
                                 && row.epoch == epoch && transaction != 0 => {
                             ack.unwrap().publish(Reply::Disposition { incarnation, transaction, input_cut });
                             row.last_disposition = Some(row.last_disposition.map_or(transaction, |old| old.max(transaction)));
-                            if sequencing || self.sequencer.retired || self.sequencer.recovering() {
-                                self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime, original_on);
+                            if original_on && (sequencing || self.sequencer.retired || self.sequencer.recovering()) {
+                                self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime);
                             }
                         }
                         _ => {}
@@ -697,24 +712,6 @@ impl Hub {
                     }
                     _ => {}
                 }
-                if let Intent::Disposition {
-                    incarnation,
-                    transaction,
-                    total: 1,
-                    index: 0,
-                    canceled: true,
-                    ..
-                } = &intent
-                {
-                    // Seed in FIFO receipt order, never first sweep encounter:
-                    // this Source's monotonic counter can predate this lease.
-                    if *transaction != 0
-                        && row.last_disposition.is_none()
-                        && row.lease.is_some_and(|lease| lease.incarnation == *incarnation)
-                    {
-                        row.last_disposition = Some(transaction - 1);
-                    }
-                }
                 let intent = if let Intent::Capture(token) = intent {
                     if row.lease == Some(token.key.lease) && row.epoch == token.key.epoch {
                         row.captures.accept(&token, token.key.lease, row.epoch);
@@ -748,21 +745,27 @@ impl Hub {
                 };
                 let units = row.ingress.at_ref(position).map_or(1, |intent| match intent {
                     Intent::Capture(token)
-                        if !self.capture_hold
-                            && row.status_query != Some(position)
-                            && !(self.frozen_captures.active
+                        if !(self.capture_hold
+                            || self.sequencer.recovering()
+                            || row.status_query == Some(position)
+                            || self.frozen_captures.active
                                 && token.frozen == Some(self.frozen_captures.id))
-                            && ((!sequencing
-                                && (token.frozen.is_none() || self.sequencer.retired))
+                            && (row.terminal_cut.is_some()
+                                || (!sequencing
+                                    && (token.frozen.is_none() || self.sequencer.retired))
                                 || (sequencing
                                     && token.frozen.is_some()
                                     && (token.completed(row.received)
                                         || token.key.serial <= row.input_settled.0
                                             && row.received >= row.input_settled.1)))
                             && (row.output.len() == 0
-                                || row.retirement_scan.is_some_and(|(owner, _, left)| {
-                                    owner == position && left == 0
-                                })) =>
+                                || (!(self.sequencer.retired
+                                    && row
+                                        .producer_joined
+                                        .is_some_and(|cut| row.received >= cut))
+                                    && row.retirement_scan.is_some_and(|(owner, _, left)| {
+                                        owner == position && left == 0
+                                    }))) =>
                     {
                         token.units()
                     }
@@ -776,6 +779,11 @@ impl Hub {
                 row.ingress_cursor =
                     if row.ingress_left == 0 { None } else { row.ingress.next_position(position) };
                 if let Some(Intent::Capture(token)) = row.ingress.at_mut(position) {
+                    let terminal = row.terminal_cut.is_some() && !self.sequencer.recovering();
+                    if terminal {
+                        self.sequencer.consume_terminal_original(index, token, &row.captures);
+                        token.frozen = None;
+                    }
                     // Callback join ended every reader, including labels left
                     // by completed cohorts. Retire them in this charged sweep.
                     if self.sequencer.retired {
@@ -793,7 +801,8 @@ impl Hub {
                             inline_done: true,
                         });
                     }
-                    let completed = token.frozen.is_some() && token.completed(row.received);
+                    let completed =
+                        (token.frozen.is_some() || terminal) && token.completed(row.received);
                     if sequencing
                         && !self.sequencer.recovering()
                         && !token.completed(u64::MAX)
@@ -814,6 +823,14 @@ impl Hub {
                         continue;
                     }
                     if row.output.len() != 0 {
+                        if self.sequencer.retired
+                            && row.producer_joined.is_some_and(|cut| row.received >= cut)
+                        {
+                            // The exact joined cut forbids later factual output.
+                            // Drain that finite stream before its Originals;
+                            // no per-Capture scan of the same output is needed.
+                            continue;
+                        }
                         if row.retirement_scan.is_none() {
                             row.retirement_scan =
                                 Some((position, row.output.position(0).unwrap(), row.output.len()));
@@ -866,58 +883,10 @@ impl Hub {
                         }
                         None
                     }
-                    Intent::Disposition {
-                        incarnation,
-                        epoch,
-                        transaction,
-                        input_cut,
-                        total: 1,
-                        index: 0,
-                        lifetime: _,
-                        request: _,
-                        canceled: true,
-                    } if *transaction != 0
-                        && *epoch == row.epoch
-                        && row.lease.is_some_and(|lease| lease.incarnation == *incarnation) =>
-                    {
-                        let last = row.last_disposition.unwrap();
-                        if *transaction > last && last.checked_add(1) != Some(*transaction) {
-                            // A failed older reply still owns manifest.front at
-                            // Source. Keep this younger message through sweeps.
-                            continue;
-                        }
-                        if *transaction <= last {
-                            row.ingress.remove(position);
-                            self.service_revision = self.service_revision.wrapping_add(1);
-                            continue;
-                        }
-                        Some(Reply::Disposition {
-                            incarnation: *incarnation,
-                            transaction: *transaction,
-                            input_cut: *input_cut,
-                        })
-                    }
                     _ => None,
                 };
                 if reply.is_some_and(|reply| offer.bank.rows[index].replies.push(reply).is_err()) {
                     continue;
-                }
-                if let Some(Reply::Disposition { transaction, .. }) = reply {
-                    row.last_disposition = Some(transaction);
-                    if let Some(Intent::Disposition {
-                        epoch, input_cut, request, lifetime, ..
-                    }) = row.ingress.at_ref(position)
-                    {
-                        self.sequencer.cancel(
-                            index,
-                            row.lease.unwrap(),
-                            *epoch,
-                            *input_cut,
-                            *request,
-                            *lifetime,
-                            false,
-                        );
-                    }
                 }
                 if self.sequencer.heads[index + 1] == Some(position) {
                     self.sequencer.heads[index + 1] = row.ingress.next_position(position);
@@ -926,6 +895,7 @@ impl Hub {
                 self.service_revision = self.service_revision.wrapping_add(1);
             }
             if let Some((position, mut cursor, mut left)) = row.retirement_scan {
+                let before = left;
                 let Some(Intent::Capture(token)) = row.ingress.at_ref(position) else {
                     unreachable!()
                 };
@@ -950,6 +920,9 @@ impl Hub {
                     left -= 1;
                 }
                 row.retirement_scan = Some((position, cursor, left));
+                if left != before {
+                    self.service_revision = self.service_revision.wrapping_add(1);
+                }
             }
             for _ in 0..256 {
                 if self.collected == 4096 || row.output.free() == 0 {
@@ -1026,7 +999,7 @@ impl Hub {
             }
             // Empty initial baseline may enroll without registry acknowledgement.
             // Its complete coverage is nevertheless required, including silence.
-            if !row.member {
+            if !row.member && row.terminal_cut.is_none() {
                 if let Some(baseline) = row.baseline.as_ref().filter(|b| b.frame.output_cut == 0) {
                     let floor = row.joining.or(self.publication_through).unwrap_or(baseline.start);
                     if baseline.start < floor {
@@ -1056,11 +1029,19 @@ impl Hub {
                 && row.coverage.is_some_and(|c| c.through > c.start)
                 && self.clock.valid
                 && offer.session.alive.load(Ordering::Acquire)
+                && shared.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE == 0
+                && offer.session.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE
+                    == 0
             {
                 row.member = true;
                 self.membership = self.membership.saturating_add(1);
                 row.joining = None;
-                if !shared.withdrawn.load(Ordering::Acquire) && !self.sequencer.recovering() {
+                if !shared.withdrawn.load(Ordering::Acquire)
+                    && !self.sequencer.recovering()
+                    && shared.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE == 0
+                    && offer.session.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE
+                        == 0
+                {
                     let _ = shared.emission_gate.compare_exchange(
                         CLOSED,
                         OPEN,
@@ -1470,7 +1451,7 @@ impl Hub {
                 // Adopt and its first Progress can occupy different callbacks.
                 // Keep the initial snapshot until collection has enrolled the
                 // row; acknowledging it earlier loses the only join proof.
-                if baseline.frame.output_cut == 0 && !row.member {
+                if baseline.frame.output_cut == 0 && !row.member && row.terminal_cut.is_none() {
                     continue;
                 }
                 let sample = (baseline.frame.time * self.rate).round() as i64;
@@ -1879,7 +1860,8 @@ impl Hub {
 
 impl Hub {
     fn collect_direct_captures(&mut self) {
-        let sequencing = self.sequences_inputs();
+        let terminal = self.sequencer.terminal_session && !self.sequencer.recovering();
+        let sequencing = self.sequences_inputs() && !terminal;
         let Some(lease) = self.direct.capture_lease() else {
             return;
         };
@@ -1919,12 +1901,15 @@ impl Hub {
             let units = match self.direct_ingress.at_ref(position) {
                 Some(Intent::Capture(token))
                     if !self.capture_hold
+                        && !self.sequencer.recovering()
                         && ((sequencing
                             && token.frozen.is_some()
                             && !(self.frozen_captures.active
                                 && token.frozen == Some(self.frozen_captures.id)))
                             || !sequencing
-                                && (token.frozen.is_none() || self.sequencer.retired)) =>
+                                && (token.frozen.is_none()
+                                    || self.sequencer.retired
+                                    || terminal)) =>
                 {
                     token.units()
                 }
@@ -1943,7 +1928,7 @@ impl Hub {
             let Some(Intent::Capture(token)) = self.direct_ingress.at_mut(position) else {
                 unreachable!();
             };
-            if self.sequencer.retired {
+            if self.sequencer.retired || terminal {
                 token.frozen = None;
             }
             let frozen_reader =
@@ -2069,7 +2054,9 @@ impl Hub {
         );
         self.frozen_captures.commit(&targets)
     }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(super) fn release_captures(&mut self, joined: bool) {
+        self.test_capture_id = None;
         if !self.frozen_captures.active && !self.capture_hold {
             return;
         }
@@ -2094,15 +2081,21 @@ impl Hub {
     pub fn test_pause_captures(&mut self) {
         self.capture_hold = true;
     }
+    pub fn test_resume_capture_collection(&mut self) {
+        self.capture_hold = false;
+    }
     pub fn test_hold_captures(&mut self, sample: i64) {
         self.capture_hold = true;
         self.test_capture_request = Some(sample);
     }
     fn test_capture_tick(&mut self) {
         if let Some(sample) = self.test_capture_request.take() {
-            self.freeze_captures(sample).unwrap();
+            self.test_capture_id = Some(self.freeze_captures(sample).unwrap());
         }
-        if self.frozen_captures.active {
+        // This harness owns only the freeze it explicitly requested. Advancing
+        // a production cohort here can start its traversal halfway through the
+        // scheduler's bounded assembly and invalidate the next callback's push.
+        if self.frozen_captures.active && self.test_capture_id == Some(self.frozen_captures.id) {
             if std::mem::take(&mut self.test_capture_commit) {
                 self.commit_capture().unwrap();
             }
@@ -2195,6 +2188,7 @@ impl Hub {
             self.sequencer.finalized,
         )
     }
+    #[allow(clippy::type_complexity)] // A compact snapshot of six independent row proofs.
     pub fn test_input_row(
         &self,
         source: usize,
@@ -2239,34 +2233,6 @@ impl Hub {
             binding,
         )
         .get(source, handle)
-    }
-    pub fn test_fill_reply_with_old_ack(&mut self) {
-        let row = &self.rows[0];
-        let (cut, complete_through) = row.last_ack.unwrap();
-        let reply = Reply::OutputRetained {
-            incarnation: row.lease.unwrap().incarnation,
-            epoch: row.epoch,
-            cut,
-            complete_through,
-        };
-        let replies = &mut self.offer.as_mut().unwrap().bank.rows[0].replies;
-        while replies.push(reply).is_ok() {}
-    }
-    pub fn test_disposition_cursor(&self) -> (usize, Option<u64>) {
-        let row = &self.rows[0];
-        let mut count = 0;
-        let mut next = row.ingress.front_position();
-        while let Some(position) = next {
-            if matches!(row.ingress.at_ref(position), Some(Intent::Disposition { .. })) {
-                count += 1;
-            }
-            next = row.ingress.next_position(position);
-        }
-        let cursor = row.ingress_cursor.and_then(|position| match row.ingress.at_ref(position) {
-            Some(Intent::Disposition { transaction, .. }) => Some(*transaction),
-            _ => None,
-        });
-        (count, cursor)
     }
     pub fn test_repeat_capture_retirement(&mut self, key: super::capture::Key) {
         self.offer.as_mut().unwrap().bank.rows[key.lease.slot as usize - 1]

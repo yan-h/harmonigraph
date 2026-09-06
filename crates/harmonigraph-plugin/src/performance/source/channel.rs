@@ -271,7 +271,7 @@ impl Source {
                     wire_sequence,
                     if choke { 120 } else { 123 },
                     target.life,
-                    OutputOrigin { parent, work: targets },
+                    OutputOrigin { parent },
                 );
                 self.journal
                     .push(fact)

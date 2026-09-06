@@ -15,8 +15,9 @@ GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the des
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
 The policy's scoring constants and musical iteration belong to #621;
 [#630](https://github.com/yan-h/harmonigraph/pull/630) established a constrained working host configuration, not the minimum reliable delay.
-Yan has accepted the latency target, late-track behavior, stop/Off rules, emergency stop at capacity and restricted routing recovery below.
-The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
+Yan has accepted the latency target, late-track behavior, stop/Off rules, terminal serious faults and restricted routing recovery below.
+The terminal-fault decision supersedes preserving/replaying interrupted performance after those selected failures:
+“We can have rare faults terminate the performance.” The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
 those mechanics must satisfy these product decisions before adaptive output is complete.
 The [stage 2 engineering contracts](adaptive-tuning-contracts.md) now select those mechanics, capacities and production verification obligations before plugin wiring.
 They remain the specification;
@@ -149,13 +150,22 @@ Keeping musical order does not by itself guarantee simultaneous acoustic attacks
 cross-track release barriers are not implicitly part of this design.
 
 Persistent failure is not an indefinitely supportable delay with finite storage.
-At actual required-storage exhaustion, enter a visible, latched **emergency stop**:
-cancel affected queued attacks, invalidate their replies, send releases for affected sounding voices and reject new attacks until explicit Reset and valid recovery.
-This deliberately permits note loss at catastrophic exhaustion;
-a missed deadline, elapsed timeout or unavailable hub alone does not authorize it while the required state still fits.
-Source-local exhaustion stops that source;
-hub/global exhaustion stops the session.
-Dependent unplayed decisions on other sources must be invalidated or rescheduled without treating their planned state as confirmed output.
+Enter a visible, latched **terminal fault** for actual exhaustion of required event/request/journal/cohort/voice storage, a real rejected or partially accepted host output attempt or unavailable required output endpoint, or proven loss of necessary input, identity, clock or state evidence that makes continued decisions unsafe.
+Unknown initial controller values alone do not establish that loss.
+Immediately inhibit the failing Source and schedule essential termination:
+fence, cancel affected pending performance and stale dependent assignments, drain factual outcomes, then settle ownership into CLOSED.
+Keep the fault local only when performance is independent of shared prospective decisions;
+an enrolled contributor's failure conservatively terminates the session's affected performance.
+Actual accepted prefixes and history survive cancellation, and physical release/pedal/prefix debt remains independently owned until acceptance or an established host termination boundary.
+Essential termination bypasses accumulated late-stream delay.
+Finish the finite cancellation transaction when its cuts, readers and ownership settle even while the visible fault latch remains;
+rejected emergency retries service existing debt without restarting that transaction.
+Reject new attacks until explicit Reset AND a valid fresh boundary.
+No retained-phrase Status/Rebuild/Replay or automatic Resume is required for this terminal path.
+Ordinary callback-order misses, delayed assignments, work-slice exhaustion, ring backpressure, failed gate/credit claims, routine missing callbacks, healthy configuration/Off changes and display/take-only loss with intact audio-owned facts do not establish a serious fault.
+Neither elapsed time nor workload size alone authorizes cancellation.
+Ordinary late divergence still retains and reconciles unsounded performance and its prospective dependencies;
+this never permits retuning a sounding voice, and complete automatic activation remains later #616 work.
 Reserve a failure-signaling path that still works when ordinary queues are full.
 Release/cancellation delivery and its completion tracking must also survive full ordinary queues;
 local state cannot declare a voice terminated before accepted downstream output or a measured host termination boundary.
@@ -474,7 +484,7 @@ The single participation control does not remove the need for internal transitio
 | Participating to Off | Newly received notes intentionally use zero correction; pending adaptive requests finish tuned under the normal/late timing contract | Withdraw this source from future context/display; preserve existing offsets until release |
 | Assignment deadline missed | Retain the attack for its valid assignment and report a timing failure; no unretuned or dropped-note fallback | Preserve frozen offsets; handle related queued events under the specified late-event schedule |
 | Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks while required storage fits | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
-| Required-storage exhaustion | Cancel affected pending attacks visibly and reject new attacks until explicit Reset and valid recovery | Send releases through the independent emergency path; latch source-local or session-wide failure as appropriate |
+| Selected terminal fault | Cancel affected pending performance visibly and reject new attacks until explicit Reset and a valid fresh boundary | Preserve accepted history, finish cancellation into CLOSED and retry independent physical debt; terminate shared affected performance for an enrolled contributor |
 | Transport Stop or explicit Reset | Cancel affected pending attacks and reject their obsolete replies | Send releases without accumulated delay, invalidate dependent plans and establish a fresh sequencing boundary |
 | Off to Participating, reconnect or report-loss recovery | Resume adaptive sequencing only after the complete held baseline and pending-request state are accepted | Restore actual state without re-emitting attacks or retuning survivors |
 | Source unregister or slot reuse | Old requests and replies cannot address the replacement | Invalidate the old incarnation and release only its context/display voices |

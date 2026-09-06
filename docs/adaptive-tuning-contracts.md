@@ -95,15 +95,22 @@ never let `Vec::capacity()` or a ring's internal capacity accidentally define ad
 Each pending input event owns exactly one event slot until its output is accepted or its cancellation is authorized and acknowledged.
 A request record is separate because its note-on event can leave the pending pool while the voice, reply rejection or revocation acknowledgement still needs its identity.
 Do not retire a request until all its events, emitted lifetime, plan and acknowledgement references are gone.
+Hub request identity and replaceable Plan storage have separate retirement conditions.
+Retain every participating identity until the whole finite recovery reader closes, using the existing indexed pool rather than per-Plan reader pins or a new slab.
+Retain canceled unbound identity until its normal Original is consumed, even after recovery closes.
+Settle a canceled current-cohort assignment's `cohort_unsent` obligation exactly once independently of identity retention and reply publication;
+a full reply ring must not strand counted delivery work.
+An authenticated DONE Original can legitimately outlive its retired Plan.
+Cancellation of an original On requires its exact original-On identity;
+expression and replacement-child dispositions cannot cancel that On.
 The 8,192 lifetime ceiling can therefore be reached before the performance pool;
 that is a named required resource, not an excuse to overwrite the oldest request.
 
 Transfer-window saturation is backpressure while the sender retains the data.
 Stop advancing the relevant publication cut and keep processing independent releases/control work.
 An ordinary deadline miss, age, lack of a reply or full transfer ring alone does not authorize dropping an attack.
-Actual exhaustion of a required event, lifetime, journal, cohort, voice or plan slot invokes the accepted emergency stop:
-source-owned storage stops that source;
-hub/global storage stops the session.
+Actual exhaustion of a required event, lifetime, journal, cohort, voice or plan slot invokes terminal fault settlement under section 9. Keep scope local only for performance independent of shared prospective decisions;
+an enrolled contributor's failure conservatively terminates the session's affected performance, and hub/global exhaustion is session-scoped.
 The 17th tuner is visibly refused without evicting one of the first 16.
 
 Voice admission reserves a source cell and a session credit before any note-on is submitted.
@@ -285,8 +292,9 @@ For that set, finalize sample `t` only when `max(coverage_start) <= t < min(thro
 Off's context withdrawal and an instance's deactivation do not mutate this set halfway through the pass.
 Enrollment/removal creates a future acknowledged boundary;
 it cannot make an old unresolved cohort complete by deleting its missing contributor retrospectively.
-Source disappearance or input before a returning member's coverage suspends that old sequencing history and enters recovery.
-Keep surviving unsounded requests for explicit resubmission;
+A recoverable callback interruption or input before a returning member's coverage suspends that old sequencing history and enters ordinary recovery.
+Confirmed owner loss instead follows terminal settlement under section 9.
+For recoverable interruptions, keep surviving unsounded requests for explicit resubmission;
 do not restamp them as fresh historical evidence.
 
 Output progress has its own `(coverage_start, through, output_cut)` and membership revision.
@@ -443,7 +451,7 @@ The exact consequences are:
 
 | Results | Required outcome |
 | --- | --- |
-| Note-on rejected | No held voice is confirmed. Suppress its unattempted tuning and dependent normal output, report failure and retain the exact unsounded attack for a legal retry after plan validation, unless an explicit cancellation applies. |
+| Note-on rejected | No held voice is confirmed. Suppress its unattempted tuning and dependent normal output, latch the terminal output fault and cancel affected pending performance; the rejected attack need not survive for replay. |
 | Note-on accepted, tuning accepted | Confirm the onset and its accepted tuning, with frozen adaptive offset and initial player value. |
 | Note-on accepted, tuning rejected | Record an actual onset with unestablished intended tuning, latch partial-output fault, inhibit new attacks and request immediate emergency release/choke. Never record the intended correction as accepted. |
 | Later expression rejected | Keep the preceding accepted pitch as truth; inhibit dependent plans and enter output-fault containment. |
@@ -454,7 +462,8 @@ It is a protocol fault outside supported normal operation, **not an allowed unre
 Do not retry tuning on that sounding voice as reconciliation, resend its note-on, or claim pair atomicity.
 An accepted prefix followed by rejection invokes explicit visible output-fault containment even when storage remains available;
 for a CC88/raw-note pair, an accepted control-only prefix creates receiver-prefix repair debt but no accepted onset.
-For the note-on/tuning pair, a rejected note-on with no accepted prefix remains an unsounded request.
+For the note-on/tuning pair, a rejected note-on with no accepted prefix is canceled without inventing an actual onset.
+An unattempted onset suppressed by ordinary fencing remains retained for a valid replacement plan.
 Neither case is an ordinary assignment deadline miss.
 The supported host premise must be validated:
 at the declared workload, Bitwig accepts both onset events at their exact common sample and the configured destinations honor expression.
@@ -532,8 +541,8 @@ Accepted future-timestamp output is also irrevocable even if its acoustic onset 
 it is distinct from `ReleaseComplete`, which requires accepted termination/neutralization or an established host termination boundary.
 A fence can acknowledge a partial-onset release debt while that termination remains unresolved and recovery/admission stays inhibited.
 
-On a missed deadline, changed actual onset/release/expression time, unexpected acceptance failure, source loss, Off withdrawal or configuration-context recovery, conservatively revoke the **entire unretired prospective suffix** from the earliest affected decision serial across all sources.
-Do not attempt an unbounded per-note dependency DAG or silently leave later decisions based on lifetimes that no longer occurred as planned.
+On an ordinary missed deadline, changed actual onset/release/expression time, Off withdrawal or configuration-context recovery, conservatively revoke the **entire unretired prospective suffix** from the earliest affected decision serial across all sources.
+Selected serious output/evidence/storage faults instead use terminal settlement under section 9. Do not attempt an unbounded per-note dependency DAG or silently leave later decisions based on lifetimes that no longer occurred as planned.
 Freeze assignment publication while the suffix settles;
 other sources' already-sounding lifetimes and unaffected ready output continue.
 An accepted racing successor stays fixed even if its originally assumed predecessor was revoked.
@@ -622,6 +631,33 @@ Report the current extra delay and failure state without promising a catch-up ti
 
 ## 9. Stop, Off and emergency completion
 
+### Selected terminal faults
+
+Actual required-storage exhaustion, a real rejected/partially accepted host output attempt or unavailable required output endpoint, and proven loss of necessary input/protocol identity/clock/state evidence terminate affected performance.
+Evidence-loss examples include uninspected or invalid input, arithmetic overflow, unsupported clock discontinuity, confirmed owner loss and a proven unreconstructable required receiver state.
+Unknown initial controller values alone are insufficient.
+Ordinary lateness, work-slice exhaustion, ring backpressure, failed gate/credit CAS, routine missing callbacks, healthy configuration/Off changes and display/take-only loss with intact audio-owned facts are explicitly excluded.
+No time threshold or workload size alone establishes a serious fault.
+
+Immediately inhibit the failing Source and schedule essential termination.
+Only independent performance can remain source-local;
+an enrolled contributor whose failure invalidates other Sources' prospective decisions conservatively terminates the session's affected performance.
+The ordered transaction is fence → cancel affected pending performance and stale dependent assignments → drain factual outcomes → finish ownership into CLOSED.
+Retain exact gate/BUSY settlement, output cuts, racing accepted prefixes, actual history, cancellation classification/ACKs, inventory/chunk ownership and Capture retirement evidence.
+Do not add retained-phrase Status/Rebuild/Replay or automatic Resume callers to this path.
+Cancellation cannot delete an inventory/chunk reader without an equivalent bounded cancellation-cut proof.
+
+The fault remains visibly latched until explicit Reset AND a valid fresh boundary.
+The finite cancellation transaction completes once its cuts/readers/ownership settle, independently of that latch and of unresolved physical release/pedal/prefix debt.
+Physical debt keeps its own identity, credit and actual-retention ownership;
+CLOSED does not claim successful downstream termination.
+Repeated rejected emergency attempts retry that debt without restarting cancellation transactions indefinitely.
+Essential termination bypasses accumulated late-stream delay and still respects the current host-output cursor.
+No unretuned fallback, held-note retuning, silent healthy-note loss or unsafe reclamation is permitted.
+Ordinary late-performance reconciliation remains required and its complete automatic activation remains later #616 work.
+
+### Ordinary Stop and Reset
+
 Transport Stop is a `playing=true -> false` transition, not every callback with `playing=false`.
 Record a run identifier and the first local Stop edge once per source run.
 At that source's observed edge, close its pre-Stop input sequence, immediately inhibit/cancel those unsounded lifetimes and schedule undelayed emergency releases for its old held set.
@@ -699,7 +735,7 @@ it does not erase actual held state.
 3. **Admit and replace current state.** The hub validates the full frame, counts every global/local reservation, and atomically replaces only this source's confirmed set in its own callback. The baseline supersedes current-state application of deltas `<= C`, never their retained history. Keep/transfer all available actual records through C and attempt their ordered canonical publication exactly once before publishing this source's baseline control and later deltas. Only already-unrecoverable event loss or an actual downstream publication failure warrants a diagnostic gap; an undrained journal does not. Do not count old and replacement copies as extra voices, publish a partial set or return credits for unconfirmed downstream releases. The baseline/recovery control updates display/take state without re-emitting attacks.
 4. **Acknowledge distinct cuts.** Publish `BaselineAck(recovery_id, lease, C, membership_revision)` for current-state replacement and release of the owned baseline slot. It does not retire journal records. Only `OutputRetainedAck(lease, H)` retires source actual records through H after full-record transfer to the hub's audio-owned retention or canonical publication attempt. Neither acknowledgement waits on a GUI/background/disk consumer; retained records remain the responsible audio owner's obligation. The second baseline slot is spare for ownership overlap, not permission to supersede an unacknowledged transaction.
 5. **Dispose of pending requests separately.** At quiescence the source fixes a pending-manifest input cut and enumerates every pre-cut request in 64-entry chunks, with total count and monotonic chunk sequence. Each record states retained-unsounded, accepted/partial, or authorized-canceled, plus request/plan/configuration identity. Source events and request slots remain owned while chunking; new post-cut input uses remaining storage and waits behind the recovery boundary. The hub acknowledges the complete manifest, never just the last chunk or the held baseline.
-6. **Resume.** The hub discards old unplayed plans only after disposition and output cuts settle. Retained unsounded requests are resubmitted with original input/dependency metadata, preserved bound configurations and new plan generations into the new continuous-coverage boundary. Later ordered deltas `> C` are merged exactly once before new context is used. Publish `RecoveryComplete` only after baseline, manifest, output and membership boundaries agree.
+6. **Finish.** The hub discards old unplayed plans only after disposition and output cuts settle. For ordinary retained-performance recovery, resubmit unsounded requests with original input/dependency metadata, preserved bound configurations and new plan generations into the new continuous-coverage boundary; later ordered deltas `> C` merge exactly once before new context is used. For terminal faults, complete cancellation ownership into CLOSED without rebuilding/replaying canceled performance or reopening the gate. Publish `RecoveryComplete` only after the applicable baseline, manifest, output and membership boundaries agree; the visible latch and independently owned physical debt do not pin a finished cancellation reader.
 
 An empty held baseline cannot acknowledge an unsounded attack.
 It also cannot erase a completed accepted lifetime:

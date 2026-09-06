@@ -57,6 +57,7 @@ pub struct Fence {
     pub transaction: u64,
     pub generation: u64,
     pub from_decision: u64,
+    pub terminal: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,21 +113,6 @@ pub enum Intent {
         epoch: u64,
         input_cut: u64,
         output_cut: u64,
-    },
-    /// A separately counted ordinary pending-input disposition, never a held
-    /// baseline standing in for unsounded input. Plans/config bindings come later.
-    Disposition {
-        incarnation: u64,
-        epoch: u64,
-        transaction: u64,
-        input_cut: u64,
-        total: u32,
-        index: u32,
-        // The aggregation-only hub acknowledges cancellation independently of
-        // held output; #616 binds this identity to its remote request ledger.
-        lifetime: u64,
-        request: u16,
-        canceled: bool,
     },
 }
 
@@ -201,10 +187,9 @@ pub enum Reply {
 #[derive(Clone, Copy, Debug)]
 pub struct OutputOrigin {
     pub parent: u16,
-    pub work: u16,
 }
 impl OutputOrigin {
-    pub const NONE: Self = Self { parent: u16::MAX, work: u16::MAX };
+    pub const NONE: Self = Self { parent: u16::MAX };
 }
 
 /// Explicit compact discriminator avoids paying a second aligned enum tag in

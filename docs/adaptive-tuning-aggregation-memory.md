@@ -1,5 +1,8 @@
 # Aggregation storage and the future session budget
 
+The latest terminal-stage measurements and full future projection are recorded in [the terminal checkpoint](adaptive-tuning-terminal-faults.md#memory-ledger).
+The tables below retain their earlier population derivation; the current projection must include the later measured owner and index deltas.
+
 This is the allocation account for [companion aggregation](adaptive-tuning-companion-aggregation.md), its [ordinary channel-wave replay slice](adaptive-tuning-channel-waves.md), and [original CaptureArena ownership](adaptive-tuning-capture-arena.md).
 The hard ceiling remains 144 MiB, or 150,994,944 bytes, of additional adaptive-session storage.
 It is not a limit on the whole plugin's RSS.

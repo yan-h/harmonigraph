@@ -32,6 +32,7 @@ impl Recovery {
     pub(super) fn begin(&mut self) {
         self.work = 0;
     }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(super) fn active(&self) -> bool {
         self.pending.is_some()
     }
@@ -91,6 +92,12 @@ impl Source {
         if row.emission_gate.load(Ordering::Acquire) & !BUSY != (command.generation | CLOSED) {
             return;
         }
+        if command.terminal {
+            // Reaffirm the exact terminal cut even if the original local fault
+            // predated this command. This is once per fence, never per retry.
+            self.cancel_unsounded();
+            self.arm_release_debt();
+        }
         self.recovery.pending = Some(PendingFence {
             command,
             input_cut: self.next_event,
@@ -145,6 +152,12 @@ impl Source {
         else {
             return;
         };
+        // Terminal inventory is the cancellation-cut proof: every nonessential
+        // pre-cut effect has its exact disposition ACK before classification.
+        // Unaccepted physical releases retain their independent original owners.
+        if pending.command.terminal && !self.local_cancel_cut_settled() {
+            return;
+        }
         // Requests outlive their original On captures. Enumerate the fixed
         // lifetime set independently, including a held/terminal accepted On
         // whose original capture was already retired before this fence.
@@ -274,17 +287,29 @@ impl Source {
         if row.emission_gate.load(Ordering::Acquire) & !GATE_FLAGS != generation {
             return;
         }
-        let Some(boundary) = boundary.checked_sub(self.clock.calibration.offset) else {
-            self.fault(CLOCK_FAULT);
-            return;
+        let boundary = if command.terminal {
+            None
+        } else {
+            let Some(boundary) = boundary.checked_sub(self.clock.calibration.offset) else {
+                self.fault(CLOCK_FAULT);
+                return;
+            };
+            Some(boundary)
         };
         self.recovery.completed = command.transaction;
         self.recovery.minimum_emission = generation;
-        self.recovery.boundary = Some(boundary);
+        self.recovery.boundary = boundary;
         self.recovery.pending = None;
         self.recovery.cleanup = Some(0);
         // The existing bounded pending scan revisits newly unpinned originals.
         self.pending_cursor = self.pending.front_position();
+        if self.producer_joined {
+            // Joined owners never call the live output scheduler that consumes
+            // pending_cursor. Revisit the existing explicit cancellation cut
+            // through its bounded off-audio scan so completed pinned Originals
+            // can release their final Life references after the reader ends.
+            self.cancel_unsounded_through(self.cancel_cut);
+        }
         // Explicit local Stop/emergency cuts and their latches remain owned by
         // their existing settlement path; a Hub reopen cannot erase them.
     }

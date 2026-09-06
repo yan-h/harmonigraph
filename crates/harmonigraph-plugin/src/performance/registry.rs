@@ -494,38 +494,55 @@ pub fn retire_hub(owner: Box<super::hub::Hub>) {
     service_retired();
 }
 
+#[cfg(all(test, not(feature = "tuning-probe")))]
+static TEST_SERVICE_ROUNDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(all(test, not(feature = "tuning-probe")))]
+pub fn test_service_rounds() -> usize {
+    TEST_SERVICE_ROUNDS.load(Ordering::Relaxed)
+}
+
 pub fn service_retired() {
-    // All-retired peers have no live callback to request. Complete locally
-    // ready handshakes while they actually change retained ownership; stop at
-    // an absent/unknown proof. The selected manifest/pending pools bound work.
-    // Conservative serialized phase bound with8192 input envelopes AND32768
-    // child references: ceil((8192+32768+1024+1024)/64)=672 disposition
-    // rounds;128 traversal/cleanup rounds;400 source-output collection;132
-    // aggregate merge (including observed DIRECT);8 journal retirement;2 reply
-    // tail;80 fixed handshakes. The traversal allowance rounds up
-    // ceil(8192/256)+ceil((2*(8192+32768)+65*672)/(2048-2*65))=98,
-    // including blocked-parent restarts and indivisible cleanup tails.
-    // Every outer round services all four sessions independently. The previous
-    // 1454-round sum includes16 serialized joined-producer controls and
-    // 16 saved-baseline progress reports. At retirement each Source owns at
-    // most one baseline and cannot create another. Mailbox retries wait only
-    // for already-counted report/output drainage; successful publication and
-    // consumption bump revision. Capture installation and retirement add at
-    // most2*17*(8192+32768) charged input units.350 further grant-saturated
-    // rounds cover that population with4096 units and at most64 unused tail
-    // units. Separately reserve128 rounds for the per-row64-cell parse tail
-    // (8192/64), which can leave the aggregate grant unused. Source's shared
-    // 512 intent grant leaves at least448 capture pushes after at most64
-    // dispositions, so its ceil(8192/448)=19 publication rounds fit there.
-    // Reserve32 more rounds for a retained ingress sweep and its oldest-cell
-    // revisit once reply capacity returns (1024/64 visits each). These added
-    // phases keep the conservative sum1964 below2048. Capture retirement uses
-    // the existing reply lane; the full16-source capacity fixture drains both
-    // ordinary dispositions and these capture owners without rescue callbacks.
-    // Missing external proof still exits immediately.
-    for _ in 0..2048 {
-        if !service_retired_once() {
-            break;
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    TEST_SERVICE_ROUNDS.store(0, Ordering::Relaxed);
+    // Fixed joined incarnations generate no new musical input. Each outer
+    // round services every Source and Hub; per-row paths run in parallel,
+    // while shared work/grant interference is charged across all seventeen
+    // rows. The full derivation is in adaptive-tuning-terminal-faults.md.
+    // These are ownership rounds, not a callback or physical-release deadline.
+    const CAPTURE_ROUNDS: usize = PENDING_EVENTS * (OUTPUT_RING / 64 + 3 * INTENT_RING / 64 + 4);
+    const CONTROL_ROUNDS: usize = 4 * (PENDING_EVENTS + 32768 + INTENT_RING + REPLY_RING);
+    const RECOVERY_ROUNDS: usize = 4 * (2 * TUNERS * LIFETIMES / 256 + 4 * TUNERS)
+        + (TUNERS + 3) * (3 * LIFETIMES / 256 + 2 * LIFETIMES / 64);
+    const FACTUAL_ROUNDS: usize = 2 * (TUNERS * (OUTCOME_JOURNAL + 2 * OUTPUT_RING + 128) + 2048);
+    const GRANT_ROUNDS: usize = (2402304usize + 65536).div_ceil(1904);
+    const HANDOVER_ROUNDS: usize = 4 * TUNERS * 16;
+    // Revisit parents plus completed child links and their final reclamation.
+    const UNPIN_ROUNDS: usize = (TUNERS + 3) * (PENDING_EVENTS + 2 * 32768) / 256;
+    const REVISIT_ROUNDS: usize = INTENT_RING / 64;
+    const TERMINAL_ROUNDS: usize = CAPTURE_ROUNDS
+        + CONTROL_ROUNDS
+        + RECOVERY_ROUNDS
+        + FACTUAL_ROUNDS
+        + GRANT_ROUNDS
+        + HANDOVER_ROUNDS
+        + UNPIN_ROUNDS
+        + REVISIT_ROUNDS;
+    let mut quiet = 0;
+
+    for _ in 0..TERMINAL_ROUNDS {
+        #[cfg(all(test, not(feature = "tuning-probe")))]
+        TEST_SERVICE_ROUNDS.fetch_add(1, Ordering::Relaxed);
+        if service_retired_once() {
+            quiet = 0;
+        } else {
+            // A completed finite scan can leave an actionable owner beyond the
+            // current64-cell slice. Allow one complete ingress revisit without
+            // calling its blocked rotations ownership progress. If a row's
+            // grant is denied, another finite owner spent that grant instead.
+            quiet += 1;
+            if quiet == REVISIT_ROUNDS {
+                break;
+            }
         }
     }
 }

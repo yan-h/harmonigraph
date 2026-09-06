@@ -396,9 +396,9 @@ impl Lives {
                 ready_head: value.ready_head,
                 ready_tail: value.ready_tail,
                 cleanup_next: value.cleanup_next,
-                flags: u8::from(value.ready_queued) * super::source::READY_QUEUED
-                    | u8::from(value.assignment_held) * super::source::ASSIGNMENT_HELD
-                    | u8::from(value.shift.is_some()) * super::source::SHIFT_VALID,
+                flags: (u8::from(value.ready_queued) * super::source::READY_QUEUED)
+                    | (u8::from(value.assignment_held) * super::source::ASSIGNMENT_HELD)
+                    | (u8::from(value.shift.is_some()) * super::source::SHIFT_VALID),
             });
         }
     }
@@ -628,6 +628,19 @@ impl Permissions {
         // no such borrow survives here. End the arena Arc before the ack Release.
         drop(token);
         Retirement { key }
+    }
+    /// Read only the authenticated Original-On identity while its unique token
+    /// and parent permission remain owned. Terminal cut disposal needs no graph
+    /// traversal or copied mutable Source state.
+    pub fn original_on(&self, token: &Token) -> Option<(u16, u64)> {
+        if !token.valid(token.key.lease, token.key.epoch)
+            || !Self::contains(&self.parents, token.key.position as usize)
+        {
+            return None;
+        }
+        let original = token.original();
+        original.event.attack()?;
+        Some((original.life, token.birth(original.life)?.serial))
     }
     pub fn empty(&self) -> bool {
         self.work.iter().chain(self.parents.iter()).all(|word| *word == 0)
