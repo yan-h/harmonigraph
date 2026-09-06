@@ -505,277 +505,8 @@ fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Re
     Ok(())
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
-    view_proj: [f32; 16],
-    cam_right: [f32; 4],
-    cam_up: [f32; 4],
-    /// x unused — it carried the scene clock, which no shader stage reads any
-    /// more: the shimmer was its one consumer and it now takes that clock
-    /// already multiplied by its speed and reduced onto one cycle
-    /// (`misc8.x`), which is the only form in which an f32 can carry a song
-    /// position honestly. Retired rather than refilled WITH the clock: two
-    /// spellings of the same time in the same buffer is how a later pattern
-    /// picks the one that stair-steps.
-    /// y: base node radius (world units);
-    /// z unused — it carried how much two nodes' overlapping light added up,
-    /// a mix between the two blends the glow pass wrote at once. The light is
-    /// one screen-blended field now (`glow_targets`), so there is nothing left
-    /// to dial between. A retired slot rather than a repack, which would
-    /// renumber the ones around it for nothing.
-    /// w unused — it carried the node style, the paint of a disc at the node's
-    /// centre, from when that disc had more than one. A retired slot rather
-    /// than a repack, which would renumber the ones around it for nothing.
-    misc: [f32; 4],
-    /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
-    /// (the shader converts its screen-pixel AA softness to render
-    /// pixels with it); w: bloom strength, which blit.wgsl reads (this
-    /// slot is NOT free). The dots style maps a dot's pitch through x/y
-    /// to index `pitch_lut`.
-    misc2: [f32; 4],
-    /// x unused — it carried the radius of a disc at the node's centre, the
-    /// one layer that was not a ring. Retired in place, like `misc.w`;
-    /// y/z: the
-    /// outer octave layer's inner/outer band radii (same units), which the
-    /// scene hands over either as z > y or as the empty pair (0, 0) that says
-    /// the layer is off — the shader gates the band on z > y rather than
-    /// assuming it (`glyph_band`'s two soft edges cross instead of cancelling
-    /// at z == y, painting a dot at the node's centre); w: the outer edge of
-    /// the outermost RING the node draws (`Scene::rings_outer`), which
-    /// `node_rim` and the mark strip stand off, so neither has to know
-    /// which layer was the last one on.
-    misc3: [f32; 4],
-    /// Pitch->color lookup for the dots octave style (see harmonigraph_scene's
-    /// `pitch_ramp_lut`), matching the node disc gradient.
-    pitch_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
-    /// x: unused — it carried the solidity of a disc at the node's centre;
-    /// y: where the melody/bass strip starts (`Scene::mark_inner`);
-    /// z/w unused — they carried the idle marker's radius and style, from
-    /// when an unlit node drew a placeholder. Retired in place,
-    /// like `misc.x`. (The blit pipeline binds only the head of this
-    /// buffer, so trailing fields are safe to add here.)
-    misc4: [f32; 4],
-    /// x: half a resting marker's arm thickness, as a share of one arm's
-    /// length (`Scene::plus_half_width`) — 1 is a filled square;
-    /// y: where a marker's arms start to taper, as a share of one arm
-    /// (`Scene::plus_taper_start`) — 1 is a square end;
-    /// z: the node's ANGULAR padding in quad UV units — the gap between two
-    /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
-    /// never arrives: every stand-off that one buys is already spent in the
-    /// radii in `misc3` and `misc4.y`, so what stands the marks off the band is
-    /// `mark_inner`, not a sum taken over this;
-    /// w: how far a melody/bass mark reaches past the band, same units, where
-    /// 0 means no marks (so this slot is NOT free — `mark_extension` reads it,
-    /// and the octave layer gates the marks on it). Safe to have started a new
-    /// slot here, per the note on `misc4`.
-    misc5: [f32; 4],
-    /// x/y unused — they carried the trail's mark style and strength, from
-    /// when a memory was a change to the idle marker rather than a kept note
-    /// name. Retired in place.
-    /// z: unused; w: the melody/bass marks' shimmer pattern
-    /// (0 off, then one index per pattern — see `Pulse::shader_index`).
-    misc6: [f32; 4],
-    /// Unused — the pane fill this pass is composited over, from when a draw
-    /// here knocked a hole through to it. Nothing cuts to the pane now: a
-    /// shadow is a multiply on what the frame already holds. Retired in place
-    /// rather than repacked, which would renumber the rows around it for
-    /// nothing. See `Scene::background`.
-    background: [f32; 4],
-    /// The unlit ground a node's two rings stand on (`Scene::lattice_ground`): the
-    /// neutral grey the OCTAVE band's silent slices are, and the colour a
-    /// sounding one's pitch is painted over as it fades.
-    ///
-    /// A slot of its own beside `background` rather than three of the retired
-    /// scalars: it is a colour, the buffer's other colour has one, and a grey
-    /// split across the seam between two vec4s would be read by nothing that
-    /// wanted the halves apart. The audio ring's own copy of it is `t` = 0 of
-    /// `spectral_lut` below, baked on the CPU from the same `L*`.
-    lattice_ground: [f32; 4],
-    /// The wheel's pitch axis. x: octaves one turn is cut into
-    /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
-    /// (`OctaveLayout::center`).
-    ///
-    /// No slot range and no per-node angle: both depend on the node's own
-    /// pitch class — which of its octaves are the ones nearest the center, and
-    /// how far its ring is turned to put them on their pitches — so the shader
-    /// derives them per node from these two.
-    ///
-    /// z/w: the audio ring's inner and outer radius in quad UV units
-    /// (`SpectralPaint::inner` / `::outer`), both 0 when the ring is off — the
-    /// shader draws nothing for an empty annulus, so the toggle reaches it as
-    /// geometry. They ride here rather than in a slot of their own because the
-    /// ring is the same wheel at smaller radii: the shader reads the span and
-    /// the center beside them for every wedge it draws.
-    misc7: [f32; 4],
-    /// The shimmer's knobs (see
-    /// `Scene::shimmer_speed`). x: how far the sheet has travelled, in world
-    /// units, already reduced onto one cycle of the pattern — the SPEED does
-    /// not reach the shader, having been spent producing this (see
-    /// `Scene::shimmer_slide`);
-    /// y: the pattern's period in world units, strictly positive; z: how deep
-    /// the light is (0 none, 1 the tuned depth); w: how gradually it arrives
-    /// across the period (0 a crest, 1 a cosine).
-    ///
-    /// One slot for the set rather than the free `misc7.w` plus a new one:
-    /// they are read together in one function, and splitting them across the
-    /// seam between two vec4s buys nothing but a second place to look.
-    misc8: [f32; 4],
-    /// `OctaveLayout::bounds` — the angle from a ring's seam to each of its
-    /// slice boundaries, the same table for every node — four to a row, which
-    /// is how a uniform array is laid out anyway.
-    oct_bounds: [[f32; 4]; 3],
-    /// The audio ring's knobs (see `harmonigraph_scene::SpectralPaint`).
-    /// x: how many cents of spectrum one wedge of the ring spans, read only
-    /// when y is 0; y: 1 where each wedge is ONE reading taken at its own
-    /// octave's pitch (`SpectralReading::Fold`) rather than a window spread
-    /// across it (`::Spectrum`); z/w unused.
-    misc9: [f32; 4],
-    /// The node glow's dials. x: how far past a node's outermost drawn edge
-    /// its light spreads, in quad UV units (`Scene::glow_reach`); y: how much
-    /// light (`Scene::glow_strength`); z unused; w: how widely a node's own
-    /// ink is averaged into the colour of its light (`Scene::glow_blend`).
-    ///
-    /// ZEROED WHOLE where the glow does not draw, so `x > 0.0` is the single
-    /// test on either side of the boundary — [`LatticeCallback::glow_draws`]
-    /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
-    /// nothing, and the shapes beside it have nothing to shape.
-    misc10: [f32; 4],
-    /// The node glow's falloff inside its reach, as the signed shape of its
-    /// normalized exponential (`Scene::glow_curve`) in x. y/z/w unused.
-    ///
-    /// Zeroed with `misc10`: no glow draw reads a curve while the reach or
-    /// strength is off.
-    glow_curve: [f32; 4],
-    /// The LATTICE GEOMETRY group's shadow — the nodes this module draws. x:
-    /// how wide it is, as a share of a node's radius (`ShadowStyle::width`);
-    /// y: how far its renderer reaches past a caster's ink in the picture's
-    /// own σ (`ShadowKernel::reach_sigmas`), which every node quad is grown by;
-    /// w: how dark it lands (`ShadowStyle::depth`), 1 taking the frame under a
-    /// solid caster to the shader's own floor. z unused.
-    ///
-    /// The TEXT group's names are not here: a name's box is drawn by the text
-    /// pipeline and reads its depth out of that pipeline's own uniform
-    /// (`TextUniforms::shadow_depth`). Its markers are drawn by this module and
-    /// take that group's settings from `plus_shadow` below. What all casters
-    /// share is σ's unit, and σ rides on the caster
-    /// (`shadow::Caster::sigma_points`).
-    ///
-    /// A REACH in y and not a σ ratio, because the two renderers do not end at
-    /// the same multiple of their own width: the ratio times a constant answers
-    /// for a Gaussian and would cut a distance's window off a third of the way
-    /// in.
-    ///
-    /// A row of its own rather than slots scattered over the ones beside it,
-    /// because they are one control: a group's Shadow bar and the Shadow depth
-    /// bar under it.
-    ///
-    /// NOT zeroed with `misc10`, which is where this row parts company with
-    /// every other one under the glow: an item casts whether or not there is a
-    /// light in the picture, so zeroing this with the light would take every
-    /// shadow off with it the moment the Reach reached 0. The width is its own
-    /// off switch (`glow_shadow()` in lattice.wgsl), and the depth is a second
-    /// one — a group at either bar's bottom packs no cell.
-    misc11: [f32; 4],
-    /// The resting markers' shadow, inherited from the LATTICE TEXT group. The
-    /// same four terms and layout as `misc11`: width, the renderer's reach in
-    /// σ, unused, and depth.
-    ///
-    /// A row of its own because markers are drawn by the lattice pipeline while
-    /// the rest of their group is drawn by the text pipeline. Sharing the row
-    /// above would make their style follow the nodes again; scattering these
-    /// terms through spare slots would hide that this is one inherited style.
-    plus_shadow: [f32; 4],
-    /// The node glow's plumbing row, which is not a dial. x: how many rows this
-    /// frame's ink strip has (`Scene::glow_rows`) — the one thing
-    /// `vs_ink_strip` cannot work out for itself, since it is writing that
-    /// texture rather than reading one, and a CAPACITY rather than the instance
-    /// count, rows being handed out per node and held for as long as that
-    /// node's light lasts. y/z/w unused.
-    ///
-    /// A row of its own rather than the spare half of one above, because it
-    /// answers a different question: everything up there is a setting a person
-    /// dialled, and this is how tall a texture the renderer allocated. Zeroed
-    /// whole with them, on the same rule.
-    misc12: [f32; 4],
-    /// The WASH. x: how much of the light a LIT slice of a node washes its own
-    /// ink with (`Scene::glow_wash`), where every other piece of the lattice's
-    /// ink takes that same field whole. y: one quad uv as a world length on the
-    /// markers' sheet (`Scene::marker_unit`), which is what a marker's quad
-    /// converts between its own world arm and the node uv the Shadow's reach is
-    /// dialled in (`vs_plus`). z/w unused.
-    ///
-    /// A row of its own rather than a spare slot among the glow's dials: the
-    /// wash reads the light RAW, where every dial up there shapes the
-    /// light itself, so a bar sitting among them would carry the coupling it
-    /// exists to break. HALF of it zeroed with `misc10` — a wash with no light
-    /// to lay down is a factor on nothing — and the unit beside it packed
-    /// whatever the glow says, a marker's quad being sized for its shadow with
-    /// no light in the picture at all.
-    misc13: [f32; 4],
-    /// The shadow atlas's plumbing row, which is not a dial. x/y: the pane in
-    /// POINTS, the space a caster's box is packed in (`shadow::pack`), so a
-    /// clip position resolves back to it (`pane_points` in lattice.wgsl); z/w:
-    /// the atlas in texels, for the two draws that FILL a cell — a texture
-    /// cannot be bound while it is the target being written, so its size
-    /// cannot be read off it.
-    ///
-    /// The two halves are settled in different places: the pane's points in
-    /// `from_scene`, the atlas's size in `prepare`, which is after the packing
-    /// and so the earliest the size is known.
-    misc14: [f32; 4],
-    /// The cell a resting marker's GAUSSIAN is read out of, as rows rather than
-    /// a buffer: every cross is the same shape at the same σ and a blur is
-    /// linear, so one set serves the whole field. A direct distance leaves them
-    /// empty. The box is in the pane's points, centred on a crossing.
-    ///
-    /// The marker field is also the FIRST caster the frame packs, so it sits at
-    /// index 0 of the array the scene draws read; these rows are what the draw
-    /// that FILLS the cell takes, which cannot bind that array's companion
-    /// texture while it is the target being written.
-    plus_shadow_rect: [f32; 4],
-    /// That box's cell in atlas texels: origin, then size.
-    plus_shadow_cell: [f32; 4],
-    /// x: points to cell texels; y: σ in those texels; z: the cell's share of
-    /// the target's pixels, which is what the cross's own soft band is scaled
-    /// by where it is RASTERIZED (`aa_width` in lattice.wgsl); w: one arm in
-    /// points, which is what turns a fragment's place on a cross into a place
-    /// in the cell.
-    ///
-    /// The cell's own level is not carried at all, being 1 for every marker —
-    /// each spends its own opacity as a share where it READS the cell.
-    plus_shadow_terms: [f32; 4],
-    /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
-    /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
-    /// same gradient the spectrogram's cells and the Spiral pane's segments
-    /// are read off, with its silent end moved onto the node's own ground
-    /// (`harmonigraph_scene::ring_gradient`) so a level reads as the same light
-    /// over a grey ground as it does over their black one.
-    /// Indexed by a LEVEL where `pitch_lut` beside it is indexed by a pitch,
-    /// which is the whole difference between the two schemes.
-    spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
-    /// The analyzer's grid through the volume-color dB window, a byte per
-    /// bucket, sixteen to a row (see `SPECTRUM_WORDS`) — what a wedge of the
-    /// audio ring paints.
-    ///
-    /// The one spectrum the GPU gets. The gate's copy
-    /// (`SpectralPaint::levels`, the same buckets through the analyzer's own
-    /// Level window) is answered on the CPU by `RingGate` and `RingFade` and
-    /// never needs a GPU home, so uploading it would be 3.8 KB a frame that
-    /// nothing in lattice.wgsl reads.
-    ///
-    /// In the uniform buffer rather than a texture, and 3.8 KB.
-    /// What a texture would buy is a sampler's own bilinear read; what it
-    /// costs is a bind-group entry on every lattice pipeline, a texture per
-    /// SURFACE — the docked pane and the Render preview both draw a lattice in
-    /// one frame, and a `write_texture` is ordered ahead of the shared encoder
-    /// egui-wgpu submits, so one shared texture would hand both panes whichever
-    /// spectrum was written last (the trap `bind_sheets` documents) — and a
-    /// second upload path beside the uniforms, which are already per pane and
-    /// already carry a lookup table of their own. The interpolation is two
-    /// unpacks and a mix.
-    spectrum_color: [[u32; 4]; SPECTRUM_WORDS],
-}
+mod uniforms;
+use uniforms::*;
 
 /// Rows of four `u32` the analyzer's grid packs into: sixteen levels to a row.
 ///
@@ -934,7 +665,7 @@ struct GpuPlus {
     /// stand in. Per instance rather than in a uniform because it is a WORLD
     /// length; the two proportions measured against it, the arm's thickness and
     /// where its ends taper, are the same for the whole field and ride in
-    /// `misc5.x` and `misc5.y`.
+    /// `MarkerParams::half_width` and `MarkerParams::taper_start`.
     pos_radius: [f32; 4],
     /// rgb: the marker's own ink, a: its opacity. Both come off one resolve of
     /// `ViewConfig::marker_ink`, so a marker at rest is that grey exactly; the
@@ -1031,7 +762,7 @@ struct LatticeCallback {
     /// for this is what a group decides OUTSIDE the packing: which fill
     /// pipeline the names' cells are drawn by, and the depth a name's box
     /// spends (`fs_shadow_box` reads it out of the text pipeline's own
-    /// uniform). The geometry group's pair rides in `uniforms.misc11`.
+    /// uniform). The geometry group's pair rides in `uniforms.geometry_shadow`.
     shadow: harmonigraph_scene::ShadowSettings,
     /// Which caster each node instance's shadow is, by index into `casters` —
     /// parallel to `instances`, since the walk interleaves the two lists.
@@ -1503,98 +1234,98 @@ impl LatticeCallback {
             slide: labels.slide,
             pluses,
             uniforms: Uniforms {
-                view_proj: view_proj.to_cols_array(),
-                cam_right: right.extend(0.0).to_array(),
-                cam_up: up.extend(0.0).to_array(),
-                misc: [0.0, scene.node_radius, 0.0, 0.0],
-                misc2: [
-                    scene.darkest_pitch,
-                    scene.brightest_pitch,
+                composite: CompositeParams {
+                    darkest_pitch: scene.darkest_pitch,
+                    brightest_pitch: scene.brightest_pitch,
                     render_scale,
-                    bloom_strength(scene.bloom_strength),
-                ],
-                misc3: [0.0, scene.outer_inner, scene.outer_outer, scene.rings_outer],
-                pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
-                misc4: [0.0, scene.mark_inner, 0.0, 0.0],
-                misc5: [
-                    scene.plus_half_width,
-                    scene.plus_taper_start,
-                    scene.octave_gap,
-                    scene.mark_thickness,
-                ],
-                misc6: [0.0, 0.0, 0.0, scene.pulse_marks.shader_index() as f32],
-                background: scene.background.to_array(),
-                lattice_ground: scene.lattice_ground.to_array(),
-                misc7: [
-                    scene.octave_layout.span as f32,
-                    scene.octave_layout.center,
-                    scene.spectral.inner,
-                    scene.spectral.outer,
-                ],
-                misc8: [
-                    scene.shimmer_slide(),
-                    scene.shimmer_width,
-                    scene.shimmer_intensity,
-                    scene.shimmer_softness,
-                ],
-                // Straight indexing: the table is exactly as long as the
-                // rows are wide (the const assert above is what keeps it so),
-                // and a fallback here would quietly ship a wheel with a wrong
-                // angle in it rather than failing the build.
-                oct_bounds: std::array::from_fn(|row| {
-                    std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
-                }),
-                misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.folded)), 0.0, 0.0],
-                // Zeroed whole rather than packed where the glow does not
-                // draw — see `Uniforms::misc10`.
-                misc10: if lights {
-                    [scene.glow_reach, scene.glow_strength, 0.0, scene.glow_blend]
-                } else {
-                    [0.0; 4]
+                    bloom_strength: bloom_strength(scene.bloom_strength),
                 },
-                glow_curve: if lights {
-                    [scene.glow_curve.shape(), 0.0, 0.0, 0.0]
-                } else {
-                    [0.0; 4]
+                camera: CameraParams {
+                    view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),
+                    right: Float4(right.extend(0.0).to_array()),
+                    up: Float4(up.extend(0.0).to_array()),
                 },
-                // Packed whatever `lights` says — see `Uniforms::misc11`: a
-                // frame with no light in it still casts every shadow the
-                // lattice has. z unused.
-                misc11: [geometry.width, geometry.kernel.reach_sigmas(), 0.0, geometry.depth],
-                // Markers are notation which hands each position to and from
-                // its name, so their whole shadow style follows the text
-                // group even though the lattice pipeline draws them.
-                plus_shadow: [text.width, text.kernel.reach_sigmas(), 0.0, text.depth],
-                misc12: if lights {
-                    [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
-                } else {
-                    [0.0; 4]
+                node: NodeParams {
+                    radius: scene.node_radius,
+                    band_inner: scene.outer_inner,
+                    band_outer: scene.outer_outer,
+                    rings_outer: scene.rings_outer,
+                    mark_inner: scene.mark_inner,
+                    angular_gap: scene.octave_gap,
+                    mark_thickness: scene.mark_thickness,
+                    padding: 0.0,
                 },
-                // HALF of it zeroed where the glow does not draw. The wash is a
-                // share of the light and goes with it; the unit beside it is
-                // what a marker's own quad is sized in (`vs_plus`), and that
-                // quad has to hold a shadow cast with no light in the picture
-                // at all — which is `misc11`'s rule above.
-                misc13: [if lights { scene.glow_wash } else { 0.0 }, scene.marker_unit, 0.0, 0.0],
-                // The pane in points, which `from_scene` knows; the atlas's own
-                // size is settled where it is allocated, in `prepare`.
-                misc14: [size_points.x, size_points.y, 0.0, 0.0],
-                // The markers' shared cell, likewise: it is `casters[0]` and its
-                // place is not known until the frame is packed.
-                plus_shadow_rect: [0.0; 4],
-                plus_shadow_cell: [0.0; 4],
-                plus_shadow_terms: [0.0; 4],
-                spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
-                // Zeroed rather than packed when the ring is off:
-                // `u.spectrum_color` is read only through `spectral_ring`,
-                // which draws nothing off an empty annulus, so the fresh
-                // feature-off frame skips the 3828-bucket pack — twice, docked
-                // pane and Render preview — and the struct uploads whole
-                // either way.
+                marker: MarkerParams {
+                    half_width: scene.plus_half_width,
+                    taper_start: scene.plus_taper_start,
+                    world_unit: scene.marker_unit,
+                    padding: 0.0,
+                },
+                octave: OctaveParams {
+                    span: scene.octave_layout.span as f32,
+                    center: scene.octave_layout.center,
+                    padding: Float2([0.0; 2]),
+                    bounds: std::array::from_fn(|row| {
+                        Float4(std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col]))
+                    }),
+                },
+                shimmer: ShimmerParams {
+                    slide: scene.shimmer_slide(),
+                    period: scene.shimmer_width,
+                    intensity: scene.shimmer_intensity,
+                    softness: scene.shimmer_softness,
+                    pattern: scene.pulse_marks.shader_index() as f32,
+                    padding0: 0.0,
+                    padding1: 0.0,
+                    padding2: 0.0,
+                },
+                spectral: SpectralParams {
+                    inner: scene.spectral.inner,
+                    outer: scene.spectral.outer,
+                    range_cents: scene.spectral.range,
+                    folded: f32::from(u8::from(scene.spectral.folded)),
+                },
+                glow: if lights {
+                    GlowParams {
+                        reach: scene.glow_reach,
+                        strength: scene.glow_strength,
+                        blend: scene.glow_blend,
+                        curve: scene.glow_curve.shape(),
+                        wash: scene.glow_wash,
+                        row_capacity: scene.glow_rows.max(1) as f32,
+                        padding: Float2([0.0; 2]),
+                    }
+                } else {
+                    bytemuck::Zeroable::zeroed()
+                },
+                // Every shadow still casts with the glow disabled. Markers
+                // inherit notation's style even though this pipeline draws them.
+                geometry_shadow: ShadowParams {
+                    width: geometry.width,
+                    reach_sigmas: geometry.kernel.reach_sigmas(),
+                    depth: geometry.depth,
+                    padding: 0.0,
+                },
+                marker_shadow: ShadowParams {
+                    width: text.width,
+                    reach_sigmas: text.kernel.reach_sigmas(),
+                    depth: text.depth,
+                    padding: 0.0,
+                },
+                shadow_target: ShadowTargetParams {
+                    pane_points: Float2([size_points.x, size_points.y]),
+                    atlas_texels: Float2([0.0; 2]),
+                },
+                // Settled by prepare after packing casters[0].
+                marker_cell: bytemuck::Zeroable::zeroed(),
+                lattice_ground: Float4(scene.lattice_ground.to_array()),
+                pitch_lut: std::array::from_fn(|k| Float4(scene.pitch_lut[k].to_array())),
+                spectral_lut: std::array::from_fn(|k| Float4(scene.spectral.lut[k].to_array())),
+                // No shader reader while the ring is off; skip the bucket pack.
                 spectrum_color: if scene.spectral.ring_draws() {
-                    pack_spectrum(&scene.spectral.color_levels)
+                    pack_spectrum(&scene.spectral.color_levels).map(Uint4)
                 } else {
-                    [[0u32; 4]; SPECTRUM_WORDS]
+                    [Uint4([0; 4]); SPECTRUM_WORDS]
                 },
             },
             target_format,
@@ -1648,9 +1379,9 @@ impl LatticeCallback {
     /// or composited: no target, no pass, and every wash reading the stand-in
     /// transparent texture rather than a light. The SHADOW is not gated by it
     /// — an item casts with no light in the picture (see
-    /// [`Uniforms::misc11`]).
+    /// [`ShadowParams`]).
     fn glow_draws(&self) -> bool {
-        self.uniforms.misc10[0] > 0.0
+        self.uniforms.glow.reach > 0.0
     }
 }
 
@@ -2856,7 +2587,7 @@ fn create_scene_pipelines(
 /// into that node's cell, and one cross into the markers' shared one.
 ///
 /// Group 0 alone. Neither may bind the atlas — a texture cannot be read while
-/// it is the target being written — so both take its size off `u.misc14`
+/// it is the target being written — so both take its size off `u.shadow_target`
 /// instead, and neither reads the light: what a cell holds is coverage, and the
 /// colour it is laid down in is settled where the cell is READ.
 ///
@@ -4019,14 +3750,14 @@ impl CallbackTrait for LatticeCallback {
             offscreen_size,
             screen_size,
             PaneTargets {
-                bloom: self.uniforms.misc2[3] > 0.0,
+                bloom: self.uniforms.composite.bloom_strength > 0.0,
                 glow,
                 shadow: shadow_wanted,
                 blurs,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
-                rows: self.uniforms.misc12[0] as u32,
+                rows: self.uniforms.glow.row_capacity as u32,
                 // At least one: an empty storage binding is a validation error,
                 // and a frame that packed nothing still binds the array for the
                 // pipeline's layout — one zeroed entry, which is a caster with
@@ -4165,7 +3896,7 @@ impl CallbackTrait for LatticeCallback {
                         mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
                         filter_axis: self.slide.unit(),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        // The TEXT group's own depth, where `misc11` carries
+                        // The TEXT group's own depth, where `geometry_shadow` carries
                         // the geometry group's: a name's box is drawn by this
                         // pipeline and a ring's by the lattice's, so the two
                         // depths reach the two shaders through their own
@@ -4213,14 +3944,17 @@ impl CallbackTrait for LatticeCallback {
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
-            uniforms.misc14[2] = atlas.size[0] as f32;
-            uniforms.misc14[3] = atlas.size[1] as f32;
+            uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
         }
         if let Some(cell) = packed.boxes.first().filter(|_| self.marker_arm_points > 0.0) {
-            uniforms.plus_shadow_rect = cell.rect;
-            uniforms.plus_shadow_cell = cell.cell;
-            uniforms.plus_shadow_terms =
-                [cell.cell_map[0], cell.cell_map[1], cell.cell_map[3], self.marker_arm_points];
+            uniforms.marker_cell = MarkerCellParams {
+                rect: Float4(cell.rect),
+                cell: Float4(cell.cell),
+                points_to_texels: cell.cell_map[0],
+                aa_scale: cell.cell_map[3],
+                arm_points: self.marker_arm_points,
+                padding: 0.0,
+            };
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;

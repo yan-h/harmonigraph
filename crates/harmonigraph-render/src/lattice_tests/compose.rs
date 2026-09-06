@@ -1,63 +1,44 @@
 //! Bloom, and the order the sheets reach the frame in.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
 use crate::*;
 
+/// Fractional strength must change the halo independently of AA/render scale.
+/// Read unsaturated pixels outside the original ink so clipping cannot hide a
+/// swapped control, and compare both scales at the same screen resolution.
 #[test]
-fn bloom_adds_light_over_the_plain_composite() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let clear = wgpu::Color::BLACK;
-
-    let scene_off = parity_scene();
-    let mut scene_on = parity_scene();
-    scene_on.bloom_strength = 1.0;
-
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut total = |scene: &Scene, pane_id: u64| -> u64 {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-            .chunks(4)
-            .map(|px| u64::from(px[0]) + u64::from(px[1]) + u64::from(px[2]))
-            .sum()
-    };
-
-    let plain = total(&scene_off, 31);
-    let bloomed = total(&scene_on, 32);
-    assert!(
-        bloomed > plain + plain / 20,
-        "bloom at strength 1.0 should add clearly visible light: \
-         plain {plain} vs bloomed {bloomed}"
-    );
+fn fractional_bloom_strength_is_independent_of_render_scale() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = single_marked_node(0, 0);
+    scene.glow_reach = 0.0;
+    scene.pluses.clear();
+    scene.nodes[0].octaves.fill(1.0);
+    scene.pitch_lut.fill(glam::Vec4::new(0.7, 0.5, 0.3, 1.0));
+    let mut scale_totals = Vec::new();
+    for scale in [1.0, 2.0] {
+        scene.render_scale = scale;
+        scene.bloom_strength = 0.0;
+        let plain = shooter.shot(&scene);
+        let mut halos = Vec::new();
+        for strength in [0.25, 0.75] {
+            scene.bloom_strength = strength;
+            let frame = shooter.shot(&scene);
+            let halo: u64 = plain
+                .chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .filter(|(a, _)| a[..3] == [0, 0, 0])
+                .map(|(_, b)| b[..3].iter().map(|v| u64::from(*v)).sum::<u64>())
+                .sum();
+            halos.push(halo);
+        }
+        assert!(halos[0] > 500, "fixture needs a measurable halo: {halos:?}");
+        let ratio = halos[1] as f64 / halos[0] as f64;
+        assert!((2.8..3.2).contains(&ratio), "scale {scale}: halo ratio {ratio}, {halos:?}");
+        eprintln!("fractional bloom scale {scale}: halo sums {halos:?}");
+        scale_totals.push(halos[1]);
+    }
+    let ratio = scale_totals[1] as f64 / scale_totals[0] as f64;
+    assert!((0.85..1.15).contains(&ratio), "render scale changes halo strength: {scale_totals:?}");
 }
 
 /// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it

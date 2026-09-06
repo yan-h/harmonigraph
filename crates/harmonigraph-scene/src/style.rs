@@ -410,7 +410,7 @@ pub enum Pulse {
 }
 
 impl Pulse {
-    /// Index the shader reads (`misc6.w` — see `Uniforms` in
+    /// Index the shader reads (`ShimmerParams::pattern` in
     /// harmonigraph-render). 0 is the steady layer and every other value picks
     /// a pattern out of `shimmer_terms`.
     pub fn shader_index(self) -> u32 {
