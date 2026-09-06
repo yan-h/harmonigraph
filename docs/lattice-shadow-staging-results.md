@@ -31,7 +31,9 @@ Inherited golden/mark fixture event-constructor boundaries were left untouched.
 ## Method and reproducibility
 
 Release Rust 1.92, macOS 26.6.2 (25G83), Apple M1 Pro / Metal.
-Every local Cargo operation had a separately relayed exclusive machine lease, used sccache and this worktree's own target directory, and returned the lease immediately after terminal exit and an approved process-clearance check.
+Each measurement operation had a separately relayed exclusive machine lease, used sccache and this worktree's own target directory, and returned the lease immediately after terminal exit and an approved process-clearance check.
+Later correctness/build validation uses the coordinator's assigned build slot;
+the user subsequently authorized two disjoint build-capable tasks.
 The raw adapter identification was required;
 no sandbox-only adapter skip counted as validation.
 
@@ -137,5 +139,33 @@ Only the two test buffers gain `COPY_SRC` and one sentinel cell;
 their production capacity metadata and upload paths remain in use.
 The scratch probe above separately exercises the large upload cardinalities.
 
-Local actual-adapter validation, both unchanged golden sets, the single requested Claude Opus/xhigh review against the verified immediate parent, and final post-commit plugin/offline release builds remain delivery gates.
-No golden is to be blessed and no shared DAW slot is to be swapped.
+Initial acceptance passed at source head `d458a51b240013b90b371d464558eda3993e9116`:
+
+- [Full CI](https://github.com/yan-h/harmonigraph/actions/runs/34002124485) and Security passed at that exact head.
+- The local combined actual-adapter command below exited 0 after 114.80 s: 240 renderer tests passed (4 timing probes ignored), 47 offline tests passed (9 probes ignored), and no failures. The full log contains no adapter absence/skip output.
+- All 13 lattice and 5 offline goldens passed unchanged, including the new actual-prepare upload/picture fixture and the inherited hot-reload/reference/history coverage. No golden was blessed.
+- Exactly one requested Claude Opus/xhigh source review against verified `codex/lattice-history-owner` / `33dad566` completed with no findings. There were no fixes or declined findings and no second review. The reviewer could not access external registry source; Codex separately read `wgpu-types-29.0.4/src/write_only.rs:280–308` and verified that `write_iter` panics on both short and excess iterators.
+
+The earlier CI run at `43959360` hit a Rust/Clippy 1.92 internal compiler error in the fixture's external-struct update closure.
+Copying the node first and assigning its position avoids that compiler failure with identical fixture data;
+production code was unchanged.
+Full local validation and the single review logs are `initial-validation.log` and `claude-review.log` in the artifact directory.
+
+```sh
+env -u HARMONIGRAPH_BLESS CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 \
+  CARGO_TARGET_DIR="$PWD/target" \
+  cargo test --release -p harmonigraph-render -p harmonigraph-offline \
+  --features harmonigraph-render/hot-reload -- --nocapture
+```
+
+Final post-commit plugin/offline release artifacts and the binary's actual tag are recorded in [draft PR #666](https://github.com/yan-h/harmonigraph/pull/666), which remains open and not merged.
+The final build uses both packages:
+
+```sh
+env -u HARMONIGRAPH_BLESS CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 \
+  CARGO_TARGET_DIR="$PWD/target" \
+  cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
+./load-plugin.sh --tag
+```
+
+No shared DAW slot is swapped by this experiment.
