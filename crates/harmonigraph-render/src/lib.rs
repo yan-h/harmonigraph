@@ -1349,9 +1349,7 @@ impl LatticeCallback {
                         // Settled by prepare, which is where the lit nodes are
                         // mapped onto the target's pixels.
                         lit: 0.0,
-                        // Already clamped to the bar's ends by `derive_scene`;
-                        // the shader's own floor is against a zeroed group.
-                        overlap: scene.glow_union,
+                        padding: 0.0,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
@@ -2887,17 +2885,11 @@ fn create_cell_pipelines(
 /// at every pixel. That is the change #680 is built on: an operator written in
 /// shader code is not confined to what a fixed-function blend can express.
 ///
-/// **NO BLEND**, where a billboard per node needed one. The fold is
-/// `fs_glow_gather`'s: the p-norm UNION of every halo's coverage at the pixel,
-/// at the exponent the Union bar holds ([`harmonigraph_scene::ViewConfig::glow_union`]).
-/// A lone note is unchanged exactly, `n` notes over one another
-/// read at most `n^(1/p)` times one, and it is commutative, so the order the
-/// loop walks in is not readable in the picture. The screen blend it replaces
-/// had that last guarantee and not the first two — `n` overlapping halos read
-/// `1 - (1-a)^n`, so a chord's middle climbed toward white and the count of
-/// nodes, rather than any note, was the brightest thing on screen (#680). A
-/// plain MAX is the union taken to its limit and creases along every locus where
-/// two nodes light a pixel equally, which is why the exponent is finite.
+/// **NO BLEND**, where a billboard per node needed one.
+/// `fs_glow_gather` combines luminance with peak-normalized screen and mixes
+/// colour separately. The fixed full-strength ceiling comes from Glow gain;
+/// notes and their fades never move it. A lone glow keeps its original colour
+/// and coverage. The light remains independent of instance order.
 ///
 /// **Every sheet at once**, which is what the fold's commutativity buys as it
 /// bought it for the blend. What occludes a node's halo is the scene pass,
@@ -4395,9 +4387,9 @@ impl CallbackTrait for LatticeCallback {
                     multiview_mask: None,
                 });
                 // ONE quad over the target, every lit node folded at each of its
-                // pixels off the list at group 2. The fold is commutative and
-                // never subtracts, so this target is one field of light with no
-                // depth in it at all — which is what makes it safe to lay under
+                // pixels off the list at group 2. The fold is commutative,
+                // so this target is one field of light with no depth in it
+                // at all — which is what makes it safe to lay under
                 // every sheet as a single layer.
                 //
                 // Skipped with nothing lit, where the clear above has already

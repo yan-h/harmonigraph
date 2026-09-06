@@ -6,7 +6,6 @@ use crate::SharedState;
 use harmonigraph_scene::{
     GlowCurve, ShadowKernel, ShadowSettings, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
-    GLOW_UNION_MAX, GLOW_UNION_MIN,
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -46,7 +45,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow gain")
         .unit(1.0, "×")
             .show(ui)
-            .on_hover_text("Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.");
+            .on_hover_text(
+                "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain. \
+                 Overlapping glows join smoothly under a fixed full-strength brightness ceiling. \
+                 Note arrivals and fades do not change the ceiling.",
+            );
         ValueBar::new(
             &mut view.glow_curve.shape,
             GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
@@ -93,47 +96,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  0% preserves their original colors; \
                  100% blends them into the surrounding light. \
                  Idle shapes always receive the full glow.",
-            );
-        // What a CHORD comes to, which is the one thing none of the bars above
-        // says: they set what ONE note's light is, and this sets how much of it
-        // a second note standing in the same place adds. The stored value is
-        // the union's exponent (`ViewConfig::glow_union`) and the readout is
-        // what that exponent means — `2^(1/p) - 1`, the gain where two equal
-        // halos meet — so the number FALLS as the bar fills. The colour where
-        // notes overlap is the same union run per channel, so this bar sets how
-        // much a meeting brightens and a second note never takes light out of a
-        // channel the first one lit (`fs_glow_gather`).
-        //
-        // Named for the OPERATOR and not for the reading, which is what makes
-        // a falling number read forwards: a fuller bar is more of a union, two
-        // notes coming to one light rather than to the sum of two, and the
-        // percentage is what they still add on top of it. Under the reading's
-        // own name — "Overlap" — the same bar would say the overlap shrinks as
-        // it fills, which is a control that reads backwards at a glance.
-        //
-        // GEOMETRIC travel (`eased` on a range whose bottom is above zero),
-        // which is the only spacing that reads evenly: the gain is a root of
-        // the exponent, so equal steps in `p` would spend the top half of the
-        // bar on percentages a fraction apart.
-        //
-        // The top is 32 because of the SHAPE rather than the arithmetic: the
-        // fold factors its running maximum out, so it cannot overflow or
-        // underflow at any exponent, but past here the union's ridge along the
-        // bisector between two notes narrows toward the crease a plain max
-        // leaves (see `GLOW_UNION_MAX`).
-        ValueBar::new(&mut view.glow_union, GLOW_UNION_MIN..=GLOW_UNION_MAX, "Union")
-            .eased(true)
-            // One decimal, which is what `percent()` gives every other share on
-            // this page and what keeps the number moving over the whole drag:
-            // at whole percent the top third of the bar reads +2% throughout.
-            .display(|p| format!("+{:.1}%", (2f32.powf(1.0 / p) - 1.0) * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How far overlapping notes merge into one light instead of adding up. \
-                 The number is what two equal notes still add where they meet: \
-                 +41% at the bottom of the bar, +2% at the top. \
-                 A fuller bar spreads a chord's light rather than piling it up, \
-                 and one note on its own never changes.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

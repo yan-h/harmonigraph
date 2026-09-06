@@ -71,7 +71,7 @@ struct GlowParams {
     wash: f32,
     row_capacity: f32,
     lit: f32,
-    overlap: f32,
+    padding: f32,
 };
 
 struct ShadowParams {
@@ -384,25 +384,6 @@ fn plus_shadow_through(
 // finished picture rather than from this field.
 fn glow_wash() -> f32 {
     return clamp(u.glow.wash, 0.0, 1.0);
-}
-
-// The exponent the node glow's halos are UNIONED at (the Union bar, carried in
-// `u.glow.overlap` — the transport cannot spell it `union`, which WGSL
-// reserves): the light at a pixel is the p-norm of every halo's coverage there,
-// so `n` notes over one another read at most `n^(1/p)` times one and a lone
-// note reads exactly itself at any exponent.
-//
-// ONE reader, spent by every power and every root in [`fs_glow_gather`] — the
-// light's and its three channels' — and that is the invariant the bar cannot be
-// allowed to break: a fold raised to one exponent and rooted at another is not
-// a norm of anything.
-//
-// The floor is what the root divides by, and it is 1 rather than the bar's own
-// bottom of 2: every exponent at or above 1 is a norm, so this repairs only the
-// value nobody dialled — a group zeroed because the glow is off, which is a
-// pass this shader would have returned nothing from anyway.
-fn glow_union() -> f32 {
-    return max(u.glow.overlap, 1.0);
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
@@ -2990,24 +2971,16 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// ONE DRAW over the whole target, into one transparent texture.
-// `fs_glow_gather` walks every lit node at each pixel and folds their halos by
-// the p-norm UNION at the Union bar's exponent. A note gives off the strength
-// it gives off whether it is alone or in a chord, and a chord only spreads that
-// light over a larger area: `n` halos over one another read at most `n^(1/p)`
-// times one, and a lone one reads exactly itself. The operator is commutative,
-// so nothing about the order it walks in reaches the picture. Screen — which
-// this replaced — and adding both make the COUNT of overlapping nodes, rather
-// than any note, the brightest thing on screen (#680). The COLOUR is that same
-// union again, run PER CHANNEL over each node's premultiplied light, so a
-// second note can only ever add to a channel: two hues meet in both halos' own
-// light rather than in a mix of it, and neither is dimmed by the other.
+// ONE DRAW over the whole target. `fs_glow_gather` combines the halos' linear
+// luminance using screen normalized to a FIXED full-strength peak. An overlap
+// may rise above either tail, but not above that ceiling. Unlike the p-norm,
+// this does not preserve a narrow valley between neighbouring notes.
 //
-// NOTHING in the target is subtractive, and that is what lets the sheets meld
-// into one layer rather than being assembled one at a time: it is light and
-// light only, so a node hidden behind a nearer sheet has nothing to cut with —
-// what it may do to a node in front of it is BRIGHTEN it, or leave it as it is
-// where the nearer node's own halo is already the larger.
+// Colour is the sum of the incoming linear RGB scaled to the screened
+// luminance. No winning node or channel changes ownership at the bisector.
+// The fixed ceiling follows Glow gain, not the active notes or their fades.
+// A lone contribution keeps its original gamma-space RGB and coverage.
+//
 // What hides its SHAPE is the scene pass, which draws every node over the
 // finished light: a ring, a mark and a name are drawn whole there, and what
 // each takes back out of the light is its own shadow, multiplied in by its own
@@ -3432,13 +3405,9 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
 /// ONE node's light at this fragment — the gather's loop body
 /// ([`fs_glow_gather`]).
 ///
-/// STRAIGHT and not premultiplied, which is the one place this parts company
-/// with every other layer here: `w` is the halo's own coverage and `xyz` is the
-/// colour that coverage is of, unmixed with it. The two arrive from different
-/// places — `w` off the falloff, `xyz` off the ink strip — and the gather is
-/// what puts them together: the four norms it folds are this coverage and the
-/// three channels of `w * xyz`. Premultiplying here would only move that one
-/// multiply across the call.
+/// STRAIGHT: `w` is coverage and `xyz` is the gamma-encoded strip colour.
+/// The gather premultiplies them before decoding the displayed contribution
+/// to linear light, so the isolated glow keeps today's falloff and colour.
 ///
 /// `uv` is where the fragment stands in THIS node's own uv, which the gather
 /// inverts out of the node's screen frame. Every length below is in that uv, so
@@ -3539,163 +3508,99 @@ fn vs_glow_gather(@builtin(vertex_index) vertex_index: u32) -> @builtin(position
     return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 
-/// ONE term into a running p-norm, held as a max and a sum with the LARGEST
-/// term so far factored out of the sum: `m` is that largest, `s` is the sum of
-/// `(v_i/m)^p`, and the norm is `m * s^(1/p)`.
-///
-/// Every term raised to the power is therefore in (0, 1] whatever the exponent,
-/// which is what lets `p` climb toward the true max without the sum overflowing
-/// or a small term's power underflowing to nothing before it can be compared.
-/// That underflow is what stopped #443's first design, which raised the raw
-/// coverage in an f16 target.
-///
-/// Rescaling when a new maximum arrives is the price: `s` is multiplied by
-/// `(m_old/m_new)^p`, which is exact arithmetic on what is already banked and
-/// leaves the fold COMMUTATIVE — the instance order [`fs_glow_gather`] walks in
-/// is not readable in the picture, the same reason the pass it replaces could
-/// draw every sheet at once.
-///
-/// Written once and spent four times a node, on the coverage and on each
-/// channel of the colour that coverage is of. A term can only ADD: a p-norm is
-/// at least its own largest term, so nothing folded in here takes anything back
-/// out of what is already banked.
-fn union_fold(m: ptr<function, f32>, s: ptr<function, f32>, v: f32, p: f32) {
-    if v <= 0.0 {
-        // Contributes nothing, and is what keeps a 0/0 out of the branches
-        // below: a channel no node has lit stays at exactly zero.
-        return;
-    }
-    if *m <= 0.0 {
-        // The first term IS the maximum, and its own share is exactly 1.
-        // Written out rather than left to the branch below, which would take
-        // `pow` of a zero base.
-        *m = v;
-        *s = 1.0;
-    } else if v > *m {
-        *s = *s * pow(*m / v, p) + 1.0;
-        *m = v;
-    } else {
-        *s = *s + pow(v / *m, p);
-    }
+// The lattice target stores gamma-encoded RGB, like egui's non-sRGB surface.
+// Decode the PREMULTIPLIED contribution: decoding straight ink then applying
+// coverage would change the existing lone glow's visible falloff.
+const GLOW_LUMINANCE: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+
+fn glow_linear(rgb: vec3<f32>) -> vec3<f32> {
+    return select(
+        pow((rgb + 0.055) / 1.055, vec3<f32>(2.4)),
+        rgb / 12.92,
+        rgb <= vec3<f32>(0.04045),
+    );
 }
 
-/// The light draw: every lit node's halo folded at this pixel, in one pass.
+fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
+    return select(
+        1.055 * pow(max(rgb, vec3<f32>(0.0031308)), vec3<f32>(1.0 / 2.4)) - 0.055,
+        rgb * 12.92,
+        rgb <= vec3<f32>(0.0031308),
+    );
+}
+
+/// Screen under a fixed full-strength ceiling, independent of note count,
+/// hue, level and camera. `peak` is the centre coverage of a full-strength
+/// neutral glow at this gain, not a maximum sampled from the active notes.
+/// Its decoded luminance is the brightness ceiling even for mixed hues.
 ///
-/// No depth in it: this is a pass of its own ahead of the scene's, so every
-/// node's halo melds into one layer before any node is drawn over it, and no
-/// sheet's light is legible as having come first. It is also what puts the
-/// light UNDER every shadow — the composite lays it down at the bottom of the
-/// scene pass, and each item's own draw multiplies it along with the rest of
-/// the frame beneath.
+/// Each incoming luminance y contributes y / peak_luminance to a screen:
+/// `s += (y / peak_luminance) * (1 - s)`. This form retains faint tails that
+/// subtracting a product of nearly-one complements from one could lose.
+/// The output is at most the peak, and one contributor is exactly itself.
 ///
-/// A GATHER rather than a billboard per node under a blend state, and this is
-/// what the gather is FOR: the fold below is a p-norm union, which no
-/// fixed-function blend can express (#680). One note gives off the strength
-/// many do, and many only spread the light over a larger area.
+/// Colour comes from summed linear RGB, scaled to that screened luminance.
+/// If that colour cannot fit below the peak in RGB, desaturate toward grey
+/// at the SAME luminance. Per-channel clipping would change brightness and
+/// hue; independent RGB screens would give each hue a different brightness
+/// curve instead of screening luminance itself.
 ///
-/// The COLOUR is the SAME union run again, per channel, over each node's
-/// premultiplied light `a * halo.xyz`: three more maxima and three more sums
-/// through [`union_fold`], resolved by the same root. Being a norm rather than
-/// a mean is the whole of it, and both rules before it were means. Weighted by
-/// the norm's own terms, `(a_i/m)^p`, a node nearer by a hair took the whole
-/// vote, and two hues met at a SEAM — the colour switching over a band a few
-/// pixels either side of the bisector, narrower the fuller the bar (#683's
-/// first build). Weighted by the plain coverages the switch went, but a mean
-/// lands BETWEEN the two colours while the norm holds the light near the
-/// larger: a dim note crossing a bright one's halo kept the bright coverage
-/// and got a diluted colour, so a second note made an area DARKER. Measured
-/// over the shipped pitch ramp at half coverage, whose two ends are 3.9x apart
-/// in luminance — meeting at equal coverage those two read 22% under the
-/// brighter note ALONE at a bar reading of +19%, 35% under at the fresh +9%
-/// and 42% under at the top, having crossed from brighter to darker at +34%.
-/// A p-norm is at least its own largest term, so per channel a second note can
-/// no longer take out what the first laid down.
-///
-/// What it can do is ADD, and only by the channels the two do not share: two
-/// hues read brighter than either, bounded by white rather than by the count.
-/// Over the same ramp and coverage that is worth at most +4.7% of luminance
-/// for a pair and +8.0% for a triple, and both of those are at the TOP of the
-/// bar, where the count's own `n^(1/p)` is smallest; at the fresh exponent and
-/// below it is worth nothing at all, a mixed pair never reading over the same
-/// pair in one hue. Where the two DO share a channel it is the light's own
-/// `2^(1/p)` ridge and nothing new, and where they share nothing there is no
-/// crest at all: pure red over pure blue reads `(a_1, 0, a_2)`, each channel a
-/// norm of one smooth halo.
-///
-/// `u.glow.lit` and not `arrayLength(&glow_nodes)`: the buffer outlives the
-/// frames that grew it (see the binding).
-///
-/// No derivative anywhere in it, unlike every other fragment entry point here,
-/// and that is the strip's doing: the shapes the light is coloured out of are
-/// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
-/// stage asks how big any node is on screen.
+/// The target's alpha is still coverage, separately screened under the same
+/// gain. Raise it only when needed to contain the resulting gamma RGB, since
+/// every reader expects a valid premultiplied texture. Bloom is downstream
+/// and can add its own light; this ceiling belongs to the node-glow layer.
 @fragment
 fn fs_glow_gather(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let lit = u32(max(u.glow.lit, 0.0));
-    // Read ONCE, so no power below and no root at the end can come from two
-    // different numbers ([`glow_union`]).
-    let p = glow_union();
-    // FOUR running norms, each a max-and-sum pair for [`union_fold`] to carry:
-    // the LIGHT's, over the coverages, and one per CHANNEL, over the nodes'
-    // premultiplied colour. The channels are an array of three rather than a
-    // `vec3` because WGSL has no pointer into a vector component, and the fold
-    // takes its pair by pointer so it can be written once.
-    var m = 0.0;
-    var s = 0.0;
-    var mc = array<f32, 3>(0.0, 0.0, 0.0);
-    var sc = array<f32, 3>(0.0, 0.0, 0.0);
-    for (var i = 0u; i < lit; i = i + 1u) {
-        let node = glow_nodes[i];
-        // This pixel in the node's own uv. `pos.xy` is the glow target's own
-        // pixels, which is the space the frame was inverted in.
-        let delta = pos.xy - node.centre;
-        let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
-        // STRAIGHT, not premultiplied: `a` is this node's coverage and `halo.xyz`
-        // the colour it is a coverage of ([`glow_layer`]).
-        let halo = glow_layer(node, uv);
-        let a = halo.w;
-        if a <= 0.0 {
-            // Lights nothing here, and now skips four folds rather than one.
-            continue;
-        }
-        // FOUR `pow` a node a pixel where the light alone was one, and that is
-        // the price of the colour being the same operator as the light rather
-        // than a second rule beside it. #680 asked for this gather with effort
-        // disregarded, for generality, and this is what generality costs here.
-        //
-        // PREMULTIPLIED for the channels: `a * halo.xyz` is the light this node
-        // actually puts in each channel, and a union of channels is only
-        // meaningful on that. Straight colours would union to the brightest hue
-        // present rather than to the brightest light.
-        union_fold(&m, &s, a, p);
-        let v = a * halo.xyz;
-        union_fold(&mc[0], &sc[0], v.x, p);
-        union_fold(&mc[1], &sc[1], v.y, p);
-        union_fold(&mc[2], &sc[2], v.z, p);
-    }
-    if m <= 0.0 {
-        // No node lit this pixel. The resolve below is well-defined only on
-        // `s >= 1`, which holds exactly when something did.
+    let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
+    if peak <= 0.0 {
         return vec4<f32>(0.0);
     }
-    // `m * (sum (a_i/m)^p)^(1/p)` — the p-norm of the coverages — and each
-    // channel the same root of its own. A LONE node is unchanged exactly: every
-    // sum is 1, every root of 1 is 1, so the light is that node's own `a` and
-    // the channels its own `a * colour`, to the bit.
-    //
-    // Clamped at 1 because a norm of terms that each reach full is above full,
-    // and the target is a coverage. The output stays valid premultiplied either
-    // side of the clamp: a colour is at most 1, so `a * colour_ch <= a` term by
-    // term and the norm is monotone in every term, and `min` of both at 1 keeps
-    // that order.
-    let root = 1.0 / p;
-    let alpha = min(m * pow(s, root), 1.0);
-    let peak = vec3<f32>(mc[0], mc[1], mc[2]);
-    let banked = vec3<f32>(sc[0], sc[1], sc[2]);
-    // A channel NO node lit has both terms at zero, which `pow` would take the
-    // log of; `select` answers it with the exact zero instead.
-    let colour = min(peak * pow(banked, vec3<f32>(root)), vec3<f32>(1.0));
-    return vec4<f32>(select(vec3<f32>(0.0), colour, peak > vec3<f32>(0.0)), alpha);
+    let peak_luminance = glow_linear(vec3<f32>(peak)).x;
+    if peak_luminance <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var screen = 0.0;
+    var coverage = 0.0;
+    var rgb = vec3<f32>(0.0);
+    var sole = vec4<f32>(0.0);
+    var count = 0u;
+    let lit = u32(max(u.glow.lit, 0.0));
+    for (var i = 0u; i < lit; i = i + 1u) {
+        let node = glow_nodes[i];
+        let delta = pos.xy - node.centre;
+        let uv = vec2<f32>(dot(node.inv_x, delta), dot(node.inv_y, delta));
+        let halo = glow_layer(node, uv);
+        if halo.w <= 0.0 {
+            continue;
+        }
+        let incoming = vec4<f32>(halo.xyz * halo.w, halo.w);
+        sole = incoming;
+        count = count + 1u;
+        let linear = glow_linear(incoming.xyz);
+        let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
+        screen = screen + share * (1.0 - screen);
+        coverage = coverage + (halo.w / peak) * (1.0 - coverage);
+        rgb = rgb + linear;
+    }
+    // Also preserves lone glows byte-for-byte through the nonlinear colour
+    // round trip, including a node whose neighbours have completely faded.
+    if count <= 1u {
+        return sole;
+    }
+    let total = dot(rgb, GLOW_LUMINANCE);
+    let light = min(screen, 1.0) * peak_luminance;
+    if total <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, peak * coverage);
+    }
+    var linear = rgb * (light / total);
+    let largest = max(max(linear.x, linear.y), linear.z);
+    if largest > peak_luminance {
+        let chroma = clamp((peak_luminance - light) / (largest - light), 0.0, 1.0);
+        linear = mix(vec3<f32>(light), linear, chroma);
+    }
+    let colour = min(glow_gamma(max(linear, vec3<f32>(0.0))), vec3<f32>(peak));
+    let alpha = max(peak * coverage, max(max(colour.x, colour.y), colour.z));
+    return vec4<f32>(colour, min(alpha, peak));
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

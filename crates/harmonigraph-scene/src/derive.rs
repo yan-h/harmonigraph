@@ -558,7 +558,6 @@ pub fn derive_scene(
         // Clamped here as well, for the shells that never come through
         // `sanitize`: the shader divides by this exponent to take the root, so
         // a number from outside the bar is a light nothing can resolve.
-        glow_union: view.glow_union.clamp(crate::GLOW_UNION_MIN, crate::GLOW_UNION_MAX),
         marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
