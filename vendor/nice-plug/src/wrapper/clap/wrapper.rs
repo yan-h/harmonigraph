@@ -1105,78 +1105,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    /// Similar to [`handle_in_events()`][Self::handle_in_events()], but will stop just before an
-    /// event if the predicate returns true for that events. This predicate is only called for
-    /// events that occur after `current_sample_idx`. This is used to stop before a tempo or time
-    /// signature change, or before next parameter change event with `raw_event.time >
-    /// current_sample_idx` and return the **absolute** (relative to the entire buffer that's being
-    /// split) sample index of that event along with the its index in the event queue as a
-    /// `(sample_idx, event_idx)` tuple. This allows for splitting the audio buffer into segments
-    /// with distinct sample values to enable sample accurate automation without modifications to the
-    /// wrapped plugin.
-    ///
-    /// # Safety
-    ///
-    /// `in_` must contain only pointers to valid data (Clippy insists on there being a safety
-    /// section here).
-    pub unsafe fn handle_in_events_until(
-        &self,
-        in_: &clap_input_events,
-        transport_info: &mut *const clap_event_transport,
-        current_sample_idx: usize,
-        total_buffer_len: usize,
-        resume_from_event_idx: usize,
-        stop_predicate: impl Fn(*const clap_event_header) -> bool,
-    ) -> Option<(usize, usize)> {
-        let mut input_events = self.input_events.borrow_mut();
-        input_events.clear();
-
-        // To achieve this, we'll always read one event ahead
-        let num_events = unsafe {
-            clap_call! { in_=>size(in_) }
-        };
-        if num_events == 0 {
-            return None;
-        }
-
-        let start_idx = resume_from_event_idx as u32;
-        let mut event: *const clap_event_header = unsafe {
-            clap_call! { in_=>get(in_, start_idx) }
-        };
-        for next_event_idx in (start_idx + 1)..num_events {
-            unsafe {
-                self.handle_in_event(
-                    event,
-                    &mut input_events,
-                    Some(transport_info),
-                    current_sample_idx,
-                    total_buffer_len,
-                );
-                // Stop just before the next parameter change or transport information event at a sample
-                // after the current sample
-                let next_event: *const clap_event_header =
-                    clap_call! { in_=>get(in_, next_event_idx) };
-                if (*next_event).time > current_sample_idx as u32 && stop_predicate(next_event) {
-                    return Some(((*next_event).time as usize, next_event_idx as usize));
-                }
-                event = next_event;
-            }
-        }
-
-        // Don't forget about the last event
-        unsafe {
-            self.handle_in_event(
-                event,
-                &mut input_events,
-                Some(transport_info),
-                current_sample_idx,
-                total_buffer_len,
-            );
-        }
-
-        None
-    }
-
     /// Write the unflushed parameter changes to the host's output event queue. The sample index is
     /// used as part of splitting up the input buffer for sample accurate automation changes. This
     /// will also modify the actual parameter values, since we should only do that while the wrapped
@@ -1195,7 +1123,6 @@ impl<P: ClapPlugin> Wrapper<P> {
     ) {
         // We'll always write these events to the first sample, so even when we add note output we
         // shouldn't have to think about interleaving events here
-        if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, current_sample_idx as u32); } }
         let sample_rate = self.current_buffer_config.load().map(|c| c.sample_rate);
         loop {
             let change = self.output_parameter_events.borrow_mut().events.pop();
@@ -1278,7 +1205,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                 total_buffer_len as u32,
             );
 
-            if P::CLAP_CONFIGURATION { unsafe { self.notify_configuration(out, time); } }
             let push_successful = match event {
                 NoteEvent::NoteOn {
                     timing: _,
@@ -2391,7 +2317,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             // chunks whenever a parameter change occurs
             let mut block_start = 0;
             let mut block_end = total_buffer_len;
-            let mut event_start_idx = 0;
 
             // The host may send new transport information as an event. In that case we'll also
             // split the buffer.
@@ -2402,57 +2327,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                 if P::CLAP_PERFORMANCE {
                     block_end = wrapper.walk_owned_input(Some(block_start as u32), process.frames_count, &mut owned_transport) as usize;
                     transport_info = owned_transport.as_ref().map_or(std::ptr::null(), |t| t as *const _);
-                } else if !process.in_events.is_null() {
-                    let split_result = unsafe {
-                        wrapper.handle_in_events_until(
-                            &*process.in_events,
-                            &mut transport_info,
-                            block_start,
-                            total_buffer_len,
-                            event_start_idx,
-                            |next_event| {
-                                // Always split the buffer on transport information changes (tempo, time
-                                // signature, or position changes), and also split on parameter value
-                                // changes after the current sample if sample accurate automation is
-                                // enabled
-                                if P::SAMPLE_ACCURATE_AUTOMATION {
-                                    match ((*next_event).space_id, (*next_event).type_) {
-                                        (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE)
-                                        | (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT) => true,
-                                        (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_MOD) => {
-                                            let next_event =
-                                                &*(next_event as *const clap_event_param_mod);
-
-                                            // The buffer should not be split on polyphonic modulation
-                                            // as those events will be converted to note events
-                                            !(next_event.note_id != -1
-                                                && wrapper
-                                                    .poly_mod_ids_by_hash
-                                                    .contains_key(&next_event.param_id))
-                                        }
-                                        _ => false,
-                                    }
-                                } else {
-                                    matches!(
-                                        ((*next_event).space_id, (*next_event).type_,),
-                                        (CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT)
-                                    )
-                                }
-                            },
-                        )
-                    };
-
-                    // If there are any parameter changes after `block_start` and sample
-                    // accurate automation is enabled or the host sends new transport
-                    // information, then we'll process a new block just after that. Otherwise we can
-                    // process all audio until the end of the buffer.
-                    match split_result {
-                        Some((next_param_change_sample_idx, next_param_change_event_idx)) => {
-                            block_end = next_param_change_sample_idx;
-                            event_start_idx = next_param_change_event_idx;
-                        }
-                        None => block_end = total_buffer_len,
-                    }
                 }
 
                 // After processing the events we now know where/if the block should be split, and
@@ -2716,7 +2590,6 @@ impl<P: ClapPlugin> Wrapper<P> {
                             total_buffer_len,
                         )
                     };
-                    if P::CLAP_CONFIGURATION { unsafe { wrapper.notify_configuration(&*process.out_events, block_end.saturating_sub(1) as u32); } }
                 }
                 if P::CLAP_CONFIGURATION { wrapper.configuration_request_main(); }
 

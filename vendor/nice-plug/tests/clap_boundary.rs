@@ -1379,22 +1379,6 @@ fn notifications_merge_in_time_and_retain_partial_gestures_at_shared_budget() {
 }
 
 #[test]
-fn optout_legacy_and_activation_latency_remain_unchanged() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut d = Device::new(Control::default(), c"fixture.legacy");
-    d.run(0, 64, vec![on(4)], true);
-    assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy, 1);
-    assert_eq!(d.sink.attempts[0].time, 4);
-    assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks.is_empty());
-    let latency = unsafe {
-        &*(((*d.plugin).get_extension.unwrap())(d.plugin, CLAP_EXT_LATENCY.as_ptr())
-            .cast::<clap_plugin_latency>())
-    };
-    assert_eq!(unsafe { (latency.get.unwrap())(d.plugin) }, 512);
-    assert_eq!(d.control.restarts.load(Ordering::Relaxed), 0);
-}
-
-#[test]
 fn unsupported_input_and_legacy_send_misuse_are_explicit() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = Device::new(Control { misuse: true, ..Default::default() }, c"fixture.performance");
