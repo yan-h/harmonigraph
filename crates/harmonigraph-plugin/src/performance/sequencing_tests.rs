@@ -854,6 +854,50 @@ fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emissio
 }
 
 #[test]
+fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice() {
+    let _scope = crate::test_scope::enter();
+    let stopped = || {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        Input::Transport(value)
+    };
+    let (hub, source) = production_pair();
+    // Note 1 is assigned and forwarded downstream; note 2 is still waiting for
+    // its assignment when the transport stops.
+    source.run_format(1536, vec![transport(0, 120.0), note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    let sounding = source.run_format(2048, vec![note(2, 0, 64, 0, true)], None, None, 512);
+    assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
+    assert_eq!(source.source_snapshot().local_pending, 1, "note 2 has no assignment yet");
+    let stop = source.run_format(2560, vec![stopped()], None, None, 512);
+    assert!(
+        stop.values.iter().any(|(time, event)| *time == 0
+            && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. })),
+        "the forwarded voice is terminated, not merely forgotten: {:?}",
+        stop.values
+    );
+    for controller in [64, 66, 69] {
+        assert!(stop.values.iter().any(|(_, event)| matches!(
+            event,
+            Event::Midi { data: [0xb0, value, 0], .. } if *value == controller
+        )));
+    }
+    assert!(!stop.values.iter().any(|(_, event)| event.attack().is_some()));
+    // The Hub answers note 2 after the Stop. Its assignment arriving must not
+    // resurrect a canceled attack.
+    hub.run_format(2048, vec![], None, None, 512);
+    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
+    for raw in [3584, 4096, 4608] {
+        assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+        hub.run_format(raw - 1024, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_none());
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 2)).is_none());
+}
+
+#[test]
 fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
