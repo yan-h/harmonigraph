@@ -36,7 +36,6 @@ pub(super) const SHIFT_VALID: u8 = 16;
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub captures: usize,
-    pub velocity_prefix: [Option<u8>; 16],
     pub unmapped_reports: usize,
     pub pending: usize,
     pub local_pending: usize,
@@ -300,10 +299,6 @@ impl Source {
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
             captures: self.captures_outstanding,
-            velocity_prefix: std::array::from_fn(|channel| {
-                let state = &self.state.channels()[channel];
-                (state.controller_valid[1] & (1 << 24) != 0).then_some(state.controllers[88])
-            }),
             unmapped_reports: (0..self.journal.len())
                 .filter(|index| !self.journal.get(*index).unwrap().mapped)
                 .count()
@@ -545,7 +540,6 @@ impl Source {
             // controller state and factual ACK debt alone are not wire loss.
             self.fault(REFERENCE_FAULT);
         }
-        self.discard_wave_prefix_pins();
     }
     pub fn joined_cut(&self) -> Option<u64> {
         self.producer_joined.then_some(self.sequence)
@@ -927,7 +921,6 @@ impl Source {
             NONE
         };
         let position = self.enqueue_cell(event, life, raw, addressed && count != 1);
-        self.capture_velocity_prefix(position);
         if addressed && count == 1 {
             self.capture_inline_ready(position, life);
         }
@@ -1173,7 +1166,6 @@ impl Source {
     }
 
     fn cancel_unsounded(&mut self) {
-        self.discard_wave_prefix_pins();
         self.cancel_unsounded_through(self.next_event);
     }
     fn cancel_unsounded_through(&mut self, cut: u64) {
@@ -1196,9 +1188,6 @@ impl Source {
         if self.state.count() != 0
             || self.state.pedals_held()
             || self.owed_note_off != [NONE; 64]
-            || self.state.channels().iter().any(|channel| {
-                channel.controller_valid[1] & (1 << 24) != 0 && channel.controllers[88] != 0
-            })
         {
             self.arm_release_debt();
         }
@@ -1331,12 +1320,6 @@ impl Source {
         }
         for channel in 0..16 {
             let state = &self.state.channels()[channel];
-            if state.controller_valid[1] & (1 << 24) != 0
-                && state.controllers[88] != 0
-                && self.channel_reset[channel] & 0x80 == 0
-            {
-                self.channel_reset[channel] |= 0x40;
-            }
             if used_channels & (1 << channel) != 0 || state.controller_valid != [0, 0] {
                 for (bit, controller) in [64usize, 66, 69].into_iter().enumerate() {
                     let known_neutral =
@@ -1630,7 +1613,6 @@ impl Source {
             if child == NONE { 0 } else { u64::from(child) + 3 },
         ]);
         let wire = self.assigned_event(pending);
-        let prefix = self.prefix_reconciliation(pending).map(Event::input);
         let group = if pending.event.attack().is_some() && self.delay() != 0 {
             let life = life.unwrap();
             let tuning = Event::Expression {
@@ -1643,9 +1625,7 @@ impl Source {
                     + life.assignment.correction as f64 / 100_000_000.0,
                 flags: 0,
             };
-            api::Group::tuned_onset(token, time, prefix, wire.input(), tuning.input())
-        } else if let Some(prefix) = prefix {
-            api::Group::velocity_note(token, time, prefix, wire.input())
+            api::Group::onset(token, time, wire.input(), tuning.input())
         } else {
             api::Group::single(token, api::Lane::Normal, time, wire.input())
         };
@@ -1747,12 +1727,6 @@ impl Source {
             return false;
         };
         let pending = self.resolved(position, child);
-        if !self.prefix_ready(pending) {
-            return false;
-        }
-        if group.velocity_prefix().is_none() && self.prefix_reconciliation(pending).is_some() {
-            return false;
-        }
         let actual = self.callback.unwrap().steady_time.checked_add(i64::from(group.time));
         if actual.is_none_or(|actual| self.next_stop_sample().is_some_and(|stop| actual >= stop)) {
             return false;
@@ -1784,9 +1758,8 @@ impl Source {
         {
             return false;
         }
-        let report_cells = self.channel_report_cells(pending)
-            + usize::from(group.velocity_prefix().is_some())
-            + usize::from(group.initial_tuning().is_some());
+        let report_cells =
+            self.channel_report_cells(pending) + usize::from(group.initial_tuning().is_some());
         // Preserve the entire reserved emergency allowance before every normal
         // host acceptance. Exhaustion must occur while terminations can still
         // receive unique factual sequence numbers; clearing a fault cannot wrap.
@@ -1912,20 +1885,7 @@ impl Source {
         parent.staged = false;
         self.pending.set(position, parent);
         let permit = self.permit.take();
-        let prefix = completion.group.velocity_prefix();
-        if let Some(prefix) = prefix.filter(|_| completion.accepted & 1 != 0) {
-            assert!(permit.is_some_and(
-                |permit| permit.position == position && permit.serial == parent.serial
-            ));
-            let event = Event::from_input(prefix).unwrap();
-            let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
-            let delta = self.record(event, NONE, pending.input, actual);
-            self.journal
-                .push(delta)
-                .unwrap_or_else(|_| unreachable!("prepared prefix journal credit"));
-        }
-        let note_bit = if prefix.is_some() { 2 } else { 1 };
-        if completion.accepted & note_bit != 0 {
+        if completion.accepted & 1 != 0 {
             let permit = permit.expect("accepted output requires durable preparation");
             assert_eq!((permit.position, permit.serial), (position, parent.serial));
             let actual = self
@@ -1946,7 +1906,7 @@ impl Source {
                 player,
             );
             let partial = completion.group.initial_tuning().is_some()
-                && completion.accepted & (note_bit << 1) == 0;
+                && completion.accepted & 2 == 0;
             delta.outcome =
                 Outcome::wire(pending.life, OutputOrigin { parent: position as u16 }, partial);
             if partial {
@@ -1955,7 +1915,7 @@ impl Source {
             }
             self.journal.push(delta).unwrap_or_else(|_| unreachable!("prepared journal credit"));
             if let Some(tuning) = completion.group.initial_tuning() {
-                if completion.accepted & (note_bit << 1) != 0 {
+                if completion.accepted & 2 != 0 {
                     let tuning = Event::from_input(tuning).unwrap();
                     let player = self.lives.at(pending.life).unwrap().assignment.initial_player;
                     let delta =
@@ -2039,23 +1999,6 @@ impl Source {
                 || completion.disposition == api::Disposition::MissingOutput
             {
                 self.fault(OUTPUT_FAULT);
-                if prefix.is_some() && completion.accepted & 1 != 0 {
-                    // Every newly accepted prefix without its consumer owns
-                    // repair, even when an earlier output fault is latched.
-                    self.arm_release_debt();
-                }
-            } else if prefix.is_none()
-                && self.prefix_reconciliation(pending).is_some()
-                && self.charge(1)
-            {
-                let callback = self.callback.unwrap();
-                self.stage_work(
-                    position,
-                    child,
-                    callback.steady_time,
-                    callback.steady_time + i64::from(callback.frames),
-                    output,
-                );
             }
         }
         if parent.serial <= self.cancel_cut
@@ -2250,26 +2193,7 @@ impl Source {
         if self.sealed {
             return;
         }
-        // A failed consumer can leave its accepted CC88 waiting at the receiver.
-        // Repair precedes any emergency raw MIDI Off that could consume it.
-        // 64 voice +48 pedal +16 prefix attempts fit the reserved128 exactly.
-        for channel in 0..16 {
-            if self.channel_reset[channel] & 0x40 == 0 {
-                continue;
-            }
-            let event = Event::Midi { port: 0, data: [0xb0 | channel as u8, 88, 0], flags: 0 };
-            let group = api::Group::single(
-                api::Token([0, channel as u64, 3, 2]),
-                api::Lane::Emergency,
-                output.cursor().max(self.stops.emergency_start),
-                event.input(),
-            )
-            .unwrap();
-            if output.stage(group).is_err() {
-                return;
-            }
-            self.channel_reset[channel] = (self.channel_reset[channel] & !0x40) | 0x80;
-        }
+        // 64 voice releases and 48 pedal resets fit the reserved 128 exactly.
         for index in 0..64 {
             let Some(mut release) = self.emergency[index] else {
                 continue;
@@ -2322,11 +2246,6 @@ impl Source {
     }
     fn prepare_emergency(&mut self, group: api::Group) -> bool {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
-            return false;
-        }
-        if matches!(group.event(0), Some(InputValue::Midi { data: [status, _, _], .. })
-            if matches!(status & 0xf0, 0x80 | 0x90) && self.channel_reset[usize::from(status & 15)] & 0xc0 != 0)
-        {
             return false;
         }
         self.permit = Some(Permit {
@@ -2385,18 +2304,13 @@ impl Source {
             self.emergency[index] = Some(release);
         } else {
             let bit = completion.group.token.0[2] as u8;
-            let (pending_bit, staged_bit) =
-                if bit == 3 { (0x40, 0x80) } else { (1 << bit, 1 << (bit + 3)) };
+            let (pending_bit, staged_bit) = (1 << bit, 1 << (bit + 3));
             self.channel_reset[index] &= !staged_bit;
             if completion.accepted & 1 != 0 {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let delta = self.record(event, NONE, actual, actual);
-                if bit == 3 {
-                    self.accept_prefix_neutralization(index);
-                } else {
-                    self.accept_wave_neutralization(index, bit);
-                }
+                self.accept_wave_neutralization(index, bit);
                 self.emergency_output
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("prepared emergency cell"));
@@ -2725,8 +2639,6 @@ impl Source {
                 | (i64::from(!self.admitted(pending.generation)) << 1)
                 | (i64::from(pending.life != NONE && !self.assignment_ready(pending.life)) << 2)
                 | (i64::from(pending.serial <= self.cancel_cut) << 3)
-                | (i64::from(self.prefix_reconciliation(pending).is_some()) << 4)
-                | (i64::from(!self.prefix_ready(pending)) << 5)
                 | (i64::from(self.faults != 0) << 6)
         });
         self.shared.diagnostics.source.publish([
@@ -3380,7 +3292,7 @@ impl Source {
         );
         println!(
             "LEDGER wave [wave,stops,prefix] {:?}",
-            [size_of::<wave::Wave>(), size_of::<stop::Stops>(), size_of::<wave::Prefix>()]
+            [size_of::<wave::Wave>(), size_of::<stop::Stops>()]
         );
     }
 }

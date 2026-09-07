@@ -406,10 +406,6 @@ impl Device {
     fn run(&self, raw: i64, events: Vec<Input>, reject_kind: Option<u16>) -> Sink {
         self.run_select(raw, events, reject_kind, None)
     }
-    fn run_scripted(&self, raw: i64, events: Vec<Input>, acceptance: Vec<bool>) -> Sink {
-        ACCEPTANCE_SCRIPT.with(|script| *script.borrow_mut() = acceptance);
-        self.run(raw, events, None)
-    }
     fn run_select(
         &self,
         raw: i64,
@@ -2759,10 +2755,6 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
 #[test]
 fn observed_callback_cost_at_empty_and_full_session_state() {
     let _scope = crate::test_scope::enter();
-    if std::env::var_os("HARMONIGRAPH_REPLAY_REHEARSAL").is_some() {
-        channel_wave_tests::observe_replay_callbacks(true);
-        return;
-    }
     fn report(name: &str, mut times: Vec<u128>) {
         times.sort_unstable();
         let mean = times.iter().sum::<u128>() as f64 / times.len() as f64;
@@ -2846,7 +2838,6 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     sources.clear();
     drop(hub);
-    channel_wave_tests::observe_replay_callbacks(false);
 }
 
 #[test]
@@ -4627,7 +4618,7 @@ fn final_sequence_terminal_is_retained_once_and_acknowledged_in_mapped_and_seale
 }
 
 #[test]
-fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_available() {
+fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_available() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -4649,24 +4640,17 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
         })
         .collect();
     initial.extend((0..64).map(|id| note(id + 1, (id / 4) as i16, (60 + id % 4) as i16, 1, true)));
-    initial.extend((0..16).map(|channel| {
-        Input::Midi(clap_event_midi {
-            header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 2),
-            port_index: 0,
-            data: [0xb0 | channel, 88, 37],
-        })
-    }));
-    assert_eq!(source.run(64, initial, None).values.len(), 96);
+    assert_eq!(source.run(64, initial, None).values.len(), 80);
     hub.run(64, vec![], None);
     assert_eq!(session.credits.load(Ordering::Acquire), 64);
     assert!(source.source_snapshot().pedals_held);
     let events = (0..512).map(|index| expression(index % 64 + 1, 0.125, 0)).collect();
     let wire = source.run_select(128, events, None, Some(512));
     assert_eq!(
-        wire.attempts, 640,
-        "512 actual normal attempts plus64 voice,48 pedal and16 prefix emergency attempts"
+        wire.attempts, 624,
+        "512 actual normal attempts plus64 voice and48 pedal emergency attempts"
     );
-    assert_eq!(wire.values.len(), 639);
+    assert_eq!(wire.values.len(), 623);
     assert_eq!(
         wire.values.iter().filter(|(_, event)| matches!(event, Event::Expression { .. })).count(),
         511
@@ -4692,17 +4676,10 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
     assert_eq!(snapshot.faults, source::OUTPUT_FAULT);
     assert_eq!(snapshot.journal, 511);
     assert_eq!(
-        snapshot.emergency, 128,
+        snapshot.emergency, 112,
         "actual accepted emergency facts use their separate retained journal"
     );
     assert!(!snapshot.pedals_held);
-    assert_eq!(snapshot.velocity_prefix, [Some(0); 16]);
-    assert!(
-        wire.values[511..527]
-            .iter()
-            .all(|(_, event)| matches!(event, Event::Midi { data: [_, 88, 0], .. })),
-        "all16 repairs precede the emergency voices"
-    );
     assert_eq!(
         session.credits.load(Ordering::Acquire),
         64,
@@ -4721,10 +4698,10 @@ fn full_normal_attempt_lane_keeps_all_voice_pedal_and_prefix_emergency_attempts_
     });
     let extra = source.run_status(192, vec![malformed], None, None, 64, true);
     assert_eq!(extra.attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 128);
+    assert_eq!(source.source_snapshot().emergency, 112);
     assert_eq!(source.source_snapshot().faults, source::OUTPUT_FAULT | source::INPUT_FAULT);
     assert_eq!(source.run(256, vec![], None).attempts, 0);
-    assert_eq!(source.source_snapshot().emergency, 128);
+    assert_eq!(source.source_snapshot().emergency, 112);
     let mut remaining_resets = 0;
     for block in 2..=16 {
         hub.run(block * 64, vec![], None);

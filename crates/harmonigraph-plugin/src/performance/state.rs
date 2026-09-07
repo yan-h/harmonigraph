@@ -59,11 +59,10 @@ impl State {
     }
 
     /// Unknown timestamp is never a synthetic note delta. Preserve factual
-    /// terminal transactions, including a CC88 correction before an essential
-    /// raw Off, without assigning those accepted events a musical timestamp.
+    /// terminal transactions without assigning those accepted events a
+    /// musical timestamp.
     pub fn apply_unmapped_terminal(&mut self, event: Event, lifetime: u64) -> bool {
         if event.release() {
-            self.consume_velocity_prefix(event);
             if let Some(cell) = self
                 .voices
                 .iter_mut()
@@ -73,9 +72,7 @@ impl State {
             }
             true
         } else if let Event::Midi { port: 0, data: [status, cc, value], .. } = event {
-            if status & 0xf0 != 0xb0
-                || !(cc == 88 && value < 128 || matches!(cc, 64 | 66 | 69) && value == 0)
-            {
+            if status & 0xf0 != 0xb0 || !(matches!(cc, 64 | 66 | 69) && value == 0) {
                 return false;
             }
             let channel = &mut self.channels[usize::from(status & 15)];
@@ -170,20 +167,7 @@ impl State {
     /// accepted output, settled host acceptance. A wildcard is applied to the
     /// lifetime set resolved at its original stream position by that caller.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
-        self.consume_velocity_prefix(event);
         self.apply_with_consumed_prefix(event, stamp)
-    }
-
-    fn consume_velocity_prefix(&mut self, event: Event) {
-        if let Event::Midi { port: 0, data: [status, _, _], .. } = event {
-            if matches!(status & 0xf0, 0x80 | 0x90) {
-                // MIDI Association CA-031: an accepted raw NoteOn/Off clears
-                // the prefix. Derivation creates no extra wire CC record.
-                let channel = &mut self.channels[usize::from(status & 15)];
-                channel.controllers[88] = 0;
-                channel.controller_valid[1] |= 1 << 24;
-            }
-        }
     }
 
     fn apply_with_consumed_prefix(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {

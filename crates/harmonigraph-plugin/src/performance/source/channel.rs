@@ -24,13 +24,8 @@ pub(super) enum Role {
     Stop {
         previous: u16,
         next: u16,
-        owners: u16,
     },
-    ReachedStop {
-        known: u16,
-        waiting: u16,
-        owners: u16,
-    },
+    ReachedStop,
     Header {
         first_waiter: u16,
         last_waiter: u16,
@@ -45,7 +40,6 @@ pub(in crate::performance) struct Cell {
     pub(super) next_waiter: Option<u16>,
     pub(super) previous_waiter: Option<u16>,
     pub(super) accepted: bool,
-    pub(super) velocity_prefix: wave::Prefix,
 }
 #[derive(Default)]
 pub(super) struct Channels {
@@ -296,13 +290,10 @@ impl Source {
         }
     }
     pub(super) fn channel_done(&mut self, position: usize, pending: Pending) {
-        if let Some(channel) = pending.event.channel() {
-            self.drop_prefix(pending.channel.velocity_prefix, usize::from(channel));
-        }
         if let Role::Onset { previous, next } = pending.channel.role {
             self.unlink_onset(pending, previous, next);
         }
-        if let Role::Stop { previous, next, .. } = pending.channel.role {
+        if let Role::Stop { previous, next } = pending.channel.role {
             self.unlink_stop(previous, next);
             return;
         }

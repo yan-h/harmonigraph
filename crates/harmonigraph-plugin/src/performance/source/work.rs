@@ -296,9 +296,6 @@ impl Source {
                 NOTE_OFF => Event::note_off(life.id, life.channel, life.key, life.midi),
                 _ => pending.event.for_voice(life.id, life.channel, life.key),
             };
-            if cell.operation == NOTE_OFF {
-                pending.channel.velocity_prefix = wave::Prefix::known(0);
-            }
             pending.disposition = cell.phase & DISPOSITION != 0;
             pending.selected = child;
         } else if pending.life != NONE && pending.event.attack().is_none() {
@@ -398,10 +395,6 @@ impl Source {
                 return;
             }
         } else {
-            if matches!(parent.channel.role, channel::Role::Stop { owners, .. } | channel::Role::ReachedStop { owners, .. } if owners != 0)
-            {
-                return;
-            }
             if let Some(channel) = parent.event.channel_control().map(usize::from) {
                 if self.channel_history_needed(parent)
                     || self.channels.head[channel]

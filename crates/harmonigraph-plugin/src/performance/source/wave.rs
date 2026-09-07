@@ -6,27 +6,6 @@ use harmonigraph_core::canonical::ChannelBaseline;
 pub(super) const SETUP_TOKEN: u64 = u64::MAX;
 const REGISTERS: u16 = 130;
 
-/// A deferred association owns one channel pin on an exact retained Stop cell.
-/// Full Pending serial identity remains fixed while that pin prevents reuse.
-#[derive(Clone, Copy)]
-pub(super) struct Prefix(u16);
-impl Default for Prefix {
-    fn default() -> Self {
-        Self(128)
-    }
-}
-impl Prefix {
-    pub fn known(value: u8) -> Self {
-        Self(u16::from(value))
-    }
-    pub fn stop(index: u16) -> Self {
-        Self(256 + index)
-    }
-    pub fn stop_index(self) -> Option<usize> {
-        (self.0 >= 256).then(|| usize::from(self.0 - 256))
-    }
-}
-
 pub(super) struct Wave {
     pub shift: Option<i64>,
     pub first: u16,
@@ -44,9 +23,6 @@ pub(super) struct Wave {
     setup_staged: bool,
     reset_cut: u64,
     neutralized: u8,
-    input_prefix: Prefix,
-    prefix_cut: u64,
-    repaired_stop: u64,
 }
 
 impl Default for Wave {
@@ -66,9 +42,6 @@ impl Default for Wave {
             setup_staged: false,
             reset_cut: 0,
             neutralized: 0,
-            input_prefix: Prefix::default(),
-            prefix_cut: 0,
-            repaired_stop: 0,
         }
     }
 }
@@ -80,129 +53,6 @@ pub(super) fn transaction(event: Event) -> bool {
 }
 
 impl Source {
-    pub(super) fn capture_velocity_prefix(&mut self, position: usize) {
-        let mut pending = self.pending.at(position).unwrap();
-        let Event::Midi { data: [status, a, b], .. } = pending.event else { return };
-        let channel = usize::from(status & 15);
-        if status & 0xf0 == 0xb0 && a == 88 {
-            self.drop_prefix(self.channels.waves[channel].input_prefix, channel);
-        }
-        let wave = &mut self.channels.waves[channel];
-        match status & 0xf0 {
-            0x80 | 0x90 => {
-                pending.channel.velocity_prefix = wave.input_prefix;
-                wave.input_prefix = Prefix::known(0);
-                wave.prefix_cut = pending.serial;
-                self.pending.set(position, pending);
-            }
-            0xb0 if a == 88 => {
-                wave.input_prefix = Prefix::known(b);
-                wave.prefix_cut = pending.serial;
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn prefix_reconciliation(&self, pending: Pending) -> Option<Event> {
-        let value = self.prefix_value(
-            pending.channel.velocity_prefix,
-            usize::from(pending.event.channel()?),
-        )??;
-        let Event::Midi { port, data: [status, _, _], .. } = pending.event else { return None };
-        if !matches!(status & 0xf0, 0x80 | 0x90) {
-            return None;
-        }
-        let channel = usize::from(status & 15);
-        let state = &self.state.channels()[channel];
-        let wire = self.channels.waves[channel].wire;
-        let earlier_wire = wire.index != NONE && wire.serial < pending.serial;
-        (earlier_wire
-            || state.controller_valid[1] & (1 << 24) == 0
-            || state.controllers[88] != value)
-            .then_some(Event::Midi { port, data: [0xb0 | channel as u8, 88, value], flags: 0 })
-    }
-
-    // Outer None means the original Stop boundary/repair is still pending;
-    // inner None means its actual receiver prefix was unknown.
-    fn prefix_value(&self, prefix: Prefix, channel: usize) -> Option<Option<u8>> {
-        if let Some(index) = prefix.stop_index() {
-            let stop = self.pending.at(index).expect("owned Stop association");
-            let channel::Role::ReachedStop { known, waiting, owners } = stop.channel.role else {
-                return None;
-            };
-            assert_ne!(owners & (1 << channel), 0);
-            if waiting & (1 << channel) != 0
-                && self.channels.waves[channel].repaired_stop < stop.serial
-            {
-                return None;
-            }
-            Some((known & (1 << channel) != 0).then_some(0))
-        } else {
-            Some((prefix.0 < 128).then_some(prefix.0 as u8))
-        }
-    }
-
-    pub(super) fn prefix_ready(&self, pending: Pending) -> bool {
-        pending.event.channel().is_none_or(|channel| {
-            self.prefix_value(pending.channel.velocity_prefix, usize::from(channel)).is_some()
-        })
-    }
-
-    pub(super) fn drop_prefix(&mut self, prefix: Prefix, channel: usize) {
-        let Some(index) = prefix.stop_index() else { return };
-        let mut stop = self.pending.at(index).expect("owned Stop association");
-        let (channel::Role::Stop { ref mut owners, .. }
-        | channel::Role::ReachedStop { ref mut owners, .. }) = stop.channel.role
-        else {
-            unreachable!()
-        };
-        assert_ne!(*owners & (1 << channel), 0);
-        *owners &= !(1 << channel);
-        self.pending.set(index, stop);
-        self.remove_finished(index);
-    }
-
-    pub(super) fn settle_wave_prefix(&mut self, channel: usize) {
-        let prefix = self.channels.waves[channel].input_prefix;
-        if prefix.stop_index().is_none() {
-            return;
-        }
-        if let Some(value) = self.prefix_value(prefix, channel) {
-            self.channels.waves[channel].input_prefix =
-                value.map_or_else(Prefix::default, Prefix::known);
-            self.drop_prefix(prefix, channel);
-        }
-    }
-
-    pub(super) fn capture_stop_prefixes(&mut self, position: usize) {
-        let serial = self.pending.at(position).unwrap().serial;
-        for channel in 0..16 {
-            self.drop_prefix(self.channels.waves[channel].input_prefix, channel);
-            let wave = &mut self.channels.waves[channel];
-            wave.input_prefix = Prefix::stop(position as u16);
-            wave.prefix_cut = serial;
-        }
-    }
-
-    pub(super) fn discard_wave_prefix_pins(&mut self) {
-        for channel in 0..16 {
-            let prefix = self.channels.waves[channel].input_prefix;
-            let actual = &self.state.channels()[channel];
-            // A reached cancellation discards every old input association.
-            // Known nonzero receiver state still owns actual repair debt;
-            // a consumer captured while that repair rejects must bind its
-            // required neutral result, not resurrect the old receiver value.
-            // State itself changes only when the host accepts output.
-            self.channels.waves[channel].input_prefix =
-                if actual.controller_valid[1] & (1 << 24) != 0 {
-                    Prefix::known(0)
-                } else {
-                    Prefix::default()
-                };
-            self.drop_prefix(prefix, channel);
-        }
-    }
-
     pub(super) fn established_channel(&self, channel: usize) -> bool {
         self.state.voices().any(|voice| usize::from(voice.channel) == channel)
             || [64, 66, 69]
@@ -659,15 +509,6 @@ impl Source {
         let cc = [64, 66, 69][usize::from(bit)];
         wave.base.controller_valid[cc / 64] |= 1 << (cc % 64);
         wave.base.controllers[cc] = 0;
-    }
-
-    pub(super) fn accept_prefix_neutralization(&mut self, channel: usize) {
-        let wave = &mut self.channels.waves[channel];
-        wave.repaired_stop = self.stops.reached;
-        if wave.prefix_cut <= self.cancel_cut && wave.input_prefix.stop_index().is_none() {
-            wave.input_prefix = Prefix::known(0);
-        }
-        self.settle_wave_prefix(channel);
     }
 
     pub(super) fn schedule_channels(&mut self, start: i64, end: i64, output: &mut api::Output<'_>) {

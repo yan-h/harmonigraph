@@ -121,7 +121,6 @@ pub enum Lane {
 enum Events {
     Single(InputValue),
     Pair { first: InputValue, second: InputValue },
-    VelocityOnset { port: u16, data: [u8; 3], flags: u32, note: InputValue, tuning: InputValue },
 }
 
 /// A single event or one of two narrowly validated pairs: note-on/tuning or
@@ -142,60 +141,11 @@ pub enum StageError {
 }
 
 impl Group {
-    /// Reconcile a known velocity prefix immediately before its raw MIDI
-    /// consumer under one caller permit, retaining each independent host result.
-    pub fn velocity_note(
-        token: Token,
-        time: u32,
-        prefix: InputValue,
-        note: InputValue,
-    ) -> Result<Self, StageError> {
-        let matching = matches!((prefix, note),
-            (InputValue::Midi { port: pp, data: [ps, 88, value], .. },
-             InputValue::Midi { port: np, data: [ns, key, velocity], .. })
-                if pp == np && ps & 0xf0 == 0xb0 && ps & 15 == ns & 15
-                    && matches!(ns & 0xf0, 0x80 | 0x90)
-                    && value < 128 && key < 128 && velocity < 128);
-        if !matching {
-            return Err(StageError::Invalid);
-        }
-        Ok(Self { token, lane: Lane::Normal, time, events: Events::Pair { first: prefix, second: note } })
-    }
-
-    pub fn velocity_prefix(&self) -> Option<InputValue> {
-        match self.events {
-            Events::Pair { first: prefix @ InputValue::Midi { data: [status, 88, _], .. }, .. }
-                if status & 0xf0 == 0xb0 => Some(prefix),
-            Events::VelocityOnset { port, data, flags, .. } => Some(InputValue::Midi { port, data, flags }),
-            _ => None,
-        }
-    }
-
     pub fn initial_tuning(&self) -> Option<InputValue> {
         match self.events {
-            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. }
-            | Events::VelocityOnset { tuning, .. } => Some(tuning),
+            Events::Pair { second: tuning @ InputValue::Expression { expression: CLAP_NOTE_EXPRESSION_TUNING, .. }, .. } => Some(tuning),
             _ => None,
         }
-    }
-
-    /// A raw MIDI onset can need its captured CC88 immediately before the
-    /// consumer and per-note tuning immediately after it. The small prefix is
-    /// stored compactly; the complete group still fits its 256-byte reservation.
-    pub fn tuned_onset(
-        token: Token,
-        time: u32,
-        prefix: Option<InputValue>,
-        note: InputValue,
-        tuning: InputValue,
-    ) -> Result<Self, StageError> {
-        let mut group = Self::onset(token, time, note, tuning)?;
-        if let Some(prefix) = prefix {
-            Self::velocity_note(token, time, prefix, note)?;
-            let InputValue::Midi { port, data, flags } = prefix else { unreachable!() };
-            group.events = Events::VelocityOnset { port, data, flags, note, tuning };
-        }
-        Ok(group)
     }
 
     pub fn single(
@@ -245,7 +195,6 @@ impl Group {
         match self.events {
             Events::Single(_) => 1,
             Events::Pair { .. } => 2,
-            Events::VelocityOnset { .. } => 3,
         }
     }
 
@@ -254,9 +203,6 @@ impl Group {
             (Events::Single(e), 0)
             | (Events::Pair { first: e, .. }, 0)
             | (Events::Pair { second: e, .. }, 1) => Some(e),
-            (Events::VelocityOnset { port, data, flags, .. }, 0) => Some(InputValue::Midi { port, data, flags }),
-            (Events::VelocityOnset { note, .. }, 1) => Some(note),
-            (Events::VelocityOnset { tuning, .. }, 2) => Some(tuning),
             _ => None,
         }
     }
