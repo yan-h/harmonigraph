@@ -147,6 +147,7 @@ impl Adoption {
     }
 }
 pub struct Shared {
+    pub(super) diagnostics: super::diagnostics::Shared,
     #[cfg(test)]
     pub before_transfer: TestPause,
     #[cfg(test)]
@@ -175,6 +176,7 @@ impl Shared {
     }
     fn new(routing: Routing) -> Arc<Self> {
         Arc::new(Self {
+            diagnostics: super::diagnostics::Shared::new(matches!(routing, Routing::Hub(_))),
             #[cfg(test)]
             before_transfer: TestPause::default(),
             #[cfg(test)]
@@ -321,6 +323,11 @@ impl Prepared for Pending {
             main.value = self.value;
             self.slot.take().unwrap().publish(self.value);
         }
+        nice_plug::nice_log!(
+            "HG-TUNING-SETUP pid={} instance={:?} accepted_gen={} pairing_gen={} reset={} routing={:?} previous_adopted={:?}",
+            std::process::id(), self.shared.registration(), self.value.generation,
+            self.value.pairing_generation, self.value.reset, self.value.routing, self.shared.adopted(),
+        );
         self.shared.dirty.store(true, Ordering::Release);
         self.shared.request_main();
     }
@@ -374,6 +381,7 @@ impl Setup for Adapter {
     fn service(&self) -> bool {
         registry::service_retired();
         registry::global().lock().unwrap().service();
+        self.0.diagnostics.log(&self.0);
         self.0.dirty.swap(false, Ordering::AcqRel)
     }
 }

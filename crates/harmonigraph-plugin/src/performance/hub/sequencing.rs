@@ -255,6 +255,9 @@ impl Sequencer {
     pub(super) fn recovering(&self) -> bool {
         self.recovery.active
     }
+    pub(super) fn diagnostic_recovery(&self) -> (i64, i64) {
+        self.recovery.diagnostic_state()
+    }
     pub(super) fn revoke_ack(
         &mut self,
         source: usize,
@@ -491,9 +494,15 @@ impl Hub {
         }
     }
 
-    fn input_snapshot(&self, owner: &Owner) -> Option<Membership> {
-        let (direct, cut) = self.direct.completed_input()?;
+    fn input_snapshot(&mut self, owner: &Owner) -> Option<Membership> {
+        self.trace.input_wait = 0;
+        self.trace.input_source = 0;
+        let Some((direct, cut)) = self.direct.completed_input() else {
+            self.trace.input_wait = 1;
+            return None;
+        };
         if cut > self.sequencer.captured[0] {
+            self.trace.input_wait = 2;
             return None;
         }
         let cap = owner
@@ -515,15 +524,25 @@ impl Hub {
                 if row.terminal_cut.is_some() {
                     continue;
                 }
+                self.trace.input_wait = 3;
+                self.trace.input_source = index + 1;
                 return None;
             }
             if row.acknowledged_membership == 0
                 || row.input_membership != row.acknowledged_membership
             {
+                self.trace.input_wait = 4;
+                self.trace.input_source = index + 1;
                 return None;
             }
-            let interval = row.input_coverage?;
+            let Some(interval) = row.input_coverage else {
+                self.trace.input_wait = 5;
+                self.trace.input_source = index + 1;
+                return None;
+            };
             if interval.1 > self.sequencer.captured[index + 1] {
+                self.trace.input_wait = 6;
+                self.trace.input_source = index + 1;
                 return None;
             }
             snapshot.leases[index] = Some(lease);
@@ -531,7 +550,11 @@ impl Hub {
             snapshot.floor = snapshot.floor.max(interval.0.start);
             snapshot.through = snapshot.through.min(interval.0.through);
         }
-        (snapshot.through > snapshot.floor).then_some(snapshot)
+        if snapshot.through <= snapshot.floor {
+            self.trace.input_wait = 7;
+            return None;
+        }
+        Some(snapshot)
     }
 
     fn next_input_sample(&mut self) -> Option<i64> {

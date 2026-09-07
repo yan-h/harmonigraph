@@ -43,6 +43,40 @@ The next onset receives nonzero Just tuning and its real release, and a later Ap
 This fixes that concrete startup sequence;
 it does not claim every setup wait or live reactivation path is resolved.
 
+## Production diagnostics
+
+The production plugin emits `HG-TUNING` summaries through the existing Info-level plugin logger, including when editors are closed.
+Its default sink is stderr, which Bitwig includes in its engine log (`~/Library/Logs/Bitwig/engine.log` in the measured host); an existing `NICE_LOG` override still applies.
+`HG-TUNING-SETUP` records an accepted Apply/Reinitialize or restore immediately on the main thread, with the prior adopted clock.
+Summaries include PID, registration, build tag, selected Hub and runtime Source/session identities so three Tune instances remain distinguishable.
+The actual live Bitwig summary capture is a handoff check; the exported wrapper fixture has verified summary and blocked-Apply output through the same stderr logger.
+
+Audio callbacks update fixed counters and publish fixed atomic snapshots at approximately one-second audio intervals.
+The existing setup callback performs all formatting and logging on the main thread, at most once per wall-clock second when the report's meaningful values change.
+Absolute clocks do not cause idle logging;
+coverage lag, rounded to seconds for the change key, still exposes a stalled peer.
+No editor, worker, new transport message or persisted field is involved, and diagnostics never mark setup dirty.
+
+Each Source reports consumed note On/Off counts, accepted note output counts and last actual pitch, received assignments/correction, adoption, retained work, and the actual setup wait.
+Each Hub reports the last published Source/key/pitch together, resolved tuning axes/locks/Auto/Learn, transition/input/publication wait reasons and source slot, credits, and each row's membership, coverage and retention.
+`*_mc` values are microcents (1,000,000 per cent); sample frontiers use the shared mapped clock, `raw_end` uses the host clock, and the minimum signed integer denotes an absent frontier.
+Counters are cumulative per instance; a last note remains historical after its release.
+An `Adopted` setup clock and the registry's Attached status do not by themselves prove that a row has completed audio enrollment.
+
+Named setup/transition/input/publication reasons are printed beside their numeric codes.
+The remaining compact masks use these bit positions:
+
+| Field | Bits, from bit 0 upward |
+| --- | --- |
+| `pending_gate` | Invalid clock; admission closed; assignment unavailable; cancellation cut; prefix reconciliation; prefix ordering; emergency fault; locally completed envelope retained for remote history |
+| `output_settlement_wait` | Held credit; held pedals; owed Note-Off; ordinary journal; emergency journal; prepared permit; manifest; emergency slots; channel reset; baseline |
+| Source `recovery` | Fence pending; inventory counting; revoke acknowledgment owed; inventory acknowledgment owed; cleanup pending |
+
+A nonzero settlement mask during an ordinary held note is expected.
+The setup wait and accepted/adopted generations establish whether that retained state is currently preventing Apply.
+The focused regression uses three exported Tune instances and a Hub, proves the periodic host callback after initial setup is drained, verifies distinct identities and nonzero Just tuning, then pauses Hub consumption after an actual Apply and observes the retained-history wait.
+It also checks that a later pitch expression updates the Hub's published identity and pitch together, and that healthy idle clock progress leaves the log change key unchanged.
+
 ## Owned musical state
 
 `ConfigReducer` binds `policy::CONFIG` version 1 with the complete resolved configuration.

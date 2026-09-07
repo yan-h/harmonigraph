@@ -123,6 +123,7 @@ impl Row {
     }
 }
 pub struct Hub {
+    trace: Box<super::diagnostics::Counts>,
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_aggregation: bool,
     #[cfg(all(test, not(feature = "tuning-probe")))]
@@ -197,6 +198,78 @@ impl Hub {
         }
         self.shared.status.store(diagnostics, Ordering::Release);
         self.shared.extra_delay.fetch_max(self.sequencer.extra_delay, Ordering::Relaxed);
+        if self.trace.due(callback.frames, self.rate) {
+            self.publish_diagnostics(callback, owner);
+            self.shared.request_main();
+        }
+    }
+    fn publish_diagnostics(&self, callback: api::Callback, owner: &Owner) {
+        self.direct.publish_diagnostics(callback);
+        let recovery = self.sequencer.diagnostic_recovery();
+        let config = owner.timeline.reducer().resolved();
+        self.shared.diagnostics.hub.as_ref().unwrap().publish([
+            self.offer.as_ref().map_or(0, |offer| offer.session.runtime) as i64,
+            self.publication_clock.epoch as i64,
+            self.transition.map_or(0, |update| update.generation) as i64,
+            self.trace.setup_wait,
+            i64::from(self.clock.valid),
+            i64::from(self.invalidated),
+            recovery.0,
+            recovery.1,
+            self.sequencer.decision as i64,
+            self.publication_through.unwrap_or(i64::MIN),
+            callback.steady_time.saturating_add(i64::from(callback.frames)),
+            self.trace.output_on as i64,
+            self.trace.output_off as i64,
+            self.trace.last_source as i64,
+            self.trace.last_output_key.map_or(-1, i64::from),
+            self.trace.last_output_pitch,
+            config.revision as i64,
+            i64::from(config.tuning.c_offset),
+            i64::from(config.tuning.three),
+            i64::from(config.tuning.five),
+            i64::from(config.tuning.seven),
+            i64::from(config.modes.tempered.syntonic),
+            i64::from(config.modes.tempered.septimal_kleisma),
+            i64::from(config.modes.auto[0]),
+            i64::from(config.modes.auto[1]),
+            i64::from(config.modes.learning),
+            self.trace.input_wait,
+            self.trace.input_source as i64,
+            self.trace.publication_wait,
+            self.trace.publication_source as i64,
+            self.offer.as_ref().map_or(0, |offer| offer.session.credits.load(Ordering::Acquire))
+                as i64,
+        ]);
+        let Some(offer) = &self.offer else { return };
+        for (index, (row, snapshot)) in
+            self.rows.iter().zip(self.shared.diagnostics.rows.as_ref().unwrap().iter()).enumerate()
+        {
+            let shared = &offer.session.rows[index];
+            snapshot.publish([
+                row.lease.map_or(0, |lease| lease.source.0) as i64,
+                shared.expected_incarnation.load(Ordering::Acquire) as i64,
+                i64::from(row.member),
+                row.joining.unwrap_or(i64::MIN),
+                row.coverage.map_or(i64::MIN, |coverage| coverage.through),
+                row.input_coverage.map_or(i64::MIN, |(coverage, _)| coverage.through),
+                row.received as i64,
+                row.applied as i64,
+                row.output.len() as i64,
+                row.ingress.len() as i64,
+                row.baseline.as_ref().map_or(-1, |baseline| baseline.frame.output_cut as i64),
+                row.state.count() as i64,
+                row.acknowledged_membership as i64,
+                row.input_membership as i64,
+                shared.emission_gate.load(Ordering::Acquire) as i64,
+                i64::from(shared.withdrawn.load(Ordering::Acquire)),
+                i64::from(shared.source_detached.load(Ordering::Acquire)),
+                i64::from(shared.hub_detached.load(Ordering::Acquire)),
+                row.seal.map_or(-1, |cut| cut as i64),
+                row.producer_joined.map_or(-1, |cut| cut as i64),
+                i64::from(shared.faults.load(Ordering::Acquire)),
+            ]);
+        }
     }
     fn fence_rows(&self, generation: u64) {
         if let Some(offer) = &self.offer {
@@ -302,6 +375,7 @@ impl Hub {
         let shared = setup::Shared::hub();
         let direct = Source::new(shared.clone());
         Box::new(Self {
+            trace: Box::default(),
             #[cfg(all(test, not(feature = "tuning-probe")))]
             test_aggregation: false,
             #[cfg(all(test, not(feature = "tuning-probe")))]
@@ -422,13 +496,16 @@ impl Hub {
     }
 
     fn commit_transition(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
+        self.trace.setup_wait = 0;
         let Some(update) = self.transition else {
             return;
         };
         if self.sequencer.terminal_session && !update.reset {
+            self.trace.setup_wait = 1;
             return;
         }
         if !self.sequencer.can_reset_clock_context() {
+            self.trace.setup_wait = 2;
             self.configuration_exhausted();
             return;
         }
@@ -438,9 +515,19 @@ impl Hub {
             || !self.direct.transition_settled()
             || owner.direct.pending().is_some()
         {
+            self.trace.setup_wait = if !(local_reset
+                || update.routing.calibration().matches(self.rate, self.max_frames))
+            {
+                3
+            } else if !self.direct.transition_settled() {
+                4
+            } else {
+                5
+            };
             return;
         }
         let Some(offer) = &self.offer else {
+            self.trace.setup_wait = 6;
             return;
         };
         if offer.session.rows.iter().any(|row| {
@@ -454,12 +541,14 @@ impl Hub {
                 || row.state.count() != 0
         }) || offer.session.credits.load(Ordering::Acquire) != 0
         {
+            self.trace.setup_wait = 7;
             return;
         }
         // Both factual identities and prospective context cross this boundary
         // together, after all old ownership settles. Budget the clear/reseed
         // before committing anything; the directory itself needs no scan.
         if self.collected + HELD_SESSION + 64 > 4096 {
+            self.trace.setup_wait = 8;
             return;
         }
         self.collected += HELD_SESSION + 64;
@@ -470,11 +559,13 @@ impl Hub {
             owner.recording.close_invalidated(recorder);
         }
         let Some(epoch) = self.publication_clock.epoch.checked_add(1) else {
+            self.trace.setup_wait = 9;
             return;
         };
         let clock = ClockId { epoch, ..self.publication_clock };
         let offset = if local_reset { 0 } else { update.routing.calibration().offset };
         if !owner.recording.commit_clock(clock, offset) {
+            self.trace.setup_wait = 10;
             return;
         }
         self.direct.commit_clock_setup(update, epoch);
@@ -1110,7 +1201,10 @@ impl Hub {
     }
 
     fn publish_output(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
+        self.trace.publication_wait = 0;
+        self.trace.publication_source = 0;
         let Some(callback) = self.callback else {
+            self.trace.publication_wait = 1;
             return;
         };
         let Some(raw_end) =
@@ -1149,6 +1243,10 @@ impl Hub {
         let members: [bool; TUNERS] = std::array::from_fn(|i| self.rows[i].member);
         for (index, member) in members.iter().copied().enumerate() {
             if let Some(start) = self.rows[index].joining {
+                if start <= through {
+                    self.trace.publication_wait = 2;
+                    self.trace.publication_source = index + 1;
+                }
                 through = through.min(start);
             }
             if member {
@@ -1160,8 +1258,14 @@ impl Hub {
                     continue;
                 }
                 let Some(coverage) = self.rows[index].coverage else {
+                    self.trace.publication_wait = 3;
+                    self.trace.publication_source = index + 1;
                     return;
                 };
+                if coverage.through <= through {
+                    self.trace.publication_wait = 4;
+                    self.trace.publication_source = index + 1;
+                }
                 through = through.min(coverage.through);
             }
         }
@@ -1261,6 +1365,8 @@ impl Hub {
                 None
             };
             if index <= TUNERS && lookup.is_none() {
+                self.trace.publication_wait = 5;
+                self.trace.publication_source = index;
                 break;
             }
             self.merged += 1;
@@ -1277,6 +1383,8 @@ impl Hub {
                     });
                 if recorder.publish_note(delta, observation, route).is_err() {
                     owner.direct.recovery = true;
+                } else {
+                    self.trace.published(delta);
                 }
                 owner.direct.published();
             } else if index > TUNERS {
@@ -1366,6 +1474,8 @@ impl Hub {
                     });
                     if recorder.publish_note(delta, observation, route).is_err() {
                         row.repair = true;
+                    } else {
+                        self.trace.published(delta);
                     }
                 }
                 row.applied = value.sequence;

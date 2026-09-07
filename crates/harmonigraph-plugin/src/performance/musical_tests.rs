@@ -268,6 +268,123 @@ impl Phrase {
 }
 
 #[test]
+fn production_diagnostics_identify_three_sources_and_apply_history_wait() {
+    let _scope = crate::test_scope::enter();
+    use super::super::diagnostics::{HUB_FIELDS, ROW_FIELDS, SOURCE_FIELDS};
+    fn field(labels: &[&str], values: &[i64], name: &str) -> i64 {
+        values[labels.iter().position(|label| *label == name).unwrap()]
+    }
+    let mut phrase = Phrase::new();
+    for source in &phrase.sources {
+        source.main();
+    }
+    phrase.hub.main();
+    let wakes_before = phrase.sources[1]._stats.callbacks.load(Ordering::Acquire);
+
+    phrase.step(
+        [
+            vec![note(0, 0, 60, 0, true)],
+            vec![note(1, 0, 64, 0, true)],
+            vec![note(2, 0, 67, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    // Cross the real one-second audio sampling interval, with no editors.
+    for _ in 0..96 {
+        phrase.idle();
+    }
+    assert!(
+        phrase.sources[1]._stats.callbacks.load(Ordering::Acquire) > wakes_before,
+        "periodic diagnostics request the real host callback after initial setup was drained"
+    );
+    let mut identities = Vec::new();
+    for (index, source) in phrase.sources.iter().enumerate() {
+        let values = source.shared().diagnostics.source.read().unwrap();
+        identities.push(field(SOURCE_FIELDS, &values, "source"));
+        assert_eq!(field(SOURCE_FIELDS, &values, "input_on"), 1);
+        assert_eq!(field(SOURCE_FIELDS, &values, "output_on"), 1);
+        assert!(field(SOURCE_FIELDS, &values, "assignments") > 0);
+        assert_eq!(field(SOURCE_FIELDS, &values, "last_input_key"), [60, 64, 67][index]);
+        assert_eq!(
+            field(SOURCE_FIELDS, &values, "last_output_pitch_mc"),
+            phrase.voice(index, [60, 64, 67][index], 0).pitch_microcents
+        );
+        source.main(); // The existing callback drains the real stderr logger.
+    }
+    identities.sort_unstable();
+    identities.dedup();
+    assert_eq!(identities.len(), 3);
+    let shared = phrase.hub.shared();
+    let values = shared.diagnostics.hub.as_ref().unwrap().read().unwrap();
+    assert_eq!(field(HUB_FIELDS, &values, "published_on"), 3);
+    assert_eq!(field(HUB_FIELDS, &values, "third_mc"), i64::from(Tuning::just().five));
+    for row in shared.diagnostics.rows.as_ref().unwrap().iter().take(3) {
+        assert_eq!(field(ROW_FIELDS, &row.read().unwrap(), "member"), 1);
+    }
+    phrase.hub.main();
+    // A pitch update from the first Tune must not retain the last onset's
+    // identity from the third Tune while reporting the first Tune's pitch.
+    phrase.step([vec![expression(0, 0.5, 0)], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..96 {
+        phrase.idle();
+    }
+    let hub_values = shared.diagnostics.hub.as_ref().unwrap().read().unwrap();
+    assert_eq!(field(HUB_FIELDS, &hub_values, "last_published_source"), identities[0]);
+    assert_eq!(field(HUB_FIELDS, &hub_values, "last_published_key"), 60);
+    assert_eq!(
+        field(HUB_FIELDS, &hub_values, "last_published_pitch_mc"),
+        phrase.voice(0, 60, 0).pitch_microcents
+    );
+    let before = phrase.sources[1].shared().diagnostics.report(&phrase.sources[1].shared());
+    for _ in 0..96 {
+        phrase.idle();
+    }
+    let after = phrase.sources[1].shared().diagnostics.report(&phrase.sources[1].shared());
+    assert_ne!(before.0, after.0, "actual sample frontiers advanced");
+    assert_eq!(before.1, after.1, "healthy idle clock advance must not log again");
+
+    // An actual Apply while the Hub stops consuming leaves accepted history
+    // owned by this Source. Observe the real gate, without changing recovery.
+    let source = &phrase.sources[1];
+    let shared = source.shared();
+    let previous = shared.adopted().unwrap().generation;
+    shared.apply(shared.value().routing, true).unwrap();
+    let paused_at = phrase.raw;
+    for _ in 0..96 {
+        source.run_format(phrase.raw, vec![], None, None, 512);
+        phrase.raw += 512;
+    }
+    let values = shared.diagnostics.source.read().unwrap();
+    assert!(shared.value().generation > previous);
+    assert_eq!(shared.adopted().unwrap().generation, previous);
+    assert_eq!(field(SOURCE_FIELDS, &values, "setup_wait"), 3);
+    assert_ne!(field(SOURCE_FIELDS, &values, "output_settlement_wait") & ((1 << 0) | (1 << 3)), 0);
+    assert_eq!(field(SOURCE_FIELDS, &values, "output_on"), 1);
+    assert_eq!(field(SOURCE_FIELDS, &values, "source"), identities[1]);
+    let report = shared.diagnostics.report(&shared);
+    assert_ne!(report.1, after.1, "Apply and stalled ownership must trigger a changed log");
+    assert!(report.0.contains("setup_wait=3(accepted_history)"));
+    // Restore the actual missing callback intervals before destroying this
+    // fixture; abandoned held streams would pollute the process-wide registry.
+    for raw in (paused_at..phrase.raw).step_by(512) {
+        for index in [0, 2] {
+            phrase.sources[index].run_format(raw, vec![], None, None, 512);
+        }
+        phrase.hub.run_format(raw, vec![], None, None, 512);
+    }
+    for _ in 0..96 {
+        for source in &phrase.sources {
+            source.main();
+        }
+        phrase.hub.main();
+        phrase.idle();
+    }
+    phrase.release_all();
+    drop(phrase);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
 fn production_musical_dfa_permutations_include_each_predecessor() {
     let _scope = crate::test_scope::enter();
     let positions = [LatticePos::new(2, 0, 0), LatticePos::new(3, -1, 0), LatticePos::new(3, 0, 0)];

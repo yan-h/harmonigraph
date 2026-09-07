@@ -173,6 +173,7 @@ impl Adoption {
 }
 
 pub struct Source {
+    trace: Box<super::diagnostics::Counts>,
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub test_aggregation: bool,
     pub shared: Arc<setup::Shared>,
@@ -357,6 +358,7 @@ impl Source {
     pub fn new(shared: Arc<setup::Shared>) -> Box<Self> {
         let (pending, lives, work) = super::capture::storage(&shared);
         Box::new(Self {
+            trace: Box::default(),
             #[cfg(all(test, not(feature = "tuning-probe")))]
             test_aggregation: false,
             shared,
@@ -821,9 +823,11 @@ impl Source {
         // A terminal latch rejects new performance. Essential original releases
         // can still discharge an existing physical lifetime.
         if self.faults != 0 && !event.release() {
+            self.trace.input(event);
             return api::Consumption::Consumed;
         }
         let Some(raw) = input.sample else {
+            self.trace.input(event);
             self.fault(INPUT_FAULT);
             return api::Consumption::Consumed;
         };
@@ -957,6 +961,7 @@ impl Source {
         }
         self.pending.seal(position);
         self.remove_finished(position);
+        self.trace.input(event);
         api::Consumption::Consumed
     }
 
@@ -1006,6 +1011,7 @@ impl Source {
     }
 
     pub fn apply_setup_with_clock(&mut self, allow_clock: bool) -> Option<setup::Update> {
+        self.trace.setup_wait = 0;
         self.input_complete = true;
         self.fence_transition();
         // Candidate changes have the same original-input cut as an explicit
@@ -1047,6 +1053,7 @@ impl Source {
                         callback.steady_time.checked_add(i64::from(callback.frames))
                     });
                     if !self.capture_participation(value, sample) {
+                        self.trace.setup_wait = 1;
                         break;
                     }
                 }
@@ -1058,6 +1065,7 @@ impl Source {
             let changes_clock =
                 update.reset || update.routing.calibration() != self.clock.calibration;
             if changes_clock && !allow_clock {
+                self.trace.setup_wait = 2;
                 return Some(update);
             }
             if changes_clock
@@ -1065,6 +1073,7 @@ impl Source {
             {
                 // A new clock cannot reinterpret outstanding accepted history.
                 self.shared.status.store(self.diagnostics() | CLOCK_FAULT, Ordering::Release);
+                self.trace.setup_wait = 3;
                 break;
             }
             if changes_clock
@@ -1073,6 +1082,7 @@ impl Source {
                     .as_ref()
                     .is_some_and(|offer| offer.generation < update.pairing_generation)
             {
+                self.trace.setup_wait = 4;
                 break;
             }
             if update.reset
@@ -1086,6 +1096,16 @@ impl Source {
                 // The generation guard above waits for the old lease. A new
                 // lease counts post-cut input in old_pending again; requiring
                 // that input to finish before clearing this fault deadlocks it.
+                self.trace.setup_wait =
+                    if !update.routing.calibration().matches(self.rate, self.max_frames) {
+                        5
+                    } else if !self.recovery.settled() {
+                        6
+                    } else if !self.output_settled() {
+                        7
+                    } else {
+                        8
+                    };
                 break;
             }
             if changes_clock {
@@ -2153,6 +2173,8 @@ impl Source {
                 }
             }
         }
+        let pitch = self.state.voice(lifetime).map(|voice| (voice.note, voice.pitch_microcents));
+        self.trace.output(event, pitch, self.source_id().0);
         delta
     }
     fn release_gate(&self) {
@@ -2525,6 +2547,9 @@ impl Source {
                     }) {
                         self.lives.local_mut(life).unwrap().assignment = binding;
                         self.lives.local_mut(life).unwrap().flags |= ASSIGNMENT_HELD;
+                        self.trace.assignments = self.trace.assignments.saturating_add(1);
+                        self.trace.decision = binding.decision;
+                        self.trace.correction = binding.correction;
                     }
                 }
             }
@@ -2664,7 +2689,7 @@ impl Source {
         }
     }
 
-    pub fn end(&mut self, _callback: api::Callback) {
+    pub fn end(&mut self, callback: api::Callback) {
         #[cfg(test)]
         self.shared.before_transfer.reach();
         self.compact();
@@ -2695,6 +2720,95 @@ impl Source {
         if self.session().is_some_and(|session| !session.alive.load(Ordering::Acquire)) {
             self.shared.request_main();
         }
+        if self.shared.source.is_some() && self.trace.due(callback.frames, self.rate) {
+            self.publish_diagnostics(callback);
+            self.shared.request_main();
+        }
+    }
+    pub(super) fn publish_diagnostics(&self, callback: api::Callback) {
+        let lease = self.capture_lease();
+        let session = self.session();
+        let row =
+            self.offer.as_ref().map(|offer| &offer.session.rows[usize::from(offer.lease.slot - 1)]);
+        let position = self.pending.front_position();
+        let retained = position.is_some_and(|position| self.pending.local_done(position));
+        let head = position.filter(|_| !retained).and_then(|position| self.pending.at(position));
+        // Independent gate facts for the oldest retained input, not permission
+        // to bypass any gate and not a claim that later inputs share its wait.
+        // Completed envelopes can remain for a remote ACK after channel/prefix
+        // owners were released. Only inspect wire gates on still-local work.
+        let head_wait = head.map_or(i64::from(retained) << 7, |pending| {
+            i64::from(!self.output_clock_valid())
+                | (i64::from(!self.admitted(pending.generation)) << 1)
+                | (i64::from(pending.life != NONE && !self.assignment_ready(pending.life)) << 2)
+                | (i64::from(pending.serial <= self.cancel_cut) << 3)
+                | (i64::from(self.prefix_reconciliation(pending).is_some()) << 4)
+                | (i64::from(!self.prefix_ready(pending)) << 5)
+                | (i64::from(self.faults != 0) << 6)
+        });
+        self.shared.diagnostics.source.publish([
+            session.map_or(0, |s| s.runtime) as i64,
+            self.source_id().0 as i64,
+            lease.map_or(-1, |lease| i64::from(lease.slot)),
+            self.incarnation() as i64,
+            self.epoch as i64,
+            self.setup_started as i64,
+            self.trace.setup_wait,
+            i64::from(self.output_clock_valid()),
+            match self.adoption {
+                Adoption::Pending => 0,
+                Adoption::Sent => 1,
+                Adoption::Joined => 2,
+            },
+            row.map_or(-1, |row| row.emission_gate.load(Ordering::Acquire) as i64),
+            row.map_or(0, |row| i64::from(row.withdrawn.load(Ordering::Acquire))),
+            session.map_or(0, |s| s.closing.load(Ordering::Acquire) as i64),
+            i64::from(self.participating),
+            self.held() as i64,
+            self.pending.len() as i64,
+            self.old_pending as i64,
+            self.captures_outstanding as i64,
+            self.journal.len() as i64,
+            self.emergency_output.len() as i64,
+            self.baseline.map_or(-1, |b| b.cut as i64),
+            i64::from(self.baseline_acked),
+            self.recovery.diagnostic_state(),
+            i64::from(self.output_settled()),
+            i64::from(self.local_cancel_cut_settled()),
+            i64::from(self.diagnostics()),
+            self.wave_shift.saturating_sub(self.delay()).max(0),
+            self.trace.input_on as i64,
+            self.trace.input_off as i64,
+            self.trace.last_input_key.map_or(-1, i64::from),
+            self.trace.output_on as i64,
+            self.trace.output_off as i64,
+            self.trace.last_output_key.map_or(-1, i64::from),
+            self.trace.last_output_pitch,
+            self.trace.assignments as i64,
+            self.trace.decision as i64,
+            i64::from(self.trace.correction),
+            self.committed_assignment as i64,
+            self.sequence as i64,
+            self.transfer_cut as i64,
+            self.acknowledged as i64,
+            callback.steady_time.saturating_add(i64::from(callback.frames)),
+            self.coverage.map_or(i64::MIN, |c| c.through),
+            self.complete_through,
+            self.next_event as i64,
+            self.cancel_cut as i64,
+            head_wait,
+            i64::from(self.held() != 0)
+                | (i64::from(self.state.pedals_held()) << 1)
+                | (i64::from(self.owed_note_off != [NONE; 64]) << 2)
+                | (i64::from(self.journal.len() != 0) << 3)
+                | (i64::from(self.emergency_output.len() != 0) << 4)
+                | (i64::from(self.permit.is_some()) << 5)
+                | (i64::from(self.manifest.len() != 0) << 6)
+                | (i64::from(self.emergency.iter().any(Option::is_some)) << 7)
+                | (i64::from(self.channel_reset != [0; 16]) << 8)
+                | (i64::from(self.baseline.is_some()) << 9),
+            i64::from(self.status_query.is_some()),
+        ]);
     }
     fn transfer(&mut self) {
         if self.offer.is_none() {

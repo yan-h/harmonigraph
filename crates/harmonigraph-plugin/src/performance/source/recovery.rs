@@ -29,6 +29,13 @@ pub(super) struct Recovery {
 }
 
 impl Recovery {
+    pub(super) fn diagnostic_state(&self) -> i64 {
+        i64::from(self.pending.is_some())
+            | (i64::from(self.counting) << 1)
+            | (i64::from(self.needs_ack()) << 2)
+            | (i64::from(self.pending.is_some_and(|p| !p.inventory_acked)) << 3)
+            | (i64::from(self.cleanup.is_some()) << 4)
+    }
     pub(super) fn begin(&mut self) {
         self.work = 0;
     }

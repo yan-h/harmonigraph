@@ -1,5 +1,6 @@
 mod capture;
 pub(crate) mod clock;
+mod diagnostics;
 pub mod direct;
 pub mod event;
 pub(crate) mod hub;

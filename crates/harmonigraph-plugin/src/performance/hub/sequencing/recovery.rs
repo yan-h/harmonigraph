@@ -69,6 +69,9 @@ pub(super) struct Recovery {
 }
 
 impl Recovery {
+    pub(in crate::performance::hub) fn diagnostic_state(&self) -> (i64, i64) {
+        (if self.active { self.phase as i64 + 1 } else { 0 }, self.source as i64)
+    }
     pub(super) fn lease(&self, source: usize) -> Option<Lease> {
         self.participants[source].fence.map(|fence| fence.lease)
     }
