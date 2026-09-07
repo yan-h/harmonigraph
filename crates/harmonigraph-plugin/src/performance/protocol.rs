@@ -14,19 +14,20 @@ pub const INTENT_RING: usize = 1024;
 pub const REPLY_RING: usize = 1024;
 pub const OUTPUT_RING: usize = 2048;
 pub const OUTCOME_JOURNAL: usize = 4096;
-/// Sized for the stated workload — sixteen tracks, 100+ simultaneous notes —
-/// rather than deduced. A source holds at most `HELD_PER_SOURCE` sounding
-/// notes; the rest of each depth is headroom for input that has arrived and
-/// not yet settled. Exhaustion stays an explicit bounded failure at every one
-/// of these: it latches a fault, it is not made unreachable by the size.
-pub const PENDING_EVENTS: usize = 512;
-pub const LIFETIMES: usize = 512;
+/// A request slot is held for as long as any in-flight input still addresses
+/// it, not for as long as its note sounds, so this tracks `PENDING_EVENTS`
+/// rather than `HELD_PER_SOURCE`. Both stay where they were; the plan ledger
+/// they size belongs to the per-pairing allocation, not to their depth.
+pub const PENDING_EVENTS: usize = 8192;
+pub const LIFETIMES: usize = 8192;
 /// Copied records the Hub stages per source between arrival and sequencing.
 /// One input can address every held note, so this is deeper than the number
-/// of inputs a callback can carry.
-pub const CAPTURES_PER_SOURCE: usize = 512;
+/// of inputs a callback can carry. Exhaustion is back pressure on the ring,
+/// which the Tune retries; it is not made unreachable by the size.
+pub const CAPTURES_PER_SOURCE: usize = 1024;
 /// Copied records the ordering pass may hold for one sample across all
-/// sources. Beyond it the pass latches rather than dropping an input.
+/// sources: sixteen tracks each choking every held note at the same sample is
+/// 1,040. Beyond it the pass latches rather than dropping an input.
 pub const BATCH_EVENTS: usize = 2048;
 pub const DELAY: i64 = 512;
 

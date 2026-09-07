@@ -3282,6 +3282,7 @@ impl Source {
                 self.free_lives.capacity()
             ]
         );
+        println!("LEDGER source work [cell,count,backing] {:?}", self.work.test_layout());
         println!(
             "LEDGER source queues [cell,count,backing] journal={:?} emergency={:?} manifest={:?}",
             self.journal.test_layout(),
@@ -3341,26 +3342,6 @@ impl Source {
             });
         }
         None
-    }
-    pub fn test_pending_dump(&self) -> String {
-        let mut out = String::new();
-        let mut position = self.pending.front_position();
-        while let Some(index) = position {
-            let p = self.pending.at(index).unwrap();
-            out.push_str(&format!(
-                "[{index} serial={} ev={:?} life={} inline_done={} work={}/{}/{} staged={} cq={} published={} sealed={} disp={}] ",
-                p.serial, p.event, p.life, p.inline_done, p.work_count, p.work_remaining,
-                p.work_linked, p.staged, p.cleanup_queued, self.pending.published(index),
-                self.pending.sealed(index), p.disposition
-            ));
-            position = self.pending.next_position(index);
-        }
-        out
-    }
-    pub(super) fn test_cancel_before_receive(&mut self) {
-        self.visits = 0;
-        self.stop();
-        self.cancel_slice();
     }
     pub(super) fn test_reset_progress(&self) -> String {
         format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} lease={} old={} captures={} published={} sealed={}", self.reset_armed,

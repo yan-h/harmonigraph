@@ -1812,7 +1812,10 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
         accepted, 128,
         "the source's 64 terminal-but-unacknowledged reservations remain charged"
     );
-    assert_eq!(source.source_snapshot().pending, 8192);
+    // All 8,192 inputs were captured; the 128 that actually sounded released
+    // their envelopes as soon as their copies were sent, so what stays is
+    // exactly the unsounded remainder.
+    assert_eq!(source.source_snapshot().pending, 8064);
     assert_eq!(source.source_snapshot().local_pending, 8064);
     let shared = source.shared();
     shared.apply(shared.value().routing, true).unwrap();
@@ -3020,7 +3023,11 @@ fn blocked_older_attack_does_not_hold_completed_nonhead_cells_past_8192_events()
         }
         hub.run(block * 64, vec![], None);
     }
-    assert!(physical_high_water > 4096 && physical_high_water < 8192);
+    // 9,600 events pass through 8,192 cells without exhausting them. Under the
+    // copied transport an envelope is released as soon as its copy is sent and
+    // its own work settles, so only the blocked attack is ever retained; there
+    // is no retirement round trip left for completed cells to queue behind.
+    assert_eq!(physical_high_water, 1, "only the blocked attack is retained");
     let release = target.run(51 * 64, vec![note(1, 0, 60, 7, false)], None);
     assert_eq!(release.values.len(), 1);
     assert_eq!(release.values[0].0, 7);
@@ -4823,7 +4830,10 @@ fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit(
             matches!(wire.values[1].1,Event::Note {kind:CLAP_EVENT_NOTE_ON,id:new,..} if new==id)
         );
         assert_eq!(source.source_snapshot().local_pending, 0);
-        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (1, 1));
+        // Both slots are free again the moment their copies are sent, which is
+        // what makes the next retrigger reuse exactly this parent and child —
+        // the reuse the defensive injections above are aimed at.
+        assert_eq!((source.source_snapshot().pending, source.source_snapshot().references), (0, 0));
         hub.run(block * 64, vec![], None);
     }
     wrapper.test_with_plugin(|plugin| plugin.source.as_ref().unwrap().test_finish_replay());

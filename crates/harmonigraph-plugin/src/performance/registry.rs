@@ -237,16 +237,6 @@ impl Registry {
         self.sources.iter().flatten().any(|s| s.id == id)
     }
     #[cfg(test)]
-    pub fn test_retired_source_state(&self, id: u64) -> Option<super::source::Snapshot> {
-        self.sources
-            .iter()
-            .flatten()
-            .find(|source| source.id == id)?
-            .owner
-            .as_ref()
-            .map(|owner| owner.test_snapshot())
-    }
-    #[cfg(test)]
     pub fn test_retained_hub(&self, id: u64) -> bool {
         self.hubs.iter().flatten().any(|h| h.id == id && h.retired && h.owner.is_some())
     }

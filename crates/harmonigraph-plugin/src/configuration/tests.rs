@@ -235,13 +235,7 @@ impl Device {
                 return;
             }
         }
-        let dump = self.wrapper().test_inspect_plugin(|plugin| {
-            plugin.aggregation.as_ref().unwrap().direct.test_pending_dump()
-        });
-        panic!(
-            "accepted gesture release must finish bounded ownership: {:?}\n{dump}",
-            snapshot(self)
-        );
+        panic!("accepted gesture release must finish bounded ownership: {:?}", snapshot(self));
     }
     fn params(&self) -> &clap_plugin_params {
         unsafe {

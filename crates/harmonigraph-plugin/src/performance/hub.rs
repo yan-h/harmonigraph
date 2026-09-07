@@ -554,6 +554,8 @@ impl Hub {
     }
     fn collect(&mut self) {
         let sequencing = self.sequences_inputs();
+        // Whether a copied record can still reach the ordering pass at all.
+        let keep = sequencing && !self.sequencer.terminal_session;
         let Some(offer) = &mut self.offer else {
             return;
         };
@@ -765,17 +767,20 @@ impl Hub {
                     Intent::Capture(record) => {
                         if row.lease == Some(record.lease) && row.epoch == record.epoch {
                             self.sequencer.captured[index + 1] = record.serial;
-                            row.inputs
-                                .push(record)
-                                .unwrap_or_else(|_| unreachable!("checked input capacity"));
+                            if keep {
+                                row.inputs
+                                    .push(record)
+                                    .unwrap_or_else(|_| unreachable!("checked input capacity"));
+                            }
                         }
                     }
                 }
             }
-            // The Hub owns every copied record it holds. A terminated row's
-            // records are dropped: its stream is settled where the fault
-            // latched, and nothing is left to sequence them against.
-            if row.terminal_cut.is_some() && row.inputs.len() != 0 {
+            // The Hub owns every copied record it holds outright, so when it
+            // will not sequence them there is nothing to hand back and nothing
+            // to wait for — a retired Hub, a latched terminal session or a
+            // terminated row drops them where they stand.
+            if (!keep || row.terminal_cut.is_some()) && row.inputs.len() != 0 {
                 row.inputs.clear();
             }
             for _ in 0..256 {
@@ -1754,6 +1759,7 @@ impl Hub {
         if self.direct.capture_lease().is_none() {
             return;
         }
+        let keep = self.sequences_inputs() && !self.sequencer.terminal_session;
         for _ in 0..256 {
             if self.direct_inputs.free() == 0 || self.input_work == 4096 {
                 break;
@@ -1763,12 +1769,16 @@ impl Hub {
             };
             self.input_work += 1;
             self.sequencer.captured[0] = record.serial;
-            self.direct_inputs
-                .push(record)
-                .unwrap_or_else(|_| unreachable!("checked DIRECT input capacity"));
+            if keep {
+                self.direct_inputs
+                    .push(record)
+                    .unwrap_or_else(|_| unreachable!("checked DIRECT input capacity"));
+            }
             self.service_revision = self.service_revision.wrapping_add(1);
         }
-        if self.sequencer.terminal_session && self.direct_inputs.len() != 0 {
+        // Same as a Tune row: a retired Hub or a latched terminal session will
+        // never sequence these copies, and owns them outright.
+        if !keep && self.direct_inputs.len() != 0 {
             self.direct_inputs.clear();
         }
     }

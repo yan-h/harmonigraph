@@ -6,7 +6,7 @@
 //! ownership protocol left to defend.
 use super::NONE;
 
-pub(in crate::performance) const CAPACITY: usize = 8192;
+pub(in crate::performance) const CAPACITY: usize = 32768;
 pub(super) const TARGET: u8 = 0;
 pub(super) const CHOKE: u8 = 1;
 pub(super) const NOTE_OFF: u8 = 2;

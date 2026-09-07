@@ -340,11 +340,16 @@ fn production_unmatched_originals_settle_without_hiding_independent_clock() {
         )
         .values;
     assert_eq!(source.source_snapshot().input_cut, 4);
-    for serial in 1..=4 {
-        let original = inspect_source(&source, |source| source.test_capture(serial).unwrap());
-        assert_eq!(original.work_count, 0);
-        assert!(original.published, "every original was copied to the Hub");
+    // All four were copied to the Hub. The three that matched no note own no
+    // work and owe no output, so their envelopes settle inside this callback;
+    // only the forwarded clock still waits for its own output at input+D.
+    for serial in 1..=3 {
+        assert!(inspect_source(&source, |source| source.test_capture(serial)).is_none());
     }
+    let clock = inspect_source(&source, |source| source.test_capture(4).unwrap());
+    assert_eq!(clock.work_count, 0);
+    assert!(clock.published, "every original was copied to the Hub");
+    assert_eq!(source.source_snapshot().pending, 1);
     hub.run_format(1536, vec![], None, None, 512);
     for raw in (2048..8192).step_by(512) {
         output.extend(source.run_format(raw, vec![], None, None, 512).values);
@@ -514,6 +519,9 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     run(1536, vec![note(69, 0, 59, 0, true)], None);
     hub.run_format(1536, vec![], None, None, 512);
     run(2048, vec![note(70, 0, 61, 0, true)], None);
+    // Read each classification in its own capturing callback: an envelope is
+    // released as soon as its copy is sent and its own work has settled.
+    assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
     hub.run_format(2048, vec![], None, None, 512);
     unsafe {
         context.raw_begin_set_parameter(param);
@@ -525,7 +533,6 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
         vec![note(71, 0, 62, 0, true), source.participation(true, 1), note(72, 0, 64, 2, true)],
         Some(CLAP_EVENT_PARAM_VALUE),
     );
-    assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
     assert!(!inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
     assert!(inspect_source(&source, |source| source.test_capture(6).unwrap().adaptive));
     hub.run_format(2560, vec![], None, None, 512);
