@@ -203,12 +203,18 @@ fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
 /// engages where a color's luma — the shader's dot over the STORED values,
 /// not over their decoded light — clears `SHIMMER_CEILING / e^swing`, about
 /// 0.40 at this fixture's Intensity of 1. The default ramp crosses that in
-/// its upper half: the dark end (luma 0.33) pays nothing and is held to
-/// rounding, mid-ramp (0.45) measures 3.7 `L*`, and the bright end (0.64)
-/// measures 15 — the encoded-domain slide compounded through the display
+/// its upper half: the dark end (luma 0.25) pays nothing and is held to
+/// rounding, mid-ramp (0.53) measures 8.9 `L*`, and the bright end (0.92)
+/// measures 30 — the encoded-domain slide compounded through the display
 /// transfer, and several times what a calibration in decoded light predicts.
 /// `SHIMMER_CEILING`'s comment carries the trade; this pins its measured cost
 /// so a retune moves a number here rather than a picture only.
+///
+/// It has moved once, and this is what that looks like: the 2026-09-07 capture
+/// took the lattice gradient's brightness ramp from 31 to 65, which stretches
+/// the LUT at BOTH ends — the dark end fell out of the slide's reach (0.33 to
+/// 0.25) while the bright end went most of the way to white (0.64 to 0.92),
+/// roughly doubling the standing shade the upper half pays.
 #[test]
 fn between_peaks_the_layer_sits_at_its_own_color() {
     const SIZE: [u32; 2] = [256, 256];
@@ -256,8 +262,8 @@ fn between_peaks_the_layer_sits_at_its_own_color() {
         );
         let allowed = match *end {
             "dark" => 1.0,
-            "mid" => 6.0,
-            _ => 17.0,
+            "mid" => 10.0,
+            _ => 33.0,
         };
         assert!(
             dip < allowed,

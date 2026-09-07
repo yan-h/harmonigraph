@@ -2360,24 +2360,25 @@ impl Default for ViewConfig {
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
-                lightness: 53.0,
-                lightness_ramp: 31.0,
+                // Brighter in the middle and over a much steeper ramp than
+                // the arc opened on (53.0 over 31.0): the low end stays dark
+                // enough to sit back while the top of the range carries real
+                // light, which is what separates octaves at a glance.
+                lightness: 60.5,
+                lightness_ramp: 65.0,
                 // Denominated in the floor every hue can hold (see
                 // `chroma_of`), which is a tighter axis than the per-hue
-                // ceiling: this is the fraction holding the mean colorfulness
-                // of THIS arc where 0.601_670_8 of the ceiling held it, so the
-                // lattice a fresh install draws is as colored as it was and
-                // only spends that color evenly. Retuning the type's own
-                // `default_chroma` does not reach here — the two are
-                // independent numbers, which is the point of writing this out.
-                chroma: 0.793_2,
-                // Flat, where the brightness ramp is not: the hue arc is
-                // already spending color on pitch, and a chroma ramp over it
-                // would say the same thing twice at the price of one end of
-                // the range going grey. Dialled rather than opened on — see
-                // `default_chroma_ramp`, which the type's own default takes
-                // for the same reason.
-                chroma_ramp: 0.0,
+                // ceiling. Retuning the type's own `default_chroma` does not
+                // reach here — the two are independent numbers, which is the
+                // point of writing this out.
+                chroma: 0.825_000_05,
+                // A slight ramp, no longer flat: the brightness ramp above it
+                // is steep enough that the bright end would read washed
+                // without a little more color under it. Small on purpose —
+                // the hue arc is still what spends color on pitch, and a
+                // ramp that competed with it would take one end of the range
+                // grey.
+                chroma_ramp: 0.069_999_99,
             },
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
@@ -2515,9 +2516,11 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about four fifths strength: a node's rings are quiet
-            // shapes, and the bloom is what gives them presence.
-            bloom_strength: 0.806_154_85,
+            // A halo at about half strength, down from the four fifths the
+            // view opened on: a node's rings are quiet shapes and the bloom is
+            // what gives them presence, but the glow beside it now carries
+            // more of that job — see `glow_blend` and `glow_wash` below.
+            bloom_strength: 0.482_142_87,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, laid down at about half strength — where
             // the DAW look was captured on 2026-09-07, up from the quarter the
@@ -2530,20 +2533,22 @@ impl Default for ViewConfig {
             // ShadowSettings`, that being the one source of a persisted
             // group's fallback.
             shadow: ShadowSettings::default(),
-            // The whole field, which is the fresh picture with no bar in it:
-            // every piece of the lattice's ink wears the light it stands in,
-            // and the bar is there to pull a SOUNDING slice back out of its own
-            // halo without the grey around it going with it.
-            glow_wash: 1.0,
-            // A little under half way round: each octave's arc still reads in
-            // its own colour, softened toward its neighbours rather than cut
-            // against them. Captured from the DAW on 2026-09-07, with the
-            // accumulation below.
-            glow_blend: 0.425_476_2,
-            // Mostly the fixed-peak glow, with a touch of the per-channel
-            // screen accumulation, so a chord's overlapping halos brighten a
-            // little where they meet.
-            glow_accumulation: 0.087_619_05,
+            // About a third of the field, where the picture opened on the
+            // whole of it: a sounding slice is pulled back out of its own halo
+            // and reads as ink rather than as light, while the resting grey
+            // around it still wears what it stands in. That is exactly what
+            // the bar is for, and the fresh view now uses it.
+            glow_wash: 0.365_952_37,
+            // Two thirds of the way round: an octave's arc is softened well
+            // into its neighbours rather than cut against them, which is what
+            // turns the overlapping fields of a chord into one light instead
+            // of a stack of coloured rings.
+            glow_blend: 0.669_761_9,
+            // The fixed-peak glow alone: with the blend above carrying a
+            // chord's halos into each other, the per-channel screen
+            // accumulation was adding brightness where they meet on top of a
+            // union that already reads as one light.
+            glow_accumulation: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of

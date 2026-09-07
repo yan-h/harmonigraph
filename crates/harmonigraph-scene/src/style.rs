@@ -893,15 +893,17 @@ impl Default for ShadowSettings {
             lattice_geometry: ShadowStyle {
                 kernel: ShadowKernel::Distance,
                 width: 1.0,
-                depth: 0.365_238_1,
-                falloff: 0.776_523_8,
+                depth: 0.329_285_7,
+                falloff: 0.757_595_24,
             },
-            // Tight and a little deeper, a hair under the plain exponential:
-            // a letterform or a resting marker keeps a crisp edge.
+            // Tight and shallower than the geometry beside it, a hair under
+            // the plain exponential: a letterform or a resting marker keeps a
+            // crisp edge and sits close to what it is written on rather than
+            // standing off it.
             lattice_text: ShadowStyle {
                 kernel: ShadowKernel::Distance,
-                width: 0.210_714_28,
-                depth: 0.585_238_1,
+                width: 0.242_857_14,
+                depth: 0.297_857_14,
                 falloff: 0.984_738_1,
             },
             // Full depth under the roll's ribbons and the spiral's dots, wide
