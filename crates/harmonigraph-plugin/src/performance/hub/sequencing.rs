@@ -557,6 +557,22 @@ impl Hub {
             self.sequencer.finalized = Some(finalized);
             self.sequencer.copied = Some(finalized);
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
+            // Collection and assembly spend one allowance, so a callback that
+            // spent most of it collecting cannot be trusted to finish taking
+            // this sample. Reserve the whole sample before removing any of it:
+            // a partly consumed batch has nowhere to go, since `end` clears
+            // what was popped and those records are already gone from their
+            // queues. Too big for the pass at all is the bounded failure; too
+            // big for what is left of this callback is a wait, and the next
+            // callback starts the allowance over with room for any sample.
+            let owed = self.same_sample_records(sample);
+            if owed > BATCH_EVENTS {
+                self.configuration_exhausted();
+                return;
+            }
+            if self.input_work + owed > 4096 {
+                return;
+            }
             let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
                 return;
             };
@@ -569,10 +585,12 @@ impl Hub {
             self.sequencer.cohort_unsent = 0;
             self.sequencer.cohort_recipients = 0;
             // One sample, start to finish, inside this callback: assemble the
-            // copies, sort them once, then apply them in that order. A step
-            // that fails has already latched the shared reset, so the batch is
-            // abandoned rather than resumed.
+            // copies, sort them once, then apply them in that order. The
+            // records are out of their queues from here, so a step that fails
+            // is a terminal fault and never a deferral — several of `apply`'s
+            // own refusals latch nothing on their own.
             if !self.assemble_inputs() || !self.apply_batch(owner) {
+                self.configuration_exhausted();
                 self.batch.end();
                 return;
             }
@@ -584,23 +602,40 @@ impl Hub {
         }
     }
 
+    /// What this sample owes across every source, leaving all of it in place.
+    /// Records within a source are in input order, so each source's share is
+    /// the run standing at its queue front. Counting stops one past the batch
+    /// capacity: beyond that the answer is only "too many", and the scan has
+    /// no reason to walk seventeen full queues to say so.
+    fn same_sample_records(&mut self, sample: i64) -> usize {
+        let mut owed = 0;
+        for source in 0..=TUNERS {
+            let mut offset = 0;
+            while owed <= BATCH_EVENTS
+                && self.inputs(source).get(offset).is_some_and(|record| record.sample == sample)
+            {
+                offset += 1;
+                owed += 1;
+            }
+        }
+        owed
+    }
+
     /// Take every copied record standing at this sample, from every source,
-    /// and put the batch in merge order.
+    /// and put the batch in merge order. The caller reserved room for the
+    /// whole sample in both the callback allowance and the batch, so false is
+    /// a latched fault rather than the deferral it used to be.
+    #[must_use]
     fn assemble_inputs(&mut self) -> bool {
         let sample = self.batch.sample;
         for source in 0..=TUNERS {
-            loop {
-                if self.input_work == 4096 {
-                    return false;
-                }
-                match self.inputs(source).front() {
-                    Some(record) if record.sample == sample => {}
-                    _ => break,
-                }
+            while self.inputs(source).front().is_some_and(|record| record.sample == sample) {
                 let record = self.inputs(source).pop().unwrap();
                 self.input_work += 1;
                 if !self.batch.push(record) {
-                    // More same-sample records than one pass can hold.
+                    // Reserved above, so unreachable; latching rather than
+                    // asserting keeps a wrong reservation off the host's
+                    // audio thread.
                     self.configuration_exhausted();
                     return false;
                 }

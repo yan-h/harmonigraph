@@ -1766,3 +1766,100 @@ fn production_same_sample_group_past_one_queue_latches_instead_of_stalling() {
         drop(hub);
     }
 }
+
+#[test]
+fn production_a_sample_too_big_for_the_rest_of_a_callback_waits_rather_than_vanishing() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration = Calibration { offset: 0 };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let sources: [Device; 16] = std::array::from_fn(|_| {
+        let mut source = Device::new(true);
+        source.configure_format(uuid, true, calibration);
+        source.activate_format(44100.0, 512);
+        source
+    });
+    let mut raw = 0;
+    for _ in 0..3 {
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    raw = 1536;
+    for (index, source) in sources.iter().enumerate() {
+        let held = (0..16)
+            .map(|key| note(key, index as i16 % 16, 48 + key as i16, 0, true))
+            .collect::<Vec<_>>();
+        source.run_format(raw, held, None, None, 512);
+    }
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context().len()),
+        256,
+        "the crowded sample needs every source's sixteen notes sounding to address"
+    );
+    // One crowded sample per source: six wildcard tuning expressions over the
+    // sixteen held notes (96 records) plus sixteen same-key retriggers, each
+    // copying its predecessor's choke beside its own onset (32). 128 a source,
+    // 2,048 across the session, every one of them at that sample. Collecting
+    // them costs 2,064 of the callback's 4,096, which leaves less than the
+    // 2,048 assembly then needs.
+    raw += 512;
+    for (index, source) in sources.iter().enumerate() {
+        let mut crowd = (0..6).map(|_| expression(-1, 0.25, 0)).collect::<Vec<_>>();
+        crowd.extend(
+            (0..16).map(|key| note(100 + key, index as i16 % 16, 48 + key as i16, 0, true)),
+        );
+        source.run_format(raw, crowd, None, None, 512);
+    }
+    hub.run_format(raw, vec![], None, None, 512);
+    let mut sounded = 0;
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            sounded += source
+                .run_format(raw, vec![], None, None, 512)
+                .values
+                .iter()
+                .filter(|(_, event)| event.attack().is_some())
+                .count();
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        sounded, 256,
+        "a deferred sample is late, not lost: every retrigger still gets its assignment"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| (1..=16).map(|s| hub.test_inputs(s).len()).sum::<usize>()),
+        0,
+        "and the deferral leaves nothing behind once the next callback takes it"
+    );
+    for source in &sources {
+        raw += 512;
+        source.run_format(raw, vec![note(-1, -1, -1, 0, false)], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    for _ in 0..64 {
+        raw += 512;
+        for source in &sources {
+            source.run_format(raw, vec![], None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert!(sources.iter().all(|source| source.source_snapshot().held == 0));
+    drop(sources);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
