@@ -4792,5 +4792,8 @@ impl CallbackTrait for LatticeCallback {
 }
 
 mod gpu_harness;
+// Dependent crates exercise the same GPU requirement as this crate's tests.
+#[doc(hidden)]
+pub use gpu_harness::{headless_device as test_gpu_device, test_gpu_adapter};
 #[cfg(test)]
 mod lattice_tests;

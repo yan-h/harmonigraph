@@ -1630,16 +1630,9 @@ mod tests {
         const SIZE: [u32; 2] = [128, 64];
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-        let instance = wgpu::Instance::default();
-        let Ok(adapter) =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        else {
-            eprintln!("no GPU adapter available; skipping");
+        let Some((device, queue)) = harmonigraph_render::test_gpu_device() else {
             return;
         };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("headless device");
         let mut renderer = egui_wgpu::Renderer::new(
             &device,
             FORMAT,

@@ -555,8 +555,8 @@ mod tests {
             Ok(true)
         }) {
             Ok(_) => Some(frames),
-            // CI without a GPU: the pipeline can't be exercised at all,
-            // and a hard failure there would be noise, not signal.
+            // Optional local GPU tests may skip. The shared device setup
+            // fails before returning this error when CI requires a GPU.
             Err(e) if e.contains("no usable GPU adapter") => {
                 eprintln!("skipping: {e}");
                 None

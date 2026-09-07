@@ -294,8 +294,8 @@ impl Shot {
 /// a picture of history still arriving, which moves with the analyzer's hop
 /// rather than with anything the heatmap does.
 ///
-/// A machine with no usable GPU adapter draws nothing and asserts nothing —
-/// the same skip `render::tests` takes.
+/// Local runs may skip without a GPU; CI requires one through the shared
+/// device setup before this function can return without comparing pixels.
 fn check(name: &str, shot: Shot) {
     let take = shot.take();
     check_take(name, shot, take);

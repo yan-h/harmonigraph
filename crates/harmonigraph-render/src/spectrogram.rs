@@ -683,7 +683,7 @@ impl CallbackTrait for SpectrogramCallback {
 /// caller says have moved) has to hand the same resources one frame after
 /// another, exactly as a pane does.
 ///
-/// `None` where the machine has no GPU adapter, which every caller returns on.
+/// `None` without an adapter only when GPU tests are optional; CI requires one.
 pub struct SpectrogramHeadless {
     device: wgpu::Device,
     queue: wgpu::Queue,
