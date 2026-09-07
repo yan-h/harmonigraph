@@ -169,7 +169,10 @@ pub struct Hub {
 // Charged owner upper bounds apply in production builds too, where the fixture
 // freeze controls are absent. Larger backing cells have their own assertions.
 const _: () = assert!(std::mem::size_of::<Hub>() <= 1136);
-const _: () = assert!(std::mem::size_of::<Row>() <= 31200 + 2 * 64 * 8);
+// A row is its `State` (15,752 bytes of held voices and channel controllers)
+// plus its bookkeeping. The held-note snapshot it used to carry alongside was
+// nearly as large again; this ceiling is retightened to what is left.
+const _: () = assert!(std::mem::size_of::<Row>() <= 16384);
 impl Hub {
     pub fn end(
         &mut self,
