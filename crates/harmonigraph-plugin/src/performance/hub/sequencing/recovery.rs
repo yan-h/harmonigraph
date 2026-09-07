@@ -121,6 +121,7 @@ impl Hub {
             // These accepted facts are included in that copy and its cuts.
             return;
         }
+        self.close_resumed_emission();
         self.request_recovery(from);
     }
 
@@ -171,6 +172,17 @@ impl Hub {
                     r.detach
                 ))
                 .collect::<Vec<_>>()
+        )
+    }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_recovery_output_cuts(
+        &self,
+        source: usize,
+    ) -> (u64, u64, bool) {
+        (
+            self.rows[source].received,
+            self.rows[source].applied,
+            self.rows[source].baseline.is_some(),
         )
     }
     #[cfg(all(test, not(feature = "tuning-probe")))]
@@ -1054,13 +1066,7 @@ impl Hub {
             // A prior callback may have delivered some completion frames. Close
             // those generations too before settling the remaining participants;
             // a racing permitted group remains factual in the next inventory.
-            for (source, participant) in self.sequencer.recovery.participants.iter().enumerate() {
-                if participant.resumed {
-                    self.offer.as_ref().unwrap().session.rows[source]
-                        .emission_gate
-                        .fetch_or(CLOSED, Ordering::AcqRel);
-                }
-            }
+            self.close_resumed_emission();
         }
         for source in 0..TUNERS {
             let participant = &mut self.sequencer.recovery.participants[source];
@@ -1124,6 +1130,19 @@ impl Hub {
         } else if !self.sequencer.terminal_session {
             if let Some(from) = pending_from {
                 self.request_recovery(from);
+            }
+        }
+    }
+
+    fn close_resumed_emission(&self) {
+        if !self.sequencer.recovery.active {
+            return;
+        }
+        for (source, participant) in self.sequencer.recovery.participants.iter().enumerate() {
+            if participant.resumed {
+                self.offer.as_ref().unwrap().session.rows[source]
+                    .emission_gate
+                    .fetch_or(CLOSED, Ordering::AcqRel);
             }
         }
     }

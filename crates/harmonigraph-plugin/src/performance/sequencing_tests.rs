@@ -70,6 +70,315 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
     })
 }
 
+fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
+    let uuid = SavedUuid::default();
+    let calibration =
+        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    let sources: [Device; 3] = std::array::from_fn(|index| {
+        let mut source = Device::new(true);
+        source.configure_format(
+            uuid,
+            true,
+            Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+        );
+        source.activate_format(44100.0, 512);
+        source
+    });
+    for raw in [0, 512, 1024] {
+        for source in &sources {
+            let input = if raw == 0 {
+                (0..2)
+                    .flat_map(|channel| {
+                        [64, 66, 69].map(move |cc| raw_midi([0xb0 | channel, cc, 0], 0))
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            source.run_format(raw, input, None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    for raw in [1536, 2048] {
+        for index in [1, 0, 2] {
+            let input = match (raw, index) {
+                (1536, 1) => vec![note(2, 0, 64, 448, true)],
+                (1536, 0) => vec![note(1, 0, 60, 0, true)],
+                (2048, 0) => vec![note(4, 1, 69, 400, true), note(4, 1, 69, 420, false)],
+                _ => vec![],
+            };
+            sources[index].run_format(raw, input, None, None, 512);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let late = sources[1].run_format(
+        2560,
+        vec![note(5, 1, 71, 400, true), note(5, 1, 71, 420, false)],
+        None,
+        None,
+        512,
+    );
+    assert!(late
+        .values
+        .iter()
+        .any(|(time, event)| *time == 0 && event.attack().is_some_and(|(id, ..)| id == 2)));
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |hub| hub.test_recovery_identity()).0);
+    for index in [0, 2] {
+        assert!(sources[index].run_format(2560, vec![], None, None, 512).values.is_empty());
+    }
+    (hub, sources)
+}
+
+fn drain_production_recovery_sources(
+    hub: &Device,
+    sources: &[Device; 3],
+    mut raw: i64,
+    mut c_raw: i64,
+) {
+    for step in 0..160 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            let source_raw = if index == 2 {
+                c_raw += 512;
+                c_raw
+            } else {
+                raw
+            };
+            let input = if step == 0 && source.source_snapshot().held != 0 {
+                vec![note(index as i32 + 1, 0, if index == 0 { 60 } else { 64 }, 0, false)]
+            } else {
+                vec![]
+            };
+            let output = source.run_format(source_raw, input, None, None, 512);
+            assert!(!output.values.iter().any(|(_, event)| event.attack().is_some()));
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        if sources.iter().all(|source| {
+            let state = source.source_snapshot();
+            state.held == 0 && state.pending == 0 && state.captures == 0
+        }) && !inspect_hub(hub, |hub| hub.test_recovery_identity()).0
+        {
+            return;
+        }
+    }
+    panic!("accepted releases and owned evidence did not settle");
+}
+
+#[test]
+fn production_received_divergence_recloses_already_resumed_successor() {
+    let _scope = crate::test_scope::enter();
+    let (hub, sources) = production_recovery_with_two_pending_gestures();
+    let shared: Vec<_> = sources
+        .iter()
+        .map(|source| {
+            inspect_source(source, |source| {
+                let offer = source.offer.as_ref().unwrap();
+                offer.session.rows[usize::from(offer.lease.slot - 1)].clone()
+            })
+        })
+        .collect();
+    let mut raw = 2560;
+    let mut c_raw = raw;
+    let mut hold_c = false;
+    for _ in 0..160 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            if index != 2 || !hold_c {
+                if index == 2 {
+                    c_raw = raw;
+                }
+                assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
+            }
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        shared[2].to_source.take_repair_if(|reply| {
+            hold_c |= matches!(reply, protocol::Reply::InventoryComplete { .. });
+            false // Leave the real completion in its single repair cell.
+        });
+        if hold_c
+            && shared[..2]
+                .iter()
+                .all(|row| row.emission_gate.load(Ordering::Acquire) & source::CLOSED == 0)
+        {
+            break;
+        }
+    }
+    assert!(hold_c);
+    assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Resume"));
+    for row in &shared[..2] {
+        assert_eq!(row.emission_gate.load(Ordering::Acquire) & source::CLOSED, 0);
+    }
+    let before = inspect_hub(&hub, |hub| hub.test_recovery_identity());
+    assert!(before.0 && before.2.is_none(), "{before:?}");
+    raw += 512;
+    let output = sources[0].run_format(raw, vec![], None, None, 512);
+    assert!(
+        output.values.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 4)),
+        "{:?}",
+        output.values
+    );
+    hub.run_format(raw, vec![], None, None, 512);
+    let continuation = inspect_hub(&hub, |hub| hub.test_recovery_identity());
+    assert!(
+        continuation.0 && continuation.1 == before.1 && continuation.2.is_some(),
+        "{continuation:?}"
+    );
+    assert_eq!(
+        shared[1].emission_gate.load(Ordering::Acquire) & source::CLOSED,
+        source::CLOSED,
+        "received lateness closes B before stalled canonical publication can apply A"
+    );
+    assert!(sources[1].run_format(raw, vec![], None, None, 512).values.is_empty());
+    let mut successor = Vec::new();
+    for _ in 0..160 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            let source_raw = if index == 2 {
+                c_raw += 512;
+                c_raw
+            } else {
+                raw
+            };
+            let output = source.run_format(source_raw, vec![], None, None, 512);
+            if index == 1 {
+                successor.extend(
+                    output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
+                );
+            }
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        if successor.iter().any(|(_, event)| event.release())
+            && !inspect_hub(&hub, |hub| hub.test_recovery_identity()).0
+        {
+            break;
+        }
+    }
+    assert_eq!(successor.len(), 3, "{successor:?}");
+    assert!(successor[0].1.attack().is_some_and(|(id, ..)| id == 5));
+    assert!(matches!(successor[1].1, Event::Expression { id: 5, .. }));
+    assert!(successor[2].1.release());
+    assert_eq!((successor[1].0, successor[2].0), (successor[0].0, successor[0].0 + 20));
+    drain_production_recovery_sources(&hub, &sources, raw, c_raw);
+    drop(sources);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
+#[test]
+fn production_stop_baseline_holds_recovery_until_known_release_applies() {
+    let _scope = crate::test_scope::enter();
+    let (hub, sources) = production_recovery_with_two_pending_gestures();
+    let mut raw = 2560;
+    let Input::Transport(playing) = transport(0, 120.0) else { unreachable!() };
+    for _ in 0..160 {
+        raw += 512;
+        for source in &sources {
+            assert!(source
+                .run_callback(raw, vec![], (None, None), (512, false), Some(playing))
+                .values
+                .is_empty());
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        if inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild") {
+            break;
+        }
+    }
+    assert!(inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild"));
+    let before = inspect_hub(&hub, |hub| hub.test_recovery_output_cuts(1));
+    assert_eq!(before.0, before.1);
+    let Input::Transport(mut stopped) = transport(0, 120.0) else { unreachable!() };
+    stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    let mut c_raw = raw;
+    raw += 512;
+    assert!(sources[0].run_format(raw, vec![], None, None, 512).values.is_empty());
+    let release = sources[1].run_callback(raw, vec![], (None, None), (512, false), Some(stopped));
+    assert!(release.values.iter().any(|(time, event)| *time == 0 && event.release()));
+    // C's last interval ends exactly at this release: its missing next callback
+    // holds the canonical frontier while collection already owns the output.
+    hub.run_format(raw, vec![], None, None, 512);
+    let received = inspect_hub(&hub, |hub| hub.test_recovery_output_cuts(1));
+    assert!(received.0 > before.0 && received.1 == before.1, "{before:?} -> {received:?}");
+    for _ in 0..16 {
+        raw += 512;
+        for (index, source) in sources[..2].iter().enumerate() {
+            assert!(source
+                .run_callback(
+                    raw,
+                    vec![],
+                    (None, None),
+                    (512, false),
+                    Some(if index == 1 { stopped } else { playing })
+                )
+                .values
+                .is_empty());
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("phase=Rebuild"),
+        "known accepted release must apply before copying factual state: {}",
+        inspect_hub(&hub, |hub| hub.test_recovery_progress())
+    );
+    assert!(received.2, "Stop's pending baseline protects the received release cut");
+    let mut successor = Vec::new();
+    for _ in 0..160 {
+        raw += 512;
+        for (index, source) in sources.iter().enumerate() {
+            let source_raw = if index == 2 {
+                c_raw += 512;
+                c_raw
+            } else {
+                raw
+            };
+            let output = source.run_callback(
+                source_raw,
+                vec![],
+                (None, None),
+                (512, false),
+                Some(if index == 1 { stopped } else { playing }),
+            );
+            if index == 0 {
+                successor.extend(
+                    output.values.into_iter().map(|(time, event)| (raw + i64::from(time), event)),
+                );
+            } else {
+                assert!(
+                    !output
+                        .values
+                        .iter()
+                        .any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 5)),
+                    "Stop's old pending onset stays canceled"
+                );
+            }
+            assert_eq!(source.source_snapshot().faults, 0);
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        if successor.iter().any(|(_, event)| event.release())
+            && !inspect_hub(&hub, |hub| hub.test_recovery_identity()).0
+        {
+            break;
+        }
+    }
+    assert_eq!(successor.len(), 3, "{successor:?}");
+    assert!(successor[0].1.attack().is_some_and(|(id, ..)| id == 4));
+    assert!(
+        matches!(successor[1].1, Event::Expression { id: 4, value: 0.02, .. }),
+        "the released B voice is absent from A's replay context: {successor:?}"
+    );
+    assert!(successor[2].1.release());
+    assert_eq!((successor[1].0, successor[2].0), (successor[0].0, successor[0].0 + 20));
+    drain_production_recovery_sources(&hub, &sources, raw, c_raw);
+    drop(sources);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
+
 #[test]
 fn production_late_output_automatically_redecides_bound_successor_and_keeps_held_pitch() {
     let _scope = crate::test_scope::enter();
@@ -892,7 +1201,7 @@ fn production_revoke_inventory_keeps_a_lifetime_after_its_on_capture_and_plan_re
     let request = chunk.value().records[0].unwrap();
     assert_eq!(request.outcome, protocol::RequestOutcome::Accepted);
     assert_eq!(request.lifetime, bound.lifetime);
-    assert_eq!(request.input, 1536);
+    assert_eq!(request.on_serial, 1);
     assert_ne!(request.decision, 0);
     assert_eq!(Some(request.configuration), bound.assignment);
     drop(chunk);
@@ -1002,7 +1311,7 @@ fn production_revoke_inventory_chunks_sixty_five_requests_while_capture_window_i
     for (index, record) in first.value().records.iter().flatten().enumerate() {
         assert_eq!(record.lifetime, index as u64 + 1);
         assert_eq!(record.outcome, protocol::RequestOutcome::Retained);
-        assert_eq!(record.input, 1536);
+        assert_eq!(record.on_serial, index as u64 + 1);
         assert_eq!(record.decision, 0);
     }
     for _ in 0..3 {

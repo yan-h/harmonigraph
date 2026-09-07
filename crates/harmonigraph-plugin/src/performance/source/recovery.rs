@@ -234,7 +234,6 @@ impl Source {
                 on_serial: life.on_serial,
                 decision: life.assignment.decision,
                 configuration: life.assignment.configuration,
-                input: life.input,
                 life: index,
                 outcome,
             });

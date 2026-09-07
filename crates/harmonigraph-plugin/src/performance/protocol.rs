@@ -68,13 +68,14 @@ pub enum RequestOutcome {
     Canceled,
 }
 
+/// Reconciliation identity and outcome. Original input timing remains owned by
+/// Source Life/Capture and accepted OutputDelta, not this inventory projection.
 #[derive(Clone, Copy, Debug)]
 pub struct RequestInventory {
     pub lifetime: u64,
     pub on_serial: u64,
     pub decision: u64,
     pub configuration: harmonigraph_core::configuration::ResolvedConfig,
-    pub input: i64,
     pub life: u16,
     pub outcome: RequestOutcome,
 }

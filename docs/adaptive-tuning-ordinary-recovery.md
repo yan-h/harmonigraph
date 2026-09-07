@@ -34,6 +34,21 @@ Pending durations and expression are preserved, and completed output sequences c
 The existing factual-revision checks still protect an active replay's copied context;
 they are not standalone evidence that a particular output missed its schedule.
 
+An independent review found that a continuation could leave previously resumed Sources open while another participant still held its completion message.
+A reaching three-Source fixture leaves C's real InventoryComplete in the repair cell, lets A/B reopen, then runs A→Hub→B while C holds canonical publication behind A's newly accepted late output.
+Before correction B remained OPEN despite the queued continuation.
+The correction reuses the existing resumed-generation closure before queuing that continuation, retaining a racing BUSY claim as factual output.
+Afterward B stays closed, its successor completes once with its original duration, accepted releases settle, and all owners drain.
+
+The review also questioned whether an accepted Stop release could be omitted from the pre-copy cut.
+The runtime probe received sequence 9 with only 8 applied and a status cut of 8, but remained in Rebuild through 16 further A/B/Hub callbacks.
+The existing pending-baseline guard was the reason:
+Stop had published a baseline through that release, and it could not install ahead of its factual output.
+Once C's delayed callback stream resumed, the release applied and the replayed successor used correction 0.02 with the released voice absent.
+No additional cut tracking was added for this guarded case.
+Both fixtures resume each Source at its own next raw interval;
+skipping raw time would instead test a clock discontinuity.
+
 ## Reaching checks
 
 The production automatic trace uses three Sources and four initial notes at 44.1 kHz / 512 frames.
@@ -60,7 +75,7 @@ The 15-note fixture retains all 60 original accepted events and exact gestures f
 Automatic recovery's finite inventory reader outlives the short notes, so a bounded quiet drain now waits for its acknowledgement before asserting Capture retirement.
 It permits no extra output or terminal fault.
 The initial affected group had 36 passes and this one ownership-wait failure;
-the corrected fixture then passed all six cases independently.
+the corrected fixture then passed all six cases independently and the full 37-test group passed before the two review fixtures were added.
 These are functional allocation-guard checks, not musical-policy cost measurements or listening validation.
 
 ## Reset and CI fixture corrections
@@ -84,7 +99,13 @@ The repair cell remains reserved, credits settle once, and the stale-epoch and r
 
 No allocation or owner population was added.
 The Plan field is reused in place, and the full 256-byte future Plan/Life ceilings and configuration reservations remain intact.
-The ordinary subtotal remains 106209688 bytes and complete future projection 150730867, leaving 264077 below 144 MiB.
+Clippy exposed the inventory input-time copy as unused once the write-only Plan input field was repurposed.
+That redundant `RequestInventory` field was removed;
+original timing remains in Source Life/Capture and accepted `OutputDelta`, while the inventory retains exact original-On serial, lifetime, configuration and outcome.
+The two inventory fixtures assert their original-On serials after this cleanup.
+The guarded allocator rerun measures 106201496 ordinary bytes, 8192 fewer than the base, because each of sixteen inventory windows shrank by 512 bytes.
+Record/window/slot sizes are now 96/6264/6272 bytes.
+The window remains inside its existing prepaid manifest reservation, so the complete future projection stays 150730867, leaving 264077 below 144 MiB.
 Both voice/history halves, indices and 4 MiB policy workspace remain reserved;
 no prepaid capacity is reclaimed twice.
 
