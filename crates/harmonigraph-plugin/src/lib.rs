@@ -743,7 +743,6 @@ impl Plugin for Harmonigraph {
         self.take.publish_clock(self.presentation_seconds);
         ProcessStatus::Normal
     }
-
 }
 
 impl ClapPlugin for Harmonigraph {

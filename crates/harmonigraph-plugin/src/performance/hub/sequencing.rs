@@ -390,7 +390,11 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 #[cfg(test)]
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
-        println!("LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}", self.history.layout(), [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]);
+        println!(
+            "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
+            self.history.layout(),
+            [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]
+        );
         println!(
             "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
             [
