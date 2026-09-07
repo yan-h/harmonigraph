@@ -69,8 +69,7 @@ class SemanticBreaksTests(unittest.TestCase):
             "",
         ], [
             "- **Range.**",
-            "  The lower endpoint stays here.",
-            "  The upper endpoint stays there.",
+            "  The lower endpoint stays here. The upper endpoint stays there.",
             "  This accepted clause stays separate,",
             "  as does this one.",
             "1. Ordered.",
@@ -89,11 +88,24 @@ class SemanticBreaksTests(unittest.TestCase):
             "",
         ], [
             "An explicit hard break  ",
-            "The broken sentence ends here;",
-            "another clause ends with a hard break  ",
+            "The broken sentence ends here; another clause ends with a hard break  ",
             "The final sentence ends here.",
             "",
         ])
+
+    def test_multiline_inline_spans_keep_their_structure_across_accepted_breaks(self):
+        for opening, closing in [("`", "`"), ("[", "](https://example.test)")]:
+            with self.subTest(opening=opening):
+                self.assert_repaired([
+                    f"Use {opening}these settings:",
+                    "alpha. # Heading",
+                    f"continues{closing} here.",
+                    "",
+                ], [
+                    f"Use {opening}these settings:",
+                    f"alpha. # Heading continues{closing} here.",
+                    "",
+                ])
 
     def test_structure_and_indent_changes_bound_repairs(self):
         structures = [

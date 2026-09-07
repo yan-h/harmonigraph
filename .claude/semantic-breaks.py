@@ -14,9 +14,9 @@ splicing paragraphs cannot leave a fragment stranded on its own line.
 
 Structure is left alone entirely — frontmatter, fenced code, tables, headings,
 HTML blocks, indented code, and reference definitions are copied through
-untouched. Inside prose, a break is only ever taken at a boundary that already
-carries punctuation, and never inside a code span, a link target, or after an
-abbreviation.
+untouched. Inside prose, repairs join mid-clause breaks without introducing
+new ones. Accepted boundaries stay in place, including those inside multiline
+code spans and links.
 """
 
 from __future__ import annotations
@@ -25,17 +25,6 @@ import os
 import re
 import subprocess
 import sys
-
-# Sentence enders, then the clause boundaries the spec allows. Breaking only
-# after punctuation is what makes the check below a mechanical test rather than
-# a judgement: every line of a paragraph but its last ends at one of these.
-SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-CLAUSE_END = re.compile(r"(?<=[;:—])\s+")
-
-# A period that does NOT end a sentence. Version numbers and the Latin
-# abbreviations this tree actually uses; a break after one reads as a sentence
-# boundary that is not there.
-ABBREV = re.compile(r"(?:^|\s)(?:e\.g|i\.e|cf|vs|etc|Dr|Mr|Ms|St|approx|Fig|no)\.$|\d\.$", re.I)
 
 # Structure that is copied through rather than reflowed.
 STRUCTURAL = re.compile(
@@ -53,45 +42,6 @@ STRUCTURAL = re.compile(
     re.X,
 )
 FENCE = re.compile(r"^(`{3,}|~{3,})")
-
-
-def _spans_to_protect(text: str) -> list[tuple[int, int]]:
-    """Character ranges a break must not fall inside."""
-    spans: list[tuple[int, int]] = []
-    for m in re.finditer(r"`[^`]*`", text):  # inline code
-        spans.append(m.span())
-    for m in re.finditer(r"\[[^\]]*\]\([^)]*\)", text):  # inline link
-        spans.append(m.span())
-    return spans
-
-
-def _inside(pos: int, spans: list[tuple[int, int]]) -> bool:
-    return any(a < pos < b for a, b in spans)
-
-
-def split_clauses(text: str) -> list[str]:
-    """Break `text` after sentences, then after clause punctuation."""
-    protect = _spans_to_protect(text)
-
-    def cut(chunk: str, pattern: re.Pattern[str], offset: int) -> list[str]:
-        out, last = [], 0
-        for m in pattern.finditer(chunk):
-            if _inside(offset + m.start(), protect):
-                continue
-            head = chunk[last : m.start()]
-            if ABBREV.search(head):
-                continue
-            out.append(head)
-            last = m.end()
-        out.append(chunk[last:])
-        return [p for p in out if p.strip()]
-
-    pieces, base = [], 0
-    for sentence in cut(text, SENTENCE_END, 0):
-        start = text.index(sentence, base)
-        base = start + len(sentence)
-        pieces.extend(cut(sentence, CLAUSE_END, start))
-    return [p.strip() for p in pieces if p.strip()]
 
 
 def _indent(line: str) -> str:
@@ -113,12 +63,14 @@ def reflow(lines: list[str]) -> list[str]:
             out.append(lines[i])
         else:
             # The checker never crosses an indentation change. Preserve that
-            # prefix on every new clause so list continuations stay in place.
+            # prefix so list continuations stay in place. Only join: inserting
+            # new breaks could split an inline span opened on an accepted line
+            # before this run, turning its text into a heading or list marker.
             indent = _indent(lines[start])
-            clauses = split_clauses(" ".join(p.strip() for p in lines[start : i + 1]))
+            joined = " ".join(p.strip() for p in lines[start : i + 1])
             # The last line may end in an explicit Markdown hard break.
-            clauses[-1] += lines[i][len(lines[i].rstrip()) :]
-            out.extend(indent + clause for clause in clauses)
+            suffix = lines[i][len(lines[i].rstrip()) :]
+            out.append(indent + joined + suffix)
         i += 1
     return out
 
