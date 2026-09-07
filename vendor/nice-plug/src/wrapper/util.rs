@@ -34,9 +34,13 @@ compile_error!(
     "The 'assert_process_allocs' feature does not work correctly in combination with the 'x86_64-pc-windows-gnu' target, see https://github.com/Windfisch/rust-assert-no-alloc/issues/7"
 );
 
-#[cfg(all(debug_assertions, feature = "assert_process_allocs"))]
+#[cfg(all(debug_assertions, feature = "assert_process_allocs", not(feature = "clap-boundary-tests")))]
 #[global_allocator]
 static A: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+
+#[cfg(all(debug_assertions, feature = "clap-boundary-tests"))]
+#[global_allocator]
+static MEASURED: super::allocation_probe::MeasuredAllocator = super::allocation_probe::MeasuredAllocator;
 
 /// A Rabin fingerprint based string hash for parameter ID strings.
 pub fn hash_param_id(id: &str) -> u32 {

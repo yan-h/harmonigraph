@@ -70,7 +70,13 @@ fn played() -> SharedState {
     let mut state = fresh();
     state.view.show_labels = true;
     for key in 48..72 {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, key, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            key,
+            1.0,
+        ));
     }
     state
 }

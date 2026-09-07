@@ -6,22 +6,24 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
+use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
 use harmonigraph_record::{interleaved_reservation, TAKE_CHANNELS};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod background;
+mod configuration;
 mod editor;
+mod performance;
 #[cfg(feature = "tuning-probe")]
 mod probe;
+#[cfg(test)]
+mod test_scope;
+#[cfg(not(feature = "tuning-probe"))]
+use performance::tune::HarmonigraphTune;
 #[cfg(feature = "tuning-probe")]
 use probe::HarmonigraphTune;
-
-/// Capacity of the audio→GUI note event ring buffer. Events are dropped
-/// (silently) if the GUI stalls long enough to fill it.
-pub(crate) const EVENT_RING_CAPACITY: usize = 4096;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
@@ -42,6 +44,8 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    configuration: Option<Box<configuration::Owner>>,
+    aggregation: Option<Box<performance::hub::Hub>>,
     #[cfg(feature = "tuning-probe")]
     probe: probe::Hub,
     /// Keeps the spectrogram's history running while the editor window is
@@ -58,7 +62,6 @@ pub struct Harmonigraph {
     /// and it cost a crash; ordering the field is cheaper than being sure.
     _background: background::BackgroundAnalyzer,
     params: Arc<HarmonigraphParams>,
-    note_producer: rtrb::Producer<CoreNoteEvent>,
     /// The selected analysis input, interleaved, for the GUI's spectrum analyzer.
     audio_producer: rtrb::Producer<f32>,
     /// Current sample rate as f32 bits, so the GUI folds FFT bins under
@@ -73,16 +76,37 @@ pub struct Harmonigraph {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
+    /// Continuous presentation seconds across raw sample-clock resets/rate changes.
+    /// Historical queued records must not be reinterpreted in the new epoch.
+    presentation_seconds: f64,
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
-    take: harmonigraph_record::Recorder,
+    take: RecorderSlot,
     /// Count of events recorded in the current take, for the UI's status
     /// line. Reset when recording starts.
     take_events: Arc<AtomicU64>,
 }
 
+/// The live shell always owns its recorder. Destruction transfers that same
+/// producer, alongside its original route owner, into bounded session retirement.
+struct RecorderSlot(Option<harmonigraph_record::Recorder>);
+impl std::ops::Deref for RecorderSlot {
+    type Target = harmonigraph_record::Recorder;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("live recorder")
+    }
+}
+impl std::ops::DerefMut for RecorderSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("live recorder")
+    }
+}
+
 #[derive(Params)]
 pub struct HarmonigraphParams {
+    session: std::sync::OnceLock<Arc<performance::setup::Shared>>,
+    configuration:
+        std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
     /// Window size in logical pixels, persisted with the plugin state.
     #[persist = "editor-state"]
     pub editor_state: Arc<editor::EguiState>,
@@ -169,6 +193,8 @@ fn param_for_key(key: ParamKey) -> FloatParam {
 impl Default for HarmonigraphParams {
     fn default() -> Self {
         HarmonigraphParams {
+            session: std::sync::OnceLock::new(),
+            configuration: std::sync::OnceLock::new(),
             editor_state: editor::EguiState::from_size(
                 editor::DEFAULT_SIZE.0,
                 editor::DEFAULT_SIZE.1,
@@ -208,6 +234,8 @@ impl HarmonigraphParams {
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a HarmonigraphParams,
     pub setter: &'a ParamSetter<'a>,
+    pub configuration:
+        Option<(nice_plug::wrapper::clap::configuration::ConfigurationSnapshot, bool)>,
     /// The key currently inside an explicit begin_set/end_set gesture, if
     /// any. Lives in EditorShared so it survives across frames (this
     /// adapter is rebuilt every frame).
@@ -215,11 +243,37 @@ pub(crate) struct PluginParamBackend<'a> {
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
+    fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
+        self.configuration.map(|(snapshot, pending)| configuration::view(snapshot, pending))
+    }
+    fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
+        self.params
+            .configuration
+            .get()
+            .map(|mailbox| mailbox.submit(configuration::packet(edit)).is_ok())
+    }
+
     fn get(&self, key: ParamKey) -> f32 {
+        if let (Some((snapshot, _)), Some(index)) =
+            (self.configuration, ParamKey::TUNING.iter().position(|k| *k == key))
+        {
+            return snapshot.raw[index];
+        }
         self.params.param_for(key).value()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
+        if let (Some(mailbox), Some(index)) =
+            (self.params.configuration.get(), ParamKey::TUNING.iter().position(|k| *k == key))
+        {
+            let _ = mailbox.submit(configuration::packet(
+                harmonigraph_core::configuration::ConfigEdit::axis(
+                    index,
+                    harmonigraph_core::tuning::microcents(value),
+                ),
+            ));
+            return;
+        }
         let param = self.params.param_for(key);
         if self.gesture.get() == Some(key) {
             // Inside an explicit gesture (drag): just set.
@@ -244,6 +298,9 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn begin_set(&self, key: ParamKey) {
+        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
+            return;
+        }
         // Close a dangling gesture first (shouldn't happen, but a host
         // seeing unbalanced begin/end is worse than a spurious end).
         if let Some(previous) = self.gesture.get() {
@@ -254,6 +311,9 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn end_set(&self, key: ParamKey) {
+        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
+            return;
+        }
         if self.gesture.get() == Some(key) {
             self.setter.end_set_parameter(self.params.param_for(key));
             self.gesture.set(None);
@@ -304,10 +364,10 @@ fn origin_source(
     }
 }
 
-/// When an event happened on the RING's clock: the plugin's own sample counter,
-/// which is what the editor's `ClockMapper` reads.
-fn ring_time(block_start: u64, timing: u32, sample_rate: f64) -> f64 {
-    (block_start + u64::from(timing)) as f64 / sample_rate
+/// Continuous presentation time for the display. The current block contributes
+/// sample offsets at its own rate; raw clock resets cannot retime queued history.
+fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
+    block_start + f64::from(timing) / sample_rate
 }
 
 /// When the same event happened on the TAKE's clock, which hangs off the
@@ -390,7 +450,6 @@ fn selected_analysis_input<'a, T>(
 
 impl Default for Harmonigraph {
     fn default() -> Self {
-        let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
         // Mono until a block says otherwise: the safe guess, since reading a
@@ -398,8 +457,13 @@ impl Default for Harmonigraph {
         // block, while reading mono as stereo would de-interleave silence.
         let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
+        let consumer = take_control.take_display().expect("one display consumer");
+        #[cfg(test)]
+        let take = configuration::injected_recorder().unwrap_or(take);
         let take_events = Arc::new(AtomicU64::new(0));
         let params = Arc::new(HarmonigraphParams::default());
+        let aggregation = performance::hub::Hub::new();
+        params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
         let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
             consumer,
             audio_consumer,
@@ -423,17 +487,19 @@ impl Default for Harmonigraph {
             params.ui_state.clone(),
         );
         Harmonigraph {
+            configuration: None,
+            aggregation: Some(aggregation),
             #[cfg(feature = "tuning-probe")]
             probe: probe::Hub::default(),
             params,
-            note_producer: producer,
             audio_producer,
             sample_rate_bits,
             audio_channels,
             editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
-            take,
+            presentation_seconds: 0.0,
+            take: RecorderSlot(Some(take)),
             take_events,
             _background,
         }
@@ -466,8 +532,8 @@ impl Plugin for Harmonigraph {
         ..AudioIOLayout::const_default()
     }];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
-    const MIDI_OUTPUT: MidiConfig = MidiConfig::Basic;
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
+    const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
 
     type SysExMessage = ();
     type BackgroundTask = ();
@@ -496,19 +562,37 @@ impl Plugin for Harmonigraph {
     }
 
     fn reset(&mut self) {
+        if let Some(owner) = self.configuration.as_mut() {
+            if self.aggregation.as_mut().is_some_and(|hub| hub.force_reset(owner, true)) {
+                self.samples_processed = 0;
+                return;
+            }
+            owner.reset(&self.take);
+            if let Some(hub) = &mut self.aggregation {
+                hub.reset_idle_clock(owner.recording.clock);
+            }
+            let mailbox = self.params.configuration.get().unwrap();
+            let generation = mailbox.reset_generation.load(Ordering::Relaxed);
+            if let Some(next) = generation.checked_add(1) {
+                mailbox.reset_generation.store(next, Ordering::Release);
+            } else {
+                owner.fault();
+            }
+            mailbox.published.publish(owner.snapshot);
+        }
         #[cfg(feature = "tuning-probe")]
         self.probe.reset();
         self.samples_processed = 0;
-        // After a transport reset, note-offs for held notes may never
-        // arrive; tell the GUI to release everything. Time 0.0 is the
-        // restarted sample clock's epoch (the editor's ClockMapper snaps
-        // its offset on a jump this large).
-        let _ = self.note_producer.push(CoreNoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 0,
-            kind: NoteEventKind::AllOff,
-        });
+        // Reset only observed direct input. The session owner must publish
+        // its own explicit source/session controls after lifecycle validation.
+        // Presentation time stays continuous when exact raw clock provenance
+        // starts a new epoch, including queued history before this reset.
+        self.take.publish_clock(self.presentation_seconds);
+        let _ = self.take.publish_note(
+            CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
+            self.presentation_seconds,
+            Default::default(),
+        );
     }
 
     fn process(
@@ -528,7 +612,14 @@ impl Plugin for Harmonigraph {
         // getter: it latches `was_armed` and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
-        let armed = self.take.is_armed();
+        let armed = match self.configuration.as_ref() {
+            Some(owner) if !owner.frozen => self.take.is_armed_at(owner.recording_intent()),
+            Some(_) => {
+                self.take.is_armed();
+                false
+            }
+            None => self.take.is_armed(),
+        };
         let take_origin =
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
                 OriginSource::Idle => None,
@@ -542,24 +633,50 @@ impl Plugin for Harmonigraph {
                 OriginSource::LocalClock(seconds) => Some(seconds),
             };
 
+        if let Some(owner) = self.configuration.as_mut() {
+            owner.record(&mut self.take, take_origin, self.presentation_seconds);
+        }
         while let Some(event) = context.next_event() {
-            if let Some(MappedNote { timing, channel, note, kind }) = mapped_note(event) {
-                let time = ring_time(block_start, timing, self.sample_rate);
-                // Full ring = GUI stalled; dropping visualization events is
-                // the right failure mode for the audio thread.
-                let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
+            if let Some(MappedNote { timing, channel, note, kind }) =
+                mapped_note(event).filter(|_| self.configuration.is_none())
+            {
+                let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
+                let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
+                let mut delta: harmonigraph_core::canonical::NoteDelta = event.into();
+                let route = if let Some(owner) = self.configuration.as_ref() {
+                    delta.timing = owner.direct_timing(timing);
+                    match delta.timing.and_then(|timing| owner.recording_route(timing, time).ok()) {
+                        Some(route) => route,
+                        None => {
+                            self.take.fail_configuration();
+                            Default::default()
+                        }
+                    }
+                } else {
+                    Default::default()
+                };
+                let _ = self.take.publish_note(
+                    delta,
+                    ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
+                    route,
+                );
                 if let Some(origin) = take_origin {
-                    self.take.note(
-                        take_time(origin, timing, self.sample_rate),
-                        channel,
-                        note,
-                        kind,
-                    );
+                    if self.configuration.is_none() {
+                        self.take.note(
+                            take_time(origin, timing, self.sample_rate),
+                            SourceId::DIRECT,
+                            channel,
+                            note,
+                            kind,
+                        );
+                    }
                     self.take_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
             // Behave as a transparent MIDI effect.
-            context.send_event(event);
+            if self.configuration.is_none() {
+                context.send_event(event);
+            }
         }
 
         // The selected input for the GUI's spectrum analyzer, INTERLEAVED:
@@ -602,6 +719,17 @@ impl Plugin for Harmonigraph {
             }
         }
 
+        if let Some(owner) = self.configuration.as_mut() {
+            self.aggregation.as_mut().unwrap().publish(
+                owner,
+                &mut self.take,
+                ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
+            );
+            owner.finish_recording_publication(
+                &mut self.take,
+                ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
+            );
+        }
         if let Some(origin) = take_origin {
             self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
@@ -621,6 +749,8 @@ impl Plugin for Harmonigraph {
         }
 
         self.samples_processed += block_samples as u64;
+        self.presentation_seconds += block_samples as f64 / self.sample_rate;
+        self.take.publish_clock(self.presentation_seconds);
         #[cfg(feature = "tuning-probe")]
         if self.probe.keep_alive() {
             return ProcessStatus::KeepAlive;
@@ -635,6 +765,212 @@ impl Plugin for Harmonigraph {
 }
 
 impl ClapPlugin for Harmonigraph {
+    const CLAP_PERFORMANCE: bool = true;
+    fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
+        Some(Arc::new(performance::setup::Adapter(
+            self.aggregation.as_ref().unwrap().shared.clone(),
+        )))
+    }
+    fn clap_main_init(&mut self) -> bool {
+        self.aggregation.as_ref().unwrap().shared.register();
+        true
+    }
+    fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
+        self.aggregation
+            .as_mut()
+            .unwrap()
+            .activate(f64::from(config.sample_rate), config.max_buffer_size);
+        true
+    }
+    fn clap_configuration_retire(&mut self, unfinished: bool) {
+        self.configuration.as_mut().unwrap().recording.retired_configuration = Some(unfinished);
+    }
+    fn clap_main_destroy(&mut self) {
+        let mut hub = self.aggregation.take().unwrap();
+        hub.retire_publication(
+            self.configuration.take().unwrap(),
+            self.take.0.take().unwrap(),
+            self.presentation_seconds,
+        );
+        performance::registry::retire_hub(hub);
+    }
+    fn clap_performance_stop(&mut self) {
+        self.aggregation.as_mut().unwrap().direct.stop();
+    }
+    fn clap_performance_reset(&mut self) {
+        self.aggregation.as_mut().unwrap().direct.stop();
+    }
+    fn clap_performance_begin(
+        &mut self,
+        callback: nice_plug::wrapper::clap::performance::Callback,
+        _output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
+    ) {
+        self.aggregation.as_mut().unwrap().begin(
+            callback,
+            self.configuration.as_mut().unwrap(),
+            self.presentation_seconds,
+        );
+    }
+    fn clap_performance_input(
+        &mut self,
+        input: nice_plug::wrapper::clap::configuration::OwnedInput,
+    ) -> nice_plug::wrapper::clap::performance::Consumption {
+        self.aggregation.as_mut().unwrap().direct.input(input)
+    }
+    fn clap_performance_input_boundary(&mut self) {
+        self.aggregation.as_mut().unwrap().input_boundary();
+    }
+    fn clap_performance_process(
+        &mut self,
+        buffer: &mut Buffer,
+        aux: &mut AuxiliaryBuffers,
+        context: &mut impl ProcessContext<Self>,
+        block: nice_plug::wrapper::clap::performance::Block,
+        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
+    ) -> ProcessStatus {
+        self.aggregation.as_mut().unwrap().direct.schedule(block, output);
+        self.process(buffer, aux, context)
+    }
+    fn clap_performance_prepare(
+        &mut self,
+        group: nice_plug::wrapper::clap::performance::Group,
+    ) -> bool {
+        self.aggregation.as_mut().unwrap().direct.prepare(group)
+    }
+    fn clap_performance_complete(
+        &mut self,
+        completion: nice_plug::wrapper::clap::performance::Completion,
+        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
+    ) {
+        self.aggregation.as_mut().unwrap().direct.complete(completion, output);
+    }
+    fn clap_performance_finalize(
+        &mut self,
+        callback: nice_plug::wrapper::clap::performance::Callback,
+        _status: i32,
+        output: &mut nice_plug::wrapper::clap::performance::Output<'_>,
+    ) {
+        self.aggregation.as_mut().unwrap().direct.schedule(
+            nice_plug::wrapper::clap::performance::Block {
+                callback,
+                start: 0,
+                frames: callback.frames,
+                transport: callback.transport,
+            },
+            output,
+        );
+    }
+    fn clap_performance_end(
+        &mut self,
+        callback: nice_plug::wrapper::clap::performance::Callback,
+        _summary: nice_plug::wrapper::clap::performance::Summary,
+    ) {
+        let old = self.configuration.as_ref().unwrap().recording.clock;
+        self.aggregation.as_mut().unwrap().end(
+            callback,
+            self.configuration.as_mut().unwrap(),
+            &mut self.take,
+            self.presentation_seconds,
+        );
+        if old != self.configuration.as_ref().unwrap().recording.clock {
+            let mailbox = self.params.configuration.get().unwrap();
+            if mailbox
+                .reset_generation
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+                .is_err()
+            {
+                self.configuration.as_mut().unwrap().fault();
+            }
+            mailbox.published.publish(self.configuration.as_ref().unwrap().snapshot);
+        }
+    }
+    const CLAP_CONFIGURATION: bool = true;
+    const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
+        &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
+    const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
+    fn clap_configuration_install(
+        &mut self,
+        handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
+    ) {
+        self.take.enable_configuration();
+        self.take.enable_canonical();
+        let owner = Box::new(configuration::Owner::new(&self.params));
+        handle.published.publish(owner.snapshot);
+        self.params
+            .configuration
+            .set(handle)
+            .unwrap_or_else(|_| panic!("configuration installed twice"));
+        self.configuration = Some(owner);
+    }
+    fn clap_configuration_prepare(
+        state: &nice_plug::plugin::PluginState,
+    ) -> Result<
+        nice_plug::wrapper::clap::configuration::ConfigurationEdit,
+        nice_plug::wrapper::clap::configuration::SubmitError,
+    > {
+        configuration::prepare(state)
+    }
+    fn clap_configuration_preview(
+        mut snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
+    ) -> nice_plug::wrapper::clap::configuration::ConfigurationSnapshot {
+        configuration::resolve_preview(&mut snapshot);
+        snapshot
+    }
+    fn clap_configuration_save(
+        snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
+        state: &mut nice_plug::plugin::PluginState,
+    ) {
+        configuration::save(snapshot, state);
+    }
+    fn clap_configuration_begin(
+        &mut self,
+        boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
+    ) {
+        self.configuration.as_mut().unwrap().begin(boundary, &self.take, self.presentation_seconds);
+    }
+    fn clap_configuration_prefix(&mut self, through: i64) {
+        self.configuration.as_mut().unwrap().prefix(through);
+    }
+    fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
+        self.configuration.as_mut().unwrap().segment(start, frames);
+    }
+    fn clap_configuration_apply(
+        &mut self,
+        command: nice_plug::wrapper::clap::configuration::ConfigurationCommand,
+        commit: nice_plug::wrapper::clap::configuration::ConfigurationCommit,
+    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
+        let owner = self.configuration.as_mut().unwrap();
+        let result = owner.apply(command, commit, &self.take);
+        if owner.timeline.storage_fault {
+            self.aggregation.as_mut().unwrap().configuration_exhausted();
+        }
+        if result.is_none() {
+            self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+        }
+        result
+    }
+    fn clap_configuration_observe(
+        &mut self,
+        event: nice_plug::wrapper::clap::configuration::OwnedInput,
+    ) {
+        self.configuration.as_mut().unwrap().observe(event);
+    }
+    fn clap_configuration_group_end(
+        &mut self,
+        _sample: i64,
+    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
+        let owner = self.configuration.as_mut().unwrap();
+        let result = owner.group_end();
+        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+        result
+    }
+    fn clap_configuration_fault(&mut self) {
+        let owner = self.configuration.as_mut().unwrap();
+        owner.fault();
+        self.aggregation.as_mut().unwrap().configuration_exhausted();
+        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
+    }
+
     #[cfg(feature = "tuning-probe")]
     const CLAP_PROCESS_TRACE: bool = true;
     #[cfg(feature = "tuning-probe")]
@@ -657,7 +993,7 @@ impl Vst3Plugin for Harmonigraph {
 }
 
 #[cfg(not(feature = "tuning-probe"))]
-nice_export_clap!(Harmonigraph);
+nice_export_clap!(Harmonigraph, HarmonigraphTune);
 #[cfg(feature = "tuning-probe")]
 nice_export_clap!(Harmonigraph, HarmonigraphTune);
 nice_export_vst3!(Harmonigraph);
@@ -997,7 +1333,7 @@ mod tests {
             plugin.params.analysis_input._internal_set_plain_value(AnalysisInputParam::Sidechain)
         });
         let (recorder, mut take_capture) = harmonigraph_record::testing::channel();
-        plugin.take = recorder;
+        plugin.take = RecorderSlot(Some(recorder));
         take_capture.arm_audio();
 
         let shared = plugin.editor_shared.clone();
@@ -1176,8 +1512,8 @@ mod tests {
         assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
     }
 
-    /// One event, two clocks. The ring is stamped on the plugin's own sample
-    /// counter, which is what the editor's ClockMapper reads; the take is
+    /// One event, two clocks. The ring uses continuous presentation seconds,
+    /// which is what the editor's ClockMapper reads; the take is
     /// stamped on the transport, which is what lets it be lined up against a
     /// bounce later. Collapsing them into one would look right on screen and
     /// put every recorded take at the wrong song position.
@@ -1187,15 +1523,52 @@ mod tests {
     /// 512-sample block, an odd offset at 44.1 kHz — lands off a representable
     /// value and fails on the last bit with the implementation still correct.
     #[test]
+    fn queued_history_keeps_its_clock_across_the_actual_plugin_reset() {
+        let mut plugin = Harmonigraph::default();
+        let shared = plugin.editor_shared.clone();
+        let mut shared = shared.lock();
+        plugin.presentation_seconds = 11.0;
+        plugin.samples_processed = 48_000;
+        plugin
+            .take
+            .publish_note(
+                CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                11.0,
+                Default::default(),
+            )
+            .unwrap();
+        plugin.reset();
+        assert_eq!(plugin.samples_processed, 0);
+        plugin.sample_rate = 96_000.0;
+        let next = ring_time(plugin.presentation_seconds, 48_000, plugin.sample_rate);
+        plugin
+            .take
+            .publish_note(
+                CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into(),
+                12.0,
+                Default::default(),
+            )
+            .unwrap();
+        plugin.take.publish_clock(12.0);
+        let deadline = Instant::now() + ANALYSIS_DEADLINE;
+        while shared.ui.tracker.roll().notes().count() < 2 && Instant::now() < deadline {
+            shared.catch_up(22.0);
+            std::thread::yield_now();
+        }
+        let notes: Vec<_> = shared.ui.tracker.roll().notes().map(|n| (n.start, n.end)).collect();
+        assert_eq!(notes, [(20.0, Some(21.0)), (21.5, None)]);
+    }
+
+    #[test]
     fn an_event_is_stamped_on_two_independent_clocks() {
         let rate = 48_000.0;
 
         // Both clocks advance by the event's offset within the block...
-        assert_eq!(ring_time(0, 24_000, rate) - ring_time(0, 0, rate), 0.5);
+        assert_eq!(ring_time(0.0, 24_000, rate) - ring_time(0.0, 0, rate), 0.5);
         assert_eq!(take_time(90.0, 24_000, rate) - take_time(90.0, 0, rate), 0.5);
 
         // ...but only the ring's counts the plugin's own blocks,
-        assert_eq!(ring_time(48_000, 0, rate), 1.0);
+        assert_eq!(ring_time(1.0, 0, rate), 1.0);
         // and only the take's counts the song position it hangs off.
         assert_eq!(take_time(90.0, 0, rate), 90.0);
     }

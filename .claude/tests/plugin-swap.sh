@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# Does a swap into the shared bundle slot reach a host that already has the
-# plugin open, including when the source build lives in a Codex-managed
-# worktree outside the main checkout?
-#
-# The swap is the one sequence in the tree whose failure is completely silent.
-# Bitwig's plugin host keeps the library it opened mapped for as long as its
-# sandbox PROCESS lives, so the only swap such a host can see is one that
-# changes the bytes behind the inode it is already holding:
-#
-#   - `cp` writes THROUGH the inode already at the path. Good.
-#   - `codesign` does NOT. It writes a new file and renames it into place on
-#     every run, whether or not the signature changes size — so signing the
-#     LIVE bundle discards the inode a preceding `cp` just wrote.
-#
-# Get the order wrong and every step still succeeds: the copy reports success,
-# `codesign --verify` passes, the bundle on disk is correct, and the DAW goes
-# on drawing the previous build with nothing on screen saying so. No cargo test
-# can reach this — the subject is an inode and an ad-hoc signature — which is
-# why it is a gate rather than a habit, like the reclaim-lock cases beside it.
+# Install distinct signed builds from main and an external registered worktree.
+# Every executable replacement must use a fresh inode, preserve an old open
+# descriptor's bytes, and load the new dylib in a fresh process. On-disk signature
+# verification alone did not catch Bitwig's CODESIGNING Invalid Page scans (#705).
 #
 #   .claude/tests/plugin-swap.sh          # run it
 #
@@ -86,9 +71,9 @@ git -C "$repo" worktree add -q -b "$codex_branch" "$codex_wt" HEAD 2>/dev/null |
 mkdir -p "$repo/target/release"
 cat > "$TMP/new.c" <<C
 const char *tag = "main @$sha";
-int main(void) { return 0; }
+int fixture_value(void) { return 0; }
 C
-cc -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/null || {
+cc -dynamiclib -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/null || {
   echo "✗ could not build the fixture's Mach-O" >&2; exit 1; }
 printf '#!/bin/sh\ntrue\n' > "$repo/target/release/harmonigraph-offline"
 chmod +x "$repo/target/release/harmonigraph-offline"
@@ -96,9 +81,9 @@ chmod +x "$repo/target/release/harmonigraph-offline"
 mkdir -p "$codex_wt/target/release"
 cat > "$TMP/codex.c" <<C
 const char *tag = "$codex_branch @$sha";
-int main(void) { return 0; }
+int fixture_value(void) { return 0; }
 C
-cc -o "$codex_wt/target/release/libharmonigraph_plugin.dylib" \
+cc -dynamiclib -o "$codex_wt/target/release/libharmonigraph_plugin.dylib" \
   "$TMP/codex.c" 2>/dev/null || {
   echo "✗ could not build the Codex worktree fixture's Mach-O" >&2; exit 1; }
 printf '#!/bin/sh\ntrue\n' > "$codex_wt/target/release/harmonigraph-offline"
@@ -108,13 +93,39 @@ chmod +x "$codex_wt/target/release/harmonigraph-offline"
 # a real question rather than one the fixture answers by construction.
 cat > "$TMP/old.c" <<C
 const char *tag = "main @0000000";
-int main(void) { return 0; }
+int fixture_value(void) { return 0; }
 C
-cc -o "$TMP/old-bin" "$TMP/old.c" 2>/dev/null || {
+cc -dynamiclib -o "$TMP/old-bin" "$TMP/old.c" 2>/dev/null || {
   echo "✗ could not build the fixture's Mach-O" >&2; exit 1; }
 
-# The slot, holding a signed bundle — which is the state that matters: the
-# inode under test is the one a running host would already be mapped to.
+# A fresh process goes through the dynamic loader and reads the loaded tag.
+cat > "$TMP/dlopen.c" <<'C'
+#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) { fprintf(stderr, "%s\n", dlerror()); return 1; }
+    const char **tag = dlsym(handle, "tag");
+    if (!tag) { fprintf(stderr, "%s\n", dlerror()); return 1; }
+    puts(*tag);
+    return dlclose(handle) != 0;
+}
+C
+cc -o "$TMP/dlopen" "$TMP/dlopen.c" || exit 1
+check_loads() {
+  local caller="$1" expected="$2" ext actual
+  for ext in clap vst3; do
+    actual=$("$TMP/dlopen" "$repo/target/bundled/$NAME.$ext/Contents/MacOS/$NAME")
+    if [ "$?" -ne 0 ] || [ "$actual" != "$expected" ]; then
+      echo "✗ $caller $ext dlopen returned '${actual:-no tag}', expected $expected" >&2
+      failures=$((failures + 1))
+    fi
+  done
+}
+
+# The initial signed slot is loaded before replacement, exercising a previously
+# used executable rather than a never-opened file that cannot carry old state.
 for ext in clap vst3; do
   bundle="$repo/target/bundled/$NAME.$ext"
   mkdir -p "$bundle/Contents/MacOS"
@@ -130,11 +141,65 @@ PLIST
   codesign --force --sign - "$bundle" >/dev/null 2>&1
 done
 
+check_loads initial "main @0000000"
+exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
+cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
+
+# Bitwig's class-discovery cache fingerprints Info.plist's mtime and size,
+# not the executable (#631). Keep the signed bytes for comparison and give
+# each install an old fingerprint: otherwise a test can pass just because
+# bundle setup happened in a different clock tick.
+cp "$repo/target/bundled/$NAME.clap/Contents/Info.plist" "$TMP/original.plist"
+prime_discovery_metadata() {
+  for ext in clap vst3; do
+    touch -m -t 200101010000 "$repo/target/bundled/$NAME.$ext/Contents/Info.plist"
+  done
+}
+check_discovery_metadata() {
+  local caller="$1" ext bundle plist
+  for ext in clap vst3; do
+    bundle="$repo/target/bundled/$NAME.$ext"
+    plist="$bundle/Contents/Info.plist"
+    if [ "$(stat -f %m "$plist")" -le "$metadata_before" ]; then
+      echo "✗ $caller did not refresh $ext discovery metadata" >&2
+      failures=$((failures + 1))
+    fi
+    if ! cmp -s "$TMP/original.plist" "$plist"; then
+      echo "✗ $caller changed $ext signed plist contents" >&2
+      failures=$((failures + 1))
+    fi
+    if ! codesign --verify --verbose=1 "$bundle" >/dev/null 2>&1; then
+      echo "✗ $caller left an invalid $ext signature after metadata refresh" >&2
+      failures=$((failures + 1))
+    fi
+  done
+}
+
 # A `cargo` that builds nothing: the artifacts are already staged above, and
 # what is under test is the swap rather than the compile.
 mkdir -p "$TMP/bin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/cargo"
 chmod +x "$TMP/bin/cargo"
+
+# Model a timestamp tick collision deterministically: the first metadata touch
+# per bundle leaves mtime unchanged, just as a repeat install within the same
+# clock tick can. Subsequent calls use the real touch. The direct-loader case
+# must reach the retry and still refresh both fingerprints; no timing race in
+# fixture compilation/signing decides whether that branch gets exercised.
+real_touch=$(command -v touch)
+cat > "$TMP/bin/touch" <<'SH'
+#!/usr/bin/env bash
+if [[ -n "${PLUGIN_SWAP_COLLISION_DIR:-}" && "$1" == -m ]]; then
+  marker="$PLUGIN_SWAP_COLLISION_DIR/$(basename "$(dirname "$(dirname "$2")")")"
+  if [[ ! -f "$marker" ]]; then
+    : > "$marker"
+    exit 0
+  fi
+fi
+exec "$PLUGIN_SWAP_REAL_TOUCH" "$@"
+SH
+chmod +x "$TMP/bin/touch"
+export PLUGIN_SWAP_REAL_TOUCH="$real_touch"
 
 # The inodes a host would be holding, read before the swap.
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
@@ -143,6 +208,8 @@ before_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 # HOME redirected: the scripts install the offline renderer under
 # ~/Library/Application Support, and a test must not write to the real one.
 out="$TMP/run.log"
+prime_discovery_metadata
+metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
 ( cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./update-plugin.sh ) \
   > "$out" 2>&1
 status=$?
@@ -152,25 +219,26 @@ if [ "$status" -ne 0 ]; then
   sed 's/^/    /' "$out" >&2
   failures=$((failures + 1))
 fi
+check_discovery_metadata update-plugin.sh
 
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 after_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 
-# 1. The inode survives — the whole point. A host mapped to the old one keeps
-#    serving the old build, and every other check here still passes.
-if [ "$before_clap" != "$after_clap" ]; then
-  echo "✗ the .clap executable changed inode ($before_clap -> $after_clap):" >&2
-  echo "    a running host stays on the old build until Bitwig restarts" >&2
+# 1. Both installed paths move to fresh inodes; an old open descriptor keeps
+#    the old bytes intact instead of seeing a different executable underneath.
+if [ "$before_clap" = "$after_clap" ] || [ "$before_vst3" = "$after_vst3" ]; then
+  echo "✗ update-plugin.sh reused an executable inode" >&2
   failures=$((failures + 1))
 fi
-if [ "$before_vst3" != "$after_vst3" ]; then
-  echo "✗ the .vst3 executable changed inode ($before_vst3 -> $after_vst3)" >&2
+cat <&3 > "$TMP/old-open-after"
+exec 3<&-
+if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
+  echo "✗ update-plugin.sh changed the bytes behind an old open descriptor" >&2
   failures=$((failures + 1))
 fi
+check_loads update-plugin.sh "main @$sha"
 
-# 2. The new bytes actually arrived. Writing through the inode is only right if
-#    it is the BUILD that is written; a swap that preserves the inode by not
-#    copying at all would pass the check above.
+# 2. The selected build's bytes actually arrived.
 if ! grep -q "main @$sha" "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"; then
   echo "✗ the .clap executable does not carry the build that was loaded" >&2
   failures=$((failures + 1))
@@ -216,8 +284,16 @@ if ! printf '%s\n' "$codex_list" | grep -Fq "$codex_branch"; then
   failures=$((failures + 1))
 fi
 
+before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
+before_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
+exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
+cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
 codex_out="$TMP/codex-load.log"
-(cd "$repo" && HOME="$TMP/home" ./load-plugin.sh "$codex_branch") \
+prime_discovery_metadata
+metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
+mkdir -p "$TMP/collisions"
+(cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" \
+  PLUGIN_SWAP_COLLISION_DIR="$TMP/collisions" ./load-plugin.sh "$codex_branch") \
   >"$codex_out" 2>&1
 codex_status=$?
 if [ "$codex_status" -ne 0 ]; then
@@ -234,9 +310,29 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
   sed 's/^/    /' "$loaded" >&2
   failures=$((failures + 1))
 fi
+check_discovery_metadata load-plugin.sh
+for ext in clap vst3; do
+  if [ ! -f "$TMP/collisions/$NAME.$ext" ]; then
+    echo "✗ the $ext timestamp collision fixture was not reached" >&2
+    failures=$((failures + 1))
+  fi
+done
+if [ "$before_clap" = "$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")" ] \
+  || [ "$before_vst3" = "$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")" ]; then
+  echo "✗ load-plugin.sh reused an executable inode" >&2
+  failures=$((failures + 1))
+fi
+
+cat <&3 > "$TMP/old-open-after"
+exec 3<&-
+if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
+  echo "✗ load-plugin.sh changed the bytes behind an old open descriptor" >&2
+  failures=$((failures + 1))
+fi
+check_loads load-plugin.sh "$codex_branch @$sha"
 
 if [ "$failures" -eq 0 ]; then
-  echo "  ok — registered worktrees reach a host that already has the plugin open"
+  echo "  ok — fresh signed inodes load each selected build and preserve old open files"
 else
   echo "✗ $failures plugin-swap check(s) failed" >&2
   exit 1

@@ -593,11 +593,23 @@ fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
                 (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
                 (1.0, harmonigraph_core::NoteEventKind::Off),
             ] {
-                let event = harmonigraph_core::NoteEvent { time, channel: 0, note: 60, kind };
+                let event = harmonigraph_core::NoteEvent {
+                    source: harmonigraph_core::SourceId::DIRECT,
+                    time,
+                    channel: 0,
+                    note: 60,
+                    kind,
+                };
                 state.tracker.handle_event(event);
             }
             state.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(3.5, 0, 67, 1.0));
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                3.5,
+                harmonigraph_core::SourceId::DIRECT,
+                0,
+                67,
+                1.0,
+            ));
             let scene = harmonigraph_scene::derive_scene(
                 &state.tracker,
                 &state.tuning,
@@ -670,7 +682,13 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
     // DRAWN, not when it appears.
     state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the camera looks straight at.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        0.0,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        60,
+        1.0,
+    ));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -925,7 +943,13 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     // Fade's arrival — this is about where the readout SITS.
     state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the default camera looks straight at.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        0.0,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        60,
+        1.0,
+    ));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -1042,7 +1066,13 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
     // Two notes a third apart, so there are two names to tell apart and two
     // nodes to confuse them between.
     for note in [60, 64] {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
     }
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
@@ -1143,7 +1173,13 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
     let mut state = fresh();
     state.view.show_labels = true;
     state.frame_params.fade_time = 0.0;
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 61, 1.0));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        0.0,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        61,
+        1.0,
+    ));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -1191,7 +1227,13 @@ fn lattice_names_reconstruct_both_axes_the_camera_moves() {
     let mut state = fresh();
     state.view.show_labels = true;
     state.frame_params.fade_time = 0.0;
-    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 61, 1.0));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+        0.0,
+        harmonigraph_core::SourceId::DIRECT,
+        0,
+        61,
+        1.0,
+    ));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,

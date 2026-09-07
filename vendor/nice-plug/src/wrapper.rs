@@ -12,3 +12,6 @@ pub mod vst3;
 
 // This is used by the wrappers.
 pub use util::setup_logger;
+
+#[cfg(all(debug_assertions, feature = "clap-boundary-tests"))]
+pub mod allocation_probe;

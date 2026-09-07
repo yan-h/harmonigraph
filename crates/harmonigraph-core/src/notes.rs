@@ -7,6 +7,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::canonical::{
+    CanonicalEvent, InvalidCanonical, PublicationGap, SourceBaseline, VoiceBaseline,
+};
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
@@ -15,6 +18,29 @@ use crate::tuning::PitchClass;
 /// clock in the plugin, wall clock in the standalone harness). Only
 /// differences are ever used.
 pub type Time = f64;
+
+/// Identity in one canonical display/take stream. Zero is reserved for the
+/// hub's direct input. The session owner assigns each tuner lease a fresh
+/// nonzero identity; a reusable source slot alone is not an identity.
+///
+/// This is provenance, not authorization: runtime session/epoch/incarnation
+/// validation happens before publication. Those runtime tokens are not saved
+/// in takes, and replay must never enroll a recorded source into a session.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceId(pub u64);
+
+impl SourceId {
+    pub const DIRECT: Self = Self(0);
+}
+
+/// One held address. Same-source retriggers replace this address; host note
+/// IDs remain a shell pass-through concern, not a second held-voice key.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VoiceKey {
+    pub source: SourceId,
+    pub channel: u8,
+    pub note: u8,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum NoteEventKind {
@@ -27,13 +53,14 @@ pub enum NoteEventKind {
     Tuning {
         semitones: f32,
     },
-    /// Release every held voice at once (transport reset: per-note offs
-    /// may never arrive). `channel` and `note` are meaningless here.
-    AllOff,
+    /// Release this event's source only. Channel and note are ignored.
+    SourceReset,
+    /// Release every source. Source, channel and note are ignored.
+    SessionReset,
 }
 
 /// A note's MIDI channel carries no meaning here. It is kept on [`Voice`] and
-/// [`NoteEvent`] because it is half of a note's IDENTITY — the host's key for
+/// [`NoteEvent`] because it is part of a note's IDENTITY — the host's key for
 /// matching an off to its on, and what lets two lanes hold the same note
 /// number at once — and for nothing else. Every channel is tracked, drawn as
 /// a filled disc, and colored by pitch height on the gradient, so two notes
@@ -41,6 +68,7 @@ pub enum NoteEventKind {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct NoteEvent {
     pub time: Time,
+    pub source: SourceId,
     pub channel: u8,
     pub note: u8,
     pub kind: NoteEventKind,
@@ -61,14 +89,32 @@ impl NoteEvent {
     /// anyway; a separate helper crate would trip the dependency guard
     /// `ci.sh` holds over this one. Two dependency-free constructors, always
     /// compiled, is the smallest thing that reaches the callers.
-    pub fn on(time: Time, channel: u8, note: u8, velocity: f32) -> Self {
-        NoteEvent { time, channel, note, kind: NoteEventKind::On { velocity } }
+    pub fn on(time: Time, source: SourceId, channel: u8, note: u8, velocity: f32) -> Self {
+        NoteEvent { time, source, channel, note, kind: NoteEventKind::On { velocity } }
     }
 
     /// A note-off, which carries no velocity of its own: a release velocity
     /// reaches nothing here (see [`NoteEventKind::Off`]).
-    pub fn off(time: Time, channel: u8, note: u8) -> Self {
-        NoteEvent { time, channel, note, kind: NoteEventKind::Off }
+    pub fn off(time: Time, source: SourceId, channel: u8, note: u8) -> Self {
+        NoteEvent { time, source, channel, note, kind: NoteEventKind::Off }
+    }
+
+    pub fn source_reset(time: Time, source: SourceId) -> Self {
+        Self { time, source, channel: 0, note: 0, kind: NoteEventKind::SourceReset }
+    }
+
+    pub fn session_reset(time: Time) -> Self {
+        Self {
+            time,
+            source: SourceId::DIRECT,
+            channel: 0,
+            note: 0,
+            kind: NoteEventKind::SessionReset,
+        }
+    }
+
+    pub fn key(&self) -> VoiceKey {
+        VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 }
 
@@ -314,6 +360,7 @@ impl Envelope {
 /// One sounding (or recently sounding) note.
 #[derive(Copy, Clone, Debug)]
 pub struct Voice {
+    pub source: SourceId,
     pub channel: u8,
     pub note: u8,
     pub velocity: f32,
@@ -324,6 +371,13 @@ pub struct Voice {
     /// MIDI octave (C4 = middle C = note 60 → octave 4).
     pub octave: i8,
     pub on_time: Time,
+    /// Presentation timestamp before a shell's moving clock offset.
+    original_onset: Time,
+    /// Visibility at the factual release, independent of frame/prune cadence.
+    history_eligible: bool,
+    /// Canonical accepted lifetime, absent for ordinary direct observations.
+    pub lifetime: Option<u64>,
+    pub assignment: Option<crate::canonical::AssignmentMetadata>,
     pub state: VoiceState,
     /// The moment this voice took the highest end, stamped as it LEFT the
     /// held set, and `None` if it was not wearing that end then (or is still
@@ -348,8 +402,9 @@ pub struct Voice {
 }
 
 impl Voice {
-    fn new(channel: u8, note: u8, velocity: f32, on_time: Time) -> Voice {
+    fn new(source: SourceId, channel: u8, note: u8, velocity: f32, on_time: Time) -> Voice {
         let mut voice = Voice {
+            source,
             channel,
             note,
             velocity,
@@ -357,12 +412,20 @@ impl Voice {
             pitch_class: PitchClass::from_cents(0.0),
             octave: 0,
             on_time,
+            original_onset: on_time,
+            history_eligible: true,
+            lifetime: None,
+            assignment: None,
             state: VoiceState::Held,
             wore_high: None,
             wore_low: None,
         };
         voice.set_pitch(f32::from(note));
         voice
+    }
+
+    pub fn key(&self) -> VoiceKey {
+        VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }
 
     /// `pitch_class` and `octave` are pure functions of `pitch`; every
@@ -471,8 +534,8 @@ impl Voice {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct HeldEnd {
     /// The voice holding this end, keyed as the tracker keys it:
-    /// `(channel, note)`.
-    pub key: (u8, u8),
+    /// `(source, channel, note)`.
+    pub key: VoiceKey,
     /// When this voice took the end — its own note-on when it arrived as
     /// the outer note of the chord, or the moment the voice outside it was
     /// released, whichever made it the end.
@@ -488,7 +551,7 @@ pub struct HeldEnd {
 /// the old one keeping it.
 fn took(prev: Option<HeldEnd>, voice: Option<&Voice>, now: Time) -> Option<HeldEnd> {
     let voice = voice?;
-    let key = (voice.channel, voice.note);
+    let key = voice.key();
     match prev {
         Some(end) if end.key == key && end.since >= voice.on_time => Some(end),
         _ => Some(HeldEnd { key, since: now }),
@@ -518,12 +581,12 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 /// containers: `voices()` decides which of two voices lighting ONE node
 /// wins its color, and a `HashMap`'s iteration order is seeded per map — so
 /// off one, the same take rendered twice picks different winners and produces
-/// different pixels (#135). A `BTreeMap` keyed by `(channel, note)` makes
+/// different pixels (#135). A `BTreeMap` keyed by `(source, channel, note)` makes
 /// that choice a property of the music. The map holds a chord, so the
 /// ordering costs nothing worth measuring.
 #[derive(Default)]
 pub struct NoteTracker {
-    held: BTreeMap<(u8, u8), Voice>,
+    held: BTreeMap<VoiceKey, Voice>,
     released: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
@@ -531,6 +594,30 @@ pub struct NoteTracker {
     /// (see [`HeldEnd`] for why they are remembered rather than derived).
     high_end: Option<HeldEnd>,
     low_end: Option<HeldEnd>,
+    canonical: BTreeMap<SourceId, CanonicalCursor>,
+    hidden_sources: std::collections::BTreeSet<SourceId>,
+    baselines: BTreeMap<SourceId, SourceBaseline>,
+    gaps: Vec<PublicationGap>,
+    all_uncertain: bool,
+    uncertain_sources: std::collections::BTreeSet<SourceId>,
+    restored_sources: std::collections::BTreeSet<SourceId>,
+}
+
+fn baseline_matches(row: &VoiceBaseline, voice: &Voice) -> bool {
+    row.channel == voice.channel
+        && row.note == voice.note
+        && if row.lifetime == 0 {
+            voice.lifetime.is_none() && row.actual_onset == voice.original_onset
+        } else {
+            voice.lifetime == Some(row.lifetime)
+        }
+}
+
+#[derive(Default)]
+struct CanonicalCursor {
+    output: u64,
+    baseline: u64,
+    state_cut: u64,
 }
 
 impl NoteTracker {
@@ -538,30 +625,205 @@ impl NoteTracker {
         Self::default()
     }
 
+    /// Consume one canonical item. False identifies a duplicate, not a new
+    /// musical event. This non-RT consumer cannot acknowledge source journals.
+    pub fn handle_canonical(
+        &mut self,
+        event: CanonicalEvent<'_>,
+    ) -> Result<bool, InvalidCanonical> {
+        self.handle_canonical_mapped(event, 0.0)
+    }
+
+    /// Map drawing times while retaining the source's immutable onset identity.
+    pub fn handle_canonical_mapped(
+        &mut self,
+        event: CanonicalEvent<'_>,
+        offset: Time,
+    ) -> Result<bool, InvalidCanonical> {
+        if !offset.is_finite() {
+            return Err(InvalidCanonical);
+        }
+        match event {
+            CanonicalEvent::Note(mut delta) => {
+                delta.validate()?;
+                let original_onset = delta.event.time;
+                delta.event.time += offset;
+                delta.validate()?;
+                if delta.sequence != 0 {
+                    let cursor = self.canonical.entry(delta.event.source).or_default();
+                    if delta.sequence <= cursor.output {
+                        return Ok(false);
+                    }
+                    // Available history must precede its baseline. A baseline
+                    // is not permission to silently discard late history.
+                    if delta.sequence <= cursor.state_cut {
+                        return Err(InvalidCanonical);
+                    }
+                    cursor.output = delta.sequence;
+                }
+                let key = delta.event.key();
+                if matches!(delta.event.kind, NoteEventKind::Off) && delta.lifetime != 0 {
+                    self.roll.observed_release(key, delta.lifetime, delta.event.time);
+                }
+                if !matches!(
+                    delta.event.kind,
+                    NoteEventKind::On { .. }
+                        | NoteEventKind::SourceReset
+                        | NoteEventKind::SessionReset
+                ) && delta.lifetime != 0
+                    && self
+                        .held
+                        .get(&key)
+                        .is_some_and(|voice| voice.lifetime != Some(delta.lifetime))
+                {
+                    return Ok(true);
+                }
+                self.handle_event(delta.display_event());
+                if let Some(voice) = self.held.get_mut(&key) {
+                    if delta.assignment.is_some() {
+                        voice.assignment = delta.assignment;
+                    }
+                }
+                if matches!(delta.event.kind, NoteEventKind::On { .. }) {
+                    if let Some(voice) = self.held.get_mut(&key) {
+                        voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
+                        voice.original_onset = original_onset;
+                        if let Some(pitch) = delta.pitch_microcents {
+                            voice.set_pitch((pitch as f64 / 100_000_000.0) as f32);
+                            self.roll.bend(key, delta.event.time, voice.pitch);
+                        }
+                    }
+                    self.roll.set_identity(
+                        key,
+                        (delta.lifetime != 0).then_some(delta.lifetime),
+                        original_onset,
+                    );
+                    self.restamp_ends(delta.event.time);
+                }
+            }
+            CanonicalEvent::Baseline(frame) => return self.replace_source_mapped(frame, offset),
+            CanonicalEvent::Gap(mut gap) => {
+                gap.validate()?;
+                gap.time += offset;
+                gap.through += offset;
+                gap.validate()?;
+                if let Some(source) = gap.source {
+                    self.uncertain_sources.insert(source);
+                    self.restored_sources.remove(&source);
+                } else {
+                    self.all_uncertain = true;
+                    self.restored_sources.clear();
+                }
+                self.roll.gap(gap.source, gap.time);
+                self.held.retain(|key, _| gap.source.is_some_and(|source| key.source != source));
+                self.gaps.push(gap);
+                if self.gaps.len() > NoteRoll::MAX_NOTES {
+                    self.gaps.remove(0);
+                }
+                self.restamp_ends(gap.time);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Validate the entire held set before mutation. Matching lifetimes keep
+    /// their onset, bend history and held-end identity. Missing observations
+    /// are closed as history gaps, never fictional downstream releases.
+    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
+        self.replace_source_mapped(frame, 0.0)
+    }
+
+    fn replace_source_mapped(
+        &mut self,
+        frame: &SourceBaseline,
+        offset: Time,
+    ) -> Result<bool, InvalidCanonical> {
+        frame.validate()?;
+        let mut mapped = *frame;
+        mapped.translate(offset);
+        mapped.validate()?;
+        if self.canonical.get(&frame.source).is_some_and(|cursor| frame.id <= cursor.baseline) {
+            return Ok(false);
+        }
+        if self.canonical.get(&frame.source).is_some_and(|cursor| cursor.output > frame.output_cut)
+        {
+            return Err(InvalidCanonical);
+        }
+        let voices = frame.voices();
+        if frame.participating {
+            self.hidden_sources.remove(&frame.source);
+        } else {
+            self.hidden_sources.insert(frame.source);
+        }
+        self.roll.set_participating(frame.source, frame.participating);
+        self.roll.replace_source(frame.source, voices, mapped.time, offset);
+        self.held.retain(|key, voice| {
+            key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
+        });
+        for row in voices {
+            let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
+            let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
+                let mut voice =
+                    Voice::new(frame.source, row.channel, row.note, row.velocity, onset);
+                voice.lifetime = (row.lifetime != 0).then_some(row.lifetime);
+                voice.original_onset = row.actual_onset;
+                voice
+            });
+            voice.set_pitch(row.pitch());
+            voice.assignment = row.metadata();
+        }
+        let cursor = self.canonical.entry(frame.source).or_default();
+        cursor.baseline = frame.id;
+        cursor.state_cut = frame.output_cut;
+        self.baselines.insert(frame.source, mapped);
+        self.uncertain_sources.remove(&frame.source);
+        self.restored_sources.insert(frame.source);
+        self.restamp_ends(mapped.time);
+        Ok(true)
+    }
+
+    pub fn source_baseline(&self, source: SourceId) -> Option<&SourceBaseline> {
+        self.baselines.get(&source)
+    }
+
+    /// New note deltas establish individual lifetimes, never completeness of
+    /// a source after reporting loss. Only its complete baseline/reset does.
+    pub fn source_current_certain(&self, source: SourceId) -> bool {
+        !self.uncertain_sources.contains(&source)
+            && (!self.all_uncertain || self.restored_sources.contains(&source))
+    }
+
+    pub fn publication_gaps(&self) -> &[PublicationGap] {
+        &self.gaps
+    }
+
     pub fn handle_event(&mut self, event: NoteEvent) {
         match event.kind {
             // Control event: applies regardless of the event's channel.
-            NoteEventKind::AllOff => self.all_notes_off(event.time),
+            NoteEventKind::SessionReset => self.session_notes_off(event.time),
+            NoteEventKind::SourceReset => self.source_notes_off(event.source, event.time),
             NoteEventKind::On { velocity } => {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
-                let voice = Voice::new(event.channel, event.note, velocity, event.time);
-                self.roll.note_on(event.channel, event.note, velocity, voice.pitch, event.time);
-                self.held.insert((event.channel, event.note), voice);
+                let voice =
+                    Voice::new(event.source, event.channel, event.note, velocity, event.time);
+                self.roll.note_on(event.key(), velocity, voice.pitch, event.time);
+                self.held.insert(event.key(), voice);
             }
             NoteEventKind::Off => {
-                if let Some(mut voice) = self.held.remove(&(event.channel, event.note)) {
+                if let Some(mut voice) = self.held.remove(&event.key()) {
                     self.stamp_ends_worn(&mut voice);
                     voice.state = VoiceState::Released { at: event.time };
+                    voice.history_eligible = !self.hidden_sources.contains(&voice.source);
                     self.released.push(voice);
-                    self.roll.note_off(event.channel, event.note, event.time);
+                    self.roll.note_off(event.key(), event.time);
                 }
             }
             NoteEventKind::Tuning { semitones } => {
-                if let Some(voice) = self.held.get_mut(&(event.channel, event.note)) {
+                if let Some(voice) = self.held.get_mut(&event.key()) {
                     // Octave indicators track the sounding pitch too.
                     voice.set_pitch(f32::from(event.note) + semitones);
-                    self.roll.bend(event.channel, event.note, event.time, voice.pitch);
+                    self.roll.bend(event.key(), event.time, voice.pitch);
                 }
             }
         }
@@ -569,8 +831,8 @@ impl NoteTracker {
         // voices are held, and a tuning can bend one past its neighbour. An
         // arm that changes nothing (an off for a key that is not down)
         // restamps to the same answer, `restamp_ends` being a re-read rather
-        // than a reset — which is also why the `AllOff` arm having already
-        // restamped inside `all_notes_off` costs nothing. That call is for the
+        // than a reset — which is also why the `SessionReset` arm having already
+        // restamped inside `session_notes_off` costs nothing. That call is for the
         // shells that reach the transport reset directly, not through here.
         self.restamp_ends(event.time);
     }
@@ -586,7 +848,7 @@ impl NoteTracker {
     /// been stamped for the voice BEFORE this one. Matching on the key alone
     /// would hand this voice a ring its predecessor earned.
     fn stamp_ends_worn(&self, voice: &mut Voice) {
-        let key = (voice.channel, voice.note);
+        let key = voice.key();
         let worn = |end: Option<HeldEnd>| {
             end.filter(|e| e.key == key && e.since >= voice.on_time).map(|e| e.since)
         };
@@ -605,8 +867,22 @@ impl NoteTracker {
         // per-note tuning can bend a voice past its neighbour — the same
         // reason the notes pane sorts on pitch.
         let by_pitch = |a: &&Voice, b: &&Voice| a.pitch.total_cmp(&b.pitch);
-        self.high_end = took(self.high_end, self.held.values().max_by(by_pitch), now);
-        self.low_end = took(self.low_end, self.held.values().min_by(by_pitch), now);
+        self.high_end = took(
+            self.high_end,
+            self.held
+                .values()
+                .filter(|v| !self.hidden_sources.contains(&v.source))
+                .max_by(by_pitch),
+            now,
+        );
+        self.low_end = took(
+            self.low_end,
+            self.held
+                .values()
+                .filter(|v| !self.hidden_sources.contains(&v.source))
+                .min_by(by_pitch),
+            now,
+        );
     }
 
     /// Drop released voices whose fade has fully completed, folding each
@@ -631,7 +907,9 @@ impl NoteTracker {
             if voice.release_level(now, env) > 0.0 {
                 return true;
             }
-            history.record(voice, now);
+            if voice.history_eligible {
+                history.record(voice, now);
+            }
             false
         });
     }
@@ -659,7 +937,7 @@ impl NoteTracker {
     }
 
     /// All voices that should currently be visualized: held first, in
-    /// `(channel, note)` order, then the released ones in the order they
+    /// `(source, channel, note)` order, then the released ones in the order they
     /// were let go.
     ///
     /// The order is part of the contract. Consumers accumulate over this —
@@ -667,11 +945,14 @@ impl NoteTracker {
     /// envelope, and every held voice shares one — so an unspecified order
     /// is an unspecified picture.
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
-        self.held.values().chain(self.released.iter())
+        self.held
+            .values()
+            .chain(self.released.iter())
+            .filter(|v| !self.hidden_sources.contains(&v.source))
     }
 
     pub fn held_count(&self) -> usize {
-        self.held.len()
+        self.held.values().filter(|v| !self.hidden_sources.contains(&v.source)).count()
     }
 
     /// The highest held voice and when it took that end — the chord's top
@@ -686,7 +967,10 @@ impl NoteTracker {
         self.low_end
     }
 
-    pub fn all_notes_off(&mut self, now: Time) {
+    pub fn session_notes_off(&mut self, now: Time) {
+        self.all_uncertain = false;
+        self.uncertain_sources.clear();
+        self.restored_sources.clear();
         self.roll.all_off(now);
         // Key order into `released`, which keeps its own order stable too —
         // a Vec built by draining a map inherits whatever order the map
@@ -694,8 +978,36 @@ impl NoteTracker {
         for mut voice in std::mem::take(&mut self.held).into_values() {
             self.stamp_ends_worn(&mut voice);
             voice.state = VoiceState::Released { at: now };
+            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
             self.released.push(voice);
         }
+        self.restamp_ends(now);
+    }
+
+    /// A source leaving/resetting cannot release another source's held set.
+    /// Keep the same release fade and held-end stamps as a session reset.
+    pub fn source_notes_off(&mut self, source: SourceId, now: Time) {
+        self.uncertain_sources.remove(&source);
+        self.restored_sources.insert(source);
+        self.roll.source_off(source, now);
+        let high = self.high_end;
+        let low = self.low_end;
+        let released = &mut self.released;
+        self.held.retain(|key, voice| {
+            if key.source != source {
+                return true;
+            }
+            let mut voice = *voice;
+            let worn = |end: Option<HeldEnd>| {
+                end.filter(|e| e.key == *key && e.since >= voice.on_time).map(|e| e.since)
+            };
+            voice.wore_high = worn(high);
+            voice.wore_low = worn(low);
+            voice.state = VoiceState::Released { at: now };
+            voice.history_eligible = !self.hidden_sources.contains(&voice.source);
+            released.push(voice);
+            false
+        });
         self.restamp_ends(now);
     }
 }
@@ -704,12 +1016,70 @@ impl NoteTracker {
 mod tests {
     use super::*;
 
+    #[test]
+    fn same_key_sources_keep_independent_lifetimes_bends_and_ends() {
+        let (a, b) = (SourceId(1), SourceId(2));
+        let mut tracker = NoteTracker::new();
+        let bend = |time, source, semitones| NoteEvent {
+            time,
+            source,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones },
+        };
+        tracker.handle_event(NoteEvent::on(0.0, a, 0, 60, 0.8));
+        tracker.handle_event(NoteEvent::on(0.0, b, 0, 60, 0.6));
+        tracker.handle_event(bend(0.01, a, 0.25));
+        tracker.handle_event(bend(0.02, b, -0.25));
+        assert_eq!(tracker.held_count(), 2);
+        let bass = tracker.lowest_held().unwrap();
+        assert_eq!(bass.key.source, b);
+        assert_eq!(tracker.highest_held().unwrap().key.source, a);
+
+        tracker.handle_event(NoteEvent::off(1.0, a, 0, 60));
+        let released = tracker.voices().find(|v| v.source == a).unwrap();
+        assert_eq!(released.wore_high, Some(0.01));
+        assert_eq!(released.wore_low, None, "B owns the bass stamp despite the same channel/key");
+        assert_eq!(tracker.lowest_held(), Some(bass));
+        tracker.handle_event(NoteEvent::on(2.0, a, 0, 60, 0.7));
+        tracker.handle_event(NoteEvent::on(3.0, a, 0, 60, 0.9));
+        assert_eq!(tracker.held_count(), 2, "same-source retrigger still replaces");
+        assert_eq!(tracker.voices().find(|v| v.source == b).unwrap().pitch, 59.75);
+        tracker.handle_event(NoteEvent::source_reset(4.0, a));
+        assert_eq!(tracker.held_count(), 1);
+        assert_eq!(tracker.lowest_held(), Some(bass));
+        tracker.handle_event(bend(4.5, b, -0.5));
+        let roll_b = tracker.roll().notes().find(|n| n.source == b).unwrap();
+        assert!(roll_b.is_live());
+        assert_eq!((roll_b.start, roll_b.settled_pitch()), (0.0, 59.75));
+        assert_eq!(
+            roll_b.segments(5.0).collect::<Vec<_>>(),
+            vec![
+                ((0.0, 60.0), (0.02, 59.75)),
+                ((0.02, 59.75), (4.5, 59.5)),
+                ((4.5, 59.5), (5.0, 59.5)),
+            ]
+        );
+        let ends_a: Vec<_> =
+            tracker.roll().notes().filter(|n| n.source == a).map(|n| (n.start, n.end)).collect();
+        assert_eq!(ends_a, vec![(0.0, Some(1.0)), (2.0, Some(3.0)), (3.0, Some(4.0))]);
+
+        tracker.handle_event(NoteEvent::on(5.0, a, 0, 60, 0.8));
+        tracker.handle_event(NoteEvent::on(5.0, SourceId::DIRECT, 0, 60, 0.8));
+        assert_eq!(tracker.held_count(), 3, "direct input has its own reserved identity");
+        tracker.handle_event(NoteEvent::session_reset(6.0));
+        assert_eq!(tracker.held_count(), 0);
+        assert!(tracker.roll().notes().all(|n| !n.is_live()));
+        assert_eq!(tracker.highest_held(), None);
+        assert_eq!(tracker.lowest_held(), None);
+    }
+
     fn on(time: Time, note: u8) -> NoteEvent {
-        NoteEvent::on(time, 0, note, 0.8)
+        NoteEvent::on(time, crate::SourceId::DIRECT, 0, note, 0.8)
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
-        NoteEvent::off(time, 0, note)
+        NoteEvent::off(time, crate::SourceId::DIRECT, 0, note)
     }
 
     /// Press one note on every tracked channel at each of several pitches,
@@ -725,7 +1095,13 @@ mod tests {
         for step in 0..11u8 {
             for channel in 0..15u8 {
                 let note = 21 + step * 7;
-                tracker.handle_event(NoteEvent::on(0.0, channel, note, 0.8));
+                tracker.handle_event(NoteEvent::on(
+                    0.0,
+                    crate::SourceId::DIRECT,
+                    channel,
+                    note,
+                    0.8,
+                ));
                 keys.push((channel, note));
             }
         }
@@ -755,7 +1131,7 @@ mod tests {
     fn all_notes_off_releases_the_voices_in_that_same_order() {
         let mut tracker = NoteTracker::new();
         let expected = scrambled_chord(&mut tracker);
-        tracker.all_notes_off(1.0);
+        tracker.session_notes_off(1.0);
         let order: Vec<(u8, u8)> = tracker.voices().map(|v| (v.channel, v.note)).collect();
         assert_eq!(order, expected, "the released tail must inherit key order");
     }
@@ -789,48 +1165,103 @@ mod tests {
 
         // A lone note is both ends, taken at its own note-on.
         tracker.handle_event(on(1.0, 60));
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
-        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
+                since: 1.0
+            })
+        );
+        assert_eq!(
+            tracker.lowest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
+                since: 1.0
+            })
+        );
 
         // A note inside the chord moves neither end, and must not restamp
         // the ends it did not take.
         tracker.handle_event(on(2.0, 55));
         tracker.handle_event(on(3.0, 57));
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
-        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 55), since: 2.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 },
+                since: 1.0
+            })
+        );
+        assert_eq!(
+            tracker.lowest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 55 },
+                since: 2.0
+            })
+        );
 
         // Lifting the top hands the melody DOWN, at the moment of the lift
         // rather than at the note-on of the voice that inherits it — which is
         // older than the chord and would leave nothing to ease.
         tracker.handle_event(off(4.0, 60));
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 4.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
+                since: 4.0
+            })
+        );
 
         // Pruning the voice that handed it over is not a change of ends. This
         // is the whole reason the stamp is kept here rather than read back off
         // the released tail, which the prune empties.
         tracker.prune(5.0, &Envelope { fade_time: 0.1, ..Envelope::default() });
         assert_eq!(tracker.voices().count(), 2, "the released C4 is gone");
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 4.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
+                since: 4.0
+            })
+        );
 
         // A retrigger with no off in between replaces the voice on a key it
         // already had, and that is a new note taking the end, not the old one
         // keeping it.
         tracker.handle_event(on(6.0, 57));
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 6.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
+                since: 6.0
+            })
+        );
 
         // A bend past a neighbour moves the end without any key changing:
         // MPE and per-note tuning are why the ends are compared on pitch.
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 7.0,
             channel: 0,
             note: 55,
             kind: NoteEventKind::Tuning { semitones: 6.0 },
         });
-        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 55), since: 7.0 }));
-        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 57), since: 7.0 }));
+        assert_eq!(
+            tracker.highest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 55 },
+                since: 7.0
+            })
+        );
+        assert_eq!(
+            tracker.lowest_held(),
+            Some(HeldEnd {
+                key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: 57 },
+                since: 7.0
+            })
+        );
 
         // A transport reset takes every held voice, so it takes both ends.
-        tracker.all_notes_off(8.0);
+        tracker.session_notes_off(8.0);
         assert_eq!(ends(&tracker), (None, None));
     }
 
@@ -841,6 +1272,7 @@ mod tests {
 
         // Bend up a whole tone: D, still octave 4.
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 0.1,
             channel: 0,
             note: 60,
@@ -853,6 +1285,7 @@ mod tests {
 
         // Bend down past the octave boundary: B3.
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 0.2,
             channel: 0,
             note: 60,
@@ -870,7 +1303,7 @@ mod tests {
     fn no_channel_is_dropped_on_the_way_in() {
         for channel in 0..16u8 {
             let mut tracker = NoteTracker::new();
-            tracker.handle_event(NoteEvent::on(0.0, channel, 60, 0.8));
+            tracker.handle_event(NoteEvent::on(0.0, crate::SourceId::DIRECT, channel, 60, 0.8));
             assert_eq!(tracker.voices().count(), 1, "channel {channel}");
         }
     }
@@ -986,7 +1419,7 @@ mod tests {
     fn a_note_shorter_than_its_arrival_still_reaches_full() {
         // Both ends on one duration, the way `ViewConfig::envelope` builds it.
         let env = Envelope { attack_time: 0.2, fade_time: 0.2, shape: 0.0 };
-        let mut voice = Voice::new(0, 60, 1.0, 0.0);
+        let mut voice = Voice::new(SourceId::DIRECT, 0, 60, 1.0, 0.0);
         // A key up a quarter of the way in, which is where a multiplied
         // envelope would peak.
         voice.state = VoiceState::Released { at: 0.05 };
@@ -1047,7 +1480,7 @@ mod tests {
     /// brightness that `prune` will never drop.
     #[test]
     fn a_non_finite_envelope_ends_rather_than_hangs() {
-        let mut voice = Voice::new(0, 60, 1.0, 0.0);
+        let mut voice = Voice::new(SourceId::DIRECT, 0, 60, 1.0, 0.0);
         voice.state = VoiceState::Released { at: 0.0 };
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let fades = Envelope { attack_time: 0.0, fade_time: bad, shape: 0.0 };
@@ -1183,12 +1616,13 @@ mod tests {
     fn all_off_releases_every_channel() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
-        tracker.handle_event(NoteEvent::on(0.0, 3, 64, 0.5));
+        tracker.handle_event(NoteEvent::on(0.0, crate::SourceId::DIRECT, 3, 64, 0.5));
         tracker.handle_event(NoteEvent {
+            source: crate::SourceId::DIRECT,
             time: 1.0,
             channel: 0,
             note: 0,
-            kind: NoteEventKind::AllOff,
+            kind: NoteEventKind::SessionReset,
         });
         assert_eq!(tracker.held_count(), 0);
         // Released voices fade out rather than vanish.

@@ -23,17 +23,30 @@ Demonstration:
 
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
-## Planned adaptive tuning
+## Adaptive tuning in CLAP
 
-Project-wide adaptive MIDI retuning is designed but not implemented.
-The plan adds one lightweight Harmonigraph Tune note effect before each participating instrument path;
+The CLAP bundle includes a lightweight Harmonigraph Tune note effect before each participating instrument path;
 one full Harmonigraph sequences new attacks across tracks and returns their tuning assignments for output after a fixed delay.
 Each assignment takes the preceding ones into account, and its adaptive correction stays fixed through release while composing with later player pitch expression.
 A missed assignment deadline delays the note further and reports a failure, rather than dropping it or emitting an unretuned attack.
-The added-delay target is about 10 ms, with 512 samples at 44.1 kHz (11.610 ms) an accepted initial candidate to validate during implementation.
+The configured delay is 512 samples at 44.1 kHz (11.610 ms) with a 512-sample engine buffer and validated fixed routing.
+Recovery and maximum-capacity cohorts can add substantially more delay;
+the complete musical build still needs fresh Bitwig initialization, listening and destination checks.
 Explicit Stop/Reset cancels pending attacks and releases affected voices;
 actual storage exhaustion permits a visible emergency stop that rejects new attacks until Reset.
-See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the decided behavior, the real-time protocol and the deliberately deferred alternatives.
+Start with the [setup and musical verification checklist](docs/adaptive-tuning-musical-integration.md#trying-the-current-build) and the [measured process/routing requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
+Use one Master hub, Tune before each instrument, Bitwig **by Vendor** hosting with individual overrides off, and each instance's adopted routing offset.
+Sample rate and maximum buffer size come from the host automatically;
+the only clock setup is validating the signed routing offset and applying/reinitializing it.
+The default locked 12-TET configuration produces zero adaptive correction;
+choose **Just** with **Auto** and **Learn** off to verify independent Just tuning.
+VST3 still exports full Harmonigraph only.
+See [`docs/adaptive-tuning.md`](docs/adaptive-tuning.md) for the behavior, protocol and deliberately deferred alternatives.
+
+The [source-identity foundation](docs/adaptive-tuning-source-identity.md) gives tracking and replay independent source keys and explicit source/session resets.
+Takes use format v4, including source/reset scope, resolved configurations, canonical baselines and accepted pitch provenance;
+v1–v3 takes are refused with a version error and must be recorded again.
+The current musical integration adds optional assignment metadata within v4.
 
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
 [`CLAUDE.md`](CLAUDE.md) is the house style they work under;
