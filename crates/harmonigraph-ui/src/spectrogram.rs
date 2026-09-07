@@ -686,7 +686,7 @@ impl Plan {
 ///
 /// One definition because TWO panes sample this axis — the heatmap's rows and
 /// the spectrum curve's columns — and sharing the resample
-/// ([`panes::spectral::spectrogram::footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean))
+/// ([`panes::spectral::spectrogram::footprint_mean_db`](crate::panes::spectral::spectrogram::footprint_mean_db))
 /// is only half of sharing the read. The other half is the footprint handed to
 /// it, which is one of these pixels wide on each side: counted in POINTS
 /// instead, the curve would integrate `ppp` times as many buckets per column as
@@ -869,7 +869,7 @@ pub(crate) fn frame_data(
 /// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
 /// so the max is over near-copies of one measurement rather than over a
 /// distribution. Pitch is RESAMPLED instead
-/// ([`footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean)),
+/// ([`footprint_mean_db`](crate::panes::spectral::spectrogram::footprint_mean_db)),
 /// because a pixel zoomed out spans a dozen INDEPENDENT buckets and the max of
 /// a dozen samples of a noise floor is a function of how many were drawn.
 ///
@@ -3784,7 +3784,7 @@ mod tests {
     mod gpu {
         use super::*;
         use crate::panes::spectral::axes::spectrogram_level_db;
-        use crate::panes::spectral::spectrogram::footprint_mean;
+        use crate::panes::spectral::spectrogram::footprint_mean_db;
         use harmonigraph_render::{SpectrogramHeadless, SpectrogramVertex};
 
         /// Pixels across a test frame, and so slabs across it: a readback row must
@@ -4384,7 +4384,7 @@ mod tests {
         /// between the partials reads brighter the further out the zoom, which
         /// is a statement about the layout rather than about the sound. The
         /// resample answers with the floor's own mean instead, at every N — see
-        /// [`footprint_mean`](crate::panes::spectral::spectrogram::footprint_mean).
+        /// [`footprint_mean_db`](crate::panes::spectral::spectrogram::footprint_mean_db).
         ///
         /// Both widths are in the MINIFYING arm — 8 buckets to a row and 64 —
         /// because that is the arm at issue: a row narrower than a bucket reads
@@ -4655,7 +4655,7 @@ mod tests {
                         SpectrogramShades { generation: 1, lut: lut.clone() },
                     );
                     for (j, spectrum) in spectra.iter().enumerate() {
-                        let curve = 10.0 * footprint_mean(spectrum, x0, x1).max(1e-30).log10();
+                        let curve = footprint_mean_db(spectrum, x0, x1);
                         // The band the store's own rounding leaves the heatmap
                         // free to land in, widened by the one table index a level
                         // sitting on a slice boundary can fall either side of.

@@ -46,6 +46,20 @@ fn power_at(db: f32) -> f32 {
     10.0f32.powf(db / 10.0)
 }
 
+#[test]
+fn footprint_resampling_returns_db_for_average_interpolation_and_silence() {
+    use super::spectrogram::footprint_mean_db;
+    let powers = [power_at(-20.0), power_at(-80.0)];
+    for (from, to, expected) in
+        [(0.0, 2.0, -50.0), (0.75, 1.25, -50.0), (0.0, 0.5, -20.0), (1.0, 1.5, -65.0)]
+    {
+        assert!((footprint_mean_db(&powers, from, to) - expected).abs() < 1e-5);
+    }
+    for powers in [&[][..], &[0.0][..], &[0.0, 0.0][..]] {
+        assert_eq!(footprint_mean_db(powers, 0.0, 2.0), power_db(0.0));
+    }
+}
+
 /// The note names follow the pitch zoom and the markings do not, which is
 /// the whole of the difference between text written ON the picture and
 /// text labelling the axis it is drawn against.
@@ -1660,7 +1674,7 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
 ///
 /// Loud by 40 dB rather than by a little, because a pixel of the curve
 /// resamples the whole run of buckets under it
-/// ([`footprint_mean`](super::spectrogram::footprint_mean)) and a tone is
+/// ([`footprint_mean_db`](super::spectrogram::footprint_mean_db)) and a tone is
 /// narrower than that run on a small pane: at 100 points of pitch axis across
 /// the analyzer's ten octaves the tone's own buckets are a fraction of what
 /// its pixel covers, so the level drawn is a fraction of the way up from the
@@ -2840,7 +2854,7 @@ fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
 /// Pinned textually because neither call site can see the other, and every
 /// pane at 1x or above draws identically either way: the count each derives
 /// declares a footprint — the heatmap's rows become the shader's `0.5 / rows`,
-/// the curve's columns become `footprint_mean`'s span — and a floor claims
+/// the curve's columns become `footprint_mean_db`'s span — and a floor claims
 /// more pixels than the device has, so each sample integrates a fraction of
 /// the buckets it covers. Only a render BELOW 1x separates them, which
 /// `--scale` reaches with no clamp and `docs/offline-rendering.md` recommends

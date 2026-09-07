@@ -474,6 +474,7 @@ pub fn derive_scene(
             // with (`panes::glow_fade` in harmonigraph-ui) — and the shell's
             // pass is what puts this on the Glow attack and release.
             glow: GlowStep {
+                incarnation: 0,
                 level: activation.max(melody.level).max(bass.level),
                 row: nodes.len() as u32,
                 mix: 1.0,
@@ -548,6 +549,7 @@ pub fn derive_scene(
         // row per node — the shell's pass hands out rows of its own and raises
         // this to their high-water mark.
         glow_rows: nodes_len,
+        glow_timing: None,
     }
 }
 

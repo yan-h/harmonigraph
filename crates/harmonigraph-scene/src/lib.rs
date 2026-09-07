@@ -334,13 +334,15 @@ pub const PITCH_LUT_N: usize = 64;
 /// Several numbers rather than one because the light is carried in two places
 /// at once. The LEVEL is stepped on the CPU, where the node's identity lives;
 /// the COLOUR is stepped on the GPU, where the node's ink is read (the ink
-/// strip in harmonigraph-render). What ties them is [`mix`](Self::mix): the
-/// same coefficient carries both, so the two halves of one light can never be
-/// running at different speeds — and [`marked`](Self::marked), the light's own
-/// memory of how big the node is, rides that same coefficient for the same
-/// reason.
+/// strip in harmonigraph-render). Both follow [`GlowTiming`], measured from
+/// the last pass each consumer actually used. Layout passes can be discarded
+/// before the GPU sees them. [`marked`](Self::marked) carries the light's size
+/// on the CPU beside its level.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlowStep {
+    /// Unique owner of this row while the light lives. The renderer compares
+    /// it with the owner whose ink it actually encoded, across discarded UI passes.
+    pub incarnation: u64,
     /// How lit this node is for the purpose of the light it gives off, carried
     /// on the Glow attack and release. Its TARGET is the largest level that
     /// puts ink on the node; this is where that target has got to, so it can be
@@ -355,14 +357,10 @@ pub struct GlowStep {
     /// instance list is sorted by depth and culled, so its own order is exactly
     /// what cannot be used.
     pub row: u32,
-    /// How much of this frame's reading the two of them take, `1 - exp(-dt/tau)`
-    /// on the attack or the release.
-    ///
-    /// 1 means SETTLE rather than carry, and it is the same statement in both
-    /// halves: on the CPU the level lands on its target outright, and on the
-    /// GPU the row takes the new ink whole. So the first frame of all, a row
-    /// just handed to a node, and a strip that has just been rebuilt all say
-    /// the one thing, and none of them needs a flag of its own.
+    /// Coefficient used by the CPU level step, `1 - exp(-dt/tau)`.
+    /// Direct scenes without [`Scene::glow_timing`] also use this for GPU ink.
+    /// Carried scenes resolve ink against the renderer's own encoded history,
+    /// reseeding new textures and changed row owners there.
     pub mix: f32,
     /// How much of a MARK the light still has this node wearing, carried on the
     /// same [`mix`](Self::mix) as everything else about it.
@@ -389,7 +387,33 @@ impl Default for GlowStep {
     /// light, and the mix is the value that makes the next step a settle rather
     /// than a fade up from a colour nobody drew.
     fn default() -> GlowStep {
-        GlowStep { level: 0.0, row: 0, mix: 1.0, marked: 0.0 }
+        GlowStep { incarnation: 0, level: 0.0, row: 0, mix: 1.0, marked: 0.0 }
+    }
+}
+
+/// The glow clock at scene derivation. GPU history advances only when the
+/// renderer encodes that scene; UI layout passes may be discarded beforehand.
+#[derive(Clone, Copy, Debug)]
+pub struct GlowTiming {
+    pub now: f64,
+    pub attack: f32,
+    pub release: f32,
+}
+
+impl GlowTiming {
+    /// Attack and release coefficients since the last consumed scene.
+    pub fn coefficients(self, previous: Option<f64>) -> (f32, f32) {
+        let dt = previous.map_or(f64::INFINITY, |at| self.now - at);
+        let alpha = |seconds: f32| {
+            if dt.is_nan() || dt <= 0.0 {
+                0.0
+            } else if !seconds.is_finite() || seconds <= 0.0 {
+                1.0
+            } else {
+                1.0 - (-dt / f64::from(seconds)).exp() as f32
+            }
+        };
+        (alpha(self.attack), alpha(self.release))
     }
 }
 
@@ -919,6 +943,9 @@ pub struct Scene {
     /// `nodes.len()` out of [`derive_scene`], where every node has its own row
     /// in the list's own order (see [`NodeInstance::glow`]).
     pub glow_rows: u32,
+    /// Present for carried UI and offline scenes. With no clock, direct
+    /// renderer callers supply their own [`GlowStep::mix`].
+    pub glow_timing: Option<GlowTiming>,
 }
 
 impl Scene {

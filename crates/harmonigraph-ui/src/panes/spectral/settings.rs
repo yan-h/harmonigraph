@@ -210,14 +210,6 @@ pub(crate) fn spectrum_settings_pane(
                  Increase for a steadier curve. \
                  0 ms responds immediately.",
         );
-    // Tilt: conventional stepped reference slopes. Snap stray persisted
-    // values (e.g. from the short-lived continuous bar) onto a step.
-    if !crate::TILT_STEPS.contains(&cfg.tilt) {
-        cfg.tilt = crate::TILT_STEPS
-            .into_iter()
-            .min_by(|a, b| (a - cfg.tilt).abs().total_cmp(&(b - cfg.tilt).abs()))
-            .unwrap_or(0.0);
-    }
     button_row(ui, |ui| {
         ui.label("Tilt (dB/oct)").on_hover_text(
             "Reference slope in decibels per octave. \
@@ -270,7 +262,7 @@ pub(crate) fn spectrum_settings_pane(
     });
     section(ui, "MIDI ribbons");
     ui.add_enabled_ui(cfg.show_roll, |ui| {
-        ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Ribbon width")
+        ValueBar::new(&mut cfg.roll_thickness, crate::config::ROLL_THICKNESS_RANGE, "Ribbon width")
             .unit(1.0, " st")
             .show(ui)
             .on_hover_text(

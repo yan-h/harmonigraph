@@ -496,6 +496,37 @@ fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
     }
 }
 
+#[test]
+fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
+    type Field = fn(&mut SpectrumConfig) -> &mut f32;
+    let fields: [(Field, f32, f32); 5] = [
+        (|cfg| &mut cfg.tilt, -6.0, 0.0),
+        (|cfg| &mut cfg.keyline, 0.0, 1.0),
+        (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
+        (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
+        (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
+    ];
+    for (field, min, max) in fields {
+        let default = *field(&mut SpectrumConfig::default());
+        for (value, expected) in [
+            (min - 1.0, min),
+            (max + 1.0, max),
+            (f32::NAN, default),
+            (f32::INFINITY, default),
+            (f32::NEG_INFINITY, default),
+        ] {
+            let mut state = fresh();
+            *field(&mut state.spectrum_config) = value;
+            let mut restored = fresh();
+            assert!(restored.load_persist(&state.save_persist()));
+            assert_eq!(*field(&mut restored.spectrum_config), expected);
+            let normalized = restored.save_persist();
+            assert!(restored.load_persist(&normalized));
+            assert_eq!(restored.save_persist(), normalized, "normalization is idempotent");
+        }
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a
