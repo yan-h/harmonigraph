@@ -2549,6 +2549,18 @@ impl Source {
             self.publish_seal();
             return;
         }
+        // Same reasoning as the retired pump below, for a Tune that is simply
+        // unpaired and still playing: nothing can send it `OutputRetained`,
+        // `transfer` will not even look at the journal without an offer, and a
+        // journal that only grows latches STORAGE_FAULT after 4,096 accepted
+        // events and keeps the Source from ever settling (#718). Its own
+        // forwarding is the whole fact; pairing is a reset boundary, so a Hub
+        // that arrives later is told the cut it starts from and never wants
+        // this history.
+        if self.session().is_none() {
+            let through = self.coverage.map_or(self.complete_through, |c| c.through);
+            self.acknowledge(self.sequence, through.max(self.complete_through));
+        }
         if !self.detaching {
             self.transfer();
             // A fresh Progress can occupy the only ordinary control cell on
@@ -3010,8 +3022,8 @@ impl Source {
         // output: the facts are already in its own State, and no Hub exists to
         // send `OutputRetained`. Retiring the journal locally is what lets
         // destruction settle; without it the registry entry and the whole
-        // Source leak for the life of the process. See #718 for the other half
-        // of that gap, which is an unpaired Source still live.
+        // Source leak for the life of the process. `end` does the same for a
+        // live unpaired Tune, which is the other half of #718.
         if self.session().is_none() && self.acknowledged < self.sequence {
             self.acknowledge(self.sequence, self.complete_through);
         }

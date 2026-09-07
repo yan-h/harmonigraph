@@ -710,6 +710,27 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
+fn an_unpaired_tune_retires_its_own_accepted_output_rather_than_filling_its_journal() {
+    let _scope = crate::test_scope::enter();
+    let mut source = Device::new(true);
+    source.activate_format(44100.0, 512);
+    // No Hub exists at all, so nothing can ever send `OutputRetained` and
+    // `transfer` never looks at the journal. Forward more raw controls than
+    // the 4,096-entry journal holds: with #718 open this latches
+    // STORAGE_FAULT and the journal never empties.
+    let mut emitted = 0;
+    for block in 0..12i64 {
+        let controls =
+            (0..400u32).map(|index| raw_midi([0xb0, 1, 64], index % 512)).collect::<Vec<_>>();
+        emitted += source.run_format(block * 512, controls, None, None, 512).values.len();
+    }
+    assert!(emitted > super::protocol::OUTCOME_JOURNAL, "the fixture reaches past one journal: {emitted}");
+    let settled = source.source_snapshot();
+    assert_eq!(settled.faults, 0, "an unpaired Tune's own output is not an overflow");
+    assert_eq!(settled.journal, 0, "it acknowledges what only it can acknowledge");
+}
+
+#[test]
 fn an_unpaired_hub_allocates_nothing_for_tuning_and_pairing_allocates_one_row() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
