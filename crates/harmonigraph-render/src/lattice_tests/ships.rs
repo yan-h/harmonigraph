@@ -171,8 +171,10 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             shadow: &res.shadow_layout,
             casters: &res.caster_layout,
         };
-        let build =
-            |src: &str| create_pipelines(&device, &with_common(src), format, layouts, false);
+        let build = |src: &str| {
+            let shader = lattice_module(&device, &with_common(src));
+            create_pipelines(&device, &shader, format, layouts, false)
+        };
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
         // The light at group 1: one colour over the whole frame, bound to both
@@ -291,8 +293,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 "the fixture has no marked sector",
             );
             let draw_cells = |src: &str| {
-                let (pipeline, _) =
-                    create_cell_pipelines(&device, &with_common(src), &res.bind_group_layout);
+                let shader = lattice_module(&device, &with_common(src));
+                let (pipeline, _) = create_cell_pipelines(&device, &shader, &res.bind_group_layout);
                 let target = render_to_texture(
                     &device,
                     &queue,
