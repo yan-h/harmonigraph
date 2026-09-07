@@ -508,9 +508,11 @@ impl CallbackTrait for SpectrogramCallback {
             }
             queue.write_buffer(&buffer, 0, &staging);
             pane.grid = Some(GridBuffer { buffer, key });
-        } else {
+        } else if !self.grid.dirty.is_empty() {
             let buffer = &pane.grid.as_ref().expect("the branch above holds a buffer").buffer;
-            let mut slab = vec![0u8; stride as usize];
+            // Production slabs are already aligned. Only generic bin counts
+            // need padding; an unchanged run needs no staging at all.
+            let mut padded = (bins != stride as usize).then(|| vec![0u8; stride as usize]);
             for &dirty in &self.grid.dirty {
                 let j = dirty - self.grid.first_key;
                 debug_assert!(
@@ -522,9 +524,16 @@ impl CallbackTrait for SpectrogramCallback {
                     continue;
                 }
                 let j = j as usize;
-                slab[..bins].copy_from_slice(&self.grid.run[j * bins..(j + 1) * bins]);
+                let slab = &self.grid.run[j * bins..(j + 1) * bins];
+                let bytes = match padded.as_mut() {
+                    Some(padded) => {
+                        padded[..bins].copy_from_slice(slab);
+                        padded.as_slice()
+                    }
+                    None => slab,
+                };
                 let slot = slot_of(dirty, self.grid.capacity);
-                queue.write_buffer(buffer, u64::from(slot) * u64::from(stride), &slab);
+                queue.write_buffer(buffer, u64::from(slot) * u64::from(stride), bytes);
             }
         }
 
@@ -1266,8 +1275,16 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let bins = 256usize;
-        let read = read_of(18.0, 6.0, 96);
+        for bins in [256, harmonigraph_core::spectrum::SPECTRUM_BINS, 3827, 3829] {
+            check_delta_upload(&device, &queue, bins);
+        }
+    }
+
+    fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize) {
+        let read = SpectrogramRead {
+            level_per_midi: 0.0,
+            ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, 96)
+        };
         let mut version: HashMap<i64, u32> = HashMap::new();
         let mut resources = CallbackResources::default();
         let mut previous: Option<Vec<u8>> = None;
@@ -1276,12 +1293,14 @@ mod tests {
 
         let steps = &[
             Step::new("the first upload", 1, 8, 0, &[], &[]),
+            Step::new("an unchanged warm run", 1, 8, 0, &[], &[]),
             Step::new("the newest slab rewritten", 1, 8, 0, &[5], &[5]),
             Step::new("an interior slab rewritten", 1, 8, 0, &[2], &[2]),
             Step::new("the window advanced by one", 1, 8, 1, &[], &[6]),
             Step::new("advanced again", 1, 8, 2, &[], &[7]),
             Step::new("advanced past capacity", 1, 8, 4, &[], &[8, 9]),
             Step::new("a wrapped slab rewritten", 1, 8, 4, &[9], &[9]),
+            Step::new("three wrapped slabs rewritten", 1, 8, 4, &[7, 8, 9], &[7, 8, 9]),
             Step::new("a generation bump onto keys before zero", 2, 8, -3, &[], &[]),
             Step::new("a negative key rewritten", 2, 8, -3, &[-1], &[-1]),
             Step::new("advanced across zero", 2, 8, -2, &[], &[3]),
@@ -1309,14 +1328,14 @@ mod tests {
                 dirty: step.dirty.to_vec(),
             };
             let cb = callback(full_quad(SLABS as u32), &grid, &read);
-            let incremental = frame_with(&device, &queue, &mut resources, &cb);
+            let incremental = frame_with(device, queue, &mut resources, &cb);
             assert_eq!(
                 uploaded.load(Ordering::Relaxed),
                 serial,
                 "{} drew without acknowledging its run",
                 step.label
             );
-            let full = fresh_frame(&device, &queue, &cb);
+            let full = fresh_frame(device, queue, &cb);
             assert_eq!(
                 incremental, full,
                 "{} did not land where a full upload puts it",
@@ -1344,7 +1363,7 @@ mod tests {
             run: Arc::new(Vec::new()),
             dirty: Vec::new(),
         };
-        prepare_once(&device, &queue, &mut resources, &callback(full_quad(1), &empty, &read));
+        prepare_once(device, queue, &mut resources, &callback(full_quad(1), &empty, &read));
         assert_eq!(
             uploaded.load(Ordering::Relaxed),
             standing,

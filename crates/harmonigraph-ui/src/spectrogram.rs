@@ -875,7 +875,7 @@ fn aggregate_slabs<'a>(
 ) -> (Vec<f64>, Vec<BucketDb>) {
     let mut grid = SlabGrid::default();
     for col in columns {
-        grid.fold(col, bucket);
+        grid.fold(col, bucket, None);
     }
     (grid.centers, grid.power)
 }
@@ -916,7 +916,9 @@ impl SlabGrid {
     /// the column ran BACKWARDS in time relative to the current slab — batch
     /// ignores the result (it just starts a fresh row, as before), while the
     /// incremental aggregator treats it as a broken invariant and rebuilds.
-    fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64) -> bool {
+    /// `min_key` is an explicit live retention bound; the batch driver passes
+    /// `None`. One older seed may survive until an admitted column arrives.
+    fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64, min_key: Option<i64>) -> bool {
         let nb = SPECTRUM_BINS;
         let key = (col.time / bucket).floor() as i64;
         let forward = match self.cur_key {
@@ -932,7 +934,10 @@ impl SlabGrid {
             // result. Silence is what the analyzer actually had.
             Some(k) if key > k => {
                 let empty = key - k - 1;
-                for slot in (k + 1)..key {
+                // The live owner admits only its retained interval. Keep the
+                // original gap length for the hold decision: clipping a long
+                // gap down to one empty slab must not turn silence into a hold.
+                for slot in (k + 1).max(min_key.unwrap_or(i64::MIN))..key {
                     self.centers.push((slot as f64 + 0.5) * bucket);
                     if empty <= JITTER_SLABS {
                         // Hold the previous column: at this width one empty
@@ -968,7 +973,39 @@ impl SlabGrid {
         for (kept, &fresh) in self.power[base..].iter_mut().zip(col.db.iter()) {
             *kept = (*kept).max(fresh);
         }
+        if let Some(min_key) = min_key {
+            self.retain_from(min_key, bucket);
+        }
         forward
+    }
+
+    /// Keep one predecessor when the whole grid is older than the interval.
+    /// It seeds a clipped jitter hold and establishes a real black gap; the
+    /// next admitted column removes it after any copies have been made.
+    fn retain_from(&mut self, min_key: i64, bucket: f64) {
+        let drop = self
+            .centers
+            .partition_point(|&c| ((c / bucket).floor() as i64) < min_key)
+            .min(self.centers.len().saturating_sub(1));
+        self.centers.drain(..drop);
+        self.power.drain(..drop * SPECTRUM_BINS);
+        self.held.drain(..drop);
+    }
+
+    /// Normal geometric growth is at most twice the admitted slabs plus a
+    /// predecessor. Release capacity from a larger previous pane/budget at
+    /// admission, before folding anything, rather than retaining it forever.
+    fn shrink_excess(&mut self, keep: usize) {
+        let bound = 2 * (keep.max(1) + 1);
+        if self.centers.capacity() > bound.max(4) {
+            self.centers.shrink_to_fit();
+        }
+        if self.power.capacity() > bound * SPECTRUM_BINS {
+            self.power.shrink_to_fit();
+        }
+        if self.held.capacity() > bound.max(8) {
+            self.held.shrink_to_fit();
+        }
     }
 }
 
@@ -1063,22 +1100,20 @@ impl SpectrogramAgg {
     /// once a widening drag trips it, every frame of it rebuilds, however
     /// long the aggregator had been running before. It reads on the overlay as a
     /// refold rate pinned at the frame rate for the length of the drag.
-    fn rebuild(
-        &mut self,
-        history: &crate::SpectrumHistory,
-        first: usize,
-        bucket: f64,
-        keep: usize,
-    ) {
+    fn rebuild(&mut self, history: &crate::SpectrumHistory, bucket: f64, min_key: Option<i64>) {
         self.rebuilds += 1;
         self.grid = SlabGrid::default();
-        // Far enough back to fill the retention, but never past the window's
-        // own first column — that one must be folded whatever the slack says.
-        let newest = history.back().map_or(0.0, |c| c.time);
-        let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
-        let start = history.partition_point(|c| c.time < cutoff).min(first);
+        // Admit the retention and one complete predecessor slab. The seed
+        // supplies a clipped hold, or proves the silent leading interval when
+        // the source jumped. No skipped prefix is ever expanded into rows.
+        let mut start = min_key
+            .map_or(0, |min| history.partition_point(|c| ((c.time / bucket).floor() as i64) < min));
+        if let Some(previous) = start.checked_sub(1).and_then(|i| history.get(i)) {
+            let seed = (previous.time / bucket).floor() as i64;
+            start = history.partition_point(|c| ((c.time / bucket).floor() as i64) < seed);
+        }
         for col in history.iter_from(start) {
-            self.grid.fold(col, bucket);
+            self.grid.fold(col, bucket, min_key);
         }
         self.bucket_bits = bucket.to_bits();
         self.last_time = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
@@ -1097,29 +1132,35 @@ impl SpectrogramAgg {
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
+        let min_key = history
+            .back()
+            .map(|c| ((c.time / bucket).floor() as i64).saturating_sub(keep.max(1) as i64 - 1));
         let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
-        // prior grid, time hasn't gone backwards, and the window's first slab
-        // still sits inside the grid we kept (front..=back). Anything else is a
-        // full rebuild, always correct.
+        // prior grid, time hasn't gone backwards, and the admitted first slab
+        // doesn't reach behind the kept grid. New columns can extend its newest
+        // end, including across a gap. An excluded old target must not
+        // force another rebuild on every resumed frame.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
             && newest >= self.last_time
-            && target.zip(self.grid.centers.first()).zip(self.grid.cur_key).is_some_and(
-                |((t, &front_center), back)| {
-                    let front = (front_center / bucket).floor() as i64;
-                    t >= front && t <= back
-                },
-            );
+            && target.zip(self.grid.centers.first()).is_some_and(|(t, &front_center)| {
+                let front = (front_center / bucket).floor() as i64;
+                t.max(min_key.unwrap_or(t)) >= front
+            });
 
         if !can_increment {
-            self.rebuild(history, first, bucket, keep);
+            self.rebuild(history, bucket, min_key);
         } else {
+            if let Some(min_key) = min_key {
+                self.grid.retain_from(min_key, bucket);
+                self.grid.shrink_excess(keep);
+            }
             // Fold only columns newer than the last we folded.
             let start = history.partition_point(|c| c.time <= self.last_time);
             let mut forward = true;
             for col in history.iter_from(start) {
-                if !self.grid.fold(col, bucket) {
+                if !self.grid.fold(col, bucket, min_key) {
                     forward = false;
                     break;
                 }
@@ -1127,10 +1168,10 @@ impl SpectrogramAgg {
             }
             if !forward {
                 // A mid-stream backward jump broke the grid; rebuild clean.
-                self.rebuild(history, first, bucket, keep);
+                self.rebuild(history, bucket, min_key);
             }
         }
-        self.view(history, first, bucket, target, keep)
+        self.view(history, first, bucket, target)
     }
 
     /// The window as the display reads it, taken from the kept grid: every slab
@@ -1163,17 +1204,16 @@ impl SpectrogramAgg {
     /// is about to become an interior one — an interior slab must hold every
     /// column that landed in it, in-window or not.
     fn view(
-        &mut self,
+        &self,
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
         target: Option<i64>,
-        keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let nb = SPECTRUM_BINS;
         // One mark per slab, which the hold loop at the bottom relies on to
         // index `held` by the same offset it indexes `centers` by. The three
-        // arrays are grown together by `fold` and trimmed together below, and
+        // arrays are grown by `fold` and trimmed together by `retain_from`, and
         // nothing downstream compares a mark against anything, so the two
         // going out of step is silent: the marks simply start answering for
         // slabs `drop` positions older than the ones being read.
@@ -1187,21 +1227,15 @@ impl SpectrogramAgg {
         };
         let front = (front_center / bucket).floor() as i64;
 
-        // Drop what has fallen out of the copy's reach. Centers run one per slab
-        // with no gaps (`fold` gives an empty slab its row too), so a slab key
-        // indexes the grid directly and the count IS the reach.
-        let last = self.grid.centers.len().saturating_sub(1);
-        let drop = self.grid.centers.len().saturating_sub(keep.max(1)).min(last);
-        if drop > 0 {
-            self.grid.centers.drain(0..drop);
-            self.grid.power.drain(0..drop * nb);
-            self.grid.held.drain(0..drop);
-        }
-
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
-        let start = (t - (front + drop as i64)).clamp(0, kept) as usize;
+        let start = (t - front).clamp(0, kept) as usize;
         let centers = self.grid.centers[start..].to_vec();
         let mut power = self.grid.power[start * nb..].to_vec();
+        // A target excluded by retention names pre-gap audio, not the first
+        // retained (black) slab. Repair only the slab the target really names.
+        if t != (centers[0] / bucket).floor() as i64 {
+            return (centers, power);
+        }
         for v in &mut power[0..nb] {
             *v = 0;
         }
@@ -1387,6 +1421,136 @@ mod tests {
     /// so what the aggregation tests below assert against.
     fn q(power: f32) -> BucketDb {
         harmonigraph_core::spectrogram::quantize(power)
+    }
+
+    #[test]
+    fn live_gap_folds_bound_work_and_capacity_before_serving_the_view() {
+        let keep = ring_slots(1024);
+        let bounded = |grid: &SlabGrid| {
+            assert!(grid.centers.len() <= keep + 1, "at most retention plus one seed");
+            assert_eq!(grid.power.len(), grid.centers.len() * SPECTRUM_BINS);
+            assert_eq!(grid.held.len(), grid.centers.len());
+            assert!(grid.centers.capacity() <= 2 * (keep + 1));
+            assert!(grid.power.capacity() <= 2 * (keep + 1) * SPECTRUM_BINS);
+            assert!(grid.held.capacity() <= 2 * (keep + 1));
+        };
+        for span in [12.0, 180.0, 600.0] {
+            for gap in [1.0, 2.0, 60.0, 600.0, 620.0, 1_000_000.0] {
+                for entry in ["warm", "cold", "rung"] {
+                    let mut history = crate::SpectrumHistory::default();
+                    for i in 0..160 {
+                        history.push(col(100.0 + i as f64 * 0.008, &[(5, 1.0)]));
+                    }
+                    let before_gap = history.back().unwrap().time;
+                    let mut agg = SpectrogramAgg::new();
+                    let mut bucket = live_slab(span, 1024);
+                    if entry != "cold" {
+                        agg.window(&history, 0, bucket, keep);
+                    }
+                    if entry == "rung" {
+                        bucket *= 2.0;
+                    }
+                    let resumed = before_gap + gap;
+                    history.push(col(resumed, &[(5, 0.25)]));
+                    let newest_key = (resumed / bucket).floor() as i64;
+                    let floor = newest_key - keep as i64 + 1;
+
+                    // Check each fold before view can hide a large intermediate
+                    // fill. The batch driver gets no implicit live budget.
+                    let mut probe = SlabGrid::default();
+                    for c in history.iter() {
+                        probe.fold(c, bucket, Some(floor));
+                        bounded(&probe);
+                    }
+                    let first =
+                        history.partition_point(|c| c.time < resumed - span).saturating_sub(1);
+                    let (centers, power) = agg.window(&history, first, bucket, keep);
+                    bounded(&agg.grid);
+                    assert!(agg.grid.centers.len() <= keep);
+                    assert_eq!(agg.rebuilds, if entry == "rung" { 2 } else { 1 }, "{entry}");
+                    let first_source_key =
+                        (history.get(first).unwrap().time / bucket).floor() as i64;
+                    let expected_first = first_source_key.max(floor);
+                    assert_eq!((centers[0] / bucket).floor() as i64, expected_first);
+                    assert_eq!(centers.len() as i64, newest_key - expected_first + 1);
+                    let newest_max = history
+                        .iter_from(first)
+                        .filter(|c| (c.time / bucket).floor() as i64 == newest_key)
+                        .map(|c| c.db[5])
+                        .max()
+                        .unwrap();
+                    assert_eq!(power[power.len() - SPECTRUM_BINS + 5], newest_max);
+                    if gap <= 2.0 {
+                        let expected = aggregate_slabs(history.iter_from(first), bucket);
+                        assert_eq!(
+                            (centers.clone(), power.clone()),
+                            expected,
+                            "{span}/{gap}/{entry}"
+                        );
+                    } else {
+                        let old_key = (before_gap / bucket).floor() as i64;
+                        for (j, center) in centers.iter().enumerate() {
+                            let key = (center / bucket).floor() as i64;
+                            if key > old_key && key < newest_key {
+                                assert!(
+                                    power[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
+                                        .iter()
+                                        .all(|&b| b == 0),
+                                    "old audio leaked into gap {span}/{gap}/{entry}"
+                                );
+                            }
+                        }
+                    }
+                    // Retaining the pre-gap source column must not make every
+                    // subsequent resume frame rebuild from coarser history.
+                    let rebuilds = agg.rebuilds;
+                    for n in 1..=3 {
+                        let now = resumed + n as f64 * bucket;
+                        history.push(col(now, &[(5, 0.5)]));
+                        let first =
+                            history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                        agg.window(&history, first, bucket, keep);
+                        bounded(&agg.grid);
+                    }
+                    assert_eq!(
+                        agg.rebuilds, rebuilds,
+                        "resume repeatedly rebuilt {span}/{gap}/{entry}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_retention_preserves_clipped_holds_and_releases_old_capacity() {
+        let mut history = crate::SpectrumHistory::default();
+        // Two columns in the predecessor slab: its full MAX seeds the hold.
+        for (t, p) in [(0.1, 1.0), (0.8, 0.25), (2.1, 0.5)] {
+            history.push(col(t, &[(5, p)]));
+        }
+        let mut agg = SpectrogramAgg::new();
+        let (centers, power) = agg.window(&history, 0, 1.0, 2);
+        assert_eq!(centers, [1.5, 2.5]);
+        assert_eq!([power[5], power[SPECTRUM_BINS + 5]], [q(1.0), q(0.5)]);
+
+        // A larger retained budget cannot invent the missing older coverage.
+        for key in 3..=10 {
+            history.push(col(key as f64 + 0.1, &[(5, 0.5)]));
+        }
+        agg.window(&history, 0, 1.0, 3);
+        let rebuilds = agg.rebuilds;
+        let (centers, _) = agg.window(&history, 0, 1.0, 5);
+        assert_eq!(centers, [6.5, 7.5, 8.5, 9.5, 10.5]);
+        assert_eq!(agg.rebuilds, rebuilds + 1);
+
+        agg.grid.centers.reserve(10_000);
+        agg.grid.power.reserve(10_000 * SPECTRUM_BINS);
+        agg.grid.held.reserve(10_000);
+        agg.window(&history, 0, 1.0, 3);
+        assert!(agg.grid.centers.capacity() <= 8);
+        assert!(agg.grid.power.capacity() <= 8 * SPECTRUM_BINS);
+        assert!(agg.grid.held.capacity() <= 8);
+        assert_eq!(agg.grid.centers.len(), 3);
     }
 
     #[test]
