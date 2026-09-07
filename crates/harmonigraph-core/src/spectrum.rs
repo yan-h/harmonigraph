@@ -11,9 +11,10 @@
 //! costs a complex transform of `n / 2` (see [`untangle_real_power`]). It is
 //! not incidental work: the Spectral pane asks for a column every 8 ms
 //! (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a stereo input at 8192
-//! points runs 250 transforms a second — and a DAW keeps that fed with silence
-//! as much as with audio, so the cost is continuous rather than only while
-//! something plays. At ~0.043 ms each that is ~1.1% of a core — it was ~1.6%
+//! points runs 250 transforms a second with one taper while audio remains in
+//! the window. An exactly zero retained window returns zero buckets without
+//! transforming; it still produces a column so history and decay advance.
+//! At ~0.043 ms per nonzero transform that is ~1.1% of a core — it was ~1.6%
 //! before the transform stopped computing its twiddles, and `fft_bench`'s
 //! `fft_in_place + untangle (a column's)` row is the number to re-read it off
 //! rather than the bare transform's. Which is why
@@ -96,11 +97,34 @@ pub const MAX_TAPERS: usize = 8;
 const INTERP_BIN_CEILING: usize =
     ((12 * BINS_PER_SEMITONE) as f32 / std::f32::consts::LN_2) as usize + 8;
 
+/// The pitch axis is fixed; only its conversion from Hz to FFT bins changes
+/// with the analyzer configuration. Share these frequencies across analyzers.
+struct BucketFrequencies {
+    lower_hz: f32,
+    upper_hz: f32,
+    center_hz: f32,
+}
+
+static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS]> =
+    std::sync::LazyLock::new(|| {
+        let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
+        std::array::from_fn(|b| {
+            let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            BucketFrequencies {
+                lower_hz: midi_to_hz(midi - half_bucket),
+                upper_hz: midi_to_hz(midi + half_bucket),
+                center_hz: midi_to_hz(midi),
+            }
+        })
+    });
+
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
     sample_rate: f32,
     fft_size: usize,
+    /// Forced at construction, so analysis never initializes the shared table.
+    bucket_frequencies: &'static [BucketFrequencies; SPECTRUM_BINS],
     /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
     write: usize,
@@ -146,6 +170,7 @@ impl SpectrumAnalyzer {
         let mut analyzer = SpectrumAnalyzer {
             sample_rate: sample_rate.max(1.0),
             fft_size: 0,
+            bucket_frequencies: &BUCKET_FREQUENCIES,
             ring: Vec::new(),
             write: 0,
             filled: 0,
@@ -294,6 +319,12 @@ impl SpectrumAnalyzer {
             return None;
         }
 
+        // Inspect the retained window, not just the newest input block. Return
+        // a measurement so callers keep advancing history and display decay.
+        if self.ring.iter().all(|sample| *sample == 0.0) {
+            return Some([0.0; SPECTRUM_BINS]);
+        }
+
         // One transform per taper, summed into `bin_power`. The tapers are
         // independent LOOKS at one window of audio rather than more audio, so
         // what this loop buys is a steadier reading of the same 171 ms and not
@@ -340,7 +371,6 @@ impl SpectrumAnalyzer {
         let norm_power = self.norm_power;
 
         let bin_hz = self.sample_rate / self.fft_size as f32;
-        let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
 
         // Magnitudes for the reconstructing branch alone (hence
         // [`INTERP_BIN_CEILING`] rather than the whole spectrum). Once per BIN
@@ -368,10 +398,10 @@ impl SpectrumAnalyzer {
 
         let mut buckets = [0.0f32; SPECTRUM_BINS];
         for (b, out) in buckets.iter_mut().enumerate() {
-            let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            let frequencies = &self.bucket_frequencies[b];
             // The bucket's own frequency band, in bins.
-            let x0 = midi_to_hz(midi - half_bucket) / bin_hz;
-            let x1 = midi_to_hz(midi + half_bucket) / bin_hz;
+            let x0 = frequencies.lower_hz / bin_hz;
+            let x1 = frequencies.upper_hz / bin_hz;
             // The top is CLAMPED rather than required to be in range. A bucket
             // whose upper edge reaches past the last usable bin still CONTAINS
             // usable bins, and the loudest of those is what it means; rejecting
@@ -387,7 +417,7 @@ impl SpectrumAnalyzer {
                 // Narrower: reconstruct the spectrum between the bins either
                 // side of the bucket's center, so the log axis comes out smooth
                 // instead of combed where it outruns the FFT.
-                let x = midi_to_hz(midi) / bin_hz;
+                let x = frequencies.center_hz / bin_hz;
                 let k = x.floor();
                 // Exactly the pair being read between, and no wider: the cubic
                 // wants a bin either side of that pair too, but it takes those
@@ -955,6 +985,40 @@ mod tests {
         assert!(analyzer.pitch_spectrum().is_none(), "one short of a window");
         analyzer.push_samples(&[0.1]);
         assert!(analyzer.pitch_spectrum().is_some());
+    }
+
+    #[test]
+    fn silent_windows_keep_readiness_retained_audio_and_resume() {
+        const N: usize = 4096;
+        for tapers in [1, MAX_TAPERS] {
+            let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+            analyzer.set_fft_size(N);
+            analyzer.set_tapers(tapers);
+            analyzer.push_samples(&vec![-0.0; N - 1]);
+            assert!(analyzer.pitch_spectrum().is_none(), "zero input still needs a full window");
+            analyzer.push_samples(&[0.0]);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().all(|x| x.to_bits() == 0));
+
+            // A nonzero sample at the physical end of the ring, but off the
+            // final Hann endpoint whose taper would erase it.
+            let mut near_end = vec![0.0; N];
+            near_end[N - 2] = 1.0;
+            analyzer.push_samples(&near_end);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().any(|x| *x > 0.0));
+            // Time order crosses the ring seam while older audio remains.
+            analyzer.push_samples(&[0.0; 17]);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().any(|x| *x > 0.0));
+            analyzer.push_samples(&vec![0.0; N]);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().all(|x| x.to_bits() == 0));
+
+            // Quiet audio must resume after the shortcut without reading
+            // skipped scratch or being mistaken for exact silence.
+            let quiet: Vec<_> = (0..N).map(|i| 1e-10 * (i as f32 * 0.05).sin()).collect();
+            analyzer.push_samples(&quiet);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().any(|x| *x > 0.0));
+            analyzer.push_samples(&vec![-0.0; N]);
+            assert!(analyzer.pitch_spectrum().unwrap().iter().all(|x| x.to_bits() == 0));
+        }
     }
 
     #[test]
