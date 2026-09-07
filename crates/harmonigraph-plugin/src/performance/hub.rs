@@ -566,6 +566,27 @@ impl Hub {
         let (anchor, time) = self.anchor.unwrap_or((0, 0.0));
         time + (sample as f64 - anchor as f64) / self.rate
     }
+    /// True when a source's staged records are a same-sample group larger than
+    /// one row can hold: the queue is full, every record in it stands at
+    /// `next`, and `next` is the sample of the record still waiting behind it.
+    ///
+    /// Neither side can move from there. The ordering pass wants coverage
+    /// strictly beyond a sample before it consumes any of it, and a Source
+    /// cannot report coverage past a sample whose records it has not finished
+    /// copying out — which it cannot, because the row is full. The batch
+    /// overflow at `BATCH_EVENTS` is not the backstop: collection stops long
+    /// before assembly ever sees the group. So this is the bounded storage
+    /// failure, latched here rather than left as a silent stall.
+    ///
+    /// It latches as soon as the group is proven oversized, which may be
+    /// while other sources still have earlier samples left to sequence. Those
+    /// are lost to the fault, but they were already doomed: this row can never
+    /// accept the rest of its group.
+    fn unconsumable_group<const N: usize>(queue: &Queue<Capture, N>, next: i64) -> bool {
+        queue.free() == 0
+            && queue.front().is_some_and(|front| front.sample == next)
+            && queue.get(queue.len() - 1).is_some_and(|back| back.sample == next)
+    }
     fn collect(&mut self) {
         let sequencing = self.sequences_inputs();
         // Whether a copied record can still reach the ordering pass at all.
@@ -803,7 +824,12 @@ impl Hub {
                     break;
                 }
                 match bank.rows[index].intents.peek() {
-                    Ok(Intent::Capture(_)) if row.inputs.free() == 0 => break,
+                    Ok(Intent::Capture(record)) if row.inputs.free() == 0 => {
+                        if Self::unconsumable_group(&row.inputs, record.sample) {
+                            shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+                        }
+                        break;
+                    }
                     Ok(_) => {}
                     Err(_) => break,
                 }
@@ -1653,7 +1679,17 @@ impl Hub {
         }
         let keep = self.sequences_inputs() && !self.sequencer.terminal_session;
         for _ in 0..256 {
-            if self.direct_inputs.free() == 0 || self.input_work == 4096 {
+            if self.input_work == 4096 {
+                break;
+            }
+            if self.direct_inputs.free() == 0 {
+                // The Hub's own MIDI can address every held note too, so this
+                // queue takes the same oversized same-sample group a Tune row
+                // does — minus the ring, which is the only difference.
+                let next = self.direct.peek_direct_capture();
+                if next.is_some_and(|r| Self::unconsumable_group(&self.direct_inputs, r.sample)) {
+                    self.configuration_exhausted();
+                }
                 break;
             }
             let Some(record) = self.direct.take_direct_capture() else {

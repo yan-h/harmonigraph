@@ -1708,3 +1708,61 @@ fn production_reset_requires_fresh_complete_input_after_a_same_class_fault() {
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_same_sample_group_past_one_queue_latches_instead_of_stalling() {
+    let _scope = crate::test_scope::enter();
+    // Both input owners stage into a CAPTURES_PER_SOURCE queue and both stop
+    // collecting when it fills: a Tune's row through the intent ring, and the
+    // Hub's own MIDI without one. The group is oversized for either.
+    for slot in [1, 0] {
+        let (hub, source) = production_pair();
+        let (played, other) = if slot == 0 { (&hub, &source) } else { (&source, &hub) };
+        let mut raw = 1536;
+        let held = (0..64).map(|index| note(index, 0, index as i16, index as u32, true)).collect();
+        played.run_format(raw, held, None, None, 512);
+        other.run_format(raw, vec![], None, None, 512);
+        for _ in 0..128 {
+            raw += 512;
+            played.run_format(raw, vec![], None, None, 512);
+            other.run_format(raw, vec![], None, None, 512);
+        }
+        // Seventeen wildcard tuning expressions at one sample copy one record
+        // per addressed note: 1,088, past the 1,024 either queue stages. The
+        // 2,048-record batch overflow never sees them; collection stops first.
+        raw += 512;
+        let wildcards =
+            (0..17).map(|index| expression(-1, 0.01 + f64::from(index) * 0.001, 0)).collect();
+        played.run_format(raw, wildcards, None, None, 512);
+        other.run_format(raw, vec![], None, None, 512);
+        let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+        let mut group = None;
+        let mut latched = false;
+        for _ in 0..24 {
+            raw += 512;
+            played.run_format(raw, vec![], None, None, 512);
+            other.run_format(raw, vec![], None, None, 512);
+            let staged = inspect_hub(&hub, |hub| hub.test_inputs(slot));
+            if group.is_none() && staged.len() == protocol::CAPTURES_PER_SOURCE {
+                group = Some(staged.iter().map(|record| record.sample).collect::<Vec<_>>());
+            }
+            latched |= session.faults.load(Ordering::Acquire) & source::STORAGE_FAULT != 0;
+        }
+        let group = group.unwrap_or_else(|| panic!("slot {slot} fills with the oversized group"));
+        assert!(
+            group.iter().all(|sample| *sample == group[0]),
+            "slot {slot}: every staged record stands at one sample, which is what makes the group unconsumable"
+        );
+        assert!(
+            latched,
+            "slot {slot}: an unconsumable same-sample group is a bounded storage failure, not a silent stall"
+        );
+        assert_eq!(
+            inspect_hub(&hub, |hub| hub.test_inputs(slot).len()),
+            0,
+            "slot {slot}: the latch settles the stream and drops copies it can never sequence"
+        );
+        drop(source);
+        drop(hub);
+    }
+}

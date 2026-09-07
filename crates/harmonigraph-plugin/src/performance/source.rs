@@ -2844,21 +2844,12 @@ impl Source {
         }
         true
     }
-    /// Drain order within one input event is the order the group was built in,
-    /// and the Hub's merge keeps that order for records sharing a serial.
-    fn next_capture(&mut self) -> Option<Capture> {
+    /// The next record this Source will copy out, left where it stands.
+    /// None when nothing can be copied right now, which is also what the
+    /// caller sees from `next_capture`.
+    fn fill_capture_group(&mut self) -> Option<Capture> {
         loop {
-            if let Some(record) = self.capture_group.pop() {
-                if self.capture_group.len() == 0 {
-                    let position = self.capture_group_position;
-                    self.pending.publish(position);
-                    self.capture_published = record.serial;
-                    self.capture_cursor = self.pending.next_position(position);
-                    self.service_revision = self.service_revision.wrapping_add(1);
-                    // Publication is the last thing an envelope can be waiting
-                    // on. Nothing else revisits it, so settle it here.
-                    self.remove_finished(position);
-                }
+            if let Some(record) = self.capture_group.front() {
                 return Some(record);
             }
             let position = self.capture_cursor?;
@@ -2867,6 +2858,23 @@ impl Source {
             }
             self.capture_group_position = position;
         }
+    }
+    /// Drain order within one input event is the order the group was built in,
+    /// and the Hub's merge keeps that order for records sharing a serial.
+    fn next_capture(&mut self) -> Option<Capture> {
+        self.fill_capture_group()?;
+        let record = self.capture_group.pop().unwrap();
+        if self.capture_group.len() == 0 {
+            let position = self.capture_group_position;
+            self.pending.publish(position);
+            self.capture_published = record.serial;
+            self.capture_cursor = self.pending.next_position(position);
+            self.service_revision = self.service_revision.wrapping_add(1);
+            // Publication is the last thing an envelope can be waiting on.
+            // Nothing else revisits it, so settle it here.
+            self.remove_finished(position);
+        }
+        Some(record)
     }
     fn transfer_captures(&mut self) {
         if !self.adopt_sent {
@@ -2940,6 +2948,12 @@ impl Source {
     pub(super) fn take_direct_capture(&mut self) -> Option<Capture> {
         assert!(self.direct.is_some());
         self.next_capture()
+    }
+    /// What the next `take_direct_capture` would hand over, so the Hub can see
+    /// whether a full DIRECT queue is a wait or an oversized same-sample group.
+    pub(super) fn peek_direct_capture(&mut self) -> Option<Capture> {
+        assert!(self.direct.is_some());
+        self.fill_capture_group()
     }
     fn last_sent_sequence(&self) -> u64 {
         self.transfer_cut
