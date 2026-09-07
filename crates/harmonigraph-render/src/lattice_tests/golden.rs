@@ -577,8 +577,8 @@ pub(super) fn names_overlapping_on_one_sheet() -> Shot {
 
 /// Draw `shot` and hold it against the frame on record.
 ///
-/// A machine with no usable GPU adapter draws nothing and asserts nothing —
-/// the same skip the rest of this suite takes.
+/// Local runs may skip without a GPU; CI requires one through the shared
+/// device setup before this function can return without comparing pixels.
 fn check(name: &str, shot: Shot) {
     let Some(mut shooter) = Shooter::new(GOLDEN_SIZE) else {
         return;

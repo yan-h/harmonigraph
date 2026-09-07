@@ -41,15 +41,20 @@ fn aligned(bytes: u32) -> u32 {
 
 impl Renderer {
     /// `size` is in physical pixels. Returns `None` if the machine has no
-    /// usable GPU adapter (CI containers, mostly) — callers decide
-    /// whether that is fatal.
+    /// usable GPU adapter — callers decide whether that is fatal. Tests use
+    /// the shared GPU requirement, which makes unavailable GPUs fatal in CI.
     pub fn new(size: [u32; 2]) -> Option<Renderer> {
-        let instance = wgpu::Instance::default();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        #[cfg(test)]
+        let (device, queue) = harmonigraph_render::test_gpu_device()?;
+        #[cfg(not(test))]
+        let (device, queue) = {
+            let instance = wgpu::Instance::default();
+            let adapter = pollster::block_on(
+                instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+            )
+            .ok()?;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?
+        };
 
         // `predictable_texture_filtering` makes glyph sampling identical
         // across GPUs. It costs a little sharpness, but a render that
