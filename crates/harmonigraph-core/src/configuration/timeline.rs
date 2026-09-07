@@ -3,8 +3,6 @@
 
 use super::{ConfigMutation, ConfigReducer, ResolvedConfig};
 
-pub const CONFIG_COMMANDS: usize = 128;
-pub const CONFIG_SLOTS: usize = 2;
 pub const CONFIG_TIMELINE: usize = 128;
 pub const CONTROL_WORK: usize = 16;
 

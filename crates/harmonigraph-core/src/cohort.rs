@@ -9,7 +9,6 @@ pub const COHORT_EVENTS: usize = 1024;
 pub const COHORT_ONSETS: usize = 256;
 pub const SOURCE_ORDINALS: u8 = 17;
 pub const TARGETS_PER_EVENT: usize = 64;
-pub const EVENT_CELL_BYTES: usize = 128;
 pub const COHORT_PHASES: usize = COHORT_EVENTS + COHORT_ONSETS;
 pub const COHORT_BYTES: usize = 294_912;
 pub const ADJACENCY_BYTES: usize = 204_800;
