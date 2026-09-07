@@ -29,7 +29,12 @@ Tune's performance-only opt-in creates no configuration mailbox.
 `allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
 it does not measure RSS or other threads.
 See the [configuration](docs/adaptive-tuning-effective-configuration.md), [performance boundary](docs/adaptive-tuning-clap-performance.md) and [aggregation](docs/adaptive-tuning-companion-aggregation.md) handoffs for the contracts and measured limits.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering and production configuration/performance/setup seams.
+- **Auxiliary descriptor bounds** (`src/wrapper/clap/wrapper.rs`): stop both auxiliary-port loops at the host's declared input/output count, before dereferencing the one-past descriptor (#638).
+Missing inputs keep the existing silent-buffer fallback;
+missing outputs keep the existing skip-processing behavior and leave undeclared storage untouched.
+The existing debug diagnostics remain in place.
+`tests/clap_auxiliary.rs` reaches both bounds through an exported stereo plugin with auxiliary input and output ports, including disappearance and return between callbacks.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
