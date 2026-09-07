@@ -3,7 +3,8 @@
 //!
 //! The grid travels as DATA rather than as a picture — `capacity` slots of one
 //! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
-//! palette change moves uniforms and never comes here. What a frame owes the
+//! palette change normally moves only uniforms. A larger retention can also
+//! recover a clipped gap (see [`GpuGrid::hit`](crate::spectrogram::GpuGrid::hit)). What a frame owes the
 //! GPU is the run of slabs it draws and the few whose bytes have moved since
 //! the last one; the read that turns those bytes into pixels lives in
 //! [`harmonigraph_render`]'s shader.
@@ -324,8 +325,8 @@ pub(crate) struct GpuGrid {
 
 /// One run of slabs as it was handed to the GPU.
 struct SentRun {
-    /// Which columns it was folded from — a match means this run is still the
-    /// picture, and nothing is folded at all.
+    /// Which columns it was folded from — a match with enough retained
+    /// coverage ([`GpuGrid::hit`]) means nothing is folded at all.
     key: RunKey,
     /// This run's own handover number, which the GPU echoes back through
     /// [`GpuGrid::uploaded`] once it has written it.
@@ -383,10 +384,27 @@ impl SentRun {
 }
 
 impl GpuGrid {
-    /// The layout of the run already on the GPU, if it was folded from these
-    /// columns — the frame then draws it without touching the store.
-    fn hit(&self, key: &RunKey) -> Option<TexLayout> {
-        self.sent.as_ref().filter(|sent| sent.key == *key).map(|sent| sent.layout)
+    /// The layout already on the GPU, if these columns and the live retention
+    /// need no older slab. A capacity increase alone is not a miss: only a
+    /// prefix clipped by the previous budget can be missing. Without this
+    /// check a resize followed by Span growth under a held bucket draws the
+    /// old, shorter extent until another column arrives (#714).
+    fn hit(&self, plan: &Plan, history: &crate::SpectrumHistory) -> Option<TexLayout> {
+        let sent = self.sent.as_ref().filter(|sent| sent.key == plan.key)?;
+        if !plan.key.whole
+            && history.get(plan.first).zip(history.back()).is_some_and(|(first, newest)| {
+                let target = (first.time / plan.bucket).floor() as i64;
+                let min_key = ((newest.time / plan.bucket).floor() as i64)
+                    .saturating_sub(plan.capacity.max(1) as i64 - 1);
+                // The same admitted first slab as SpectrogramAgg::window.
+                // A smaller budget may reuse a longer run in its existing
+                // buffer; the next column's build applies the smaller bound.
+                target.max(min_key) < sent.first_key
+            })
+        {
+            return None;
+        }
+        Some(sent.layout)
     }
 
     /// Take a freshly folded run as the one to draw, working out what the GPU
@@ -570,12 +588,10 @@ pub(crate) struct Columns {
     pub(crate) newest: f64,
 }
 
-/// Which columns a run was folded from, and how. Equal keys mean the run on the
-/// GPU is still the one to draw, so the frame folds nothing and re-sends what it
-/// holds.
+/// Which columns a run was folded from, and how. Equal keys plus the coverage
+/// check in [`GpuGrid::hit`] mean the GPU's run is still the one to draw.
 ///
-/// Staleness-safe by construction — every way the RUN can change moves a field:
-/// a fresh column moves `newest_bits` (even in a saturated store, where the
+/// A fresh column moves `newest_bits` (even in a saturated store, where the
 /// count holds), the oldest column scrolling out of the window moves `first`,
 /// and the Span crossing a ladder rung moves `bucket_bits`. Floats compare by
 /// bit pattern so equality is exact and free of NaN quirks.
@@ -584,9 +600,10 @@ pub(crate) struct Columns {
 /// — the rows, the pitch range, the dB window, the gradient. Those are uniforms
 /// now, so a zoom or a palette drag draws the same bytes a different way, and a
 /// key that watched them would re-fold the store on every frame of a gesture
-/// that cannot move a slab. The buffer's `capacity` is out for the same reason:
-/// it sizes the GPU's copy, not the fold, and a change to it is answered where
-/// the copy is made ([`GpuGrid::accept`]).
+/// that cannot move a slab. The buffer's `capacity` also bounds live retention,
+/// but only invalidates a hit when it admits an older slab missing from the
+/// run. Keeping that check separate lets ordinary resizes reuse the run;
+/// [`GpuGrid::accept`] resizes the copy when a build is actually needed.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RunKey {
     first: usize,
@@ -799,7 +816,8 @@ pub(crate) fn build(
 }
 
 /// The run this frame draws, and where it sits in time: the one already on the
-/// GPU when the plan's key still names it, and a fresh fold otherwise.
+/// GPU when the plan's key and retained coverage still fit, and a fresh fold
+/// otherwise.
 pub(crate) fn run_for(
     spectrum: &mut crate::AudioSpectrum,
     whole: Option<&crate::WholeSong>,
@@ -814,7 +832,7 @@ pub(crate) fn run_for(
     // ladder never offers for as long as the window stayed near it. See
     // [`Plan::new`].
     spectrum.spectrogram.at(surface).held_bucket = (!view.whole).then_some(plan.bucket);
-    match spectrum.spectrogram.at(surface).gpu.hit(&plan.key) {
+    match spectrum.spectrogram.at(surface).gpu.hit(plan, &spectrum.history) {
         Some(layout) => Some(layout),
         None => build(spectrum, whole, surface, plan, view),
     }
@@ -3040,7 +3058,7 @@ mod tests {
         // the next fold goes over whole. A rung is what it takes: inside one
         // the copy is the same size and the delta survives the resize, which is
         // [`ring_slots`]' whole job. The resize alone folds nothing either way:
-        // the capacity is not the run's, which is why it is not in the key.
+        // these columns already fit, so retention cannot extend the run.
         let narrow = PaneView { depth_len: 250.0, ..view };
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(201, 92.0));
         assert_eq!(dirty.len(), 1, "the resize alone refolded the store");
@@ -3055,6 +3073,143 @@ mod tests {
         let (_, _, dirty) = fold(&mut spectrum, &narrow, &columns(202, 92.01));
         assert!(dirty.is_empty(), "a fresh context was sent a delta");
         assert_eq!(spectrum.spectrogram.at(0).gpu.full_uploads(), 3);
+    }
+
+    #[test]
+    fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
+        for (newest, span, bucket) in
+            [(10.0, 4.0, 0.016), (20.0, 8.0, 0.032), (1_000_000.0, 4.0, 0.016)]
+        {
+            let mut spectrum = crate::AudioSpectrum::default();
+            spectrum.history.push(col(0.0, &[(1000, 1.0)]));
+            spectrum.history.push(col(newest, &[(1000, 0.5)]));
+            let columns = Columns { first: 0, len: 2, newest };
+            let mut view = PaneView {
+                ppp: 1.0,
+                pitch_len: 300.0,
+                depth_len: 256.0,
+                window: span,
+                scale: SWEEP_SCALE,
+                cfg: SpectrumConfig::default(),
+                whole: false,
+            };
+            let initial = Plan::new(&view, &columns, None);
+            assert_eq!((initial.bucket, initial.capacity), (bucket, 264));
+            // Docked pane and preview start on the same clipped run, but each
+            // must recover its own extent when it is resized.
+            for surface in 0..2 {
+                let old = run_for(&mut spectrum, None, surface, &initial, &view).unwrap();
+                assert!(old.t_origin <= newest - span && old.t_origin > newest - 2.0 * span);
+                acknowledge(&spectrum.spectrogram.at(surface).gpu);
+            }
+            for surface in 0..2 {
+                view.depth_len = 512.0;
+                view.window = span;
+                let held = spectrum.spectrogram.at(surface).held_bucket;
+                let resize = Plan::new(&view, &columns, held);
+                assert_eq!(resize.key, initial.key);
+                assert_eq!(resize.capacity, 520);
+                if bucket == 0.032 {
+                    assert!(
+                        live_slab(span, 512) < resize.bucket,
+                        "hysteresis must hold a coarser rung"
+                    );
+                }
+                let recovered = run_for(&mut spectrum, None, surface, &resize, &view).unwrap();
+                assert!(
+                    recovered.t_origin <= newest - 2.0 * span,
+                    "retained extent stayed clipped"
+                );
+                if newest == 10.0 {
+                    assert!((recovered.t_origin - 1.696).abs() < 1e-9);
+                }
+                let gpu = &spectrum.spectrogram.at(surface).gpu;
+                let run = gpu.sent.as_ref().unwrap().run.clone();
+                assert_eq!(gpu.run_slabs(), resize.capacity);
+                acknowledge(gpu);
+                if surface == 0 {
+                    assert_eq!(spectrum.spectrogram.at(1).gpu.run_slabs(), initial.capacity);
+                }
+
+                // Span growth after the resize is a hit, as are contraction
+                // and re-expansion: already retained coverage needs no refold.
+                for (depth, window) in [(512.0, 2.0 * span), (256.0, span), (512.0, 2.0 * span)] {
+                    view.depth_len = depth;
+                    view.window = window;
+                    let held = spectrum.spectrogram.at(surface).held_bucket;
+                    let plan = Plan::new(&view, &columns, held);
+                    assert_eq!(plan.key, initial.key);
+                    assert_eq!(
+                        run_for(&mut spectrum, None, surface, &plan, &view),
+                        Some(recovered)
+                    );
+                    let state = spectrum.spectrogram.at(surface);
+                    assert!(Arc::ptr_eq(&run, &state.gpu.sent.as_ref().unwrap().run));
+                    assert!(state.gpu.grid().unwrap().dirty.is_empty());
+                    assert_eq!(
+                        (state.agg.as_ref().unwrap().rebuilds(), state.gpu.full_uploads()),
+                        (2, 2)
+                    );
+                }
+                // Compare to an explicit fresh fold of this final plan, with
+                // the million-second gap still bounded to the pane's budget.
+                let mut fresh = SpectrogramAgg::new();
+                let (centers, power) =
+                    fresh.window(&spectrum.history, 0, resize.bucket, resize.capacity);
+                assert_eq!(recovered.t_origin, centers[0] - resize.bucket * 0.5);
+                assert_eq!(recovered.tex_span, centers.len() as f64 * resize.bucket);
+                assert_eq!(*run, power);
+                assert_eq!(centers.len(), resize.capacity);
+                assert!(fresh.grid.power.capacity() <= 2 * (resize.capacity + 1) * SPECTRUM_BINS);
+            }
+        }
+    }
+
+    #[test]
+    fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
+        let mut spectrum = crate::AudioSpectrum::default();
+        for i in 0..=250 {
+            spectrum.history.push(col(i as f64 * 0.008, &[(1000, 0.5)]));
+        }
+        let columns = Columns { first: 0, len: spectrum.history.len(), newest: 2.0 };
+        let mut view = PaneView {
+            ppp: 1.0,
+            pitch_len: 300.0,
+            depth_len: 256.0,
+            window: 4.0,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig::default(),
+            whole: false,
+        };
+        let initial = Plan::new(&view, &columns, None);
+        for surface in 0..2 {
+            let layout = run_for(&mut spectrum, None, surface, &initial, &view).unwrap();
+            let run = spectrum.spectrogram.at(surface).gpu.sent.as_ref().unwrap().run.clone();
+            acknowledge(&spectrum.spectrogram.at(surface).gpu);
+            // Cross the capacity boundary in both directions while the bucket
+            // stays held. Span, pitch, density and colour still only change
+            // how the same complete run is read.
+            for (depth, window, ppp) in [(257.0, 4.0, 1.0), (512.0, 8.0, 1.0), (128.0, 4.0, 2.0)] {
+                view.depth_len = depth;
+                view.window = window;
+                view.ppp = ppp;
+                view.pitch_len += 10.0;
+                view.scale.min_midi += 1.0;
+                view.scale.max_midi += 1.0;
+                view.cfg.spectrogram_gradient.hue_start += 10.0;
+                let held = spectrum.spectrogram.at(surface).held_bucket;
+                let plan = Plan::new(&view, &columns, held);
+                assert_eq!(plan.key, initial.key);
+                assert_eq!(run_for(&mut spectrum, None, surface, &plan, &view), Some(layout));
+                let state = spectrum.spectrogram.at(surface);
+                assert!(Arc::ptr_eq(&run, &state.gpu.sent.as_ref().unwrap().run));
+                assert!(state.gpu.grid().unwrap().dirty.is_empty());
+                assert_eq!(
+                    (state.agg.as_ref().unwrap().rebuilds(), state.gpu.full_uploads()),
+                    (1, 1)
+                );
+            }
+        }
     }
 
     /// The acknowledgement the render crate's `prepare` makes at the end of a
@@ -3923,7 +4078,7 @@ mod tests {
                 let plan = Plan::new(view, &columns, None);
                 let uploads = spectrum.spectrogram.at(0).gpu.full_uploads();
                 let refolds = spectrum.spectrogram.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
-                let hit = spectrum.spectrogram.at(0).gpu.hit(&plan.key).is_some();
+                let hit = spectrum.spectrogram.at(0).gpu.hit(&plan, &spectrum.history).is_some();
                 run_for(spectrum, None, 0, &plan, view).expect("a run to draw");
                 t.folds += u32::from(!hit);
                 t.rebuilds += u32::from(spectrum.spectrogram.at(0).gpu.full_uploads() > uploads);
