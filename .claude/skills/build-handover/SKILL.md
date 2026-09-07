@@ -21,10 +21,10 @@ substring is fine).
 It copies only, never builds;
 a build must already exist in the worktree.
 Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
-After a swap, deactivate + reactivate the plugin in Bitwig to pick it up —
-a rescan does not reload one that is already loaded.
-Deactivate it BEFORE the swap when a session is worth protecting:
-the copy rewrites code the running host has not faulted in yet.
+Fully quit Bitwig before loading a build, then reopen it after the swap.
+The loader signs a staging bundle and atomically installs a fresh executable inode;
+existing host processes deliberately keep their old mapped code until they exit.
+A device deactivate/reactivate, editor reopen or rescan alone may leave that process alive.
 
 The loader discovers registered Git worktrees, not one hard-coded parent directory, so a Codex-managed worktree appears on the same menu without any loader configuration.
 It does need a branch:
@@ -82,7 +82,7 @@ no session can say which corner to look in.
 A session handing over a build should say what the tag will read rather than say "look at the overlay", because a HUD that says nothing new is exactly what a swap that did not happen also looks like.
 
 This exists because a swap can silently not have happened:
-no reactivate, a build that landed in a different worktree, the wrong branch named, or a build that never finished.
+a surviving host process, a build that landed in a different worktree, the wrong branch named, or a build that never finished.
 Two builds are otherwise indistinguishable from inside the DAW, and a look that is judged against the wrong binary costs a whole round trip to discover.
 
 **Sessions, when you hand over a build:
@@ -112,7 +112,7 @@ a build made with uncommitted edits carries the commit under it.
 So commit BEFORE you build if you want the tag to distinguish your work;
 if you build first, the tag is still the truth about the binary, and it is the branch HEAD that is ahead.
 
-## A reactivate only reloads if the sandbox process exits
+## A build change requires the old host process to exit
 
 Deactivate + reactivate re-reads the binary only when Bitwig's plug-in host PROCESS for Harmonigraph exits on the unload.
 That is decided by **Settings → Plug-ins → "Create a plug-in sandbox for:"**, and the default, `by Vendor`, groups every plug-in sharing a `VENDOR` string into ONE process which lives as long as ANY of them is loaded.
@@ -121,8 +121,9 @@ the DAW keeps drawing the previous build with nothing on screen saying so, and o
 `by Plug-in` and `Individually` each give it a process of its own;
 `with Bitwig` loads it into the audio engine, which unloads nothing.
 
-The symptom is a HUD whose tag does not change after a load that reported success.
-Check the hosting mode before suspecting the swap.
+Use a full Bitwig quit/reopen for the handoff rather than relying on a device toggle.
+The symptom of a surviving process is a HUD whose tag does not change after a successful installation.
+The loader intentionally preserves that process's old file instead of changing mapped executable bytes underneath it.
 
 ## Recovering a build someone else's swap evicted
 
@@ -132,13 +133,15 @@ which is the whole recovery, and the only recipe here that gets the swap's ORDER
 To rebuild one without cd'ing into the user's checkout:
 `cargo build --release -p harmonigraph-plugin --manifest-path <main>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
 
-Do not hand-copy into the bundles and `codesign --force --sign -` each.
-That order is the failure the next paragraph describes:
-signing the live bundle discards the inode the copy just wrote, so a running host stays on the build you were trying to replace while every command reports success.
+Use the loader rather than overwriting an installed executable by hand.
+Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).
+The loader now copies the signed executable to a new sibling file on the destination filesystem and renames it atomically into place.
+The bundle path, resource seal and refreshed discovery timestamp stay intact;
+the executable inode changes on purpose.
 
 Do NOT compare shasums against the source dylib to check a swap took:
 `codesign --force` re-signs the bundled binary, so its hash legitimately differs from the file just copied (the two bundle binaries match each OTHER).
-Note that `codesign` also does not write through the file it signs —
-it renames a new one into place, which is why `load-plugin.sh` signs a staging copy and only then writes the finished bytes across.
+`load-plugin.sh` signs and verifies a staging bundle before installing its finished executable through the fresh sibling inode.
+Its regression loads both successive installed dylibs in fresh processes and checks that old open descriptors retain their original bytes.
 Confirm the new code is present instead, e.g. `strings -a "<bundle>/Contents/MacOS/Harmonigraph" | grep -c "<new symbol>"` —
 WGSL shader edits are embedded via `include_str!`, so a new const or comment name greps cleanly.

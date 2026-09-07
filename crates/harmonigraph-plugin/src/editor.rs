@@ -12,7 +12,6 @@ use baseview::{Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::Context;
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, Queue, SizeSource};
-use harmonigraph_core::notes::NoteEvent as CoreNoteEvent;
 use harmonigraph_ui::SharedState;
 use nice_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle, ResizeHint};
 use parking_lot::Mutex;
@@ -50,6 +49,7 @@ pub(crate) struct ClockMapper {
     /// Estimated `gui_time - audio_time` (includes average delivery
     /// latency, which is fine: it's constant-ish, so spacing survives).
     offset: Option<f64>,
+    observed_audio: Option<f64>,
 }
 
 impl ClockMapper {
@@ -59,12 +59,16 @@ impl ClockMapper {
     const SMOOTHING: f64 = 0.05;
 
     pub fn new() -> Self {
-        ClockMapper { offset: None }
+        ClockMapper { offset: None, observed_audio: None }
     }
 
-    /// Feed one observation per drained batch: the newest audio timestamp
-    /// in the batch against the current GUI time.
+    /// Observe a fresh audio heartbeat, independently of historical delivery.
+    /// An idle polling pass must not re-anchor the last callback clock.
     pub fn observe(&mut self, newest_audio_time: f64, gui_now: f64) {
+        if self.observed_audio == Some(newest_audio_time) {
+            return;
+        }
+        self.observed_audio = Some(newest_audio_time);
         let candidate = gui_now - newest_audio_time;
         self.offset = Some(match self.offset {
             None => candidate,
@@ -74,6 +78,7 @@ impl ClockMapper {
     }
 
     /// Map an audio timestamp to GUI time (clamped: never in the future).
+    #[cfg(test)]
     pub fn map(&self, audio_time: f64, gui_now: f64) -> f64 {
         match self.offset {
             Some(offset) => (audio_time + offset).min(gui_now),
@@ -86,7 +91,7 @@ impl ClockMapper {
 /// and the GUI thread. Lives for the whole plugin lifetime; the editor
 /// window may open and close many times around it.
 pub struct EditorShared {
-    consumer: rtrb::Consumer<CoreNoteEvent>,
+    consumer: harmonigraph_record::publication::Consumer,
     /// Interleaved input frames from the audio thread (Spectral pane analyzer);
     /// `audio_channels` samples each.
     audio_consumer: rtrb::Consumer<f32>,
@@ -110,7 +115,6 @@ pub struct EditorShared {
     clock: ClockMapper,
     /// Reused per-frame drain scratch (events are batched so the clock
     /// observation can use the newest timestamp before mapping).
-    drain_buf: Vec<CoreNoteEvent>,
     /// Reused per-frame audio drain scratch.
     audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
@@ -135,7 +139,7 @@ pub struct EditorShared {
 
 impl EditorShared {
     pub fn new(
-        consumer: rtrb::Consumer<CoreNoteEvent>,
+        consumer: harmonigraph_record::publication::Consumer,
         audio_consumer: rtrb::Consumer<f32>,
         sample_rate_bits: Arc<AtomicU32>,
         audio_channels: Arc<AtomicU32>,
@@ -150,7 +154,6 @@ impl EditorShared {
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
             clock: ClockMapper::new(),
-            drain_buf: Vec::new(),
             audio_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
@@ -299,27 +302,24 @@ impl EditorShared {
     }
 
     /// Drain note events from the audio thread into the tracker, mapping
-    /// their sample-clock timestamps onto the GUI clock. The batch is
-    /// collected FIRST so the mapper can observe the newest timestamp
-    /// before mapping any event — that ordering is what preserves
-    /// intra-batch spacing (a fast run of notes must not quantize to GUI
-    /// frames). Returns true when events arrived, in which case the
+    /// their sample-clock timestamps onto the GUI clock. A fresh audio
+    /// heartbeat anchors the whole stream before historical records are
+    /// mapped; delayed batches never reset that anchor. Returns true when
+    /// events arrived, in which case the
     /// caller should repaint this tick rather than at the idle poll.
     fn drain_into_tracker(&mut self, now: f64) -> bool {
-        self.drain_buf.clear();
-        while let Ok(event) = self.consumer.pop() {
-            self.drain_buf.push(event);
+        if let Some(observation) = self.consumer.clock() {
+            self.clock.observe(observation, now);
         }
-        let Some(newest) = self.drain_buf.last() else {
-            return false;
-        };
-        self.clock.observe(newest.time, now);
-        for event in &self.drain_buf {
-            let mut event = *event;
-            event.time = self.clock.map(event.time, now);
-            self.ui.tracker.handle_event(event);
-        }
-        true
+        let Some(offset) = self.clock.offset else { return false };
+        let tracker = &mut self.ui.tracker;
+        self.consumer.drain(|delivery, _, _| {
+            if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
+                let result = tracker.handle_canonical_mapped(event, offset);
+                debug_assert!(result.is_ok(), "validated canonical publication");
+            }
+            true
+        }) != 0
     }
 
     /// Drain the audio sample ring into the spectrum analyzer.
@@ -452,8 +452,12 @@ fn frame(
     let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
-    let backend =
-        PluginParamBackend { params: &state.params, setter: &setter, gesture: &shared.gesture };
+    let backend = PluginParamBackend {
+        params: &state.params,
+        setter: &setter,
+        gesture: &shared.gesture,
+        configuration: state.params.configuration.get().map(|mailbox| mailbox.visible()),
+    };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
     //
@@ -509,6 +513,11 @@ fn frame(
     let fps_cap = shared.ui.fps_cap;
     let display_max_fps = queue.display_max_fps();
     drop(guard);
+    if state.params.configuration.get().is_some() {
+        if let Some(session) = state.params.session.get() {
+            session_controls(ui.ctx(), session, &mut state.session_draft);
+        }
+    }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
         queue.set_frame_interval(interval);
     }
@@ -810,6 +819,7 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
 struct WindowState {
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
+    session_draft: Option<(u64, crate::performance::clock::Calibration)>,
     /// The frame interval armed on THIS window's timer, so an unchanged
     /// cadence doesn't rebuild the run-loop timer every frame. `None` until
     /// the first frame arms one.
@@ -827,7 +837,7 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params, frame_interval: None }
+        WindowState { shared, params, frame_interval: None, session_draft: None }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -1029,14 +1039,152 @@ impl Drop for LatticeEditorHandle {
     }
 }
 
+/// Host-shell setup, intentionally outside the picture shared with video export.
+/// A draft is local to this open menu; applying it uses the prepared setup path.
+fn session_controls(
+    ctx: &egui::Context,
+    shared: &Arc<crate::performance::setup::Shared>,
+    draft: &mut Option<(u64, crate::performance::clock::Calibration)>,
+) {
+    use crate::performance::setup::{diagnostics_text, Routing};
+    egui::Area::new(egui::Id::new("harmonigraph-session-setup"))
+        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+        .show(ctx, |ui| {
+            ui.menu_button("Session", |ui| {
+                let accepted = shared.value();
+                let Routing::Hub(saved) = accepted.routing else {
+                    return;
+                };
+                if draft.as_ref().is_none_or(|(generation, _)| *generation != accepted.generation) {
+                    *draft = Some((accepted.generation, saved.calibration));
+                }
+                let (_, calibration) = draft.as_mut().unwrap();
+                ui.label(format!("Hub {}", saved.uuid));
+                ui.label("Signed offset for this routing");
+                ui.horizontal(|ui| {
+                    ui.label("Signed sample offset");
+                    ui.add(egui::DragValue::new(&mut calibration.offset));
+                });
+                ui.label("Sample rate and buffer size follow the host automatically.");
+                ui.label("Offset defaults to zero; adjust only for a known routing delay.");
+                if ui.button("Apply / Reinitialize").clicked() {
+                    let value = crate::performance::routing::HubSetup {
+                        calibration: *calibration,
+                        ..saved
+                    };
+                    if let Err(error) = shared.apply(Routing::Hub(value), true) {
+                        ui.label(error);
+                    }
+                }
+                if ui.button("Reset voices").clicked() {
+                    if let Err(error) = shared.apply(Routing::Hub(saved), true) {
+                        ui.label(error);
+                    }
+                }
+                let applied = shared.applied.load(Ordering::Acquire);
+                if let Some(adopted) = shared.adopted() {
+                    ui.label(format!(
+                        "Active clock: {:+} samples, {} Hz, up to {} frames — {}",
+                        adopted.calibration.offset,
+                        adopted.sample_rate,
+                        adopted.max_frames,
+                        if adopted.valid { "valid" } else { "reinitialization required" },
+                    ));
+                }
+                ui.label(if applied == accepted.generation {
+                    "Setup adopted"
+                } else {
+                    "Setup pending: old output must settle"
+                });
+                ui.separator();
+                ui.label(diagnostics_text(
+                    shared.status.load(Ordering::Acquire),
+                    shared.extra_delay.load(Ordering::Relaxed),
+                ));
+                ui.label(harmonigraph_perf::BUILD_TAG);
+            });
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         pace, target_frame_interval, ClockMapper, EditorShared, HarmonigraphParams, WindowState,
         DISPLAY_OVERSAMPLE, FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
-    use harmonigraph_core::notes::NoteEvent;
+    use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
+
+    #[test]
+    fn an_open_session_menu_rebinds_restored_setup_before_calibration_only_apply() {
+        use crate::performance::{routing::HubSetup, setup};
+        use nice_plug::wrapper::clap::setup::Setup;
+        let ctx = egui::Context::default();
+        let shared = setup::Shared::hub();
+        let mut draft = None;
+        let mut draw = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| super::session_controls(ui.ctx(), &shared, &mut draft),
+            )
+        };
+        fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.rect.center().to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("visible menu text {label:?}"))
+        }
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw(vec![]);
+        let output = draw(vec![]);
+        let session = text_position(&output, "Session");
+        draw(vec![egui::Event::PointerMoved(session), pointer(session, true)]);
+        draw(vec![pointer(session, false)]);
+        let output = draw(vec![]);
+        let setup::Routing::Hub(original) = shared.value().routing else { unreachable!() };
+        text_position(&output, &format!("Hub {}", original.uuid));
+        let mut restored = HubSetup::default();
+        restored.calibration.offset = 37;
+        let mut state = nice_plug::plugin::PluginState {
+            version: String::new(),
+            params: Default::default(),
+            fields: Default::default(),
+        };
+        state.fields.insert(setup::HUB_FIELD.into(), serde_json::to_string(&restored).unwrap());
+        setup::Adapter(shared.clone()).prepare(&state).unwrap().commit();
+        let output = draw(vec![]);
+        text_position(&output, &format!("Hub {}", restored.uuid));
+        let offset = text_position(&output, "37");
+        draw(vec![egui::Event::PointerMoved(offset), pointer(offset, true)]);
+        let moved = offset + egui::vec2(10.0, 0.0);
+        draw(vec![egui::Event::PointerMoved(moved)]);
+        draw(vec![pointer(moved, false)]);
+        let output = draw(vec![]);
+        let apply = text_position(&output, "Apply / Reinitialize");
+        draw(vec![egui::Event::PointerMoved(apply), pointer(apply, true)]);
+        draw(vec![pointer(apply, false)]);
+        let setup::Routing::Hub(applied) = shared.value().routing else { unreachable!() };
+        assert_eq!(applied.uuid, restored.uuid);
+        assert_ne!(applied.calibration.offset, restored.calibration.offset);
+    }
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could
@@ -1055,7 +1203,7 @@ mod tests {
         // drained voices must land on the GUI clock with their intra-batch
         // spacing intact. (This is the integration the ClockMapper unit
         // tests below can't cover: observe-newest-THEN-map ordering.)
-        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (mut producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
@@ -1066,19 +1214,155 @@ mod tests {
             take_control,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
-        for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
-            producer.push(NoteEvent::on(time, 0, note, 1.0)).unwrap();
+        for (source, time) in [(1, 99.950), (2, 99.995)] {
+            let event = NoteEvent::on(time, SourceId(source), 0, 60, 1.0);
+            producer
+                .note(
+                    harmonigraph_core::canonical::NoteDelta {
+                        assignment: None,
+                        partial_output: false,
+                        event,
+                        sequence: 1,
+                        lifetime: 1,
+                        provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
+                        timing: Some(harmonigraph_core::canonical::EventTiming {
+                            clock: Default::default(),
+                            input: 0,
+                            planned: None,
+                            sample: 0,
+                            sample_rate: 48000.0,
+                        }),
+                        pitch_microcents: None,
+                    },
+                    99.995,
+                    Default::default(),
+                )
+                .unwrap();
         }
 
+        producer.observe_clock(99.995);
         assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
         let mut on_times: Vec<f64> = shared.ui.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
         assert_eq!(on_times.len(), 2);
         assert!((on_times[1] - on_times[0] - 0.045).abs() < 1e-9, "spacing lost: {on_times:?}");
         assert!(on_times[1] <= 7.0, "never maps into the GUI future");
+        assert_eq!(shared.ui.tracker.voices().map(|v| v.source.0).collect::<Vec<_>>(), vec![1, 2]);
 
         // Empty ring: no work, no repaint request.
         assert!(!shared.drain_into_tracker(7.1));
+        producer.observe_clock(11.0);
+        // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
+        // at GUI=12; neither its batch nor a later idle poll is a new clock.
+        use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
+        use harmonigraph_core::confirmed::PitchProvenance;
+        let accepted = NoteDelta {
+            assignment: None,
+            partial_output: false,
+            event: NoteEvent::on(2.0, SourceId(3), 0, 72, 0.8),
+            sequence: 1,
+            lifetime: 61,
+            provenance: PitchProvenance::AcceptedOutput,
+            timing: Some(EventTiming {
+                clock: ClockId::default(),
+                input: 96000,
+                planned: None,
+                sample: 96000,
+                sample_rate: 48000.0,
+            }),
+            pitch_microcents: None,
+        };
+        producer.note(accepted, 11.0, Default::default()).unwrap();
+        let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
+        producer.note(event.into(), 11.0, Default::default()).unwrap();
+        assert!(shared.drain_into_tracker(21.0));
+        assert_eq!(
+            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            12.0
+        );
+        assert!(!shared.drain_into_tracker(22.0));
+        use harmonigraph_core::canonical::{ChannelBaseline, SourceBaseline, VoiceBaseline};
+        let baseline = SourceBaseline::new(
+            SourceId::DIRECT,
+            1,
+            3.0,
+            0.0,
+            0,
+            true,
+            &[VoiceBaseline {
+                note: 72,
+                actual_onset: 2.0,
+                input_onset: 2.0,
+                velocity: 0.8,
+                pitch_microcents: 7_200_000_000,
+                ..Default::default()
+            }],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        producer.observe_clock(12.0);
+        producer.baseline(0, &baseline, 12.0, Default::default()).unwrap();
+        shared.drain_into_tracker(22.2);
+        let note = shared.ui.tracker.roll().notes().find(|n| n.source == SourceId::DIRECT).unwrap();
+        assert_eq!(note.start, 12.0);
+        assert!(note.history_complete, "baseline retains the matching observed lifetime");
+        assert!(
+            (shared.ui.tracker.source_baseline(SourceId::DIRECT).unwrap().time - 13.01).abs()
+                < 1e-9
+        );
+        assert_eq!(
+            shared.ui.tracker.voices().find(|v| v.source == SourceId::DIRECT).unwrap().on_time,
+            12.0
+        );
+        assert_eq!(
+            shared.ui.tracker.roll().notes().filter(|n| n.source == SourceId::DIRECT).count(),
+            1
+        );
+        use harmonigraph_core::canonical::{GapReason, PublicationGap};
+        producer
+            .gap(
+                PublicationGap {
+                    source: Some(SourceId(3)),
+                    time: 2.5,
+                    through: 3.0,
+                    first: 2,
+                    last: 3,
+                    reason: GapReason::PublicationFull,
+                },
+                12.0,
+                Default::default(),
+            )
+            .unwrap();
+        let resumed = SourceBaseline::new(
+            SourceId(3),
+            1,
+            3.5,
+            3.5,
+            3,
+            true,
+            &[VoiceBaseline {
+                note: 72,
+                lifetime: 61,
+                actual_onset: 2.0,
+                input_onset: 2.0,
+                onset: accepted.timing,
+                velocity: 0.8,
+                pitch_microcents: 7_200_000_000,
+                provenance: PitchProvenance::AcceptedOutput,
+                ..Default::default()
+            }],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        producer.baseline(3, &resumed, 12.0, Default::default()).unwrap();
+        shared.drain_into_tracker(22.3);
+        let voice = shared.ui.tracker.voices().find(|v| v.source == SourceId(3)).unwrap();
+        let note = shared.ui.tracker.roll().notes().find(|v| v.source == SourceId(3)).unwrap();
+        assert_eq!(
+            (voice.on_time, note.start),
+            (12.0, 12.0),
+            "accepted lifetime resumes its already-mapped onset after gap"
+        );
     }
 
     /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on
@@ -1090,7 +1374,7 @@ mod tests {
     /// them while costing every note played the latency of the idle poll.
     #[test]
     fn catch_up_answers_whether_notes_arrived() {
-        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (mut producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
         let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
@@ -1105,7 +1389,10 @@ mod tests {
         // An empty ring is not a repaint.
         assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
 
-        producer.push(NoteEvent::on(1.0, 0, 60, 1.0)).unwrap();
+        producer.observe_clock(1.0);
+        producer
+            .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), 1.0, Default::default())
+            .unwrap();
         assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
 
         // And the ring is empty again, so the next tick asks for nothing.
@@ -1204,7 +1491,7 @@ mod tests {
     /// nor the params — so this exists only to satisfy the constructor, in one
     /// place rather than once per test.
     fn a_window() -> WindowState {
-        let (_producer, consumer) = rtrb::RingBuffer::new(1);
+        let (_producer, consumer) = harmonigraph_record::publication::channel();
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(1);
         let (_recorder, take_control) = harmonigraph_record::channel();
         WindowState::new(

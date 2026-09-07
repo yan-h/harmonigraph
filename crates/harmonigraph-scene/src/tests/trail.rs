@@ -5,13 +5,13 @@
 
 use super::harness::*;
 use crate::*;
-use harmonigraph_core::{Envelope, NoteEvent, NoteEventKind, NoteTracker, Tuning};
+use harmonigraph_core::{Envelope, NoteEvent, NoteEventKind, NoteTracker, SourceId, Tuning};
 
 /// Play `note` from `on` to `off` and let its fade finish, which is what
 /// moves it out of the live voices and into history.
 fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
     for (time, kind) in [(on, NoteEventKind::On { velocity: 1.0 }), (off, NoteEventKind::Off)] {
-        tracker.handle_event(NoteEvent { time, channel: 0, note, kind });
+        tracker.handle_event(NoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind });
     }
     tracker.prune(off + 2.0, &Envelope::default());
 }
@@ -185,8 +185,8 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     let mut tracker = NoteTracker::new();
     // Bend a note onto the sevens node's pitch class (a harmonic seventh
     // above C under the default 12-TET axes).
-    tracker.handle_event(NoteEvent::on(0.0, 0, 70, 1.0));
-    tracker.handle_event(NoteEvent::off(1.0, 0, 70));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 70, 1.0));
+    tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 70));
     tracker.prune(5.0, &Envelope::default());
 
     let scene = scene_of(&tracker, &tuning, &view, &frame, 10.0);

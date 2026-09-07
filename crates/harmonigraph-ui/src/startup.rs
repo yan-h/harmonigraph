@@ -125,12 +125,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.workspace.dock = egui_dock::DockState::new(vec![Tab::Lattice]);
-        use harmonigraph_core::NoteEvent;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
-        state.tracker.handle_event(NoteEvent::on(4.0, 0, 64, 1.0));
-        state.tracker.handle_event(NoteEvent::off(4.99, 0, 64));
-        state.tracker.handle_event(NoteEvent::on(4.0, 0, 67, 1.0));
+        use harmonigraph_core::{NoteEvent, SourceId};
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 64, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.99, SourceId::DIRECT, 0, 64));
+        state.tracker.handle_event(NoteEvent::on(4.0, SourceId::DIRECT, 0, 67, 1.0));
         assert_eq!(state.tracker.voices().count(), 3);
         begin_editor_loading(&ctx);
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

@@ -87,7 +87,13 @@ fn the_ui_scale_leaves_the_picture_alone() {
         let backend = RecordingBackend::default();
         // Something to draw: a held voice for the roll and the voice bars, and
         // an analyzed column for the spectrum.
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.5, 0, 60, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.5,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            60,
+            1.0,
+        ));
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
         bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
         state.spectrum.push_history(0.5, &bins);

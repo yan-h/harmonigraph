@@ -282,7 +282,7 @@ impl GlowFade {
 
 #[cfg(test)]
 mod tests {
-    use harmonigraph_core::{LatticePos, NoteEvent};
+    use harmonigraph_core::{LatticePos, NoteEvent, SourceId};
 
     use super::*;
     use crate::tests::probe::fresh;
@@ -329,7 +329,7 @@ mod tests {
     fn a_nodes_light_outlives_every_layer_that_lit_it() {
         const TAU: f64 = 0.5;
         let mut state = lit(0.0, TAU as f32);
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut scene = scene_at(&state, 0.0);
         fade.step(&mut scene, &state.view, 0.0);
@@ -338,7 +338,7 @@ mod tests {
 
         // The key comes up, and with no Fade under it the node draws nothing
         // at all from the next frame on.
-        state.tracker.handle_event(NoteEvent::off(0.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let level = |fade: &mut GlowFade, state: &SharedState, now: f64| {
             let mut scene = scene_at(state, now);
             fade.step(&mut scene, &state.view, now);
@@ -374,7 +374,7 @@ mod tests {
         // A fifth up is one step along the threes axis, which is a node of its
         // own on the same sheet.
         let neighbour = LatticePos::new(1, 0, 0);
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let mut rows = Vec::new();
         let step = |fade: &mut GlowFade, state: &SharedState, now: f64| {
@@ -385,11 +385,11 @@ mod tests {
         };
         rows.push(step(&mut fade, &state, 0.0));
         // The neighbour arrives...
-        state.tracker.handle_event(NoteEvent::on(0.1, 0, 67, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.1, SourceId::DIRECT, 0, 67, 1.0));
         rows.push(step(&mut fade, &state, 0.1));
         rows.push(step(&mut fade, &state, 0.2));
         // ...and leaves, long enough ago for its light to be over.
-        state.tracker.handle_event(NoteEvent::off(0.2, 0, 67));
+        state.tracker.handle_event(NoteEvent::off(0.2, SourceId::DIRECT, 0, 67));
         rows.push(step(&mut fade, &state, 1.0));
         assert!(
             rows[1].1.level > 0.0 && rows[2].1.level > 0.0,
@@ -430,7 +430,7 @@ mod tests {
         const TAU: f64 = 0.5;
         let mut state = lit(0.0, TAU as f32);
         assert!(state.view.mark_melody, "the fresh view marks the melody end");
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut fade = GlowFade::default();
         let size = |fade: &mut GlowFade, state: &mut SharedState, now: f64| {
             state.tracker.prune(now, &state.view.envelope(&state.frame_params));
@@ -442,7 +442,7 @@ mod tests {
         let (bit, held) = size(&mut fade, &mut state, 0.0);
         assert_eq!((bit, held), (1.0, 1.0), "a marked node's light is sized against it");
 
-        state.tracker.handle_event(NoteEvent::off(0.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::off(0.0, SourceId::DIRECT, 0, 60));
         let (bit, just_after) = size(&mut fade, &mut state, 0.05);
         assert_eq!(bit, 0.0, "the node's own bit has to have stepped, or this proves nothing");
         assert!(just_after > 0.5, "the light's size left with the mark: {just_after}");
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn a_view_with_no_light_carries_nothing() {
         let mut state = lit(0.3, 2.5);
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let mut scene = scene_at(&state, 0.0);
         let before = node_at(&scene, LatticePos::ORIGIN).glow;
         state.view.glow_reach = 0.0;

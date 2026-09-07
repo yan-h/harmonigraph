@@ -96,7 +96,12 @@ pub(crate) unsafe fn serialize_json<'a, P: Plugin>(
     params_iter: impl IntoIterator<Item = (&'a String, ParamPtr)>,
 ) -> Result<Vec<u8>> {
     let plugin_state = unsafe { serialize_object::<P>(plugin_params, params_iter) };
-    let json = serde_json::to_vec(&plugin_state).context("Could not format as JSON")?;
+    serialize_state_json(&plugin_state)
+}
+
+/// Encode an already assembled state, including opt-in format-owned overlays.
+pub(crate) fn serialize_state_json(plugin_state: &PluginState) -> Result<Vec<u8>> {
+    let json = serde_json::to_vec(plugin_state).context("Could not format as JSON")?;
 
     #[cfg(feature = "zstd")]
     {

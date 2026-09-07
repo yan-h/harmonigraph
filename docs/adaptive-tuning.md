@@ -2,16 +2,30 @@
 
 ## Status
 
-This is the decided design for a planned feature;
-none of it is implemented yet.
+This is the product and engineering design for the implemented CLAP adaptive-tuning path;
+the linked stage reports distinguish executed checks from remaining host qualification.
+The [source-identity foundation](adaptive-tuning-source-identity.md) implements source-aware display/roll/take/replay and scoped resets;
+the [effective-configuration foundation](adaptive-tuning-effective-configuration.md) adds CLAP audio ownership, bounded learning, prepared restore and resolved take replay.
+The [canonical consumer foundation](adaptive-tuning-canonical-recovery.md) implements complete baselines, publication gaps and independent recording closure.
+The [companion aggregation implementation](adaptive-tuning-companion-aggregation.md) now wires the real Tune class, session ownership and actual accepted-output history.
+The subsequent [channel-wave implementation](adaptive-tuning-channel-waves.md) adds delayed shared-channel replay and setup history.
+The [ordinary-progress stage](adaptive-tuning-ordinary-progress.md) repairs initial DIRECT forwarding, complete Capture prefixes and factual merge throughput over the reviewed terminal checkpoint;
+the [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates accepted-output divergence and adds practical transport checks.
+The [musical integration stage](adaptive-tuning-musical-integration.md) binds the version-one policy in production, owns transient history, and carries accepted assignment metadata through normal display and take replay.
+The current handoff tracks combined review and host qualification, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696) and maximum-cohort scheduling delay in [#701](https://github.com/yan-h/harmonigraph/issues/701).
+The [setup checklist](adaptive-tuning-musical-integration.md#trying-the-current-build) describes the current controls and a small musical verification phrase.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
 The policy's scoring constants and musical iteration belong to #621;
 [#630](https://github.com/yan-h/harmonigraph/pull/630) established a constrained working host configuration, not the minimum reliable delay.
-Yan has accepted the latency target, late-track behavior, stop/Off rules, emergency stop at capacity and restricted routing recovery below.
-The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
+Yan has accepted the latency target, late-track behavior, stop/Off rules, terminal serious faults and restricted routing recovery below.
+The terminal-fault decision supersedes preserving/replaying interrupted performance after those selected failures:
+“We can have rare faults terminate the performance.” The implementation owns the remaining event-ordering, storage and recovery mechanics in #617/#616;
 those mechanics must satisfy these product decisions before adaptive output is complete.
+The [stage 2 engineering contracts](adaptive-tuning-contracts.md) now select those mechanics, capacities and production verification obligations before plugin wiring.
+They remain the specification;
+the implementation handoffs distinguish executed production fixtures from outstanding contracts.
 An ordinary late assignment retains its attack and reports the failure;
 explicit cancellation and the visible emergency stop are the documented exceptions.
 
@@ -20,6 +34,10 @@ explicit cancellation and the visible emergency stop are the documented exceptio
 This feature is optimized first for one person's maintained macOS/Bitwig workflow, not for format or host coverage.
 Correct musical state, an inspectable failure mode and one small execution path outrank compatibility that has no current use.
 Add another format, transport, mode or control only when it serves a concrete project and is cheap enough to carry in every later change.
+Implementation prioritizes ordinary use, especially about 15 notes across three tracks and normal Stop, Off, Reset and reopening.
+Do not fix an issue merely because a probe reaches it:
+defer fixes that require a large increase in complexity or address cases unlikely to occur in ordinary use, recording the limitation and reasoning instead.
+Preserve existing physical-output truth and working safety behavior while making that judgment.
 
 Host behavior is evidence rather than architecture.
 Where the design depends on callback order, voice identity or CLAP event delivery, issue [#615](https://github.com/yan-h/harmonigraph/issues/615) measures the premise and either records the supported constraint or stops the downstream work;
@@ -71,6 +89,7 @@ The first implementation ships a separate lightweight tuner plugin class rather 
 That keeps the pre-instrument instance free of the analyzer, audio rings, recorder, renderer and editor.
 Both classes are exported from the one existing bundle, `nice_export_clap!(Harmonigraph, HarmonigraphTune)`, because a process-wide registry is shared only inside one dylib;
 the loader scripts see the same bundle they see today.
+The [stage 1 discovery handoff](adaptive-tuning-stage-1.md) records the plist fingerprint refresh needed for Bitwig to discover a changed class list after installation.
 The Bitwig spike proved the companion and hub share the required in-process session under `by Vendor` hosting in its measured graph;
 this does not establish every hosting mode in #623's wider matrix.
 
@@ -82,7 +101,7 @@ The tuning model is **fixed-delay central sequencing with sequential assignment 
 - the hub waits for complete input intervals in buffered state, orders their events and assigns new notes sequentially;
 - each new assignment takes the preceding assignments into account, including simultaneous notes from other tracks;
 - tuners normally emit every performance event at its mapped input time plus one common fixed delay D;
-- the adaptive correction remains fixed from actual onset through release and composes with later player expression;
+- the adaptive correction remains fixed from actual onset through release and overrides incoming pitch expression;
 - if an assignment is unavailable at its deadline, its note remains pending and the session reports a timing failure;
 - a valid late assignment permits a late attack, never a correction to an already-sounding note.
 
@@ -139,13 +158,23 @@ Keeping musical order does not by itself guarantee simultaneous acoustic attacks
 cross-track release barriers are not implicitly part of this design.
 
 Persistent failure is not an indefinitely supportable delay with finite storage.
-At actual required-storage exhaustion, enter a visible, latched **emergency stop**:
-cancel affected queued attacks, invalidate their replies, send releases for affected sounding voices and reject new attacks until explicit Reset and valid recovery.
-This deliberately permits note loss at catastrophic exhaustion;
-a missed deadline, elapsed timeout or unavailable hub alone does not authorize it while the required state still fits.
-Source-local exhaustion stops that source;
-hub/global exhaustion stops the session.
-Dependent unplayed decisions on other sources must be invalidated or rescheduled without treating their planned state as confirmed output.
+Enter a visible, latched **terminal fault** for actual exhaustion of required event/request/journal/cohort/voice storage, a real rejected or partially accepted host output attempt or unavailable required output endpoint, or proven loss of necessary input, identity, clock or state evidence that makes continued decisions unsafe.
+Unknown initial controller values alone do not establish that loss.
+Immediately inhibit the failing Source and schedule essential termination:
+fence, cancel affected pending performance and stale dependent assignments, drain factual outcomes, then settle ownership into CLOSED.
+Keep the fault local only when performance is independent of shared prospective decisions;
+an enrolled contributor's failure conservatively terminates the session's affected performance.
+Actual accepted prefixes and history survive cancellation, and physical release/pedal/prefix debt remains independently owned until acceptance or an established host termination boundary.
+Essential termination bypasses accumulated late-stream delay.
+Finish the finite cancellation transaction when its cuts, readers and ownership settle even while the visible fault latch remains;
+rejected emergency retries service existing debt without restarting that transaction.
+Reject new attacks until explicit Reset AND a valid fresh boundary.
+No retained-phrase Status/Rebuild/Replay or automatic Resume is required for this terminal path.
+Ordinary callback-order misses, delayed assignments, work-slice exhaustion, ring backpressure, failed gate/credit claims, routine missing callbacks, healthy configuration/Off changes and display/take-only loss with intact audio-owned facts do not establish a serious fault.
+Neither elapsed time nor workload size alone authorizes cancellation.
+Ordinary late divergence still retains and reconciles unsounded performance and its prospective dependencies;
+this never permits retuning a sounding voice.
+The [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates addressed accepted-output divergence; complete musical and host qualification remain later work.
 Reserve a failure-signaling path that still works when ordinary queues are full.
 Release/cancellation delivery and its completion tracking must also survive full ordinary queues;
 local state cannot declare a voice terminated before accepted downstream output or a measured host termination boundary.
@@ -278,12 +307,12 @@ it remains usable by its still-pending attack.
 ## Bounded storage and ownership
 
 The hub is the only writer of sequential policy state and history.
-Tuners own their pending performance events, actual local held voices, incoming player expression and frozen offsets.
+Tuners own their pending performance events, actual local held voices and frozen offsets.
 The protocol distinguishes intents, assignments, emission outcomes, source progress and recovery controls.
 Tuner reads of region-bound global snapshots are no longer on the assignment path.
 Any snapshots used for status or downstream views describe their confirmed frontier and do not replace the request/reply protocol.
 
-#617 selects the concrete bounded storage and publication primitives and documents their ownership and memory-ordering argument before wiring them into plugins.
+#617 implements the concrete bounded storage, publication and ownership rules selected in the [engineering contracts](adaptive-tuning-contracts.md#2-named-capacity-and-admission-limits).
 Use per-source single-producer/single-consumer channels where their ownership fits;
 keep intents and actual output distinguishable and provide a return path for assignments in #616. Concurrent payload access must be atomic or excluded by slot ownership;
 a plain or volatile struct copy racing a writer is not made safe by a seqlock retry afterwards.
@@ -360,8 +389,12 @@ Sustain-aware context remains separate from the late-event scheduling rules.
 The first and only output backend is CLAP per-note tuning expression, and the tuner companion is exported only as CLAP initially.
 At note-on the tuner emits a `CLAP_NOTE_EXPRESSION_TUNING` value for the same voice and sample position as the note.
 CLAP note expressions state the current value rather than adding a delta.
-The tuner therefore retains the player's current tuning expression per voice and emits `player expression + frozen adaptive offset` at note-on and after every later player-expression change.
-It never forwards a later player value unmodified because that would erase the adaptive offset.
+Tune owns the pitch completely, as explicitly requested for ordinary use.
+It neutralizes incoming CLAP pitch expressions before scoring and emits only the frozen adaptive offset at onset and after later incoming pitch changes.
+Incoming MIDI pitch bend is replaced by its center value;
+velocity, pressure and other non-pitch controls retain their normal behavior.
+This overrides intentional bends as well as upstream microtuning, without a preserve-bends option.
+The Hub's DIRECT observation path still forwards and reports its actual input.
 The framework already carries this boundary:
 nice-plug emits a PolyTuning output event as `CLAP_NOTE_EXPRESSION_TUNING` with the note id preserved, so the tuner emits the same event kind the hub already receives.
 
@@ -392,9 +425,16 @@ Bitwig's **by Vendor** hosting mode is the measured initial requirement, with in
 Issue [#623](https://github.com/yan-h/harmonigraph/issues/623) records the wider process/reload investigation;
 untested cells in its matrix are not additional launch requirements for the already measured mode.
 
+Each instance takes sample rate and maximum buffer size from host activation;
+they are read-only runtime values, not saved routing configuration.
+Reloaded instances use the new host format automatically.
+Live reactivation preserves old ownership and still requires the existing settlement boundary;
+changing the host format is not permission to discard accepted output.
 Initial support permits fixed calibrated routing and reinitialization after changes that invalidate track-clock alignment.
-Changes to branch latency require offset revalidation before adaptive sequencing resumes;
-automatic calibration through arbitrary graph edits is not claimed.
+Setup starts automatically at signed offset zero, using the host's actual format and continuous steady time;
+there is no manual validation checkbox.
+If a branch has a known timing offset, set that advanced offset explicitly and apply it after routing-latency changes.
+Automatic measurement of graph or delay-compensation latency is not claimed.
 Known held voices retain their offsets while the session reestablishes a valid baseline.
 If downstream held state is unknown, require an explicit voice reset and confirmed termination before rejoining.
 Continuous callbacks remain a supported-configuration requirement;
@@ -460,18 +500,18 @@ The single participation control does not remove the need for internal transitio
 
 | Transition or state | New or pending notes | Already-held voices and session state |
 |---|---|---|
-| Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and composing player expression with each frozen offset |
+| Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and preserving each frozen offset despite incoming bends |
 | Participating to Off | Newly received notes intentionally use zero correction; pending adaptive requests finish tuned under the normal/late timing contract | Withdraw this source from future context/display; preserve existing offsets until release |
 | Assignment deadline missed | Retain the attack for its valid assignment and report a timing failure; no unretuned or dropped-note fallback | Preserve frozen offsets; handle related queued events under the specified late-event schedule |
 | Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks while required storage fits | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
-| Required-storage exhaustion | Cancel affected pending attacks visibly and reject new attacks until explicit Reset and valid recovery | Send releases through the independent emergency path; latch source-local or session-wide failure as appropriate |
+| Selected terminal fault | Cancel affected pending performance visibly and reject new attacks until explicit Reset and a valid fresh boundary | Preserve accepted history, finish cancellation into CLOSED and retry independent physical debt; terminate shared affected performance for an enrolled contributor |
 | Transport Stop or explicit Reset | Cancel affected pending attacks and reject their obsolete replies | Send releases without accumulated delay, invalidate dependent plans and establish a fresh sequencing boundary |
 | Off to Participating, reconnect or report-loss recovery | Resume adaptive sequencing only after the complete held baseline and pending-request state are accepted | Restore actual state without re-emitting attacks or retuning survivors |
 | Source unregister or slot reuse | Old requests and replies cannot address the replacement | Invalidate the old incarnation and release only its context/display voices |
 | Explicit voice reset or host-guaranteed note termination | Cancel obsolete pending lifetimes under the reset contract, reject their replies and start fresh | Clear offsets only after downstream voices are terminated or the host guarantees they are gone |
 
-A later player-expression event is still emitted as `player value + frozen offset` while Off or disconnected.
-Otherwise that event would erase the held voice's correction.
+A later pitch-expression event repeats only the frozen offset while Off or disconnected.
+Incoming bends cannot erase or alter the held voice's correction.
 The local table also tracks notes deliberately started with zero correction while Off so rejoining restores the actual held set.
 No note is assigned zero correction merely because a participating request missed its deadline.
 Transient policy history is cleared on participation withdrawal, configuration revision change, session/epoch change and lifecycle-loss recovery;
@@ -520,7 +560,7 @@ Pending history advances with sequential decisions, but must retain its relation
 #616 specifies invalidation/reset behavior if planned and actual output diverge.
 Empty usable context uses the origin preference and ignores history from the preceding phrase.
 
-The real policy still has to select its initial search bounds and scoring constants.
+The [version-one policy](adaptive-tuning-policy-engine.md) selects its fixed search bounds and scoring constants.
 Anchors, additional root controls and excluded-pitch controls remain deferred.
 Measure the total central work against the callback budget;
 no distributed policy or precomputed next-note map is part of this design.
@@ -531,17 +571,17 @@ It never reads `ViewConfig` reach, camera centers, drawn windows or display tole
 The initial bounds and fixed scoring constants are named policy constants selected and documented in #621 before implementation;
 they require no new user control or persisted field.
 Candidates lie within 50 cents of the key's equal-tempered class, measured circularly with exact pitch arithmetic, and comma-equivalent nodes are deduplicated after respelling.
-An empty candidate set returns an explicit no-candidate result that the initial musical policy defines as zero adaptive offset, retaining player expression and clearing this key's assignment history.
+An empty candidate set returns an explicit no-candidate result that the initial musical policy defines as zero adaptive offset, ignoring incoming pitch expression and clearing this key's assignment history.
 This is a completed policy result, not a missing assignment or deadline fallback.
 
 Every voice carries its current emitted pitch separately from optional attack-time node metadata and the configuration revision that selected it.
-The emitted pitch is always updated when player expression changes;
-the attack node is never silently treated as the current pitch.
+DIRECT observation updates its emitted pitch when incoming expression changes, while Tune keeps its chosen pitch;
+neither path silently treats the attack node as current pitch authority.
 For scoring under the current configuration, reuse a node only if it remains in the musical domain and still exactly represents the emitted pitch.
 Otherwise project that pitch to the nearest node in the musical domain within the policy's fixed 50-cent context radius, with the policy tie-break.
 A voice with no such node remains in display/take/state but contributes no lattice-distance term.
 This projection is an explicit policy approximation and never replaces the authoritative stored pitch.
-It handles zero-offset voices, expression bends and voices held across configuration changes by the same rule.
+It handles zero-offset voices, observed DIRECT expression bends and voices held across configuration changes by the same rule.
 
 The score combines summed L1 lattice distance after respelling, an explicitly weighted hysteresis distance and the origin preference when no usable context remains.
 Use an integer/rational score with named weights so identical inputs produce identical results across platforms.
@@ -553,7 +593,7 @@ Preserve host lifecycle ordering for same-key replacements and the original per-
 Canonical policy evaluation does not authorize moving an off, choke or expression across its addressed voice.
 
 The emitted adaptive offset is the chosen node's pitch class minus the key's equal-tempered class, folded to the nearest octave.
-The 50-cent candidate restriction bounds this correction relative to the input key, not the sum with player expression.
+The 50-cent candidate restriction bounds this correction relative to the input key.
 Hysteresis encourages continuity but is not an anti-drift guarantee;
 #621 records the observed ii–V–I behavior and the bound the implementation actually enforces.
 The policy stays pure in `harmonigraph-core` and remains the part to iterate by ear.
@@ -587,16 +627,17 @@ voice addressing and relative tuning in semitones;
 - [MTS-ESP](https://github.com/ODDSound/MTS-ESP/blob/main/README.md) documents its single-master note/channel lookup and client-query model;
 - [Rust volatile-read semantics](https://doc.rust-lang.org/std/ptr/fn.read_volatile.html) states that volatile access supplies no inter-thread synchronization.
 
-The implementation starts from these repository seams:
+The current implementation uses these repository seams:
 
-- [`harmonigraph-plugin/src/lib.rs`](../crates/harmonigraph-plugin/src/lib.rs) declares basic MIDI input/output and forwards host events;
-nice-plug passes the host note id through in both directions and emits PolyTuning as the CLAP tuning expression, but its transport-event sub-block splitting must be accounted for in #615's time mapping;
-- [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) identifies tracked notes by channel and key and already consumes the note-on plus Tuning stream a tuner reports;
-its allocating tracker stays off the audio thread, and every identity-bearing key gains source scope;
-- [`harmonigraph-core/src/roll.rs`](../crates/harmonigraph-core/src/roll.rs) has an independent live-note map and bend history that also need source-aware identity and resets;
-- [`harmonigraph-ui/src/lib.rs`](../crates/harmonigraph-ui/src/lib.rs) currently resolves effective tuning in `begin_frame`, so that authority must move into the shared audio-owned configuration path;
-- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) already records per-note Tuning and gains source/reset/recovery scope, with corresponding offline replay changes;
-- [`harmonigraph-core/src/tuning.rs`](../crates/harmonigraph-core/src/tuning.rs) already supplies the exact pitch representation the policy and emitted-assignment state should retain.
+- [`harmonigraph-plugin/src/performance`](../crates/harmonigraph-plugin/src/performance/mod.rs) owns Tune, the Hub, retained input, accepted output and central sequencing;
+the wrapper preserves host note IDs and maps enclosing callback, sub-block and event offsets through the adopted clock;
+- [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) identifies tracked notes by source, channel and key and consumes the note-on plus Tuning stream a tuner reports;
+its allocating tracker stays off the audio thread;
+- [`harmonigraph-core/src/roll.rs`](../crates/harmonigraph-core/src/roll.rs) retains source-aware live notes and bend history with scoped resets;
+- [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) owns effective CLAP tuning on audio, including editor-independent learning and complete configuration revisions;
+the UI consumes that resolved state and offline replay consumes recorded configurations;
+- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) records format-v4 source/reset/recovery scope, actual sample/pitch provenance and assignment metadata for corresponding display/offline replay;
+- [`harmonigraph-core/src/tuning.rs`](../crates/harmonigraph-core/src/tuning.rs) supplies the exact pitch representation used by the policy and emitted-assignment state.
 
 The external documents do not prove actual Bitwig behavior in this plugin chain.
 That empirical evidence belongs on #615 as bounded traces and measured verdicts, so an auditor can distinguish specification, design assumption and observed result.
@@ -609,11 +650,11 @@ Other hosting modes remain outside initial support until separately established.
 Its measured D is 2,048 samples, not the accepted production target or a minimum.
 Encode the observations and completeness regressions in production tests;
 validate the smaller candidate as part of implementation without another prerequisite spike.
-2. Before wiring plugins in [#617](https://github.com/yan-h/harmonigraph/issues/617), record the concrete storage primitives, capacity/health table, configuration handoff and source recovery protocol against #615's verdict.
+2. Implement and validate [stage 2's storage, capacity/health, configuration and recovery contracts](adaptive-tuning-contracts.md) in [#617](https://github.com/yan-h/harmonigraph/issues/617) against #615's verdict.
 Implement the companion, audio-owned confirmed active state and effective tuning, and source-aware display/roll/take/replay.
 This aggregation-only milestone preserves input timing and supplies no adaptive output;
 it does not create a second launch mode.
-3. Before implementing [#616](https://github.com/yan-h/harmonigraph/issues/616), specify the event-ordering and prospective/confirmed-state mechanics that implement the accepted late-stream, Stop/Off, recovery and emergency-stop decisions above.
+3. Implement and validate stage 2's event ordering, acceptance, revocation and prospective/confirmed-state mechanics in [#616](https://github.com/yan-h/harmonigraph/issues/616), including the accepted late-stream, Stop/Off, recovery and emergency-stop decisions above.
 Add the central sequential assigner, bounded full-stream delay and replies with the artificial policy, plus deadline diagnostics and valid late-answer handling.
 4. [#621](https://github.com/yan-h/harmonigraph/issues/621) replaces the artificial policy with the first real one, including the simultaneous cross-track D–F–A case.
 

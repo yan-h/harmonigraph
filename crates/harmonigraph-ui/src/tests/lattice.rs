@@ -103,7 +103,13 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
     state.learn_active = true;
     // Hold C and G (a 12-TET fifth: within learn range of just).
     for note in [60u8, 67] {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
     }
 
     learn_step(&mut state, &backend);
@@ -129,9 +135,16 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
 /// tuning offset (cents). Used to synthesize just vs 12-TET chords.
 fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
     for &(note, cents) in notes {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+            0.0,
+            harmonigraph_core::SourceId::DIRECT,
+            0,
+            note,
+            1.0,
+        ));
         if cents != 0.0 {
             state.tracker.handle_event(harmonigraph_core::NoteEvent {
+                source: harmonigraph_core::SourceId::DIRECT,
                 time: 0.0,
                 channel: 0,
                 note,

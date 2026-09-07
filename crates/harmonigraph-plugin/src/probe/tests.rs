@@ -326,6 +326,7 @@ fn discontinuous_source_progress_invalidates_the_run() {
 
 #[test]
 fn exported_probe_preserves_split_times_and_requires_complete_central_reply() {
+    let _scope = crate::test_scope::enter();
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-probe-fixture-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

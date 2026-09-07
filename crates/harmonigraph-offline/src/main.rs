@@ -445,11 +445,18 @@ fn run() -> Result<(), String> {
         );
     }
 
+    if let Some(incomplete) = take.incomplete {
+        return Err(format!(
+            "{take_path}: incomplete canonical publication {}..={} ({:?}); rendering refused",
+            incomplete.first_publication, incomplete.last_publication, incomplete.reason
+        ));
+    }
+
     if take.truncated {
         eprintln!(
             "warning: {take_path} ends mid-record — the export was interrupted. \
              Rendering the {} events that survived.",
-            take.notes.len()
+            take.notes().count()
         );
     }
 
@@ -503,8 +510,7 @@ fn run() -> Result<(), String> {
     // Note-on times on the take clock, for aligning a bounce that has no
     // scratch recording to correlate against.
     let midi_onsets: Vec<(f64, f32)> = take
-        .notes
-        .iter()
+        .notes()
         .filter_map(|note| match note.kind {
             harmonigraph_take::NoteKind::On { velocity } => Some((note.t, velocity)),
             _ => None,
