@@ -176,6 +176,31 @@ impl Sequencer {
             *cell = None;
         }
     }
+    /// A settled reset retires the cohort still in flight along with the
+    /// session that owned it.
+    ///
+    /// A cohort stays `committing` whenever its marker cannot be published --
+    /// a full reply ring or a spent plan budget is enough -- and a terminal
+    /// fault then leaves it there, because the faulted path never reaches
+    /// `publish_cohort`. Its recipients' leases die at this boundary, so the
+    /// barrier could never be satisfied again: `publish_cohort` refuses on the
+    /// lease mismatch and `sequence_inputs` returns on it before it looks at
+    /// any fresh input. Epoch validation retires the obsolete REPLIES; nothing
+    /// retired the coordinator work that was waiting for them.
+    ///
+    /// The floor moves with the debt. Every plan the old cohort minted has a
+    /// decision at or below the current one, so clearing the debt without
+    /// moving the floor would leave those plans claiming a delivery against a
+    /// count of zero -- which `service_plans` reads as broken accounting and
+    /// latches.
+    pub(super) fn retire_cohort(&mut self) {
+        self.committing = false;
+        self.cohort_recipients = 0;
+        self.cohort_unsent = 0;
+        self.cohort_floor = self.decision;
+        self.membership = None;
+        self.config = None;
+    }
     pub(super) fn install_plan_row(&mut self, row: usize, ledger: Box<[Option<Plan>]>) {
         self.plans[row] = Some(ledger);
     }

@@ -545,6 +545,7 @@ impl Hub {
         self.transition = None;
         self.sequencer.terminal_session = false;
         self.sequencer.terminal_sources = 0;
+        self.sequencer.retire_cohort();
         self.sequencer.clear_clock_context();
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.

@@ -1863,3 +1863,128 @@ fn production_a_sample_too_big_for_the_rest_of_a_callback_waits_rather_than_vani
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_reset_retires_a_cohort_that_never_published_its_marker() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    let hub_wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    // A full reply ring is the production route to a cohort that cannot
+    // publish its marker: the assignment is minted and owed but cannot enqueue.
+    let fill = || {
+        hub_wrapper.test_with_plugin(|plugin| {
+            let hub = plugin.aggregation.as_mut().unwrap();
+            let replies = &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
+            while replies.slots() != 0 {
+                replies
+                    .push(protocol::Reply::PlanRetired {
+                        incarnation: 0,
+                        epoch: 0,
+                        life: 0,
+                        lifetime: 0,
+                        decision: 0,
+                    })
+                    .unwrap();
+            }
+        });
+    };
+    let mut raw = 1536;
+    source.run_format(raw, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    fill();
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..8 {
+        if inspect_hub(&hub, |hub| hub.test_cohort_delivery()).3 {
+            break;
+        }
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        fill();
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let pending = inspect_hub(&hub, |hub| hub.test_cohort_delivery());
+    assert!(
+        pending.3 && pending.2 != 0,
+        "the fixture starts from a cohort holding an unpublished marker: {pending:?}"
+    );
+    // A latched terminal fault from the Source's own malformed input.
+    raw += 512;
+    let malformed = Input::Midi(clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_header>() as u32,
+            ..header::<clap_event_midi>(CLAP_EVENT_MIDI, 0)
+        },
+        port_index: 0,
+        data: [0xf8, 0, 0],
+    });
+    source.run_status(raw, vec![malformed], None, None, 512, true);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..16 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_terminal_scope()).0,
+        "the fault latches the shared reset, which is what bypasses publish_cohort"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_cohort_delivery()).3,
+        "and leaves the marker unpublished across it"
+    );
+    let source_setup = source.shared();
+    let hub_setup = hub.shared();
+    source_setup.apply(source_setup.value().routing, true).unwrap();
+    hub_setup.apply(hub_setup.value().routing, true).unwrap();
+    for _ in 0..256 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        source.main();
+        hub.main();
+        if source.source_snapshot().faults == 0 {
+            break;
+        }
+    }
+    assert_eq!(source.source_snapshot().faults, 0, "the explicit reset settles");
+    let settled = inspect_hub(&hub, |hub| hub.test_cohort_delivery());
+    assert!(
+        !settled.3 && settled.2 == 0 && settled.1 == 0,
+        "the old session's commit barrier goes with it: {settled:?}"
+    );
+    let mut sounded = 0;
+    for step in 0..64 {
+        raw += 512;
+        let events = if step == 0 { vec![note(2, 0, 62, 0, true)] } else { vec![] };
+        sounded += source
+            .run_format(raw, events, None, None, 512)
+            .values
+            .iter()
+            .filter(|(_, event)| event.attack().is_some())
+            .count();
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        sounded, 1,
+        "a re-paired session sequences fresh input rather than returning on a dead barrier"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 2)],
+        "and the Hub believes the note it assigned is the one that is sounding"
+    );
+    raw += 512;
+    source.run_format(raw, vec![note(-1, -1, -1, 0, false)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    for _ in 0..64 {
+        raw += 512;
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    drop(source);
+    drop(hub);
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+}
