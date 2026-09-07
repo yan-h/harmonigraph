@@ -898,6 +898,73 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
 }
 
 #[test]
+fn production_all_sound_off_owes_each_voice_a_physical_note_off_and_all_notes_off_does_not() {
+    let _scope = crate::test_scope::enter();
+    for cc in [120u8, 123] {
+        let (hub, source) = production_pair();
+        source.run_format(
+            1536,
+            vec![note(1, 0, 60, 0, true), note(2, 0, 64, 0, true)],
+            None,
+            None,
+            512,
+        );
+        hub.run_format(1536, vec![], None, None, 512);
+        assert_eq!(source.run_format(2048, vec![], None, None, 512).values.len(), 4);
+        hub.run_format(2048, vec![], None, None, 512);
+        source.run_format(2560, vec![raw_midi([0xb0, cc, 0], 0)], None, None, 512);
+        hub.run_format(2560, vec![], None, None, 512);
+        // Both terminations end both notes for the Hub. Only All Sound Off
+        // leaves each voice a physical Note-Off still owed downstream.
+        let terminal = source.run_format(3072, vec![], None, None, 512);
+        assert_eq!(terminal.values.len(), 1, "CC{cc} has one wire effect: {:?}", terminal.values);
+        assert!(
+            matches!(terminal.values[0].1, Event::Midi { data: [0xb0, value, 0], .. } if value == cc)
+        );
+        hub.run_format(3072, vec![], None, None, 512);
+        assert_eq!(source.source_snapshot().note_off_owed, if cc == 120 { 2 } else { 0 });
+        assert!((1..=2).all(|life| inspect_hub(&hub, |hub| hub.test_voice(0, life)).is_none()));
+        // A replacement on one of those keys pays that voice's owed Off first,
+        // as a Note-Off rather than the choke an ordinary retrigger sends.
+        source.run_format(3584, vec![note(3, 0, 60, 0, true)], None, None, 512);
+        hub.run_format(3584, vec![], None, None, 512);
+        let retrigger = source.run_format(4096, vec![], None, None, 512);
+        assert_eq!(retrigger.values.len(), 2 + usize::from(cc == 120), "{:?}", retrigger.values);
+        if cc == 120 {
+            assert!(matches!(
+                retrigger.values[0].1,
+                Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 1, key: 60, channel: 0, .. }
+            ));
+        }
+        assert!(retrigger.values[usize::from(cc == 120)].1.attack().is_some());
+        hub.run_format(4096, vec![], None, None, 512);
+        // The untouched key still owes its Off, and its own release pays it.
+        source.run_format(
+            4608,
+            vec![note(3, 0, 60, 0, false), note(2, 0, 64, 0, false)],
+            None,
+            None,
+            512,
+        );
+        hub.run_format(4608, vec![], None, None, 512);
+        let last = source.run_format(5120, vec![], None, None, 512);
+        assert_eq!(
+            last.values.iter().filter(|(_, event)| event.release()).count(),
+            1 + usize::from(cc == 120),
+            "{:?}",
+            last.values
+        );
+        hub.run_format(5120, vec![], None, None, 512);
+        for raw in [5632, 6144] {
+            source.run_format(raw, vec![], None, None, 512);
+            hub.run_format(raw, vec![], None, None, 512);
+        }
+        let settled = source.source_snapshot();
+        assert_eq!((settled.held, settled.note_off_owed, settled.faults), (0, 0, 0), "{settled:?}");
+    }
+}
+
+#[test]
 fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
