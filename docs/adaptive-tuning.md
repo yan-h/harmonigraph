@@ -2,17 +2,18 @@
 
 ## Status
 
-This is the decided design for a planned feature.
+This is the product and engineering design for the implemented CLAP adaptive-tuning path;
+the linked stage reports distinguish executed checks from remaining host qualification.
 The [source-identity foundation](adaptive-tuning-source-identity.md) implements source-aware display/roll/take/replay and scoped resets;
 the [effective-configuration foundation](adaptive-tuning-effective-configuration.md) adds CLAP audio ownership, bounded learning, prepared restore and resolved take replay.
 The [canonical consumer foundation](adaptive-tuning-canonical-recovery.md) implements complete baselines, publication gaps and independent recording closure.
 The [companion aggregation implementation](adaptive-tuning-companion-aggregation.md) now wires the real Tune class, session ownership and actual accepted-output history.
-That aggregation milestone is still in progress;
-delayed shared-channel replay, final review and host validation remain before it is complete.
+The subsequent [channel-wave implementation](adaptive-tuning-channel-waves.md) adds delayed shared-channel replay and setup history.
 The [ordinary-progress stage](adaptive-tuning-ordinary-progress.md) repairs initial DIRECT forwarding, complete Capture prefixes and factual merge throughput over the reviewed terminal checkpoint;
 the [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates accepted-output divergence and adds practical transport checks.
 The [musical integration stage](adaptive-tuning-musical-integration.md) binds the version-one policy in production, owns transient history, and carries accepted assignment metadata through normal display and take replay.
-Combined review and host qualification remain unfinished, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696).
+The current handoff tracks combined review and host qualification, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696) and maximum-cohort scheduling delay in [#701](https://github.com/yan-h/harmonigraph/issues/701).
+The [setup checklist](adaptive-tuning-musical-integration.md#trying-the-current-build) describes the current controls and a small musical verification phrase.
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.
@@ -548,7 +549,7 @@ Pending history advances with sequential decisions, but must retain its relation
 #616 specifies invalidation/reset behavior if planned and actual output diverge.
 Empty usable context uses the origin preference and ignores history from the preceding phrase.
 
-The real policy still has to select its initial search bounds and scoring constants.
+The [version-one policy](adaptive-tuning-policy-engine.md) selects its fixed search bounds and scoring constants.
 Anchors, additional root controls and excluded-pitch controls remain deferred.
 Measure the total central work against the callback budget;
 no distributed policy or precomputed next-note map is part of this design.
@@ -615,16 +616,17 @@ voice addressing and relative tuning in semitones;
 - [MTS-ESP](https://github.com/ODDSound/MTS-ESP/blob/main/README.md) documents its single-master note/channel lookup and client-query model;
 - [Rust volatile-read semantics](https://doc.rust-lang.org/std/ptr/fn.read_volatile.html) states that volatile access supplies no inter-thread synchronization.
 
-The implementation starts from these repository seams:
+The current implementation uses these repository seams:
 
-- [`harmonigraph-plugin/src/lib.rs`](../crates/harmonigraph-plugin/src/lib.rs) declares basic MIDI input/output and forwards host events;
-nice-plug passes the host note id through in both directions and emits PolyTuning as the CLAP tuning expression, but its transport-event sub-block splitting must be accounted for in #615's time mapping;
+- [`harmonigraph-plugin/src/performance`](../crates/harmonigraph-plugin/src/performance/mod.rs) owns Tune, the Hub, retained input, accepted output and central sequencing;
+the wrapper preserves host note IDs and maps enclosing callback, sub-block and event offsets through the adopted clock;
 - [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) identifies tracked notes by source, channel and key and consumes the note-on plus Tuning stream a tuner reports;
 its allocating tracker stays off the audio thread;
-- [`harmonigraph-core/src/roll.rs`](../crates/harmonigraph-core/src/roll.rs) has an independent live-note map and bend history that also need source-aware identity and resets;
-- [`harmonigraph-ui/src/lib.rs`](../crates/harmonigraph-ui/src/lib.rs) currently resolves effective tuning in `begin_frame`, so that authority must move into the shared audio-owned configuration path;
-- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) already records per-note Tuning and gains source/reset/recovery scope, with corresponding offline replay changes;
-- [`harmonigraph-core/src/tuning.rs`](../crates/harmonigraph-core/src/tuning.rs) already supplies the exact pitch representation the policy and emitted-assignment state should retain.
+- [`harmonigraph-core/src/roll.rs`](../crates/harmonigraph-core/src/roll.rs) retains source-aware live notes and bend history with scoped resets;
+- [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) owns effective CLAP tuning on audio, including editor-independent learning and complete configuration revisions;
+the UI consumes that resolved state and offline replay consumes recorded configurations;
+- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) records format-v4 source/reset/recovery scope, actual sample/pitch provenance and assignment metadata for corresponding display/offline replay;
+- [`harmonigraph-core/src/tuning.rs`](../crates/harmonigraph-core/src/tuning.rs) supplies the exact pitch representation used by the policy and emitted-assignment state.
 
 The external documents do not prove actual Bitwig behavior in this plugin chain.
 That empirical evidence belongs on #615 as bounded traces and measured verdicts, so an auditor can distinguish specification, design assumption and observed result.

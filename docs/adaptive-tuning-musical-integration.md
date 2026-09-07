@@ -5,6 +5,32 @@ It replaces the artificial central correction with the reviewed [version-one mus
 The [user's ordinary-use priorities](adaptive-tuning.md#design-priorities) continue to govern implementation and review.
 This stage does not establish complete host qualification or finish the combined adaptive-tuning objective.
 
+## Trying the current build
+
+1. Load the matching plugin/renderer pair and confirm its build tag using the handoff.
+Use the documented Bitwig **by Vendor** process topology, with individual hosting overrides off for both Harmonigraph classes, at 44,100 Hz and a fixed 512-sample engine buffer.
+The [measured topology and calibration restrictions](adaptive-tuning.md#session-pairing-and-process-boundary) apply.
+2. Place one full Harmonigraph on Master and one Harmonigraph Tune in the note-effect path before each instrument.
+Keep **Participating** on in each Tune editor.
+**Automatic: exactly one hub** pairs a unique compatible hub;
+choose the intended hub explicitly when needed and resolve missing/ambiguous status before playing.
+3. In the Hub's **Session** menu and each Tune editor, enter the routing's validated signed sample offset, sample rate and maximum buffer.
+Use **I validated this routing and clock configuration** and **Apply / Reinitialize**, then check the displayed adopted clock/status.
+A zero offset alone does not establish calibration;
+revalidate after routing or delay-compensation changes.
+4. In the Hub's **Tuning** pane, turn both **Auto** switches and **Learn** off, then press **Just** to release both temperament locks and set the independent Just axes.
+Use a zero C offset for comparison with the fixtures.
+The fresh locked 12-TET defaults intentionally yield zero adaptive correction, so they cannot demonstrate Just retuning.
+5. Start with a small phrase on three tracks, including simultaneous D/F/A, and check the instrument's actual pitch as well as the displayed notes.
+The known-neutral callback fixture selects D/F/A corrections of +3.910034, +19.551330 and +5.865051 cents with independent Just axes.
+Destination conversion matters:
+the [historical pitch-conversion measurements](tuning-probe-bitwig.md#pitch-conversion) include Vital's required matching MPE settings and bend ranges.
+Check Stop, Off, project reopening, and live/offline output in the actual project before treating the new musical build as host-qualified.
+
+Fresh Bitwig controller initialization is still unverified.
+The ordinary unknown-pedal second-phrase limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696) remains;
+known-neutral fixtures and the settings above do not prove that the host initializes CC64/66/69.
+
 ## Owned musical state
 
 `ConfigReducer` binds `policy::CONFIG` version 1 with the complete resolved configuration.
