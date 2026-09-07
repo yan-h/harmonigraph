@@ -52,9 +52,9 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    shadow_stop, standoff_level, Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel,
-    ShadowSettings, ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_FREE, SHADOW_FALLOFF_MAX,
-    SHADOW_FALLOFF_MIN, SHADOW_INVISIBLE, SHADOW_STOP, SHADOW_TAIL,
+    shadow_stop, standoff_level, Gradient, NoteNames, SevensLabel, ShadowKernel, ShadowSettings,
+    ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_FREE, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
+    SHADOW_INVISIBLE, SHADOW_STOP, SHADOW_TAIL,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
@@ -716,19 +716,6 @@ pub struct PlusInstance {
 pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
-    /// Seconds for global shader animation, and NOT wrapped: the shimmer is
-    /// the only thing that clocks on it, and it reaches the shader already
-    /// reduced against its own period (see
-    /// [`shimmer_slide`](Self::shimmer_slide)). Its sheet is one field
-    /// spanning the whole lattice, so every node must read the same clock.
-    ///
-    /// f64 because a transport position is a song position: an hour in, an
-    /// f32 second is quantized to 0.0005 s, and the reduction below is what
-    /// the picture is built from. Wrapping this instead — an hourly `now %
-    /// 3600`, which is what a shader-side clock would need — puts a seam in
-    /// the sheet at every setting whose period does not divide the wrap,
-    /// which is most of them.
-    pub now: f64,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
     /// The outer octave layer's radial band (quad UV units), already
@@ -866,22 +853,6 @@ pub struct Scene {
     /// sum already spent, this struct carrying [`mark_inner`](Self::mark_inner)
     /// itself. Already clamped.
     pub mark_thickness: f32,
-    /// Which shimmer sweeps the lattice (see [`Pulse`] and
-    /// [`ViewConfig::pulse_marks`]) — every octave slice a note currently
-    /// lights, and a melody or bass mark's own strip past the band. Carried
-    /// straight from the view: nothing here depends on whether a mark is
-    /// switched on, so the sheet keeps sweeping the octave layer with both
-    /// marks off.
-    pub pulse_marks: Pulse,
-    /// How fast the shimmer travels (world units per second), how wide its
-    /// period is (world units), how deep the light it carries is (0 none, 1
-    /// the tuned depth) and how gradually that light arrives across the
-    /// period (0 a crest, 1 a cosine) — see [`ViewConfig::shimmer_speed`].
-    /// Already clamped, the width to strictly positive.
-    pub shimmer_speed: f32,
-    pub shimmer_width: f32,
-    pub shimmer_intensity: f32,
-    pub shimmer_softness: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],
@@ -950,45 +921,7 @@ pub struct Scene {
     pub glow_rows: u32,
 }
 
-/// How far the shimmer's sheet has travelled, in world units, reduced onto
-/// one cycle of its own pattern.
-///
-/// The shader wants `now * speed`, and every pattern it builds is periodic in
-/// that quantity, so it can have it modulo a cycle instead — the same picture,
-/// out of a number that stays small. Which is the whole point of doing it
-/// here:
-///
-/// - **f64, from the unwrapped clock.** The reduction is exact against a
-///   period the Spacing bar can set as low as 0.02, where the f32 product an
-///   hour into a song would have quantized the phase into about two dozen
-///   steps per band and stair-stepped visibly.
-/// - **No seam.** A clock wrapped for the shader's sake — hourly, say — lands
-///   mid-band unless the settings happen to divide the wrap, and 3600 being
-///   highly composite that is true of a lot of round pairs and none of the
-///   rest, so the sheet would jump at some settings and not others. Reduced
-///   against the pattern's OWN period there is nothing to land mid-band.
-///
-/// TWO periods, not one, and the factor is load-bearing: Hex crosses three
-/// gratings sixty degrees apart, and the outer two take the travel through a
-/// `cos 60°` — so they run at half the sheet's own frequency along their axes
-/// and only close a cycle over two of its periods. Reduce by one and Hex flips
-/// sign at every wrap. The other two patterns take the travel whole and
-/// repeat over either.
 impl Scene {
-    pub fn shimmer_slide(&self) -> f32 {
-        // The same floor the shader puts under the period, so a hand-built
-        // Scene reduces against the width the pattern is actually drawn at.
-        let cycle = 2.0 * (self.shimmer_width as f64).max(0.01);
-        let slide = (self.now * self.shimmer_speed as f64).rem_euclid(cycle);
-        // A clock or a speed that is not finite reaches here as a NaN, and a
-        // NaN slide is a lattice of NaN colors rather than a wrong sheet.
-        if slide.is_finite() {
-            slide as f32
-        } else {
-            0.0
-        }
-    }
-
     /// Decide how much of the audio ring each node wears — [`SpectralPaint::gate`]
     /// against what its wedges reach, carried on `env` by `fade`, and floored by
     /// the node's own envelope — and write it into

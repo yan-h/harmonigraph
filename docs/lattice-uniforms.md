@@ -39,13 +39,12 @@ No test is added per accessor.
 
 | Former transport → named field | Consumer and behavior coverage |
 |---|---|
-| `view_proj`, `cam_right`, `cam_up` → `camera` | Node/marker vertex transforms and shimmer field axes; direct/offscreen comparison, all lattice goldens, projection/order and rectangular shadow fixtures |
+| `view_proj`, `cam_right`, `cam_up` → `camera` | Node/marker vertex transforms; direct/offscreen comparison, all lattice goldens, projection/order and rectangular shadow fixtures |
 | `misc.y` → `node.radius` | Billboard world size; layered-node shadow fixtures and zoomed/overlapping-sheet goldens |
 | `misc2.xy` → `composite.darkest_pitch/brightest_pitch` | `pitch_lut_color`; octave hue and lattice goldens |
 | `misc2.zw` → `composite.render_scale/bloom_strength` | `aa_width` and blit composite; existing scale-2 name golden plus `fractional_bloom_strength_is_independent_of_render_scale` |
 | `misc3.yzw`, `misc4.y`, `misc5.zw` → `node.band_inner/band_outer/rings_outer/mark_inner/angular_gap/mark_thickness` | Node ink, rim and angular ink sampling; `a_mark_stands_off_the_outermost_ring_the_node_draws`, `a_mark_with_no_ring_under_it_reaches_the_nodes_centre`, distance-cell reference and octave seam fixtures |
 | `misc5.xy`, `misc13.y` → `marker.half_width/taper_start/world_unit` | Marker ink, quad and shadow; `the_shader_spends_a_markers_proportions_on_the_shape_they_name`, taper/shadow fixtures and rectangular glow-off test |
-| `misc6.w`, `misc8.xyzw` → `shimmer.pattern/slide/period/intensity/softness` | Pattern selector, travel and exposure; distinct-pattern, period, softness, speed/width and intensity tests in `shimmer.rs` |
 | `misc7.xy`, `oct_bounds` → `octave.span/center/bounds` | Slice ownership/angles; `every_octave_in_the_range_is_drawn_and_they_close_the_ring`, `an_indicator_is_drawn_at_its_own_pitchs_angle` |
 | `misc7.zw`, `misc9.xy` → `spectral.inner/outer/range_cents/folded` | Spectral annulus and sampling; `the_audio_ring_reads_the_spectrum_around_each_octave`, `the_folded_ring_reads_each_wedge_at_its_own_octave`, level-ramp fixture |
 | `misc10.xyw`, `glow_curve.x`, `misc13.x` → `glow.reach/strength/blend/curve/wash` | Glow extent, amplitude, colour convolution, falloff and illumination; reach/curve/blend tests in `glow_reach.rs`, wash and partial-release tests in `glow_colour.rs` |

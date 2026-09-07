@@ -507,7 +507,6 @@ pub fn derive_scene(
     Scene {
         nodes,
         camera,
-        now,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
@@ -523,21 +522,6 @@ pub fn derive_scene(
         plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,
-        pulse_marks: view.pulse_marks,
-        shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
-        // Strictly positive: the pattern's phase divides by this. The floor is
-        // a small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),
-        // not a fraction of the lattice — several periods crossing one node at
-        // once is a look the bar reaches on purpose.
-        shimmer_width: view.shimmer_width.clamp(0.02, 40.0),
-        shimmer_intensity: view.shimmer_intensity.clamp(0.0, 4.0),
-        // Unlike the three above, this one is clamped to exactly its bar,
-        // because it is a SHAPE rather than an amount and the bar's ends are
-        // the shape's: past 1 the shader's exponent drops below 1 and the lit
-        // part widens past the dark, so the pattern reads as thin rifts in a
-        // lit layer rather than as light crossing a clear one, and below 0 the
-        // crest narrows away to a spike too fine for any pixel to catch.
-        shimmer_softness: view.shimmer_softness.clamp(0.0, 1.0),
         background: crate::skin::well_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,

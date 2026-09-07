@@ -185,16 +185,10 @@ fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
 /// A MARKED slice the note has LEFT keeps the whole light on its band, while
 /// the strip continuing it takes the bar.
 ///
-/// The one case that parts the wash's reading of "lit" from the shimmer's
-/// (`lit_slice` in `node_ink`, which takes the louder of a slot's level and
-/// the mark still holding it). A released note under a held mark draws its
-/// band slice in the GROUND — `oct_slot_ink` returns the ghost at level 0 —
-/// while the strip outside the band is still the mark's own colour. The two
-/// pieces of that slice are two different inks, so they take the field on
-/// different terms: a sweep crossing both is one light passing over one slice,
-/// which is what the shimmer's term is for, and the wash is about what the ink
-/// IS. Grey ink is exactly the ink that has to keep the whole field or read as
-/// a hole in the light.
+/// A released note under a held mark draws its band slice in the ground,
+/// while the strip outside the band keeps the mark's own colour. The wash
+/// follows each piece's ink: the grey slice keeps the whole field, and the
+/// coloured extension takes the bar.
 ///
 /// So the claim is that the bar moves the MARK and nothing else on the node —
 /// the marked slot's own ghost included, which is the half a term reading

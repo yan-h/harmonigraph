@@ -92,19 +92,6 @@ uniform_group! {
     }
 }
 uniform_group! {
-    struct ShimmerParams {
-        /// Travel in world units, already reduced onto one cycle for f32 precision.
-        slide: f32,
-        period: f32,
-        intensity: f32,
-        softness: f32,
-        pattern: f32,
-        padding0: f32,
-        padding1: f32,
-        padding2: f32,
-    }
-}
-uniform_group! {
     struct SpectralParams {
         inner: f32,
         outer: f32,
@@ -164,7 +151,6 @@ uniform_group! {
         node: NodeParams,
         marker: MarkerParams,
         octave: OctaveParams,
-        shimmer: ShimmerParams,
         spectral: SpectralParams,
         glow: GlowParams,
         geometry_shadow: ShadowParams,

@@ -44,25 +44,6 @@ pub(super) fn one_marker(
     }
 }
 
-/// The band width every fixture in this file sweeps at: a WIDE one, chosen
-/// so a band is many pixels across at these render sizes and a probe can
-/// walk it. It is deliberately not the fresh view's width, which is 0.64 —
-/// fine enough that several bands cross a single node, which is the look the
-/// bar's tight end exists for and the wrong regime to measure a sheet's
-/// geometry in.
-///
-/// The gap is a known hole in this suite rather than a property of it: the
-/// shipped picture is only ever rendered here at the tight end's control
-/// case. Anything that goes wrong at 0.64 alone — the resolve fade closing
-/// on the pixel footprint, the crest/trough balance at softness 1 — ships
-/// green.
-///
-/// Named because [`SHIMMER_PROBE_STEP`] is sized off it: the width is a view
-/// setting rather than the shader constant it was, so a fixture retuned in
-/// one place and not the other is how the probe would come to measure
-/// nothing.
-pub(super) const PARITY_SHIMMER_WIDTH: f32 = 5.0;
-
 /// A scene exercising every draw path: lit + idle + hovered nodes with
 /// octave indicators, and resting markers under them, all overlapping so blend
 /// order matters.
@@ -149,7 +130,6 @@ pub(super) fn parity_scene() -> Scene {
     Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
-        now: 1.25,
         // The ground the lattice stands on, as the app hands it in.
         background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
@@ -159,19 +139,6 @@ pub(super) fn parity_scene() -> Scene {
         ),
         node_radius: 0.34,
         mark_thickness: 0.09,
-        // Off: a single-instant parity image can't depend on which moment
-        // of a cycle it lands on.
-        pulse_marks: Default::default(),
-        // The sweep's own settings, at this suite's measurable values rather
-        // than the fresh view's (see `PARITY_SHIMMER_WIDTH`). Inert while the
-        // mode above is Off,
-        // and stated rather than defaulted because a test that turns a mode
-        // ON — every shimmer test builds on this fixture — has to be sweeping
-        // something a reader can size against SHIMMER_PROBE_STEP.
-        shimmer_speed: 1.6,
-        shimmer_width: PARITY_SHIMMER_WIDTH,
-        shimmer_intensity: 1.0,
-        shimmer_softness: 0.8,
         outer_inner: 0.545,
         outer_outer: 0.795,
         // The band is the outermost ring here, as it is on a fresh node, so it
@@ -447,39 +414,6 @@ pub(super) fn solid_inked(bare: &[u8], inked: &[u8]) -> Vec<usize> {
 /// The slot mask naming middle C's octave — the one the node below sounds
 /// in, and so the one a mark can link back to.
 pub(super) const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
-
-/// `L*` of one pixel, off the curve `harmonigraph_scene::color` authors the
-/// ramp on rather than a copy of it.
-///
-/// Real colorimetry where the rest of this file reads a channel sum, because
-/// the tests below are claims about how bright a thing LOOKS, compared across
-/// colors that differ in hue as well: a sum weights a blue channel like a green
-/// one and would call a violet ring and a yellow one the same brightness.
-/// Shared with the authoring code and not restated here, so a reading is in the
-/// units the ramp is dialled in — a second copy of the constants could drift
-/// and would then agree with itself and disagree with the picture.
-pub(super) fn lightness(px: &[u8]) -> f64 {
-    let v = |b: u8| f64::from(b) / 255.0;
-    harmonigraph_scene::color::lightness_of_encoded(v(px[0]), v(px[1]), v(px[2]))
-}
-
-/// A color's steady shot and the eight swept ones taken over it.
-pub(super) type Shots = (Vec<u8>, Vec<Vec<u8>>);
-
-/// Whether one shot's sweep moves this pixel: further from its steady self than
-/// a byte's rounding at some moment of the period.
-///
-/// MOVED and not brightened, which is the whole of what an exposure changes
-/// here. The sheet is a ratio fitted to the layer's own headroom
-/// (`shimmer_light`), so where a color has room the sweep reads as light added
-/// and where it has none it reads as shade between crests — and a color at the
-/// top of a channel takes ALL of it as shade. Asking for a brighter pixel would
-/// find the sheet at one end of the ramp and miss it at the other, which is the
-/// difference these tests exist to measure rather than to filter out.
-pub(super) fn swept(shot: &Shots, i: usize) -> bool {
-    let base = lightness(&shot.0[i * 4..i * 4 + 4]);
-    shot.1.iter().any(|f| (lightness(&f[i * 4..i * 4 + 4]) - base).abs() > 1.0)
-}
 
 /// Bloom must add light (halo energy over the bloom-off output) —
 /// and only when asked: strength 0 keeps the parity test above valid.
@@ -852,19 +786,6 @@ pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> S
     scene.nodes[0].audio_ring = ring;
     scene
 }
-
-/// How far that probe moves the node, in world units: half the band width
-/// the fixtures sweep at, so a move ACROSS the bands lands it on a very
-/// different part of the sweep rather than back where it started.
-///
-/// Derived from [`PARITY_SHIMMER_WIDTH`] rather than written as 2.5, because
-/// the width is a SETTING now and the fixture picks it. Retuned by hand the
-/// two would drift apart silently, and a step that came out a whole number of
-/// widths would move the node back onto the phase it started at — the probe
-/// would then report a shimmer defect for a shimmer that is working, which is
-/// the same trap `the_probe_moves_along_the_angle_the_shader_sweeps` keeps
-/// the ANGLE out of.
-pub(super) const SHIMMER_PROBE_STEP: f32 = PARITY_SHIMMER_WIDTH * 0.5;
 
 /// Every node idle: no note, no marks, no octaves — the state most of a
 /// lattice is in most of the time, and the state in which a NODE paints

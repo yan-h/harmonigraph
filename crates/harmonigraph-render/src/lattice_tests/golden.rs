@@ -14,7 +14,7 @@
 //!
 //! **Scenes a feature PR is not supposed to reach** — a node standing in its
 //! own shadow, and the resting marker field standing in one node's light. A
-//! Shimmer or a Wash change leaves both alone, so a diff here on such a PR is
+//! Wash change leaves both alone, so a diff here on such a PR is
 //! the blast radius being wider than its author believed, which is the one
 //! thing the claim tests cannot say.
 //!
