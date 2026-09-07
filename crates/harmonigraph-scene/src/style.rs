@@ -370,66 +370,6 @@ impl Gradient {
     }
 }
 
-/// Which shimmer sweeps the lattice: one sheet of soft light laid over every
-/// octave slice a note currently lights, in the pattern this names, or
-/// [`Off`](Pulse::Off) for the steady picture.
-///
-/// Every live mode is the same animation with a different shape to it, which
-/// is what lets one set of knobs size all of them
-/// ([`ViewConfig::shimmer_speed`](crate::ViewConfig::shimmer_speed) and the
-/// three beside it). They share more than the knobs: the sheet is ONE field
-/// spanning the whole lattice rather than a copy per node — every node
-/// samples it at its own place on the plane the billboards face — so the
-/// light reads as raking over the picture instead of as many small identical
-/// animations.
-///
-/// A melody or bass mark's own strip takes the sheet too, past the band — a
-/// mark being the ring together with the octave it names, so light crossing
-/// the one has to cross the other. A silent slice with no mark extending it
-/// draws steady. All of it lives in `lattice.wgsl`'s Shimmer section.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum Pulse {
-    /// Steady — no animation, the look every earlier build drew.
-    #[default]
-    Off,
-    /// Parallel bands laid diagonally, travelling along their own normal: one
-    /// grating, and the plainest reading of light passing over the lattice.
-    Bands,
-    /// Two gratings crossed at right angles and multiplied, which is a
-    /// checkerboard with the corners rounded off: cells of light and cells of
-    /// dark, swapping as the sheet slides a half cell.
-    Checker,
-    /// Three gratings sixty degrees apart and summed — the hexagonal answer
-    /// to [`Checker`](Pulse::Checker), a honeycomb of bright cells.
-    ///
-    /// It tessellates where a checkerboard fights the picture: the lattice's
-    /// own rows run along three directions, not two, so a hex sheet lands
-    /// with them instead of across them, and a hexagon's neighbours are all
-    /// edge-to-edge where a square's touch at the corners.
-    Hex,
-}
-
-impl Pulse {
-    /// Index the shader reads (`ShimmerParams::pattern` in
-    /// harmonigraph-render). 0 is the steady layer and every other value picks
-    /// a pattern out of `shimmer_terms`.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            Pulse::Off => 0,
-            Pulse::Bands => 1,
-            Pulse::Checker => 2,
-            Pulse::Hex => 3,
-        }
-    }
-
-    /// Whether this mode lays a sheet over its layer at all — everything but
-    /// [`Off`](Pulse::Off). What the UI grays the shared Shimmer knobs on,
-    /// and what the shader's identity return tests.
-    pub fn sweeps(self) -> bool {
-        self != Pulse::Off
-    }
-}
-
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.
 ///

@@ -1335,16 +1335,6 @@ impl LatticeCallback {
                         Float4(std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col]))
                     }),
                 },
-                shimmer: ShimmerParams {
-                    slide: scene.shimmer_slide(),
-                    period: scene.shimmer_width,
-                    intensity: scene.shimmer_intensity,
-                    softness: scene.shimmer_softness,
-                    pattern: scene.pulse_marks.shader_index() as f32,
-                    padding0: 0.0,
-                    padding1: 0.0,
-                    padding2: 0.0,
-                },
                 spectral: SpectralParams {
                     inner: scene.spectral.inner,
                     outer: scene.spectral.outer,

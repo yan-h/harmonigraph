@@ -21,9 +21,7 @@ mod quantization;
 mod reload;
 mod shadow_staging;
 mod shadows;
-mod shimmer;
 mod ships;
-mod sweep;
 mod targets;
 mod timing;
 

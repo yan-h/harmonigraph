@@ -3,7 +3,7 @@
 //! parameters.
 
 use crate::spectral::SpectralReading;
-use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
+use crate::style::{Gradient, NoteNames, SevensLabel};
 use crate::{
     Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
     GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
@@ -548,12 +548,6 @@ pub struct ViewConfig {
     /// above whatever this is, so it is a shape rather than a second
     /// strength — and it is inert without two extras to differ.
     pub octave_extra_blend: f32,
-    // Which shimmer sweeps the octave glyphs has no field here: one pattern
-    // (`pulse_marks`) sizes the sheet for every layer it reaches — the
-    // glyphs of a currently sounding octave and a melody or bass mark's own
-    // strip alike. Saved blobs still carry the `pulse_octaves` key, naming a
-    // pattern nothing reads any more; serde ignores unknown keys, so such a
-    // blob loads intact and drops the key on the next save.
     // ---- What the audio ring says ----------------------------------------
     // Which notes are HELD, or which sine waves are SOUNDING. The two are
     // different questions about the same music, and the lattice answers both
@@ -858,126 +852,6 @@ pub struct ViewConfig {
     /// fresh view opens on — see `impl Default`, where the wait that stops
     /// the chord-release smear is written out.
     pub mark_delay: f32,
-    /// Which shimmer sweeps the lattice (see [`Pulse`]): the sheet takes
-    /// every octave slice a note currently lights, and a melody or bass
-    /// mark's own strip past the band as well — a mark being one slice in
-    /// two pieces, so light crossing one crosses the other. Fresh it is steady,
-    /// because the marks read as note history rather than another moving
-    /// spectral signal. A blob with no `pulse_marks` key gets that same value,
-    /// the container-level `#[serde(default)]` making `impl Default` the one
-    /// fallback for this field as for every other.
-    pub pulse_marks: Pulse,
-
-    // ---- Shimmer ---------------------------------------------------------
-    // The sweep's knobs: what the pattern above is sized and paced by, one
-    // sheet of light crossing the whole lattice.
-    //
-    // All four are inert while the pattern is Off.
-    /// How fast the shimmer travels, in world units per second — the
-    /// lattice's own units, so the DAW window and an exported video sweep at
-    /// the same rate across the same nodes, where a rate in screen pixels
-    /// would not. It travels along the bands' own normal, every pattern here
-    /// being gratings. 0 freezes the sheet where it stands, which is a look
-    /// rather than an off switch (the mode is the switch).
-    pub shimmer_speed: f32,
-    /// How wide the pattern is, in the same world units: the distance from one
-    /// bright peak to the next, which sizes the lit part and the dark
-    /// between it and its neighbour together — the shimmer is one shape,
-    /// scaled, rather than a width and a spacing that could disagree. Every
-    /// pattern is built out of gratings of exactly this period, so the bar
-    /// means the same thing in all of them (a hex cell comes out about 15%
-    /// wider than this, three gratings at sixty degrees being what makes it).
-    ///
-    /// The range spans three ORDERS of it, and the two ends are different
-    /// pictures rather than more and less of one:
-    ///
-    /// - Wide (around the default, several nodes to a band) is a sheet
-    ///   crossing the lattice, each node lighting as it passes.
-    /// - Around one node to a band the two read against each other worst:
-    ///   neighbours land most of a cycle apart and the picture is alternating
-    ///   NODES rather than a band passing over them, the lattice's own
-    ///   spacing being irregular (the thirds and fifths axes both project
-    ///   onto the screen's x).
-    /// - Below that, several bands cross a single node at once and it is a
-    ///   texture on the nodes rather than a sweep between them — which is a
-    ///   look worth reaching, and why the floor is a small fraction of a node
-    ///   rather than a stop above the awkward middle.
-    ///
-    /// A node is [`spacing`](Self::spacing) × 0.25 in world radius, so the
-    /// count of bands across one is roughly its diameter over this.
-    ///
-    /// The tight end is a resolution trade as well as a look, and the shader
-    /// spends it deliberately. A pattern is sines of a world coordinate
-    /// sampled once per fragment, so a period approaching a pixel — a tight
-    /// setting seen from far enough out — has no samples left to carry it and
-    /// would alias into moire that crawls as the camera moves. Rather than
-    /// draw that, `shimmer_terms` fades the sheet's amplitude out as its
-    /// period closes on the pixel footprint, so the layer settles to its
-    /// unshimmered self instead of to a shifting texture. The setting is
-    /// still the size it says it is on the lattice; what runs out is the
-    /// SAMPLING, and the fade is what makes running out look like an ending
-    /// rather than a fault. Frame the shot at the zoom the tight end is
-    /// chosen for.
-    pub shimmer_width: f32,
-    /// How strong the sweep is where it passes, 0..1 being none to the full
-    /// tuned depth: the ratio of light between a band's crest and the trough
-    /// beside it, which is ONE number for the whole of what a band does.
-    ///
-    /// The light is a MULTIPLY — an exposure — rather than an amount added or a
-    /// mix toward white (`SHIMMER_EXPOSURE` in `lattice.wgsl`). That is what
-    /// makes one setting mean one thing across the pitch ramp, and it means it
-    /// in the currency the eye reads a moving texture in: the crest-to-trough
-    /// ratio a setting is worth varies 3% from the ramp's dark end to its bright
-    /// one, where an added light varies 28% and a mix toward white more still.
-    /// A sheet that was uniform in the LIGHT it added — which the addition very
-    /// nearly was — still read weaker on the ramp's bright half, because equal
-    /// added light is not equal contrast up there.
-    ///
-    /// What it costs is CHROMA at a crest, and what it holds is hue. Scaling all
-    /// three channels by one gain slides a color along its own chromaticity, and
-    /// where the crest runs out of room it pales toward white rather than
-    /// clipping — all three channels moving together, so the color keeps its
-    /// hue while it loses some of its colorfulness. Across the ramp's two ends
-    /// at 1 that is 0.7 and 5.0 degrees of hue, against 88% and 57% of the
-    /// chroma. An addition clips in whichever channel is already highest, which
-    /// holds more chroma (99.6% and 73%) and swings the hue three times as far
-    /// (15.3 degrees); a mix toward white leaves 15% of the chroma everywhere,
-    /// at a trough as much as at a crest.
-    ///
-    /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
-    /// than from the mode. Where the display leaves the swing room, the whole
-    /// of it goes upward: the troughs sit at the layer's own color and stay
-    /// there. Where a color is too bright for that, the swing slides down to
-    /// keep its crest a color rather than a white flash, and the troughs pay
-    /// for the slide — nothing below the middle of the default ramp, about 15
-    /// `L*` of standing shade at its bright end at 1.
-    ///
-    /// What the light costs is real at any setting, and it is the point of
-    /// the bar: under a strong band an indicator says "an octave sounds here"
-    /// without saying which.
-    pub shimmer_intensity: f32,
-    /// How the light is shared out ACROSS one period, 0..1 — where
-    /// [`shimmer_intensity`](Self::shimmer_intensity) says how much light
-    /// there is, this says how gradually it arrives.
-    ///
-    /// The pattern is a raised cosine raised to a power, and this is the
-    /// power, log-spaced from 8 at 0 to 1 at 1:
-    ///
-    /// - Toward 0 the peak is a narrow crest on a layer that is otherwise at
-    ///   rest — a hard white band with a dark field around it, which at a
-    ///   tight width is a stripe pattern more than a sweep.
-    /// - Toward 1 the exponent reaches 1 and the pattern IS the cosine: every
-    ///   point of the period is on its way somewhere, so the brightest part
-    ///   fades into the clearest across the whole of the gap rather than at
-    ///   an edge. Nothing is at rest, which is the cost — the layer is lit
-    ///   somewhere at every instant.
-    ///
-    /// One number for both halves of the shape, like Intensity: the bright
-    /// part narrows exactly as the dark part widens, so a period always adds
-    /// up to itself and no setting can leave the sheet mostly-lit and
-    /// mostly-dark at once.
-    pub shimmer_softness: f32,
-
     // ---- Home markers ----------------------------------------------------
     // The cross standing at each home-sheet node position (see
     // `derive_pluses`), and the whole of what an unplayed lattice draws. Its
@@ -2071,17 +1945,6 @@ impl ViewConfig {
             fresh.octave_extra_blend
         };
 
-        // The shimmer's four knobs, on the same grounds and against the same
-        // hole in `clamp`. `derive_scene` clamps all four into their ranges
-        // every frame, which is what the shader trusts — and a NaN walks
-        // through a clamp untouched, because every comparison against it is
-        // false. From there it is a divide (the period), a `pow` exponent
-        // (the softness) and two mixes, so ONE non-finite number in a
-        // hand-edited blob NaNs the sheet, and a NaN sheet takes the rings and
-        // the slices they name with it wherever the mode is on. Repaired here rather
-        // than in `derive_scene` because this is the blob's own door: the bars
-        // cannot reach these values, so a view that holds one got it from a
-        // file.
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
         // ease of every ring. The symptom is the rings VANISHING, not drawing
@@ -2233,11 +2096,6 @@ impl ViewConfig {
             finite_or(self.glow_attack, fresh.glow_attack).clamp(0.0, GLOW_BALLISTICS_MAX);
         self.glow_release =
             finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
-
-        self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
-        self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
-        self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
-        self.shimmer_softness = finite_or(self.shimmer_softness, fresh.shimmer_softness);
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
@@ -2484,15 +2342,6 @@ impl Default for ViewConfig {
             // OUT over the whole Fade, so lifting a chord one key at a time
             // leaves a fading mark on nearly every note of it.
             mark_delay: 0.102_448_754,
-            // The marks hold steady so they read as note history rather than
-            // as another moving spectral signal.
-            pulse_marks: Pulse::Off,
-            // These values ride inert with the steady mode and preserve the
-            // dialled sheet if a moving pattern is selected.
-            shimmer_speed: 0.335_761_5,
-            shimmer_width: 0.639_271_56,
-            shimmer_intensity: 0.517_033_16,
-            shimmer_softness: 1.0,
             // Arms reaching about half way from the crossing to the ring stack
             // (`ring_inner`, in the same UV): the resting lattice reads as
             // separate crosses with ground between them rather than as a

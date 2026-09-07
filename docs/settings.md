@@ -6,7 +6,7 @@ Open **Display** for picture and interface settings.
 
 | Display page | What you will find |
 | --- | --- |
-| Lattice | Camera and seventh layers; note-layer sizes and fade; audio ring; MIDI octave ring; melody/bass marks and shimmer; labels and idle crosses. |
+| Lattice | Camera and seventh layers; note-layer sizes and fade; audio ring; MIDI octave ring; melody/bass marks; labels and idle crosses. |
 | Analyzer | View orientation and frequency range; audio input, resolution and smoothing; spectrum levels and response; shared history; MIDI ribbon appearance. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
 | Lighting | Bloom across all pictures; lattice glow; shadows for lattice shapes, lattice text, analyzer/Spiral notes, and analyzer/Spiral labels. |
@@ -24,14 +24,13 @@ The audio ring's **Pitch tolerance** controls which nearby frequencies contribut
   Brightness runs from black at 0% to white at 100%, using perceptual lightness.
   Lattice gaps, cross dimensions, glow reach and lattice shadow width use the node radius as their reference.
   Held-note extension uses the spectrum region's depth.
-- **×** measures a multiplier: label sizes, depth-layer size, bloom, glow gain and shimmer contrast.
+- **×** measures a multiplier: label sizes, depth-layer size, bloom and glow gain.
   The tooltip states the reference that 1× multiplies.
 - **ms** measures short response and fade times;
   **s** measures history duration.
 - **¢** measures cents, with 100 cents per semitone;
   **st** measures semitones, **Hz/kHz** frequency, and **dB** level.
-- **°** measures camera angles;
-  **steps** and **steps/s** measure shimmer spacing and movement on the lattice.
+- **°** measures camera angles.
   Analyzer and Spiral shadow widths use screen points (**pt**), independent of pitch zoom.
 - Counts remain whole numbers.
   The glow falloff curve keeps its signed shape value and a preview:

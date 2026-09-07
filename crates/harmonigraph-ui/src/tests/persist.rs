@@ -547,41 +547,39 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
-/// The octave glyphs' own shimmer is gone, and a project saved against it
-/// carries a `pulse_octaves` key nothing reads now. It has to open with the
-/// glyphs steady and every other setting intact — including the marks'
-/// pattern, which is the one that survived and which sits next to it in the
-/// blob, so a reader that choked on the retired key would take the live one
-/// down with it.
-///
-/// Worth a blob rather than a comment for the same reason the taper's is: that
-/// an unknown field is ignored rather than refused is a property of how the
-/// blob is read, not something this crate spells out, and a saved project
-/// failing to parse loses the user's layout and camera along with it.
+/// Retired shimmer fields, including bare enum tokens, must not discard a
+/// saved view or prevent an offline export. They disappear on the next save.
 #[test]
-fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
+fn a_blob_with_retired_shimmer_settings_survives_both_doors() {
     let mut state = fresh();
     state.camera.yaw = 1.23;
-    state.view.pulse_marks = harmonigraph_scene::Pulse::Hex;
+    state.view.extent_sevens = 3;
+    state.take.render_config.short_edge = 2160;
     let saved = state.save_persist();
-    // Where the retired key sat: beside the marks' own pattern, written
-    // bare as RON writes a unit variant.
-    let marks = "pulse_marks:Hex,";
-    let with_octaves = saved.replace(marks, &format!("pulse_octaves:Bands,{marks}"));
-    assert_ne!(with_octaves, saved, "`{marks}` is not in the blob to splice against");
+    let stale = saved.replace(
+        "pitch_gradient:",
+        "pulse_octaves:Bands,pulse_marks:Hex,shimmer_speed:1.6,shimmer_width:5.0,\
+         shimmer_intensity:1.0,shimmer_softness:0.8,pitch_gradient:",
+    );
+    assert_ne!(stale, saved, "the anchor must exist to exercise the retired keys");
 
     let mut restored = fresh();
-    restored.load_persist(&with_octaves);
-    assert_eq!(
-        restored.view.pulse_marks,
-        harmonigraph_scene::Pulse::Hex,
-        "the pattern that survived the retirement came back changed",
-    );
-    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
-    assert!(
-        !restored.save_persist().contains("pulse_octaves"),
-        "the retired key was written back out; it should drop on the next save",
-    );
+    assert!(restored.load_persist(&stale));
+    assert_eq!(restored.camera.yaw, 1.23);
+    assert_eq!(restored.view.extent_sevens, 3);
+    let offline = crate::render_config_from_persist(&stale).expect("the offline blob must load");
+    assert_eq!(offline.short_edge, 2160);
+    let resaved = restored.save_persist();
+    for key in [
+        "pulse_octaves",
+        "pulse_marks",
+        "shimmer_speed",
+        "shimmer_width",
+        "shimmer_intensity",
+        "shimmer_softness",
+    ] {
+        assert!(!resaved.contains(key), "the retired {key} key must disappear on save");
+    }
 }
 
 /// The render frame round-trips its side and the split beside it, through
