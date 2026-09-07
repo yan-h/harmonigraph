@@ -1668,7 +1668,7 @@ impl Hub {
                         // This incoming historical cut is being settled, not
                         // retained for retry. Declare that reporting loss at
                         // its actual route before allowing subsequent output.
-                        recorder.discard_publication(frame.time, route);
+                        recorder.publication_lost(frame.time, route);
                     }
                     row.repair |= result.is_err();
                     row.state.replace(&frame);
