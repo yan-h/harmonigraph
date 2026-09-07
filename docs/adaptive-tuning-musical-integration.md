@@ -61,8 +61,11 @@ Its nonzero decision, zero adaptive correction and +0.375-semitone player expres
 After changing the fifth axis to 690 cents, the next F-sharp selects `(2,1,0)` with correction −33,686,279 microcents.
 The explicit counterfactual using stale attack pitches selects `(-2,-1,0)` and +33,686,279, so this fixture distinguishes actual-pitch context from node-derived context.
 The normal display stream, actual written take and read/replayed take agree with Source facts for all 16 voices, without a voiced repair baseline supplying the metadata.
-- A real musical configuration revision and a real Source Stop each clear released-key history while retaining correct factual output.
+- A real musical configuration revision and a Source Stop that releases a held D and enters recovery each clear released-key history while retaining correct factual output.
 The configuration case leaves already held assignments unchanged.
+An isolated discriminator with all voices released before Stop retains the E preference, stays in epoch 1 and has no loss recovery or output fault.
+That is consistent with the specified withdrawal/configuration/session/epoch/loss-recovery resets;
+the fixture does not claim that every silent Stop erases history.
 
 Focused tests also verify every canonical coordinate under all four respelling forms fits the exact compact representation, and that confirmed history is separate from prospective history and cannot undo a clear.
 The existing recovery, partial-output, deadline, native Off and capture-retirement fixtures retain their ownership assertions.
@@ -107,8 +110,13 @@ The distinct prospective half remains reserved in full.
 
 The larger Source State, receiver State and cached/owned baseline copies fit their independently reserved voice/baseline rows in the [full allocation account](adaptive-tuning-aggregation-memory.md#constrained-future-allocation-plan).
 The new 384-byte sequencer metadata and two 48-byte publication-consumer increases consume 480 bytes of the existing 65,536-byte fixed-metadata reservation once.
-The full future projection therefore remains **150,730,867 bytes**, leaving **264,077 below 144 MiB**.
-All full Plan/Life configuration growth, both history/voice halves, future Plan indices and the complete 4 MiB policy reservation remain charged.
+The capped allocation plan remains **150,730,867 bytes**, leaving **264,077 below 144 MiB**, conditional on the existing joint record and enclosing-frame layout constraints.
+The 128-byte configuration ceiling is not required padding and cannot be spent independently inside every enclosing baseline.
+With the present representation, expanding each embedded configuration from its complete current 64 bytes to 128 would make VoiceBaseline 272 bytes and the publication baseline slot 19,912 bytes, exceeding both 256 and 16,384.
+The same future-only limitation already existed at the base;
+this change does not claim that the unchanged baseline representation supports that expansion.
+All Plan/Life configuration allowances, both history/voice halves, future Plan indices and the complete 4 MiB policy reservation remain charged.
+Future shape changes must satisfy both their nested-record ceilings and complete-frame ceilings together, as the original allocation contract requires.
 Neither smaller DIRECT storage nor earlier inventory/GUI savings are reclaimed again.
 
 Outside the ordinary subtotal, both actual publication channels now request 2,911,744 bytes, up 428,032 within their prepaid ring/baseline banks.
@@ -118,6 +126,8 @@ sixteen Tune factories with activation retain 70,913,963.
 The constructed/enrolled four-HG plus 64-Tune population retains 538,058,238 bytes on the measured thread.
 These include existing plugin/UI/worker integration and fixture overhead;
 they are not interchangeable with the additional adaptive-session ceiling.
+Factory probes begin with empty non-RT trackers;
+additional populated display/replay voice storage is outside those measured empty-factory totals.
 
 ## Timing and limits
 

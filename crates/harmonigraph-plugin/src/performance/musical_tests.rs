@@ -450,7 +450,7 @@ fn production_musical_normal_phrase_keeps_bends_old_configuration_and_take_metad
 }
 
 #[test]
-fn production_musical_configuration_and_stop_clear_history_without_rewriting_held_assignment() {
+fn production_musical_configuration_and_stop_recovery_clear_history() {
     let _scope = crate::test_scope::enter();
     for stop in [false, true] {
         let mut phrase = Phrase::new();
@@ -462,6 +462,8 @@ fn production_musical_configuration_and_stop_clear_history_without_rewriting_hel
         phrase.idle();
         let held = phrase.voice(0, 50, 0);
         if stop {
+            // Releasing this held D at Stop changes actual output and reaches
+            // recovery. A silent Stop in the same epoch need not clear history.
             phrase.step(std::array::from_fn(|_| vec![transport(0, 120.0)]), [0, 1, 2]);
             phrase.step(
                 std::array::from_fn(|_| {
