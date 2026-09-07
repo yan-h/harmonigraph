@@ -48,13 +48,15 @@ impl Audio {
     /// Cut on FRAME boundaries, so the slice starts on channel 0 however it is
     /// clamped: a slice off by one sample would hand every channel the next
     /// one's data.
-    pub fn slice_seconds(&self, from: f64, to: f64) -> &[f32] {
+    /// Returns the slice and its clamped exclusive end-frame index, so a
+    /// caller can date its actual newest sample even on a partial final slice.
+    pub fn slice_seconds(&self, from: f64, to: f64) -> (&[f32], usize) {
         let channels = self.channels.max(1);
         let frame = |t: f64| {
             (t * f64::from(self.sample_rate)).round().clamp(0.0, self.frames() as f64) as usize
         };
         let (start, end) = (frame(from), frame(to).max(frame(from)));
-        &self.samples[start * channels..end * channels]
+        (&self.samples[start * channels..end * channels], end)
     }
 
     /// The channels averaged into one signal, allocated on demand.
@@ -254,10 +256,13 @@ mod tests {
             channels: 2,
         };
         assert_eq!(audio.seconds(), 1.0);
-        assert_eq!(audio.slice_seconds(0.25, 0.75), vec![2.0, -2.0, 3.0, -3.0]);
+        assert_eq!(audio.slice_seconds(0.25, 0.75).0, vec![2.0, -2.0, 3.0, -3.0]);
         // Every slice starts on a left sample, whatever the bounds do.
-        for (from, to) in [(0.0, 1.0), (0.1, 0.6), (-1.0, 0.3), (0.4, 9.0), (0.9, 0.1)] {
-            let slice = audio.slice_seconds(from, to);
+        for (from, to, expected_end) in
+            [(0.0, 1.0, 4), (0.1, 0.6, 2), (-1.0, 0.3, 1), (0.4, 9.0, 4), (0.9, 0.1, 4)]
+        {
+            let (slice, end) = audio.slice_seconds(from, to);
+            assert_eq!(end, expected_end, "the endpoint belongs to the clamped slice");
             assert_eq!(slice.len() % 2, 0, "[{from}, {to}) cut a frame in half");
             assert!(
                 slice.chunks_exact(2).all(|f| f[0] > 0.0 && f[1] < 0.0),
@@ -291,13 +296,13 @@ mod tests {
         let frames: Vec<Vec<f32>> = (0..100).map(|i| vec![i as f32 / 100.0]).collect();
         let audio = decode(&build(3, 32, 1, 100, &frames)).unwrap();
         assert_eq!(audio.seconds(), 1.0);
-        assert_eq!(audio.slice_seconds(0.1, 0.2).len(), 10);
+        assert_eq!(audio.slice_seconds(0.1, 0.2).0.len(), 10);
         // Past the end is empty, not a panic: the visual tail outlives
         // the bounce whenever a note fades out at the end.
-        assert!(audio.slice_seconds(5.0, 6.0).is_empty());
+        assert!(audio.slice_seconds(5.0, 6.0).0.is_empty());
         // A backwards range is empty too, rather than panicking on the
         // reversed slice bounds.
-        assert!(audio.slice_seconds(0.5, 0.2).is_empty());
+        assert!(audio.slice_seconds(0.5, 0.2).0.is_empty());
     }
 
     #[test]

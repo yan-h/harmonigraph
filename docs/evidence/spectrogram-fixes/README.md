@@ -85,3 +85,45 @@ the pane test separately reaches real history trimming via `push_history`.
 SG1 checkpoint validation:
 47 spectrogram tests passed (one profiling test ignored), and all five existing spectral goldens passed unchanged.
 SG4A's independent Opus/medium review of `a024cb86` returned no findings.
+
+## SG2: actual offline slice endpoints
+
+The offline frame loop still feeds one frame of lookahead audio, `[now - audio_start, now + step - audio_start)`.
+`Audio::slice_seconds` now returns the actual clamped exclusive end-frame index with its borrowed samples.
+The caller dates a nonempty batch at `audio_start + (end_frame - 1) / sample_rate`.
+The analyzer's intentional half-window lag is unchanged.
+There is no added pre-roll;
+a trimmed start still establishes its own sample-hop phase, and empty slices before or after the audio supply nothing.
+The per-frame preparation function is shared by the render loop and its deterministic integration fixture.
+The live analyzer clock and whole-song precompute are unchanged.
+
+`scrolling_audio_uses_the_supplied_sample_grid` uses 62,271 stereo frames at 48 kHz, including an anti-phase impulse at sample 38,400 and a matching replayed MIDI onset.
+It exercises 30/60/120 and 30000/1001 fps, zero/nonzero audio origins, a late start at sample 20,031, and a start before the audio origin.
+Its oracle enumerates source sample-hop endpoints after FFT warm-up, independently of slice metadata and the analyzer anchor.
+All 16 combinations satisfy the timestamp oracle, preserve identical spectrum bytes across frame rates, and place the transient peak midpoint within one sample plus an analysis hop of the actual replayed MIDI onset.
+Every clamped final batch is asserted to emit at least one column, so the tail cannot pass without exercising timestamping.
+`rendering_sliced_audio_twice_is_byte_identical` also compares actual GPU exports at fractional fps with trimmed audio, and verifies that omitting the audio changes the picture.
+
+### Intended picture change
+
+Scrolling columns move later by almost one video frame:
+at 48 kHz, 33.3125/16.6458/8.3125 ms for 30/60/120 fps.
+The existing goldens run at 10 fps, so their correction is 99.979 ms. [Inspected comparisons](sg2-timestamps.png) show expected, actual, and 8× difference panels.
+Heatmap features move relative to the unchanged MIDI/playhead geometry;
+the half-window analysis lag is not corrected a second time.
+
+| Scrolling golden | Mean channel difference / 255 | Maximum / 255 |
+|---|---|---|
+| Short pane | 2.324 | 106 |
+| Tall pane | 3.260 | 138 |
+| Zoomed in | 4.595 | 154 |
+| Mixed spectral shadows | 2.191 | 127 |
+
+The whole-song golden stayed byte-identical before any blessing.
+All other offline tests passed before the four expected golden updates (50 passed, 9 ignored).
+SG1's independent Opus/high review of `d0a4f245` returned no findings.
+
+SG2 checkpoint validation:
+the workspace golden run passed, changing only the four inspected scrolling PNGs;
+all 54 offline tests passed (9 profiling tests ignored), and workspace all-target Clippy passed with warnings denied.
+No persisted shape, parameter range, or stored audio data changes.
