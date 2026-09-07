@@ -64,6 +64,40 @@ impl From<ProvenanceRecord> for PitchProvenance {
     }
 }
 
+/// Compact provenance for a normal accepted musical delta. Configuration values
+/// are retained separately by the existing configuration records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AssignmentRecord {
+    pub configuration_revision: u64,
+    pub decision: u64,
+    pub node: Option<[i32; 3]>,
+    pub correction_microcents: i64,
+    pub player_tuning: f64,
+}
+impl From<AssignmentMetadata> for AssignmentRecord {
+    fn from(a: AssignmentMetadata) -> Self {
+        Self {
+            configuration_revision: a.configuration_revision,
+            decision: a.decision,
+            node: a.node.map(|p| [p.threes, p.fives, p.sevens]),
+            correction_microcents: a.correction_microcents,
+            player_tuning: a.player_tuning,
+        }
+    }
+}
+impl From<AssignmentRecord> for AssignmentMetadata {
+    fn from(a: AssignmentRecord) -> Self {
+        Self {
+            configuration_revision: a.configuration_revision,
+            decision: a.decision,
+            node: a.node.map(|p| LatticePos::new(p[0], p[1], p[2])),
+            correction_microcents: a.correction_microcents,
+            player_tuning: a.player_tuning,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DeltaRecord {
@@ -73,6 +107,7 @@ pub struct DeltaRecord {
     pub provenance: ProvenanceRecord,
     pub timing: Option<TimingRecord>,
     pub pitch_microcents: Option<i64>,
+    pub assignment: Option<AssignmentRecord>,
     pub partial_output: bool,
 }
 impl From<NoteDelta> for DeltaRecord {
@@ -84,6 +119,7 @@ impl From<NoteDelta> for DeltaRecord {
             provenance: d.provenance.into(),
             timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
+            assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
         }
     }
@@ -97,6 +133,7 @@ impl From<DeltaRecord> for NoteDelta {
             provenance: d.provenance.into(),
             timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
+            assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
         }
     }
@@ -119,6 +156,7 @@ pub struct VoiceRecord {
     pub velocity: f32,
     pub provenance: ProvenanceRecord,
     pub assignment: Option<ConfigurationRecord>,
+    pub decision: u64,
     pub attack_node: Option<[i32; 3]>,
     pub partial_output: bool,
     pub release_pending: bool,
@@ -145,6 +183,7 @@ impl From<VoiceBaseline> for VoiceRecord {
             velocity: v.velocity,
             provenance: v.provenance.into(),
             assignment: v.assignment.map(|a| ConfigurationRecord::new(v.actual_onset, a)),
+            decision: v.decision,
             attack_node: v.attack_node.map(|p| [p.threes, p.fives, p.sevens]),
             partial_output: v.partial_output,
             release_pending: v.release_pending,
@@ -168,6 +207,7 @@ impl From<&VoiceRecord> for VoiceBaseline {
             velocity: v.velocity,
             provenance: v.provenance.into(),
             assignment: v.assignment.map(ConfigurationRecord::resolved),
+            decision: v.decision,
             attack_node: v.attack_node.map(|p| LatticePos::new(p[0], p[1], p[2])),
             partial_output: v.partial_output,
             release_pending: v.release_pending,

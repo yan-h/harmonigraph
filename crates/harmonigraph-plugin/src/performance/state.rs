@@ -109,9 +109,11 @@ impl State {
             self.voices.iter_mut().flatten().find(|voice| voice.lifetime == lifetime)
         {
             voice.player_tuning = player;
-            voice.frozen_offset_microcents = binding.correction;
-            if binding.decision != 0 {
+            voice.frozen_offset_microcents = i64::from(binding.correction);
+            if binding.decision != 0 && binding.selection.musical() {
                 voice.assignment = Some(binding.configuration);
+                voice.decision = binding.decision;
+                voice.attack_node = binding.node();
             }
         }
     }
@@ -263,6 +265,7 @@ impl State {
             provenance: stamp.provenance,
             timing: stamp.timing,
             pitch_microcents,
+            assignment: self.voice(stamp.lifetime).and_then(VoiceBaseline::metadata),
             partial_output: false,
         })
     }

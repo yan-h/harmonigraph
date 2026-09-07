@@ -6,6 +6,8 @@ use nice_plug::wrapper::clap::configuration::InputValue;
 pub enum Event {
     /// Retained and consumed by Source at its original sample, never sent to a host.
     Stop,
+    /// Ordered local participation boundary, never a downstream MIDI event.
+    Participation(bool),
     Note {
         kind: u16,
         id: i32,
@@ -51,7 +53,9 @@ impl Event {
 
     pub fn input(self) -> InputValue {
         match self {
-            Self::Stop => unreachable!("Stop boundaries are not wire output"),
+            Self::Stop | Self::Participation(_) => {
+                unreachable!("local boundaries are not wire output")
+            }
             Self::Note { kind, id, port, channel, key, velocity, flags } => {
                 InputValue::Note { kind, note_id: id, port, channel, key, velocity, flags }
             }

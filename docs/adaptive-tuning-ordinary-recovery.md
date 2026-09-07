@@ -123,7 +123,8 @@ It is deferred for that reason, not because the note-only case is rare.
 Fresh Bitwig controller initialization is unmeasured and is a prioritized manual host check;
 known-neutral fixtures do not prove universal progress.
 
-The musical policy/history/rich-metadata integration, complete-policy timing and actual late-output display/take/offline integration remain subsequent #621 work.
+The subsequent [musical integration stage](adaptive-tuning-musical-integration.md) records production policy/history/metadata wiring and integrated callback measurements.
+Actual late-output display/take/offline and host qualification remain separate checks.
 Full Bitwig, listening and live/offline destination validation have not been performed here.
 Extreme new capacity, stale-reply, peer-cancellation and destruction matrices are deferred under the user's complexity policy; existing useful safety coverage is retained.
 The draft PR carries exact committed-head review, CI and both-package release receipts.

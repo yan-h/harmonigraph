@@ -183,6 +183,7 @@ mod tests {
                     sample_rate: 48000.0,
                 }),
                 pitch_microcents: None,
+                assignment: None,
             }))
         };
         let empty = SourceBaseline::new(
@@ -326,6 +327,7 @@ mod tests {
                     sample_rate: 48000.0,
                 }),
                 pitch_microcents: None,
+                assignment: None,
             }))
         };
         let first = delta(NoteEvent::on(0.01, source, 0, 60, 0.8), 1);

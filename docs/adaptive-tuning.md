@@ -9,10 +9,10 @@ The [canonical consumer foundation](adaptive-tuning-canonical-recovery.md) imple
 The [companion aggregation implementation](adaptive-tuning-companion-aggregation.md) now wires the real Tune class, session ownership and actual accepted-output history.
 That aggregation milestone is still in progress;
 delayed shared-channel replay, final review and host validation remain before it is complete.
-Adaptive assignment and the integrated musical policy remain subsequent work.
 The [ordinary-progress stage](adaptive-tuning-ordinary-progress.md) repairs initial DIRECT forwarding, complete Capture prefixes and factual merge throughput over the reviewed terminal checkpoint;
 the [ordinary recovery stage](adaptive-tuning-ordinary-recovery.md) activates accepted-output divergence and adds practical transport checks.
-Production musical-policy integration and host qualification remain unfinished, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696).
+The [musical integration stage](adaptive-tuning-musical-integration.md) binds the version-one policy in production, owns transient history, and carries accepted assignment metadata through normal display and take replay.
+Combined review and host qualification remain unfinished, with an explicit unknown-pedal progress limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696).
 GitHub issue [#614](https://github.com/yan-h/harmonigraph/issues/614) is the design anchor, with separate children for the Bitwig timing spike, automatic aggregation, pitch output and the first policy.
 
 This document fixes the product and real-time contracts, including the inputs the first musical policy needs.

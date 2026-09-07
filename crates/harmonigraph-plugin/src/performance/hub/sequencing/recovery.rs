@@ -785,6 +785,7 @@ impl Hub {
         }
         self.input_work += TUNERS + 1;
         self.sequencer.context.copy_from_slice(&self.sequencer.actual);
+        self.sequencer.history.clear_all(self.sequencer.decision);
         self.sequencer.recovery.work = 256;
         self.sequencer.recovery.context_cuts[0] = owner.direct.sequence;
         for source in 0..TUNERS {

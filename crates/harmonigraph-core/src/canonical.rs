@@ -25,6 +25,15 @@ pub struct EventTiming {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AssignmentMetadata {
+    pub configuration_revision: u64,
+    pub decision: u64,
+    pub node: Option<LatticePos>,
+    pub correction_microcents: i64,
+    pub player_tuning: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoteDelta {
     pub event: NoteEvent,
     /// Zero means an unsequenced direct/standalone observation. Accepted source
@@ -36,6 +45,9 @@ pub struct NoteDelta {
     /// Exact current accepted pitch, when this delta establishes one. The f32
     /// in NoteEvent remains the presentation adapter, never pitch authority.
     pub pitch_microcents: Option<i64>,
+    /// Attack selection and current player expression, separate from accepted
+    /// pitch. The complete configuration is in the take configuration timeline.
+    pub assignment: Option<AssignmentMetadata>,
     /// This physical onset was accepted, but its required initial tuning was
     /// rejected. Its intended correction is not an accepted pitch fact.
     pub partial_output: bool,
@@ -50,6 +62,7 @@ impl From<NoteEvent> for NoteDelta {
             provenance: PitchProvenance::ObservedDirect,
             timing: None,
             pitch_microcents: None,
+            assignment: None,
             partial_output: false,
         }
     }
@@ -67,6 +80,7 @@ impl NoteDelta {
             || (self.provenance == PitchProvenance::AcceptedOutput
                 && (self.sequence == 0 || self.lifetime == 0 || self.timing.is_none()))
             || self.timing.is_some_and(|t| !t.valid())
+            || self.assignment.is_some_and(|a| a.decision == 0 || !a.player_tuning.is_finite())
             || (self.partial_output
                 && (self.provenance != PitchProvenance::AcceptedOutput
                     || !matches!(self.event.kind, NoteEventKind::On { .. })))
@@ -93,8 +107,8 @@ impl EventTiming {
     }
 }
 
-/// Saved factual state, not a new emitted attack. Optional assignment metadata
-/// is absent in the ordinary aggregation milestone.
+/// Saved factual state, not a new emitted attack. Musical provenance is optional
+/// for observed DIRECT and intentionally unretuned output.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceBaseline {
     pub channel: u8,
@@ -111,6 +125,7 @@ pub struct VoiceBaseline {
     pub velocity: f32,
     pub provenance: PitchProvenance,
     pub assignment: Option<ResolvedConfig>,
+    pub decision: u64,
     pub attack_node: Option<LatticePos>,
     /// An accepted onset with unestablished intended tuning remains factual.
     pub partial_output: bool,
@@ -134,6 +149,7 @@ impl Default for VoiceBaseline {
             velocity: 0.0,
             provenance: PitchProvenance::ObservedDirect,
             assignment: None,
+            decision: 0,
             attack_node: None,
             partial_output: false,
             release_pending: false,
@@ -142,6 +158,16 @@ impl Default for VoiceBaseline {
 }
 
 impl VoiceBaseline {
+    pub fn metadata(&self) -> Option<AssignmentMetadata> {
+        self.assignment.filter(|_| self.decision != 0).map(|configuration| AssignmentMetadata {
+            configuration_revision: configuration.revision,
+            decision: self.decision,
+            node: self.attack_node,
+            correction_microcents: self.frozen_offset_microcents,
+            player_tuning: self.player_tuning,
+        })
+    }
+
     pub fn key(&self, source: SourceId) -> VoiceKey {
         VoiceKey { source, channel: self.channel, note: self.note }
     }
@@ -421,6 +447,7 @@ mod tests {
 
     fn delta(event: NoteEvent, sequence: u64) -> NoteDelta {
         NoteDelta {
+            assignment: None,
             partial_output: false,
             event,
             sequence,

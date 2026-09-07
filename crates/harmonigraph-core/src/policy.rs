@@ -26,9 +26,7 @@ pub const CONTEXT_WEIGHT: u16 = 4;
 pub const HISTORY_WEIGHT: u16 = 1;
 pub const ORIGIN_WEIGHT: u16 = 1;
 
-/// Fixed descriptor for later production configuration binding. The current
-/// configuration reducer still emits version zero; this module does not wire
-/// the engine into playback or silently change that owner's configuration.
+/// Fixed descriptor bound by the production configuration reducer.
 pub const CONFIG: PolicyConfig = PolicyConfig {
     version: 1,
     domain: [RAW_THREES as u16, RAW_FIVES as u16, RAW_SEVENS as u16],

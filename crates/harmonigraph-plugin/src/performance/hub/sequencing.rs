@@ -2,8 +2,10 @@
 use super::*;
 use harmonigraph_core::cohort::{self, EventPhase, TargetAccess};
 use harmonigraph_core::configuration::ResolvedConfig;
+use harmonigraph_core::{policy, LatticePos, PitchClass};
 #[cfg(all(test, not(feature = "tuning-probe")))]
 mod actual_lookup_tests;
+mod history;
 mod recovery;
 
 #[derive(Clone, Copy)]
@@ -53,6 +55,34 @@ struct Voice {
     correction: i64,
     player: f64,
     key: u8,
+    channel: u8,
+    pitch: i64,
+    node: Option<LatticePos>,
+    configuration_revision: u64,
+    decision: u64,
+}
+
+impl Voice {
+    fn factual(source: u8, voice: &harmonigraph_core::canonical::VoiceBaseline) -> Self {
+        Self {
+            source,
+            lifetime: voice.lifetime,
+            correction: voice.frozen_offset_microcents,
+            player: voice.player_tuning,
+            key: voice.note,
+            channel: voice.channel,
+            pitch: voice.pitch_microcents,
+            node: voice.attack_node,
+            configuration_revision: voice.assignment.map_or(0, |config| config.revision),
+            decision: voice.decision,
+        }
+    }
+    fn tune(&mut self, player: f64) {
+        self.player = player;
+        self.pitch = i64::from(self.key) * 100_000_000
+            + self.correction
+            + (player * 100_000_000.0).round() as i64;
+    }
 }
 
 /// Frozen membership belongs to the same pass as its capture/config bindings.
@@ -76,7 +106,7 @@ pub(super) struct Sequencer {
     config: Option<ResolvedConfig>,
     binding_sample: i64,
     assembling: usize,
-    decision: u64,
+    pub(super) decision: u64,
     cohort_floor: u64,
     cohort_unsent: usize,
     cohort_recipients: u16,
@@ -96,8 +126,15 @@ pub(super) struct Sequencer {
     actual_index: Box<[u16]>,
     actual_free: Vec<u16>,
     actual_revision: u64,
+    pub(super) history: history::History,
+    policy: Box<policy::PolicyScratch>,
+    policy_context: Box<[policy::ContextPitch]>,
+    pub(super) participating: [bool; TUNERS + 1],
+    pub(super) participation_serial: [u64; TUNERS + 1],
     pub work: usize,
     pub extra_delay: u64,
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    policy_counts: [usize; 3],
     recovery: recovery::Recovery,
 }
 impl Default for Sequencer {
@@ -134,8 +171,22 @@ impl Default for Sequencer {
             actual_index: vec![NO_VOICE; (TUNERS + 1) * ACTUAL_KEYS_PER_SOURCE].into_boxed_slice(),
             actual_free: (0..HELD_SESSION as u16).rev().collect(),
             actual_revision: 0,
+            history: history::History::default(),
+            policy: Box::default(),
+            policy_context: vec![
+                policy::ContextPitch {
+                    pitch: PitchClass::from_microcents(0),
+                    node: None
+                };
+                HELD_SESSION
+            ]
+            .into_boxed_slice(),
+            participating: [true; TUNERS + 1],
+            participation_serial: [0; TUNERS + 1],
             work: 0,
             extra_delay: 0,
+            #[cfg(all(test, not(feature = "tuning-probe")))]
+            policy_counts: [0; 3],
             recovery: recovery::Recovery::default(),
         }
     }
@@ -173,6 +224,7 @@ impl Sequencer {
         self.actual_revision.checked_add(1).is_some()
     }
     pub(super) fn clear_clock_context(&mut self) {
+        self.history.clear_all(self.decision);
         let revision = self.actual_revision.checked_add(1).expect("preflighted clock boundary");
         self.actual_free.clear();
         for index in 0..HELD_SESSION {
@@ -190,13 +242,7 @@ impl Sequencer {
         // termination. Rebind those same factual lifetimes to the new clock.
         for voice in direct.voices() {
             let index = self.actual_free.pop().expect("at most 64 DIRECT voices");
-            let value = Voice {
-                source: 0,
-                lifetime: voice.lifetime,
-                correction: voice.frozen_offset_microcents,
-                player: voice.player_tuning,
-                key: voice.note,
-            };
+            let value = Voice::factual(0, voice);
             self.actual[usize::from(index)] = Some(value);
             self.context[usize::from(index)] = Some(value);
             self.actual_keys[usize::from(index)] =
@@ -331,16 +377,17 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() <= 256);
 const _: () = assert!(
     std::mem::size_of::<Option<Voice>>()
         + std::mem::size_of::<Option<harmonigraph_core::confirmed::ConfirmedPitch>>()
-        + 128
-        + 16
-        + 8
+        // Node and decision are now populated in Voice. Its revision occupies
+        // eight bytes of the prepaid complete configuration; reserve the rest.
+        + (128 - std::mem::size_of::<u64>())
         <= 256
 );
-const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 + 16 + 8 <= 256);
+const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
+        println!("LEDGER musical [history_cell,confirmed,prospective] {:?}; policy [scratch,context] {:?}", self.history.layout(), [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]);
         println!(
             "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
             [
@@ -372,6 +419,10 @@ impl Sequencer {
 }
 
 impl Hub {
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
+        self.sequencer.policy_counts
+    }
     #[cfg(all(test, not(feature = "tuning-probe")))]
     pub(in crate::performance) fn test_actual_voice(
         &self,
@@ -554,6 +605,7 @@ impl Hub {
                 }
                 self.sequencer.membership = Some(membership);
                 self.sequencer.binding_sample = boundary;
+                self.sequencer.history.configuration(config.revision, self.sequencer.decision);
                 self.sequencer.config = Some(config);
                 self.sequencer.assembling = 0;
                 self.sequencer.cohort_floor = self.sequencer.decision;
@@ -580,6 +632,16 @@ impl Hub {
                 Ok(cohort::Progress::Event(selected)) => {
                     if !self.assign_selected(selected) {
                         return;
+                    }
+                    if let cohort::Kind::Participation(_) =
+                        self.frozen_captures.event(selected.event_index).unwrap().kind
+                    {
+                        let source = usize::from(
+                            self.frozen_captures.event(selected.event_index).unwrap().id.source,
+                        );
+                        if source != 0 {
+                            Self::confirm(&self.rows[source - 1], &mut owner.confirmed);
+                        }
                     }
                     self.commit_capture().expect("same retained offered phase");
                     self.sequencer.work += 1;
@@ -645,6 +707,23 @@ impl Hub {
 
     fn assign_selected(&mut self, selected: cohort::Selected) -> bool {
         let event = self.frozen_captures.event(selected.event_index).unwrap();
+        if let cohort::Kind::Participation(value) = event.kind {
+            let source = usize::from(event.id.source);
+            // Replay may revisit the already committed marker. A later marker
+            // or baseline cannot turn its old Original into a new transition.
+            if event.id.sequence > self.sequencer.participation_serial[source] {
+                self.sequencer.participation_serial[source] = event.id.sequence;
+                self.sequencer.participating[source] = value;
+                if !value {
+                    self.sequencer.history.clear(source, self.sequencer.decision);
+                }
+                if source != 0 {
+                    self.rows[source - 1].participating = value;
+                    self.rows[source - 1].repair = true;
+                }
+            }
+            return true;
+        }
         let targets = Self::capture_targets(
             &self.rows,
             &self.direct_ingress,
@@ -706,22 +785,59 @@ impl Hub {
                 return true;
             }
             let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
-            // Deliberately artificial: the sum includes each prior canonical
-            // assignment, including predecessors from other Sources.
-            let correction = if replay && prior.is_some_and(|plan| plan.replay & PREFIX != 0) {
-                prior.unwrap().binding.correction
+            let configuration = prior
+                .filter(|plan| plan.bound)
+                .map(|plan| plan.binding.configuration)
+                .or(self.sequencer.config)
+                .expect("owned original cohort configuration");
+            let prefix = replay && prior.is_some_and(|plan| plan.replay & PREFIX != 0);
+            let (correction, selection) = if prefix {
+                let binding = prior.unwrap().binding;
+                (binding.correction, binding.selection)
             } else if source != 0 && birth.adaptive {
-                (1_000_000
-                    + self
-                        .sequencer
-                        .context
-                        .iter()
-                        .flatten()
-                        .map(|voice| voice.correction)
-                        .sum::<i64>())
-                    % 49_000_000
+                let mut count = 0;
+                for voice in self.sequencer.context.iter().flatten() {
+                    if self.sequencer.participating[usize::from(voice.source)] {
+                        self.sequencer.policy_context[count] = policy::ContextPitch {
+                            pitch: PitchClass::from_microcents(voice.pitch),
+                            node: voice.node,
+                        };
+                        count += 1;
+                    }
+                }
+                #[cfg(all(test, not(feature = "tuning-probe")))]
+                {
+                    self.sequencer.policy_counts[0] += 1;
+                    self.sequencer.policy_counts[1] += count;
+                    self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
+                }
+                let history = self.sequencer.history.previous(
+                    key.lease,
+                    birth.channel,
+                    birth.key,
+                    configuration.revision,
+                );
+                let Ok(selection) = policy::assign_new_note(
+                    configuration.into(),
+                    &self.sequencer.policy_context[..count],
+                    history,
+                    policy::OrderedOnset { key: birth.key },
+                    &mut self.sequencer.policy,
+                ) else {
+                    self.configuration_exhausted();
+                    return false;
+                };
+                let node = match selection.assignment {
+                    policy::Assignment::Selected { node, .. } => Selection::Node([
+                        i8::try_from(node.threes).expect("bounded canonical threes"),
+                        i8::try_from(node.fives).expect("bounded canonical fives"),
+                        i8::try_from(node.sevens).expect("bounded canonical sevens"),
+                    ]),
+                    policy::Assignment::NoCandidate => Selection::NoCandidate,
+                };
+                (selection.assignment.correction_microcents(), node)
             } else {
-                0
+                (0, Selection::Unretuned)
             };
             let player = if replay && prior.is_some_and(|plan| plan.replay & PREFIX != 0) {
                 prior.unwrap().binding.initial_player
@@ -734,11 +850,6 @@ impl Hub {
             };
             if source != 0 {
                 let index = (source - 1) * LIFETIMES + usize::from(life);
-                let configuration = prior
-                    .filter(|plan| plan.bound)
-                    .map(|plan| plan.binding.configuration)
-                    .or(self.sequencer.config)
-                    .expect("owned original cohort configuration");
                 let emission = if replay {
                     self.sequencer.recovery.generation(source - 1).unwrap()
                 } else {
@@ -752,6 +863,7 @@ impl Hub {
                     decision,
                     emission,
                     correction,
+                    selection,
                     initial_player: player,
                 };
                 let shift = if replay {
@@ -788,6 +900,15 @@ impl Hub {
                         },
                     );
                 }
+                if birth.adaptive && self.sequencer.participating[source] {
+                    self.sequencer.history.commit(
+                        key.lease,
+                        birth.channel,
+                        birth.key,
+                        binding,
+                        false,
+                    );
+                }
                 self.sequencer.cohort_unsent += 1;
                 self.sequencer.cohort_recipients |= 1 << (source - 1);
                 let reply = Reply::Assignment { key, life, lifetime: birth.serial, binding };
@@ -799,9 +920,16 @@ impl Hub {
             self.sequencer.context[slot] = Some(Voice {
                 source: event.id.source,
                 lifetime: target.lifetime,
-                correction,
+                correction: i64::from(correction),
                 player,
                 key: target.key,
+                channel: target.channel,
+                pitch: i64::from(target.key) * 100_000_000
+                    + i64::from(correction)
+                    + (player * 100_000_000.0).round() as i64,
+                node: selection.node(),
+                configuration_revision: configuration.revision,
+                decision,
             });
             self.sequencer.decision = decision;
         } else {
@@ -830,7 +958,7 @@ impl Hub {
                             cohort::Kind::Terminal | cohort::Kind::Channel { terminal: true, .. },
                         ) => *cell = None,
                         (_, cohort::Kind::Tuning { value_bits }) => {
-                            cell.as_mut().unwrap().player = f64::from_bits(value_bits)
+                            cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
                         }
                         _ => {}
                     }
@@ -1092,6 +1220,20 @@ impl Sequencer {
 
     fn store_actual(&mut self, lookup: ActualLookup, voice: Option<Voice>) -> Result<(), ()> {
         let ActualLookup { key, index, address } = lookup;
+        if let Some(fact) = voice {
+            // Do not overwrite a later scheduled bend or resurrect a scheduled
+            // release. Once this same planned expression is accepted, retain
+            // the exact wire pitch (including its boundary rounding).
+            if let Some(planned) = self.context.iter_mut().flatten().find(|planned| {
+                planned.source == fact.source
+                    && planned.lifetime == fact.lifetime
+                    && planned.decision == fact.decision
+                    && planned.correction == fact.correction
+                    && planned.player == fact.player
+            }) {
+                planned.pitch = fact.pitch;
+            }
+        }
         if index != NO_VOICE {
             assert!(self.actual_hint(key, index));
             let slot = usize::from(index);
@@ -1133,13 +1275,7 @@ impl Sequencer {
         if lookup.key.lifetime == 0 {
             return true;
         }
-        let voice = voice.map(|voice| Voice {
-            source: lookup.key.lease.slot,
-            lifetime: voice.lifetime,
-            correction: voice.frozen_offset_microcents,
-            player: voice.player_tuning,
-            key: voice.note,
-        });
+        let voice = voice.map(|voice| Voice::factual(lookup.key.lease.slot, &voice));
         self.store_actual(lookup, voice).is_ok()
     }
 
@@ -1167,13 +1303,7 @@ impl Sequencer {
             let key = ActualKey { lease, epoch, lifetime: voice.lifetime };
             self.actual_keys[usize::from(index)] = Some(key);
             self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
-            self.actual[usize::from(index)] = Some(Voice {
-                source,
-                lifetime: voice.lifetime,
-                correction: voice.frozen_offset_microcents,
-                player: voice.player_tuning,
-                key: voice.note,
-            });
+            self.actual[usize::from(index)] = Some(Voice::factual(source, voice));
         }
         if replaced {
             let Some(revision) = self.actual_revision.checked_add(1) else { return false };
@@ -1198,6 +1328,11 @@ impl Sequencer {
                 correction: 0,
                 player: 0.0,
                 key: delta.event.note,
+                channel: delta.event.channel,
+                pitch: delta.pitch_microcents.unwrap_or(i64::from(delta.event.note) * 100_000_000),
+                node: None,
+                configuration_revision: 0,
+                decision: 0,
             }),
             NoteEventKind::Off => None,
             NoteEventKind::Tuning { .. } => {
@@ -1209,6 +1344,7 @@ impl Sequencer {
                 };
                 let Some(pitch) = delta.pitch_microcents else { return false };
                 voice.player = (pitch - i64::from(voice.key) * 100_000_000) as f64 / 100_000_000.0;
+                voice.pitch = pitch;
                 Some(voice)
             }
             _ => return true,

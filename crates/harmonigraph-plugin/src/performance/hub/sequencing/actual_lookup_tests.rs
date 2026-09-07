@@ -21,6 +21,11 @@ fn factual_lookup_preserves_sparse_lifetimes_and_charges_identity_misses_once() 
                     correction: 0,
                     player: 0.0,
                     key: note,
+                    channel: 0,
+                    pitch: i64::from(note) * 100_000_000,
+                    node: None,
+                    configuration_revision: 0,
+                    decision: 0,
                 }),
             )
             .unwrap();

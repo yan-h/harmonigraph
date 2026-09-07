@@ -20,9 +20,8 @@ impl Default for TuningModes {
     }
 }
 
-/// The assignment policy has not shipped yet. Version zero explicitly carries
-/// no assignment domain or weights. #621 selects those constants; camera reach
-/// and display tolerance must never fill these fields.
+/// Versioned musical bounds and weights. Camera reach and display tolerance
+/// never fill these fields; the production owner binds the fixed policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PolicyConfig {
     pub version: u32,
@@ -109,7 +108,7 @@ impl ConfigReducer {
                 revision: 0,
                 tuning: raw,
                 modes,
-                policy: PolicyConfig::default(),
+                policy: crate::policy::CONFIG,
             },
         };
         reducer.resolve();

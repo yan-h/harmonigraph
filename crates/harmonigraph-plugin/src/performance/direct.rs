@@ -14,9 +14,51 @@ use super::{
 
 pub const OUTPUT_WINDOW: usize = 2048;
 
+/// DIRECT cannot have an adaptive assignment or partial accepted output. Keep
+/// its retained observation in the existing 128-byte window; enrich only when
+/// publishing through the shared canonical boundary.
+#[derive(Clone, Copy)]
+struct Observation {
+    event: harmonigraph_core::NoteEvent,
+    sequence: u64,
+    lifetime: u64,
+    timing: Option<EventTiming>,
+    pitch_microcents: Option<i64>,
+}
+impl From<NoteDelta> for Observation {
+    fn from(delta: NoteDelta) -> Self {
+        assert!(
+            delta.assignment.is_none()
+                && !delta.partial_output
+                && delta.provenance == PitchProvenance::ObservedDirect
+        );
+        Self {
+            event: delta.event,
+            sequence: delta.sequence,
+            lifetime: delta.lifetime,
+            timing: delta.timing,
+            pitch_microcents: delta.pitch_microcents,
+        }
+    }
+}
+impl From<Observation> for NoteDelta {
+    fn from(delta: Observation) -> Self {
+        Self {
+            event: delta.event,
+            sequence: delta.sequence,
+            lifetime: delta.lifetime,
+            timing: delta.timing,
+            pitch_microcents: delta.pitch_microcents,
+            provenance: PitchProvenance::ObservedDirect,
+            assignment: None,
+            partial_output: false,
+        }
+    }
+}
+
 pub struct Direct {
     pub state: State,
-    pending: Queue<NoteDelta, OUTPUT_WINDOW>,
+    pending: Queue<Observation, OUTPUT_WINDOW>,
     pub sequence: u64,
     lifetime: u64,
     pub baseline_id: u64,
@@ -159,7 +201,7 @@ impl Direct {
             };
             if let Some(delta) = applied.and_then(|event| self.state.apply(event, stamp)) {
                 self.sequence = sequence;
-                if self.pending.push(delta).is_err() {
+                if self.pending.push(delta.into()).is_err() {
                     self.lost = true;
                     self.recovery = true;
                 }
@@ -185,7 +227,7 @@ impl Direct {
     }
 
     pub fn pending(&self) -> Option<NoteDelta> {
-        self.pending.front()
+        self.pending.front().map(Into::into)
     }
     pub fn pending_end(&self) -> Option<i64> {
         self.pending.get(self.pending.len().checked_sub(1)?)?.timing?.sample.checked_add(1)
@@ -204,5 +246,5 @@ impl Direct {
         );
     }
 }
-const _: () = assert!(std::mem::size_of::<Option<NoteDelta>>() <= 128);
-const _: () = assert!(std::mem::align_of::<Option<NoteDelta>>() <= 8);
+const _: () = assert!(std::mem::size_of::<Option<Observation>>() <= 128);
+const _: () = assert!(std::mem::align_of::<Option<Observation>>() <= 8);

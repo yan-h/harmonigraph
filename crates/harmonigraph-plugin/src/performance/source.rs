@@ -786,8 +786,13 @@ impl Source {
             // Tune has exactly one parameter; its original retained value is the
             // authority even if the generic parameter atomic has run ahead.
             if self.shared.source.is_some() {
-                self.participating = value >= 0.5;
-                self.baseline_needed = true;
+                let Some(sample) = input.sample else {
+                    self.fault(INPUT_FAULT);
+                    return api::Consumption::Consumed;
+                };
+                if !self.capture_participation(value >= 0.5, Some(sample)) {
+                    return api::Consumption::Pending;
+                }
             }
             return api::Consumption::Consumed;
         }
@@ -1036,8 +1041,12 @@ impl Source {
             if self.setup_started < update.generation {
                 self.generation = self.generation.max(update.pairing_generation);
                 if let Some(value) = update.participating {
-                    self.participating = value;
-                    self.baseline_needed = true;
+                    let sample = self.callback.and_then(|callback| {
+                        callback.steady_time.checked_add(i64::from(callback.frames))
+                    });
+                    if !self.capture_participation(value, sample) {
+                        break;
+                    }
                 }
                 if update.reset {
                     self.stop();
@@ -3187,7 +3196,7 @@ const _: () = assert!(std::mem::size_of::<Option<Manifest>>() <= 256);
 const _: () = assert!(std::mem::align_of::<Option<Manifest>>() <= 8);
 const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 // The ledger charges this measured owner including test-support padding.
-const _: () = assert!(std::mem::size_of::<Source>() <= 31288);
+const _: () = assert!(std::mem::size_of::<Source>() <= 31288 + 64 * 8);
 
 #[cfg(all(test, not(feature = "tuning-probe")))]
 impl Source {

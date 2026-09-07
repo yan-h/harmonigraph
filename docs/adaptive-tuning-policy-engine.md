@@ -1,8 +1,9 @@
 # Adaptive tuning musical policy engine
 
 This is the independent pure-core component of [#621](https://github.com/yan-h/harmonigraph/issues/621), based on reviewed recovery head `5ebe666b6eae6e29cd5e24d9468132047b2c217f`.
-It is not wired into adaptive playback and does not finish #621. [#616](https://github.com/yan-h/harmonigraph/issues/616) still must establish central sequencing with the artificial policy before production musical wiring, history lifecycle and combined capacity/host validation.
-No plugin, session, scheduler, take, renderer, UI, vendor or persisted shape changes belong to this component.
+This document records the pure-core component and its original evidence.
+The later [musical integration stage](adaptive-tuning-musical-integration.md) wires it into adaptive playback over the ordinary recovery chain;
+combined review and host qualification still remain before #621 is complete.
 
 ## Named initial constants
 
@@ -25,8 +26,7 @@ The narrow new `PitchClass::signed_microcents_from` API avoids a float round tri
 | Maximum central cohort | 256 onsets, one sequential call each |
 
 These values are the version-one `policy::CONFIG` descriptor, not additional controls.
-The existing configuration reducer still emits policy version zero.
-Later wiring must bind the production descriptor into requests and select the engine explicitly.
+The production configuration reducer now binds that descriptor into requests through the [musical integration stage](adaptive-tuning-musical-integration.md).
 The function takes `MusicalConfig`, which copies only resolved origin, axes and respelling flags from `ResolvedConfig`.
 Its input type has no display tolerance, camera, reach, pane, resolution, auto-detection or learning state.
 Revision identity belongs to the caller's bound request, not the score.
@@ -180,7 +180,8 @@ No timing benchmark has been run;
 neither the allocation fixture nor this progression is a production callback or WCET result.
 Final exact-head CI and release evidence is recorded in the draft PR handoff, so recording that result does not move the commit the binaries identify.
 
-Remaining owner/integration work includes:
+The original component left the following owner/integration work for later stages;
+the [musical integration report](adaptive-tuning-musical-integration.md) records the current implementation and remaining checks:
 
 - Complete #617 aggregation and #616 artificial-policy central sequencing,
 including callback-order independence and off/retrigger/expression precedence.

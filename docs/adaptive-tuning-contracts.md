@@ -4,6 +4,7 @@ This is the stage 2 implementation contract for [#617](https://github.com/yan-h/
 It selects engineering mechanics before production plugin wiring.
 None of the queues, scheduling states or production limits specified here is implemented by this documentation change.
 The [stage handoff](adaptive-tuning-stage-2.md) distinguishes inspected code, arithmetic and verification still owed.
+The later [musical integration report](adaptive-tuning-musical-integration.md) records production policy, history, metadata and measured capacity evidence against these contracts.
 
 The retained probe establishes a constrained host premise, not production safety:
 [Bitwig measurements](tuning-probe-bitwig.md) used D = 2,048 and an artificial policy.
@@ -257,7 +258,8 @@ initialization, clear and suffix recovery also run under counters, not unbounded
 The selected work envelope is deliberately distinct from the retained-storage envelope.
 It may produce lateness below storage capacity under a dense workload;
 that is diagnosed and buffered, never silently interpreted as permission to cancel.
-#621 still owes its candidate/domain constants and measured worst-case policy cost.
+The [policy engine](adaptive-tuning-policy-engine.md) selects the candidate/domain constants;
+the [musical integration report](adaptive-tuning-musical-integration.md) distinguishes ordinary callback measurements, supported capacity and synthetic arithmetic stress from a worst-case timing guarantee.
 Reserve 4 MiB per session for that bounded policy scratch and refuse activation if its declared implementation does not fit;
 this reservation does not select musical search bounds or establish that 256 worst-case calls fit a callback.
 
@@ -388,8 +390,8 @@ Build one dependency graph for every complete same-sample cohort:
 This is a bounded topological traversal, not a global sort that moves every note-off before every note-on.
 Healthy downstream output retains original per-source order at input + D, adding only the required initial tuning directly after each note-on.
 The hub's canonical evaluation order for independent attacks need not be the source's host-output order for those independent attacks.
-The artificial stage #616 policy must observe its preceding cross-source assignment;
-the D/F/A musical fixture and scoring constants remain #621 work.
+The artificial stage #616 policy established preceding cross-source assignment visibility;
+the production D/F/A musical fixture now exercises that same ownership path with the version-one scoring constants.
 
 ## 6. The production host-acceptance boundary
 

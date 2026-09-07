@@ -695,6 +695,7 @@ impl View<'_> {
             cohort::Kind::Terminal
         } else {
             match original.event {
+                Event::Participation(value) => cohort::Kind::Participation(value),
                 Event::Expression { kind: 2, value, .. } if value.is_finite() => {
                     cohort::Kind::Tuning { value_bits: value.to_bits() }
                 }

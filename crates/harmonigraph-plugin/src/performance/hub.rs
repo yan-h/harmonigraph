@@ -171,7 +171,7 @@ pub struct Hub {
 // Charged owner upper bounds apply in production builds too, where the fixture
 // freeze controls are absent. Larger backing cells have their own assertions.
 const _: () = assert!(std::mem::size_of::<Hub>() <= 1136);
-const _: () = assert!(std::mem::size_of::<Row>() <= 31200);
+const _: () = assert!(std::mem::size_of::<Row>() <= 31200 + 2 * 64 * 8);
 impl Hub {
     pub fn end(
         &mut self,
@@ -544,6 +544,9 @@ impl Hub {
                 row.coverage = None;
                 row.member = false;
                 row.participating = true;
+                self.sequencer.participating[index + 1] = true;
+                self.sequencer.participation_serial[index + 1] = 0;
+                self.sequencer.history.clear(index + 1, self.sequencer.decision);
                 row.repair = false;
                 row.baseline_id = 0;
                 row.detach = None;
@@ -1309,7 +1312,7 @@ impl Hub {
                     sample_rate: self.rate,
                 };
                 let row = &mut self.rows[index];
-                if let Some(mut delta) = row.state.apply(
+                let delta = row.state.apply(
                     value.event,
                     Stamp {
                         source,
@@ -1320,7 +1323,40 @@ impl Hub {
                         timing: Some(timing),
                         provenance: PitchProvenance::AcceptedOutput,
                     },
-                ) {
+                );
+                if let Some((binding, _)) = assignment.filter(|_| {
+                    !value.outcome.partial()
+                        && (value.event.attack().is_some()
+                            || matches!(
+                                value.event,
+                                super::event::Event::Expression { kind: 2, .. }
+                            ))
+                }) {
+                    let player = if value.event.attack().is_some() {
+                        binding.initial_player
+                    } else {
+                        value.player
+                    };
+                    row.state.assignment(value.lifetime, binding, player);
+                    if self.sequencer.participating[index + 1]
+                        && matches!(value.event, super::event::Event::Expression { kind: 2, .. })
+                    {
+                        if let Some(voice) = row.state.voice(value.lifetime) {
+                            self.sequencer.history.commit(
+                                row.lease.unwrap(),
+                                voice.channel,
+                                voice.note,
+                                binding,
+                                true,
+                            );
+                        }
+                    }
+                }
+                if let Some(mut delta) = delta {
+                    delta.assignment = row
+                        .state
+                        .voice(value.lifetime)
+                        .and_then(harmonigraph_core::canonical::VoiceBaseline::metadata);
                     delta.partial_output = value.outcome.partial();
                     let route = owner.recording_route(timing, time).unwrap_or_else(|_| {
                         recorder.fail_configuration();
@@ -1331,11 +1367,6 @@ impl Hub {
                     }
                 }
                 row.applied = value.sequence;
-                if let Some((binding, _)) = assignment.filter(|_| {
-                    matches!(value.event, super::event::Event::Expression { kind: 2, .. })
-                }) {
-                    row.state.assignment(value.lifetime, binding, value.player);
-                }
                 if value.outcome.partial() {
                     row.state.partial(value.lifetime);
                 }
@@ -1474,6 +1505,7 @@ impl Hub {
         through: i64,
         selected: Option<usize>,
     ) {
+        let sequenced = self.sequences_inputs();
         let clock = self.clock_id();
         let time_offset = self.presentation(0);
         let Some(offer) = &self.offer else {
@@ -1511,6 +1543,17 @@ impl Hub {
                         continue;
                     };
                     let mut frame = baseline.frame;
+                    if sequenced {
+                        if row.baseline_id == 0
+                            && self.sequencer.participation_serial[index + 1] == 0
+                        {
+                            self.sequencer.participating[index + 1] = frame.participating;
+                        }
+                        // After enrollment only the ordered Original changes
+                        // eligibility. A baseline can arrive before that marker
+                        // or after a newer one; neither reverses its authority.
+                        frame.participating = self.sequencer.participating[index + 1];
+                    }
                     frame.id = id;
                     frame.translate(time_offset);
                     let timing = EventTiming {

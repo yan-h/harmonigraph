@@ -15,6 +15,29 @@ impl Default for Stops {
     }
 }
 impl Source {
+    pub(super) fn capture_participation(&mut self, value: bool, sample: Option<i64>) -> bool {
+        if value == self.participating {
+            return true;
+        }
+        // Activation may seed the setting before a callback clock exists.
+        // Runtime edits reserve their Original before advancing the local flag.
+        if let Some(sample) = sample {
+            if self.pending.free() == 0 || self.next_event == u64::MAX {
+                self.fault(STORAGE_FAULT);
+                return false;
+            }
+            if !self.charge(1) {
+                return false;
+            }
+            let position = self.enqueue_cell(Event::Participation(value), NONE, sample, false);
+            self.pending.seal(position);
+            self.finish_work(position, NONE);
+        }
+        self.participating = value;
+        self.baseline_needed = true;
+        true
+    }
+
     pub(super) fn capture_stop(&mut self, sample: i64) -> api::Consumption {
         if self.pending.free() == 0 || self.next_event == u64::MAX {
             self.fault(STORAGE_FAULT);

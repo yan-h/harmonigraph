@@ -151,7 +151,7 @@ fn offered_capture_survives_real_off_ack_and_cell_reuse_in_both_callback_orders(
         );
         // Actual new input attempts the same host address after old physical Off.
         a.run(raw, vec![note(101, 0, 60, 1, true), note(101, 0, 60, 2, false)], None);
-        let replacement = with_source(&a, |source| source.test_capture(12).unwrap());
+        let replacement = with_source(&a, |source| source.test_capture(13).unwrap());
         assert_ne!(replacement.life, old_on.life);
         b.run(raw, vec![], None);
         hub.run(raw, vec![], None);
@@ -210,7 +210,7 @@ fn offered_capture_survives_real_off_ack_and_cell_reuse_in_both_callback_orders(
         raw += 64;
         assert!(with_source(&a, |source| source.test_capture(5).is_none()));
         a.run(raw, vec![note(101, 0, 60, 1, true), note(101, 0, 60, 2, false)], None);
-        let reused = with_source(&a, |source| source.test_capture(14).unwrap());
+        let reused = with_source(&a, |source| source.test_capture(15).unwrap());
         assert_eq!(reused.position, old_work.position, "actual reclaimed Pending cell reuse");
         assert!(
             [old_on.life, old_second.life].contains(&reused.life),

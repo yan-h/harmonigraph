@@ -61,6 +61,9 @@ pub enum Kind {
     },
     /// An event with no lifetime/channel effect, e.g. unrelated system MIDI.
     Independent,
+    /// Source-wide input boundary. Preserve original order on both sides even
+    /// when the source's independent onsets would otherwise sort by key.
+    Participation(bool),
 }
 
 impl Kind {
@@ -784,6 +787,8 @@ impl<'events, 'scratch> Cohort<'events, 'scratch> {
                     _ => 0,
                 };
                 let mut edge = self.parent(early) == self.parent(late)
+                    || matches!(a.kind, Kind::Participation(_))
+                    || matches!(b.kind, Kind::Participation(_))
                     || shared(a) & self.scratch.channels[late] != 0
                     || shared(b) & self.scratch.channels[early] != 0;
                 if early == i && a.kind.terminal() && b.kind == Kind::Onset {

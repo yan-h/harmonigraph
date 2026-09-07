@@ -377,6 +377,7 @@ pub struct Voice {
     history_eligible: bool,
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
+    pub assignment: Option<crate::canonical::AssignmentMetadata>,
     pub state: VoiceState,
     /// The moment this voice took the highest end, stamped as it LEFT the
     /// held set, and `None` if it was not wearing that end then (or is still
@@ -414,6 +415,7 @@ impl Voice {
             original_onset: on_time,
             history_eligible: true,
             lifetime: None,
+            assignment: None,
             state: VoiceState::Held,
             wore_high: None,
             wore_low: None,
@@ -677,6 +679,11 @@ impl NoteTracker {
                     return Ok(true);
                 }
                 self.handle_event(delta.display_event());
+                if let Some(voice) = self.held.get_mut(&key) {
+                    if delta.assignment.is_some() {
+                        voice.assignment = delta.assignment;
+                    }
+                }
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
                     if let Some(voice) = self.held.get_mut(&key) {
                         voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
@@ -763,6 +770,7 @@ impl NoteTracker {
                 voice
             });
             voice.set_pitch(row.pitch());
+            voice.assignment = row.metadata();
         }
         let cursor = self.canonical.entry(frame.source).or_default();
         cursor.baseline = frame.id;

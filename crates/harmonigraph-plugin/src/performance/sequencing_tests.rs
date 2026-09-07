@@ -1,5 +1,7 @@
 //! Full production factory defaults: central input ownership and D512 output.
 use super::*;
+#[path = "musical_tests.rs"]
+mod musical_tests;
 
 fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
     let wrapper = unsafe {
@@ -77,6 +79,7 @@ fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let sources: [Device; 3] = std::array::from_fn(|index| {
         let mut source = Device::new(true);
         source.configure_format(
@@ -107,7 +110,7 @@ fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
             let input = match (raw, index) {
                 (1536, 1) => vec![note(2, 0, 64, 448, true)],
                 (1536, 0) => vec![note(1, 0, 60, 0, true)],
-                (2048, 0) => vec![note(4, 1, 69, 400, true), note(4, 1, 69, 420, false)],
+                (2048, 0) => vec![note(4, 1, 66, 400, true), note(4, 1, 66, 420, false)],
                 _ => vec![],
             };
             sources[index].run_format(raw, input, None, None, 512);
@@ -368,7 +371,7 @@ fn production_stop_baseline_holds_recovery_until_known_release_applies() {
     assert_eq!(successor.len(), 3, "{successor:?}");
     assert!(successor[0].1.attack().is_some_and(|(id, ..)| id == 4));
     assert!(
-        matches!(successor[1].1, Event::Expression { id: 4, value: 0.02, .. }),
+        matches!(successor[1].1, Event::Expression { id: 4, value: 0.09776245, .. }),
         "the released B voice is absent from A's replay context: {successor:?}"
     );
     assert!(successor[2].1.release());
@@ -687,12 +690,13 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
 fn production_hub_recovery_replays_unsounded_originals_with_copied_configuration_and_duration() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    source.run_format(1536, vec![note(7, 0, 62, 0, true)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
     source.run_format(2048, vec![], None, None, 512);
     hub.run_format(2048, vec![], None, None, 512);
     let held = inspect_source(&source, |source| *source.state.voices().next().unwrap());
-    assert_eq!(held.frozen_offset_microcents, 1_000_000);
+    assert_eq!(held.frozen_offset_microcents, 3_910_034);
     source.run_format(
         2560,
         vec![note(8, 1, 64, 0, true), note(8, 1, 64, 20, false)],
@@ -755,7 +759,7 @@ fn production_hub_recovery_replays_unsounded_originals_with_copied_configuration
     let rebound = resumed_binding.unwrap();
     assert!(rebound.decision > prior.decision && rebound.emission > prior.emission);
     assert_eq!(rebound.configuration, prior.configuration);
-    assert_eq!(rebound.correction, 2_000_000);
+    assert_eq!(rebound.correction, 7_820_068);
     let later = inspect_source(&source, |source| {
         source.state.voices().find(|voice| voice.lifetime == 3).unwrap().assignment.unwrap()
     });
@@ -777,7 +781,7 @@ fn production_hub_recovery_replays_unsounded_originals_with_copied_configuration
     raw += 512;
     source.run_format(
         raw,
-        vec![note(7, 0, 60, 0, false), note(9, 2, 67, 0, false)],
+        vec![note(7, 0, 62, 0, false), note(9, 2, 67, 0, false)],
         None,
         None,
         512,
@@ -1008,7 +1012,7 @@ fn production_recovery_rejects_a_stored_committed_off_binding_after_reopen() {
         512,
     );
     hub.run_format(1536, vec![], None, None, 512);
-    let capture = inspect_source(&source, |source| source.test_capture(1).unwrap());
+    let capture = inspect_source(&source, |source| source.test_capture(2).unwrap());
     assert!(!capture.adaptive);
     let (lease, shared) = inspect_source(&source, |source| {
         let offer = source.offer.as_ref().unwrap();
@@ -1021,7 +1025,7 @@ fn production_recovery_rejects_a_stored_committed_off_binding_after_reopen() {
     let prior = inspect_source(&source, |source| source.test_assignment(capture.life).unwrap());
     assert_eq!((prior.decision, prior.emission, prior.correction), (1, generation, 0));
     let key = inspect_hub(&hub, |hub| {
-        hub.test_capture_keys(1).into_iter().find(|key| key.serial == 1).unwrap()
+        hub.test_capture_keys(1).into_iter().find(|key| key.serial == 2).unwrap()
     });
     let fence = protocol::Fence {
         lease,
@@ -1052,7 +1056,7 @@ fn production_recovery_rejects_a_stored_committed_off_binding_after_reopen() {
         assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
         if let Some(protocol::Control::RevokeAck {
             fence: found,
-            input_cut: 1,
+            input_cut: 2,
             output_cut: 0,
             ..
         }) = shared
@@ -1074,7 +1078,7 @@ fn production_recovery_rejects_a_stored_committed_off_binding_after_reopen() {
     assert_eq!(record.outcome, protocol::RequestOutcome::Retained);
     assert_eq!(record.decision, prior.decision);
     drop(chunk);
-    send(protocol::Reply::InventoryComplete { fence, input_cut: 1, total: 1, chunks: 1 });
+    send(protocol::Reply::InventoryComplete { fence, input_cut: 2, total: 1, chunks: 1 });
     assert_eq!(
         shared.emission_gate.compare_exchange(
             generation | source::CLOSED,
@@ -1426,12 +1430,24 @@ fn production_missing_source_interval_retains_128_configuration_markers_then_con
 #[test]
 fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit() {
     let _scope = crate::test_scope::enter();
+    let synthetic = std::env::var_os("HARMONIGRAPH_MUSICAL_MAX").is_some();
+    let address = |index: i32| {
+        if synthetic {
+            ((index / 4) as i16, 48 + (index % 4) as i16 * 12)
+        } else {
+            (0, index as i16 + 48)
+        }
+    };
+    let mut source_max = 0;
+    let mut hub_max = 0;
+    let mut callback_sum = 0;
     let uuid = SavedUuid::default();
     let calibration =
         Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let sources: [Device; 16] = std::array::from_fn(|_| {
         let mut source = Device::new(true);
         source.configure_format(uuid, true, calibration);
@@ -1445,16 +1461,55 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
         }
         hub.run_format(raw, vec![], None, None, 512);
     }
+    if synthetic {
+        // Existing test-only serialized inspection installs one complete owned
+        // config before any musical request. This all-zero arithmetic ceiling
+        // is outside UI-supported tuning, never a production setting/path.
+        let wrapper = unsafe {
+            &*((*hub.plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+        };
+        wrapper.test_with_plugin(|plugin| {
+            use harmonigraph_core::configuration::{
+                timeline::ConfigTimeline, ConfigReducer, TuningModes,
+            };
+            plugin.configuration.as_mut().unwrap().timeline =
+                ConfigTimeline::new(ConfigReducer::new(
+                    harmonigraph_core::Tuning {
+                        c_offset: 0,
+                        three: 0,
+                        five: 0,
+                        seven: 0,
+                        tolerance: 0,
+                    },
+                    TuningModes {
+                        tempered: harmonigraph_core::Tempered::default(),
+                        auto: [false; 2],
+                        learning: false,
+                    },
+                ));
+        });
+    }
     for source in &sources {
-        source.run_format(
+        let sink = source.run_format(
             1536,
-            (0..16).map(|key| note(key, 0, key as i16 + 48, 0, true)).collect(),
+            (0..16)
+                .map(|key| {
+                    let (channel, note_key) = address(key);
+                    note(key, channel, note_key, 0, true)
+                })
+                .collect(),
             None,
             None,
             512,
         );
+        source_max = source_max.max(sink.callback_nanos);
+        callback_sum += sink.callback_nanos;
     }
-    hub.run_format(1536, vec![], None, None, 512);
+    let sink = hub.run_format(1536, vec![], None, None, 512);
+    hub_max = hub_max.max(sink.callback_nanos);
+    callback_sum += sink.callback_nanos;
     let mut onsets = [0; 16];
     let mut actual = [None; 16];
     let mut raw = 1536;
@@ -1462,15 +1517,23 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
         raw += 512;
         for (index, source) in sources.iter().enumerate() {
             let output = source.run_format(raw, vec![], None, None, 512);
+            source_max = source_max.max(output.callback_nanos);
+            callback_sum += output.callback_nanos;
             let count = output.values.iter().filter(|(_, event)| event.attack().is_some()).count();
             if count != 0 {
+                let offsets: Vec<_> = output
+                    .values
+                    .iter()
+                    .filter_map(|(offset, event)| event.attack().map(|_| *offset))
+                    .collect();
+                let accepted_sample = raw + i64::from(*offsets.iter().max().unwrap());
                 assert!(
-                    actual[index].replace(raw).is_none(),
+                    actual[index].replace(accepted_sample).is_none(),
                     "no Source repeats its accepted onsets"
                 );
                 println!(
-                    "CAPACITY_DELIVERY source={index} actual={raw} extra={} marker_state={:?}",
-                    raw - 2048,
+                    "CAPACITY_DELIVERY source={index} callback={raw} offsets={offsets:?} last_accepted={accepted_sample} extra={} marker_state={:?}",
+                    accepted_sample - 2048,
                     inspect_hub(&hub, |hub| hub.test_cohort_delivery())
                 );
                 assert_eq!(count, 16);
@@ -1488,17 +1551,44 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
                     .filter_map(|(_, event)| event.attack().map(|(_, _, key, _)| key))
                     .collect();
                 keys.sort_unstable();
-                assert_eq!(keys, (48..64).collect::<Vec<_>>());
+                let mut expected: Vec<_> = (0..16).map(|index| address(index).1 as u8).collect();
+                expected.sort_unstable();
+                assert_eq!(keys, expected);
             }
             onsets[index] += count;
             assert_eq!(source.source_snapshot().faults, 0);
         }
-        hub.run_format(raw, vec![], None, None, 512);
+        let sink = hub.run_format(raw, vec![], None, None, 512);
+        hub_max = hub_max.max(sink.callback_nanos);
+        callback_sum += sink.callback_nanos;
         if onsets == [16; 16] {
             break;
         }
     }
     assert_eq!(onsets, [16; 16]);
+    let counts = inspect_hub(&hub, |hub| hub.test_policy_counts());
+    // Late-cohort replay can reevaluate unaccepted requests. Report that cost
+    // too, while proving the first 256 sequential selections reach 255 voices.
+    assert!(counts[0] >= 256 && counts[1] >= 32640);
+    assert_eq!(counts[2], 255);
+    let config = inspect_source(&sources[0], |source| {
+        source.state.voices().next().unwrap().assignment.unwrap()
+    });
+    let candidates: Vec<_> = (0..16)
+        .map(|index| {
+            let target = harmonigraph_core::PitchClass::from_midi_note(address(index).1 as u8);
+            harmonigraph_core::positions_within(-6..=6, -2..=2, 0..=0)
+                .filter(|node| {
+                    config.tuning.pitch_class(*node).signed_microcents_from(target).unsigned_abs()
+                        <= harmonigraph_core::policy::CANDIDATE_RADIUS
+                })
+                .count()
+        })
+        .collect();
+    if synthetic {
+        assert!(candidates.iter().all(|count| *count == 65));
+    }
+    println!("MUSICAL max synthetic={synthetic} domain=65 candidates={candidates:?} policy[calls,sum_context,max_context]={counts:?} source_max_ns={source_max} hub_max_ns={hub_max} total_callback_ns={callback_sum} completed_raw={raw}");
     assert_eq!(session.credits.load(Ordering::Acquire), 256);
     assert!(sources
         .iter()
@@ -1508,7 +1598,12 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
     for source in &sources {
         source.run_format(
             raw,
-            (0..16).map(|key| note(key, 0, key as i16 + 48, 0, false)).collect(),
+            (0..16)
+                .map(|key| {
+                    let (channel, note_key) = address(key);
+                    note(key, channel, note_key, 0, false)
+                })
+                .collect(),
             None,
             None,
             512,
@@ -1802,6 +1897,7 @@ fn production_capture_status_retires_a_full_window_behind_younger_actual_output(
 fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reapplication() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let wrapper = unsafe {
         &*((*source.plugin)
             .plugin_data
@@ -1817,7 +1913,7 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     };
     run(1536, vec![note(69, 0, 59, 0, true)], None);
     hub.run_format(1536, vec![], None, None, 512);
-    run(2048, vec![note(70, 0, 60, 0, true)], None);
+    run(2048, vec![note(70, 0, 61, 0, true)], None);
     hub.run_format(2048, vec![], None, None, 512);
     unsafe {
         context.raw_begin_set_parameter(param);
@@ -1830,13 +1926,13 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
         Some(CLAP_EVENT_PARAM_VALUE),
     );
     assert!(inspect_source(&source, |source| source.test_capture(2).unwrap().adaptive));
-    assert!(!inspect_source(&source, |source| source.test_capture(3).unwrap().adaptive));
-    assert!(inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
+    assert!(!inspect_source(&source, |source| source.test_capture(4).unwrap().adaptive));
+    assert!(inspect_source(&source, |source| source.test_capture(6).unwrap().adaptive));
     hub.run_format(2560, vec![], None, None, 512);
     // No host echo follows the native Set. Accepting its old notification now
     // cannot reinsert Off ahead of D or overwrite the newer host On value.
     run(3072, vec![note(73, 0, 65, 0, true)], None);
-    assert!(inspect_source(&source, |source| source.test_capture(5).unwrap().adaptive));
+    assert!(inspect_source(&source, |source| source.test_capture(7).unwrap().adaptive));
     assert!(inspect_source(&source, |source| source.participating));
     assert!(wrapper.test_inspect_plugin(|plugin| plugin.params.participating.value()));
     hub.run_format(3072, vec![], None, None, 512);
@@ -1848,7 +1944,7 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
         4608,
         vec![
             note(69, 0, 59, 0, false),
-            note(70, 0, 60, 0, false),
+            note(70, 0, 61, 0, false),
             note(71, 0, 62, 0, false),
             note(72, 0, 64, 0, false),
             note(73, 0, 65, 0, false),
@@ -1874,10 +1970,11 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     };
     assert_eq!(
         tuning(69),
-        [0.01, 0.26],
+        [-0.11731262, 0.13268738],
         "the held correction survives Off/rejoin and player expression"
     );
-    assert_eq!(tuning(70), [0.02], "the pre-Off pending request finishes tuned");
+    assert_eq!(tuning(70).len(), 1);
+    assert_ne!(tuning(70)[0], 0.0, "the pre-Off pending request finishes tuned");
     assert_eq!(tuning(71), [0.0], "only the newly received Off note deliberately uses zero");
     assert!(tuning(72)[0] != 0.0 && tuning(73)[0] != 0.0);
     assert_eq!(source.source_snapshot().held, 0);
@@ -2008,7 +2105,7 @@ fn production_three_sources_form_one_sequential_assignment_chain() {
             panic!("missing tuning")
         };
         assert_eq!((id, channel, key), (100 + index as i32, 0, 60 + index as i16 * 2));
-        assert_eq!(value, [0.01, 0.02, 0.04][index]);
+        assert_eq!(value, [0.0; 3][index]);
     }
     hub.run_format(2048, vec![], None, None, 512);
     // Explicit physical release keeps the retirement fixture independent of
@@ -2247,7 +2344,7 @@ fn assert_assignment_output(output: &Sink, source: usize, time: u32) {
         panic!("missing tuning")
     };
     assert_eq!((id, channel, key), (source as i32, 0, 60 + source as i16 * 2));
-    assert_eq!(value, [0.01, 0.02, 0.04][source]);
+    assert_eq!(value, [0.0; 3][source]);
 }
 
 #[test]
@@ -2388,6 +2485,7 @@ fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let mut source = Device::new(true);
     source.configure_format(uuid, true, calibration);
     source.activate_format(44100.0, 512);
@@ -2401,7 +2499,7 @@ fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("partial.take");
     let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
+    source.run_format(1536, vec![note(7, 0, 59, 0, true)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
     let mut acceptance = vec![false; 1024];
     acceptance[0] = true;
@@ -2410,10 +2508,13 @@ fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     assert_eq!(output.values.len(), 1);
     assert!(output.values[0].1.attack().is_some());
     assert!(matches!(output.rejected[0].1, Event::Expression { kind: 2, .. }));
+    assert!(
+        matches!(output.rejected[0].1, Event::Expression { value, .. } if (value + 0.11731262).abs() < 1e-9)
+    );
     assert_eq!(source.source_snapshot().held, 1, "rejected emergency release keeps its credit");
     let local = inspect_source(&source, |source| *source.state.voices().next().unwrap());
     assert!(local.partial_output && local.release_pending);
-    assert_eq!(local.pitch_microcents, 6_000_000_000);
+    assert_eq!(local.pitch_microcents, 5_900_000_000);
     assert_eq!(local.frozen_offset_microcents, 0);
     assert_eq!(local.player_tuning, 0.0);
     assert_eq!(local.assignment, None, "failed intended tuning is not accepted metadata");
@@ -2448,7 +2549,8 @@ fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     assert_eq!(partial.len(), 1);
     assert!(matches!(partial[0].event.kind, harmonigraph_take::NoteKind::On { .. }));
     assert_eq!(partial[0].timing.unwrap().planned, Some(2048));
-    assert_eq!(partial[0].pitch_microcents, Some(6_000_000_000));
+    assert_eq!(partial[0].pitch_microcents, Some(5_900_000_000));
+    assert_eq!(partial[0].assignment, None);
     assert_eq!(source.source_snapshot().held, 0);
     assert_ne!(source.shared().status.load(Ordering::Acquire) & source::OUTPUT_FAULT, 0);
     drop(writer);

@@ -18,6 +18,30 @@ pub const PENDING_EVENTS: usize = 8192;
 pub const LIFETIMES: usize = 8192;
 pub const DELAY: i64 = 512;
 
+/// Four bytes retain all three outcomes without conflating an Off birth with
+/// the policy's completed NoCandidate history clear.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum Selection {
+    #[default]
+    Unretuned,
+    NoCandidate,
+    Node([i8; 3]),
+}
+impl Selection {
+    pub fn node(self) -> Option<harmonigraph_core::LatticePos> {
+        match self {
+            Self::Node(p) => {
+                Some(harmonigraph_core::LatticePos::new(p[0].into(), p[1].into(), p[2].into()))
+            }
+            _ => None,
+        }
+    }
+    pub fn musical(self) -> bool {
+        !matches!(self, Self::Unretuned)
+    }
+}
+const _: () = assert!(std::mem::size_of::<Selection>() == 4);
+
 /// Source-local request binding. decision zero is unbound; all other fields are
 /// copied as one addressed reply and preserved through Off and resubmission.
 #[derive(Clone, Copy, Debug)]
@@ -25,7 +49,11 @@ pub struct Assignment {
     pub configuration: harmonigraph_core::configuration::ResolvedConfig,
     pub decision: u64,
     pub emission: u64,
-    pub correction: i64,
+    /// Exact microcents within the policy's inclusive +/-50-cent bound.
+    pub correction: i32,
+    /// Checked coordinates from the bounded canonical policy domain, or the
+    /// explicit completed result. Decision zero alone means no assignment.
+    pub selection: Selection,
     pub initial_player: f64,
 }
 impl Default for Assignment {
@@ -35,7 +63,37 @@ impl Default for Assignment {
             decision: 0,
             emission: 0,
             correction: 0,
+            selection: Selection::Unretuned,
             initial_player: 0.0,
+        }
+    }
+}
+
+impl Assignment {
+    pub fn node(self) -> Option<harmonigraph_core::LatticePos> {
+        self.selection.node()
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn compact_selection_preserves_every_canonical_policy_coordinate() {
+    use harmonigraph_core::{policy, positions_within, Tempered};
+    for syntonic in [false, true] {
+        for septimal_kleisma in [false, true] {
+            for raw in positions_within(
+                -policy::RAW_THREES..=policy::RAW_THREES,
+                -policy::RAW_FIVES..=policy::RAW_FIVES,
+                -policy::RAW_SEVENS..=policy::RAW_SEVENS,
+            ) {
+                let node = raw.respell(Tempered { syntonic, septimal_kleisma });
+                let encoded = Selection::Node([
+                    i8::try_from(node.threes).unwrap(),
+                    i8::try_from(node.fives).unwrap(),
+                    i8::try_from(node.sevens).unwrap(),
+                ]);
+                assert_eq!(encoded.node(), Some(node));
+            }
         }
     }
 }
