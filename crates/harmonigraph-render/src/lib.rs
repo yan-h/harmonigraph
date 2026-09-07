@@ -2684,7 +2684,7 @@ struct SceneLayouts<'a> {
 /// on a reload. Never lattice.wgsl alone, which names what common.wgsl
 /// declares.
 ///
-/// The four pipelines cut from that text each build their own module of it, so
+/// Every pipeline cut from that text shares one module per resource build, so
 /// this is the one place the text becomes a module and the one place that
 /// contract is stated.
 fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::ShaderModule {
@@ -2694,10 +2694,9 @@ fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::ShaderModule
     })
 }
 
-/// Build one of the scene pipelines from WGSL source (startup uses the
-/// baked-in source; hot-reload rebuilds from disk). Node and marker pipelines
-/// share the module, bind group layout, blending, and topology; only entry
-/// points and vertex layout differ.
+/// Build one of the scene pipelines from the module shared by this resource
+/// build. Node and marker pipelines share the module, bind group layout,
+/// blending, and topology; only entry points and vertex layout differ.
 ///
 /// `bloom` selects the second colour attachment, the independent input the
 /// bright pass reads (see [`LatticeBloom::nodes_view`]). The single-attachment
@@ -2705,15 +2704,13 @@ fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::ShaderModule
 /// Both rely on painter order and carry no depth state.
 fn create_pipeline(
     device: &wgpu::Device,
-    shader_src: &str,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
     entry_points: (&str, &str),
     vertex_layouts: &[wgpu::VertexBufferLayout<'_>],
     bloom: bool,
 ) -> wgpu::RenderPipeline {
-    let shader = lattice_module(device, shader_src);
-
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_pipeline_layout"),
         bind_group_layouts: &[
@@ -2745,13 +2742,13 @@ fn create_pipeline(
         label: Some(entry_points.0),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some(entry_points.0),
             compilation_options: Default::default(),
             buffers: vertex_layouts,
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(entry_points.1),
             compilation_options: Default::default(),
             targets,
@@ -2767,13 +2764,13 @@ fn create_pipeline(
     })
 }
 
-/// Build both scene pipelines from one source. `bloom` picks the
+/// Build both scene pipelines from one shared module. `bloom` picks the
 /// two-attachment fragment entry points along with the pass state that goes
 /// with them — the pair travels together, since a pipeline whose shader
 /// writes one attachment cannot be used in a pass that carries two.
 fn create_pipelines(
     device: &wgpu::Device,
-    shader_src: &str,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layouts: SceneLayouts<'_>,
     bloom: bool,
@@ -2783,7 +2780,7 @@ fn create_pipelines(
     (
         create_pipeline(
             device,
-            shader_src,
+            shader,
             target_format,
             layouts,
             ("vs_main", node),
@@ -2792,7 +2789,7 @@ fn create_pipelines(
         ),
         create_pipeline(
             device,
-            shader_src,
+            shader,
             target_format,
             layouts,
             ("vs_plus", plus),
@@ -2818,14 +2815,15 @@ struct ScenePipelines {
 
 fn create_scene_pipelines(
     device: &wgpu::Device,
-    source: &str,
+    lattice_shader: &wgpu::ShaderModule,
+    blit_shader: &wgpu::ShaderModule,
     glyph_shader: &wgpu::ShaderModule,
     layouts: SceneLayouts<'_>,
     glyph_layout: &wgpu::BindGroupLayout,
 ) -> [ScenePipelines; 2] {
     [false, true].map(|bloom| {
         let (nodes, pluses) =
-            create_pipelines(device, source, LATTICE_COLOR_FORMAT, layouts, bloom);
+            create_pipelines(device, lattice_shader, LATTICE_COLOR_FORMAT, layouts, bloom);
         ScenePipelines {
             nodes,
             pluses,
@@ -2848,7 +2846,13 @@ fn create_scene_pipelines(
                 LATTICE_COLOR_FORMAT,
                 bloom,
             ),
-            glow_over: create_glow_over_pipeline(device, LATTICE_COLOR_FORMAT, layouts.glow, bloom),
+            glow_over: create_glow_over_pipeline(
+                device,
+                blit_shader,
+                LATTICE_COLOR_FORMAT,
+                layouts.glow,
+                bloom,
+            ),
         }
     })
 }
@@ -2867,7 +2871,7 @@ fn create_scene_pipelines(
 /// (`text::create_glyph_cell_pipeline`) so repeated ink forms one union.
 fn create_cell_pipelines(
     device: &wgpu::Device,
-    shader_src: &str,
+    shader: &wgpu::ShaderModule,
     uniforms: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
@@ -2875,7 +2879,6 @@ fn create_cell_pipelines(
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Max,
     };
-    let shader = lattice_module(device, shader_src);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_cell_pipeline_layout"),
         bind_group_layouts: &[Some(uniforms)],
@@ -2888,13 +2891,13 @@ fn create_cell_pipelines(
             label: Some(entries.0),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some(entries.0),
                 compilation_options: Default::default(),
                 buffers,
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some(entries.1),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -2958,13 +2961,12 @@ fn create_cell_pipelines(
 /// ahead of the scene's, and one write per pixel has no order to defend.
 fn create_glow_gather_pipeline(
     device: &wgpu::Device,
-    shader_src: &str,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
     node_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = lattice_module(device, shader_src);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
         bind_group_layouts: &[
@@ -2979,13 +2981,13 @@ fn create_glow_gather_pipeline(
         label: Some("fs_glow_gather"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_glow_gather"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_glow_gather"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -3036,11 +3038,10 @@ fn create_glow_gather_pipeline(
 /// is a colour and a weight rather than something to composite.
 fn create_ink_strip_pipelines(
     device: &wgpu::Device,
-    shader_src: &str,
+    shader: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let shader = lattice_module(device, shader_src);
     let build = |label: &str,
                  entry_points: (&str, &str),
                  layout: &wgpu::PipelineLayout,
@@ -3049,13 +3050,13 @@ fn create_ink_strip_pipelines(
             label: Some(label),
             layout: Some(layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some(entry_points.0),
                 compilation_options: Default::default(),
                 buffers,
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some(entry_points.1),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -3096,14 +3097,11 @@ fn create_ink_strip_pipelines(
 /// Both use painter order and the same premultiplied blend.
 fn create_glow_over_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     light_layout: &wgpu::BindGroupLayout,
     bloom: bool,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("blit_shader"),
-        source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
-    });
     // The light alone: this pass lays a finished field down and takes no
     // dial off the scene's uniforms.
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -3121,13 +3119,13 @@ fn create_glow_over_pipeline(
         label: Some("fs_glow_over"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_blit"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(if bloom { "fs_glow_over" } else { "fs_blit" }),
             compilation_options: Default::default(),
             targets: &targets[..if bloom { 2 } else { 1 }],
@@ -3177,24 +3175,29 @@ const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
     },
 };
 
-/// One post-process pipeline over the blit.wgsl module: a fullscreen quad
-/// with the given fragment entry point. The composite (into the egui
-/// pass) blends premultiplied; the bloom-chain passes overwrite their
-/// whole target and pass `blend: None`.
+/// The fullscreen shader shared by one resource build's post-process and glow
+/// pipelines. Not named for the lattice: the roll builds its own pipelines out
+/// of the same source, so a validation error carrying the lattice's name would
+/// send a reader to the wrong picture.
+fn blit_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("blit_shader"),
+        source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
+    })
+}
+
+/// One post-process pipeline over the shared blit module: a fullscreen quad
+/// with the given fragment entry point. The composite (into the egui pass)
+/// blends premultiplied; the bloom-chain passes overwrite their whole target
+/// and pass `blend: None`.
 fn create_post_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     entry_point: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
-    // Not named for the lattice: the roll builds its own post pipelines out of
-    // the same source, so a validation error carrying the lattice's name would
-    // send a reader to the wrong picture.
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("blit_shader"),
-        source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
-    });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("post_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout)],
@@ -3204,13 +3207,13 @@ fn create_post_pipeline(
         label: Some(entry_point),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_blit"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(entry_point),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -3281,11 +3284,13 @@ impl LatticeResources {
         // atlas.
         let shadow_layout = shadow::read_layout(device);
         let caster_layout = shadow::caster_layout(device);
-        // The whole module, common half and all, built once for the four
-        // pipelines cut from it.
+        // The whole module, common half and all, built once for every pipeline
+        // cut from it.
         let shader_src = with_common(SHADER_SRC);
+        let lattice_shader = lattice_module(device, &shader_src);
+        let blit_shader = blit_module(device);
         let (node_cell_pipeline, plus_cell_pipeline) =
-            create_cell_pipelines(device, &shader_src, &bind_group_layout);
+            create_cell_pipelines(device, &lattice_shader, &bind_group_layout);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
         // interpolating along that the shader does not walk itself.
@@ -3305,14 +3310,14 @@ impl LatticeResources {
         let glow_node_layout = glow_node_layout(device);
         let glow_gather_pipeline = create_glow_gather_pipeline(
             device,
-            &shader_src,
+            &lattice_shader,
             LATTICE_COLOR_FORMAT,
             &bind_group_layout,
             &strip_layout,
             &glow_node_layout,
         );
         let (ink_strip_pipeline, ink_blur_pipeline) =
-            create_ink_strip_pipelines(device, &shader_src, &bind_group_layout, &strip_layout);
+            create_ink_strip_pipelines(device, &lattice_shader, &bind_group_layout, &strip_layout);
 
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_composite_bind_group_layout"),
@@ -3320,13 +3325,22 @@ impl LatticeResources {
         });
         let composite_pipeline = create_post_pipeline(
             device,
+            &blit_shader,
             "fs_composite",
             target_format,
             &composite_layout,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
-        let filter =
-            |entry| create_post_pipeline(device, entry, LATTICE_COLOR_FORMAT, &filter_layout, None);
+        let filter = |entry| {
+            create_post_pipeline(
+                device,
+                &blit_shader,
+                entry,
+                LATTICE_COLOR_FORMAT,
+                &filter_layout,
+                None,
+            )
+        };
         let bright_pipeline = filter("fs_bright");
         let downsample_pipeline = filter("fs_blit");
         let blur_h_pipeline = filter("fs_blur_h");
@@ -3350,7 +3364,8 @@ impl LatticeResources {
         let glyph_shader = text::glyph_shader(device, &text_source());
         let scenes = create_scene_pipelines(
             device,
-            &shader_src,
+            &lattice_shader,
+            &blit_shader,
             &glyph_shader,
             SceneLayouts {
                 uniforms: &bind_group_layout,
@@ -3948,19 +3963,24 @@ impl CallbackTrait for LatticeCallback {
             match checked {
                 Ok(()) => {
                     let source = &reloaded.lattice;
+                    let lattice_shader = lattice_module(device, source);
+                    let blit_shader = blit_module(device);
                     // ...and the two draws that fill the atlas the pair above
                     // reads: a node's shadow is a blur of the same ink an edit
                     // just changed, so the cell has to be rasterized by the
                     // same build that draws the node.
-                    let (node_cell_pipeline, plus_cell_pipeline) =
-                        create_cell_pipelines(device, source, &resources.bind_group_layout);
+                    let (node_cell_pipeline, plus_cell_pipeline) = create_cell_pipelines(
+                        device,
+                        &lattice_shader,
+                        &resources.bind_group_layout,
+                    );
                     // The glow off the same source, so an edit to a node's
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
                     let glow_gather_pipeline = create_glow_gather_pipeline(
                         device,
-                        source,
+                        &lattice_shader,
                         LATTICE_COLOR_FORMAT,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
@@ -3971,7 +3991,7 @@ impl CallbackTrait for LatticeCallback {
                     // layer paints is an edit to what the halo is made of.
                     let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
                         device,
-                        source,
+                        &lattice_shader,
                         &resources.bind_group_layout,
                         &resources.strip_layout,
                     );
@@ -3990,7 +4010,8 @@ impl CallbackTrait for LatticeCallback {
                     let glyph_shader = text::glyph_shader(device, &reloaded.text);
                     resources.scenes = create_scene_pipelines(
                         device,
-                        source,
+                        &lattice_shader,
+                        &blit_shader,
                         &glyph_shader,
                         SceneLayouts {
                             uniforms: &resources.bind_group_layout,

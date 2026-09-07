@@ -478,8 +478,17 @@ impl RollResources {
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way every other thing
         // the roll draws does.
-        let filter =
-            |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
+        let blit_shader = crate::blit_module(device);
+        let filter = |entry| {
+            crate::create_post_pipeline(
+                device,
+                &blit_shader,
+                entry,
+                target_format,
+                &filter_layout,
+                None,
+            )
+        };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("roll_bloom_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -499,6 +508,7 @@ impl RollResources {
             blur_v_pipeline: filter("fs_blur_v"),
             bloom_pipeline: crate::create_post_pipeline(
                 device,
+                &blit_shader,
                 "fs_bloom_add",
                 target_format,
                 &bloom_layout,

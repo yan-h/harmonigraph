@@ -1198,9 +1198,10 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
     let at = SHADER_SRC.find("fn vs_ink_blur(").unwrap();
     assert!(SHADER_SRC[at..].contains(cull), "reference must remove the cull");
     let reference = format!("{}{}", &SHADER_SRC[..at], SHADER_SRC[at..].replacen(cull, "", 1));
+    let reference_shader = lattice_module(&shooter.device, &with_common(&reference));
     let (_, unculled) = create_ink_strip_pipelines(
         &shooter.device,
-        &with_common(&reference),
+        &reference_shader,
         &resources.bind_group_layout,
         &resources.strip_layout,
     );

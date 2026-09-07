@@ -52,8 +52,10 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
     let Some(glow) = &offscreen.glow else {
         return vec![0; (shooter.size[0] * shooter.size[1] * 4) as usize];
     };
+    let shader = blit_module(&shooter.device);
     let pipeline = create_post_pipeline(
         &shooter.device,
+        &shader,
         "fs_blit",
         shooter.format,
         &resources.filter_layout,
