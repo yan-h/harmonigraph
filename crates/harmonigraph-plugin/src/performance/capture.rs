@@ -198,6 +198,11 @@ pub(super) struct Batch {
     /// note is born and ends at one sample, so the onset has to learn it is
     /// already over instead of leaving a live context entry behind.
     terminated: Vec<(u8, u64)>,
+    /// The serial of each source's last Stop in this sample, or zero. A Stop
+    /// sorts into the release-first half, so a same-sample onset it ends is
+    /// still ahead of it in the pass and would otherwise insert the context
+    /// entry the Stop was there to take out.
+    stopped: [u64; TUNERS + 1],
     cursor: usize,
     pub sample: i64,
     pub active: bool,
@@ -208,6 +213,7 @@ impl Default for Batch {
             records: Vec::with_capacity(BATCH_EVENTS),
             tuning: Vec::with_capacity(harmonigraph_core::policy::MAX_COHORT_ONSETS),
             terminated: Vec::with_capacity(BATCH_EVENTS),
+            stopped: [0; TUNERS + 1],
             cursor: 0,
             sample: 0,
             active: false,
@@ -219,6 +225,7 @@ impl Batch {
         self.records.clear();
         self.tuning.clear();
         self.terminated.clear();
+        self.stopped = [0; TUNERS + 1];
         self.cursor = 0;
         self.sample = sample;
         self.active = true;
@@ -276,6 +283,16 @@ impl Batch {
     pub fn already_ended(&self, source: u8, lifetime: u64) -> bool {
         self.terminated.contains(&(source, lifetime))
     }
+    /// This source stopped at this sample, at the given input serial.
+    pub fn stopped(&mut self, source: u8, serial: u64) {
+        let slot = &mut self.stopped[usize::from(source)];
+        *slot = (*slot).max(serial);
+    }
+    /// True when the Stop this sample carries is later in the source's own
+    /// input than this onset, and so ended it.
+    pub fn already_stopped(&self, source: u8, serial: u64) -> bool {
+        self.stopped[usize::from(source)] > serial
+    }
     pub fn initial_tuning(&self, source: u8, lifetime: u64) -> Option<f64> {
         self.tuning
             .iter()
@@ -286,6 +303,7 @@ impl Batch {
         self.records.clear();
         self.tuning.clear();
         self.terminated.clear();
+        self.stopped = [0; TUNERS + 1];
         self.cursor = 0;
         self.active = false;
     }

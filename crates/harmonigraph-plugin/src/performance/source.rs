@@ -2814,6 +2814,7 @@ impl Source {
         }
         let own = match pending.event {
             Event::Participation(value) => Some(CaptureKind::Participation(value)),
+            Event::Stop => Some(CaptureKind::Stop),
             event if event.attack().is_some() => Some(CaptureKind::Onset),
             event if event.channel_control().is_some() => Some(CaptureKind::Channel),
             // Everything else already left as addressed records. An input that

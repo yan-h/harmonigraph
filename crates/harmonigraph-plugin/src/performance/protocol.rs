@@ -180,6 +180,10 @@ pub enum CaptureKind {
     /// their own Terminal records.
     Channel,
     Participation(bool),
+    /// This source's transport Stop. It ends every note the source is playing
+    /// — the sounding ones by emergency release, the unsounded ones by
+    /// cancellation — and neither ending becomes an addressed Terminal record.
+    Stop,
     /// Note-addressed expression and everything else the Hub keeps only as
     /// chronological context.
     Other,

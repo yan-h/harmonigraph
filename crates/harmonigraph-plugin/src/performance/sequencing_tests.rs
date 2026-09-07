@@ -930,6 +930,31 @@ fn production_a_lifetime_born_and_ended_at_one_sample_leaves_no_tuning_context()
     }
     let settled = source.source_snapshot();
     assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+    // A transport Stop is the third such ending, and the only one that is not
+    // addressed to a lifetime. It sorts into the release-first half like any
+    // other, so the onset it ends is still ahead of it in the pass.
+    let stopped = {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        Input::Transport(value)
+    };
+    source.run_format(4096, vec![], None, None, 512);
+    hub.run_format(
+        4096,
+        vec![transport(0, 120.0), note(1, 0, 60, 0, true), stopped],
+        None,
+        None,
+        512,
+    );
+    for raw in [4608, 5120] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![],
+        "the Stop's own sample carries the onset it ends"
+    );
 }
 
 #[test]
@@ -941,17 +966,19 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
         Input::Transport(value)
     };
     let (hub, source) = production_pair();
-    // Three notes, each ending by a different route: note 1 is assigned and
+    // Four notes, each ending by a different route: note 1 is assigned and
     // forwarded downstream, note 3 is assigned but one callback short of
-    // sounding, and note 2 is still waiting for its assignment.
+    // sounding, note 2 is still waiting for its assignment, and note 4 is held
+    // on the Hub's own DIRECT input, which is assigned nothing and forwarded
+    // whole.
     source.run_format(1536, vec![transport(0, 120.0), note(1, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
+    hub.run_format(1536, vec![transport(0, 120.0), note(4, 0, 72, 0, true)], None, None, 512);
     let sounding = source.run_format(2048, vec![note(3, 0, 67, 0, true)], None, None, 512);
     assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
     hub.run_format(2048, vec![], None, None, 512);
     assert_eq!(
         inspect_hub(&hub, |hub| hub.test_context()),
-        vec![(1, 1), (1, 2)],
+        vec![(1, 1), (0, 1), (1, 2)],
         "note 3 is assigned before the Stop, and note 2 has not been played yet"
     );
     let stop = source.run_format(2560, vec![note(2, 0, 64, 0, true), stopped()], None, None, 512);
@@ -969,11 +996,23 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
         )));
     }
     assert!(!stop.values.iter().any(|(_, event)| event.attack().is_some()));
+    // The same Stop reaches the Hub's own transport, and note 4 leaves by the
+    // one route DIRECT has: its emergency release goes straight to the host,
+    // never becoming an `OutputDelta`, and it has no plan to cancel.
+    let direct = hub.run_format(2560, vec![stopped()], None, None, 512);
+    assert!(
+        direct.values.iter().any(|(_, event)| matches!(
+            event,
+            Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 4, key: 72, .. }
+        )),
+        "the DIRECT voice is terminated too: {:?}",
+        direct.values
+    );
     // The Hub answers note 2 only after the Stop. Neither that assignment nor
     // note 3's, which arrived before it, may resurrect a canceled attack.
     for raw in [3072, 3584, 4096, 4608] {
         assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(raw - 512, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
     }
     let settled = source.source_snapshot();
     assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
@@ -983,7 +1022,8 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
     // The factual row is not the whole of it: the emergency release reaches the
     // Hub as accepted output rather than as an addressed Terminal record, and
     // the cancellation only marks a plan, so both notes can survive in the
-    // table the policy actually scores against.
+    // table the policy actually scores against. DIRECT reaches neither of those
+    // two routes at all, so its Stop capture is what has to end note 4 here.
     assert_eq!(
         inspect_hub(&hub, |hub| hub.test_context()),
         vec![],

@@ -705,6 +705,18 @@ impl Hub {
             }
             return true;
         }
+        if let CaptureKind::Stop = record.kind {
+            // Neither of a Stop's two endings is an addressed Terminal record:
+            // the notes already sounding go out as emergency releases and the
+            // rest are cancelled where they stand. A paired row's releases come
+            // back as accepted output and its attacks through `cancel`, but
+            // DIRECT reaches neither — its forwarding never becomes an
+            // `OutputDelta` and it has no plan to cancel — so this record is
+            // the whole of source 0's cleanup.
+            self.sequencer.forget_source(record.lease.slot);
+            self.batch.stopped(record.lease.slot, record.serial);
+            return true;
+        }
         if !record.onset() {
             let voice = self.sequencer.context.iter_mut().find(|cell| {
                 cell.is_some_and(|voice| {
@@ -823,7 +835,9 @@ impl Hub {
         // A lifetime this sample already ended still gets its assignment — the
         // Tune is waiting for one — but never becomes context, because the
         // release that ended it applied before this onset existed.
-        let slot = if self.batch.already_ended(record.lease.slot, record.lifetime) {
+        let slot = if self.batch.already_ended(record.lease.slot, record.lifetime)
+            || self.batch.already_stopped(record.lease.slot, record.serial)
+        {
             None
         } else if let Some(slot) = self.sequencer.context.iter().position(Option::is_none) {
             Some(slot)
@@ -1085,6 +1099,16 @@ impl Sequencer {
             cell.is_some_and(|voice| voice.source == source && voice.lifetime == lifetime)
         }) {
             *cell = None;
+        }
+    }
+
+    /// The same, for an ending addressed to no lifetime because it ends all of
+    /// them. One pass over the cells the scan above already walks.
+    fn forget_source(&mut self, source: u8) {
+        for cell in self.context.iter_mut() {
+            if cell.is_some_and(|voice| voice.source == source) {
+                *cell = None;
+            }
         }
     }
 
