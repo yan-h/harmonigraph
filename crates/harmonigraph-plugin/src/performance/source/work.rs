@@ -492,17 +492,23 @@ impl Source {
     }
 
     fn capture_retained(&self, position: usize) -> bool {
-        if self.recovery.holds(self.pending.at(position).unwrap().serial) {
+        let serial = self.pending.at(position).unwrap().serial;
+        if self.recovery.holds(serial) {
             return true;
         }
         // READY has never minted a token. After producer join and local
         // cancellation it has no possible reader, even if sample mapping made
-        // publication impossible. OFFERED also covers a failed Source push;
+        // publication impossible. A Tune cancellation before initial adoption
+        // is also local-only: transfer_captures cannot have published it, and
+        // dispose_work did not owe a remote disposition. Do not publish that
+        // completed Original later as a fresh onset with no cancellation.
+        // OFFERED also covers a failed Source push;
         // its unique token still requires exact retirement before reclamation.
         self.pending.remote_pending(position)
             || self.pending.unpublished(position)
                 && self.session().is_some()
                 && !self.producer_joined
+                && (self.direct.is_some() || self.adoption.sent() || serial > self.cancel_cut)
     }
 
     fn queue_ready_cleanup(&mut self, index: u16) {

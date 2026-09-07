@@ -56,6 +56,22 @@ fn production_musical_host_format_is_automatic_for_first_use_and_stale_restore()
         hub.activate_format(rate, frames);
         source.activate_format(rate, frames);
         if !restored {
+            // The editor opens after processing starts. These ordinary notes
+            // arrive before the first routing validation and remain unsounded.
+            for step in 0..8 {
+                source.main();
+                hub.main();
+                let input = match step {
+                    2 => vec![note(0, 0, 64, 0, true)],
+                    4 => vec![note(0, 0, 64, 0, false)],
+                    _ => vec![],
+                };
+                assert!(source.run_format(raw, input, None, None, frames).values.is_empty());
+                hub.run_format(raw, vec![], None, None, frames);
+                raw += i64::from(frames);
+            }
+            let before = source.source_snapshot();
+            assert_eq!((before.pending, before.lives, before.captures), (2, 1, 0));
             // The ordinary UI action validates only the routing offset.
             // No setup packet contains a user-entered rate or buffer size.
             for device in [&hub, &source] {
@@ -94,6 +110,9 @@ fn production_musical_host_format_is_automatic_for_first_use_and_stale_restore()
             );
             assert_eq!(adopted.generation, shared.value().generation);
         }
+        // Apply cancelled the unadopted phrase. It cannot mint a Hub plan
+        // whose recycled lifetime slot would pin the next ordinary onset.
+        assert!(inspect_hub(&hub, |h| h.test_plan_state(0, 0)).is_none());
         let channel = 0;
         let mut output = Vec::new();
         for step in 0..8 {
@@ -128,6 +147,24 @@ fn production_musical_host_format_is_automatic_for_first_use_and_stale_restore()
         );
         let snapshot = source.source_snapshot();
         assert_eq!((snapshot.held, snapshot.pending, snapshot.faults), (0, 0, 0));
+        // A later click must settle too; the reported failure left both UIs
+        // pending once new input met that orphaned plan.
+        for device in [&hub, &source] {
+            device.shared().apply(device.shared().value().routing, true).unwrap();
+        }
+        for _ in 0..16 {
+            source.main();
+            hub.main();
+            source.run_format(raw, vec![], None, None, frames);
+            hub.run_format(raw, vec![], None, None, frames);
+            raw += i64::from(frames);
+        }
+        for device in [&hub, &source] {
+            let shared = device.shared();
+            let adopted = shared.adopted().unwrap();
+            assert!(adopted.valid);
+            assert_eq!(adopted.generation, shared.value().generation);
+        }
     }
 }
 

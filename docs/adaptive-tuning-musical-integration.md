@@ -36,6 +36,13 @@ Fresh Bitwig controller initialization is still unverified.
 The ordinary unknown-pedal second-phrase limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696) remains;
 known-neutral fixtures and the settings above do not prove that the host initializes CC64/66/69.
 
+The first-use callback regression includes idle processing and an unsounded On/Off before the routing-validation Apply.
+Apply cancels that unpublished phrase locally;
+it must not later become a Hub plan after validation, because the Source has no remote cancellation or live request left to retire that plan.
+The next onset receives nonzero Just tuning and its real release, and a later Apply settles normally.
+This fixes that concrete startup sequence;
+it does not claim every setup wait or live reactivation path is resolved.
+
 ## Owned musical state
 
 `ConfigReducer` binds `policy::CONFIG` version 1 with the complete resolved configuration.
