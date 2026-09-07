@@ -1184,8 +1184,14 @@ fn pane_label_room(rect: egui::Rect, cfg: &SpectrumConfig) -> f32 {
         let painter = ui.painter();
         // The span reaches only the note names, which this discards; a level
         // number is set in the markings, and those are the pane's alone.
-        let text =
-            text_scales(cfg, &axes, cfg.high_midi - cfg.low_midi, painter.ctx().pixels_per_point());
+        //
+        // Ordered the way the pane orders it, and not by the raw pair: an
+        // inverted or collapsed range reaches the pane as `PITCH_RANGE_MIN_SPAN`
+        // and would reach this as a zero or negative span, which is a different
+        // markings scale and so a different font — the stand-in this helper
+        // exists to remove, put back where the range is degenerate.
+        let span = cfg.high_midi.max(cfg.low_midi + crate::PITCH_RANGE_MIN_SPAN) - cfg.low_midi;
+        let text = text_scales(cfg, &axes, span, painter.ctx().pixels_per_point());
         room =
             level_label_room(painter, &axes, &egui::FontId::monospace(MARKING_PT * text.markings));
     });

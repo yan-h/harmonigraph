@@ -187,14 +187,18 @@ def main() -> None:
         # Only the editor's instance carries a view; the tune-pairing
         # participant beside it has no ui-state at all, and is not a failure.
         bodies = [
-            body
-            for st in states
+            (n, body)
+            for n, st in enumerate(states, 1)
             if (ui := st.get("fields", {}).get("ui-state")) and (body := block(ui, "view"))
         ]
         if not bodies:
             sys.exit("No view block in any instance's ui-state blob.")
-        for body in bodies:
-            print("// From a live Bitwig session; see read-plugin-state.py.")
+        # Numbered where there is more than one, so two runs of fields cannot be
+        # read as one: the bodies print back to back, and a paste of the wrong
+        # one is a look nobody dialled.
+        for n, body in bodies:
+            where = f" instance {n}" if len(bodies) > 1 else ""
+            print(f"// From a live Bitwig session{where}; see read-plugin-state.py.")
             for name, value in split_ron(body):
                 print(f"    {name}: {value},")
         return

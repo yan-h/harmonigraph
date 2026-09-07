@@ -2399,14 +2399,16 @@ impl Default for ViewConfig {
             // person can meet by dialling neither.
             ring_gap: 0.05,
             octave_gap: 0.05,
-            // Just above the chrome's panel (`L*` 8.8) and well short of its
-            // faint surface (20.0), the rung the fresh ground stood on until
-            // the DAW look was captured on 2026-09-07: a quiet ring is a dim
-            // reading barely raised off the pane, still clear of the well grey
-            // (4.7) the lattice pane stands on. Nothing ties this to the skin
-            // any more — the chrome's ladder and the ground are dialled apart.
+            // Where the DAW look was captured on 2026-09-07, a step DOWN from
+            // the `L*` 20.0 the fresh view stood on before: just above the
+            // chrome's panel (8.8) and well short of its faint surface (20.0),
+            // so a quiet ring is a dim reading barely raised off the pane and
+            // still clear of the well grey (4.7) the lattice pane stands on.
+            // Nothing ties this to the skin any more — the chrome's ladder and
+            // the ground are dialled apart.
             lattice_ground: DEFAULT_RING_GROUND,
-            // One rung above the ring ground, so the resting positions stay
+            // Well above the ring ground — 17 `L*` clear of it since the
+            // capture moved the ground down — so the resting positions stay
             // legible through the broad glow without competing with a sounding
             // node's white name.
             marker_ink: DEFAULT_MARKER_INK,

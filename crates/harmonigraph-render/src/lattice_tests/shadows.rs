@@ -1362,7 +1362,7 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
             // bigger cell for it (`ShadowKernel::reach_sigmas`).
             let reach = sigma
                 * casters.iter().map(|c| kernel.reach_sigmas(c.falloff)).fold(0.0f32, f32::max);
-            let box_points = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32) + 2.0 * reach;
+            let box_points = pane + 2.0 * reach;
             assert!(
                 packed.size[0] as f32 <= BOXES * box_points.x
                     && packed.size[1] as f32 <= BOXES * box_points.y,
