@@ -123,8 +123,8 @@ enum Events {
     Pair { first: InputValue, second: InputValue },
 }
 
-/// A single event or one of two narrowly validated pairs: note-on/tuning or
-/// CC88/raw MIDI consumer. Staging validates the enclosing output interval.
+/// A single event or the one narrowly validated pair, note-on/tuning.
+/// Staging validates the enclosing output interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Group {
     pub token: Token,
