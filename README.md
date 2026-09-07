@@ -50,7 +50,7 @@ The current musical integration adds optional assignment metadata within v4.
 
 Almost every line here was written by Claude Code sessions, directed and reviewed by one human.
 [`CLAUDE.md`](CLAUDE.md) is the house style they work under;
-GitHub Actions runs `./ci.sh` as the canonical full gate.
+GitHub Actions runs `./ci.sh` as the canonical full gate, split across two parallel jobs and reported as one `Full CI` check.
 
 Stack:
 Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's wgpu backend in the plugin, eframe's in the standalone harness).
@@ -107,7 +107,8 @@ cargo xtask bundle harmonigraph-plugin --release
 
 Enable the tracked pre-push formatting check once per clone with `git config core.hooksPath .githooks`.
 The hook stays cheap locally;
-GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`.
+GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`, one job per gate group so the wall clock is the longest group rather than the sum of every gate.
+A bare `./ci.sh` still runs all of them, which is what it does locally.
 
 ## Getting a build into the DAW
 

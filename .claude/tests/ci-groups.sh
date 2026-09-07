@@ -3,15 +3,18 @@
 # jobs, and does every gate belong to one?
 #
 # ci.sh splits its gates into groups so the workflow can run them as parallel
-# jobs, which makes the group list two copies of one fact: `CI_GROUPS` in ci.sh
-# and `matrix.group` in ci.yml. Nothing else in the tree notices when the copies
-# disagree, and every way they can disagree is silent in the direction that
-# matters — a group named only in ci.sh is a set of gates NO job runs, and the
-# PR still goes green because the jobs that do exist all passed.
+# jobs, which makes the group list THREE copies of one fact: `CI_GROUPS` in
+# ci.sh, the `group` markers that claim the gates, and `matrix.group` in ci.yml.
+# Nothing else in the tree notices when the copies disagree, and every way they
+# can disagree is silent in the direction that matters — a group named in only
+# some of the three is a set of gates NO job runs, and the PR still goes green
+# because the jobs that do exist all passed.
 #
-# The third case is the same failure one line higher up: a gate written above
-# the first `group` marker belongs to no group at all, so it runs for a bare
-# `./ci.sh` locally and in none of the CI jobs. Whoever adds it sees it pass.
+# The remaining two cases are that same failure at its edges. A gate written
+# above the first marker belongs to no group at all, and the workflow can stop
+# passing the group entirely, which runs every gate in both legs for twice the
+# macOS budget. Each is invisible: a bare `./ci.sh` locally runs everything, so
+# whoever made the change watches it pass.
 #
 #   .claude/tests/ci-groups.sh          # run it
 #
@@ -55,15 +58,34 @@ if [ "$sorted_declared" != "$sorted_matrix" ]; then
   exit 1
 fi
 
-# Every declared group has to actually own gates. A group in both lists but on
-# no marker is a job that spins up a macOS runner, restores the cache and runs
-# nothing — invisible, because an empty job passes.
-for g in $declared; do
-  if ! grep -q "^group $g\$" "$CI"; then
-    echo "✗ group '$g' is declared and matrixed but marks no gates in ci.sh" >&2
-    exit 1
-  fi
-done
+# The markers are the THIRD copy of the same fact, and they drift both ways.
+# A declared group that marks no gates is a job that spins up a macOS runner,
+# restores the cache and runs nothing — invisible, because an empty job passes.
+# A marker naming a group nobody declared is worse, and is the likely shape of
+# a botched third group: every gate under it runs in NO job, while `./ci.sh`
+# locally still runs them under `all`, so whoever added the section watches
+# them pass. Comparing ci.sh's list against ci.yml's cannot see either case,
+# because neither list mentions the markers.
+sorted_markers=$(sed -n 's/^group \(.*\)$/\1/p' "$CI" | sort -u | tr '\n' ' ')
+
+if [ "$sorted_markers" != "$sorted_declared" ]; then
+  echo "✗ ci.sh's 'group' markers and its CI_GROUPS list disagree:" >&2
+  echo "    markers:   ${sorted_markers% }" >&2
+  echo "    CI_GROUPS: ${sorted_declared% }" >&2
+  echo "    a marker naming an undeclared group hides every gate under it from CI" >&2
+  exit 1
+fi
+
+# And the workflow has to actually PASS the group. A regression to a bare
+# `./ci.sh` is easy — it is what the line said before the split, so a merge
+# resolution can put it back — and it is silent in the expensive direction:
+# both legs then run every gate, taking twice the macOS budget this split
+# exists to protect, with every check still green.
+if ! grep -qF './ci.sh ${{ matrix.group }}' "$WORKFLOW"; then
+  echo "✗ ci.yml does not pass the matrix group to ci.sh" >&2
+  echo "    without it both legs run every gate, greenly and at twice the cost" >&2
+  exit 1
+fi
 
 # And no gate may sit above the first marker. `run` is the only way a gate is
 # invoked, plus the one `if in_group` block, so the first of either has to come

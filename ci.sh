@@ -2,7 +2,8 @@
 # Canonical full CI gate: formatting, markdown clause breaks, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
-# guard, worktree reclaim safety, and the registered-worktree bundle swap.
+# guard, the security-audit trigger split, the CI group split, worktree reclaim
+# safety, and the registered-worktree bundle swap.
 #
 # GitHub Actions invokes this script on the toolchain pinned by
 # rust-toolchain.toml, once per GROUP below. It remains available locally when a
@@ -213,7 +214,7 @@ run .claude/tests/plugin-swap.sh
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap)"
+  echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

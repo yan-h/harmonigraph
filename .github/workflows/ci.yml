@@ -54,12 +54,20 @@ jobs:
           # Both groups want the same ~/.cargo, so one key serves them instead
           # of the per-job default, which would mint an archive per group.
           shared-key: full-ci
-          # Saving only from main is what keeps the matrix from doubling the
-          # write rate into a cache that is already at GitHub's 10 GB per-repo
-          # cap (10.8 GB over 4601 entries as this landed), where every entry
-          # past the cap evicts another by LRU. A branch still RESTORES main's
+          # Saving only from main stops the matrix from doubling THIS archive's
+          # write rate into a cache already at GitHub's 10 GB per-repo cap
+          # (10.8 GB over 4601 entries as this landed), where every entry past
+          # the cap evicts another by LRU. A branch still RESTORES main's
           # archive through the restore key and re-fetches only what its own
           # lockfile moved.
+          #
+          # It does NOT fix the cap, and nothing here should be read as if it
+          # did: `save-if` reaches only rust-cache's ~/.cargo archive, while
+          # SCCACHE_GHA_ENABLED above writes compilation artifacts into the
+          # same 10 GB budget on every run including branches, ungated, and
+          # that is the larger share by volume — 4601 entries, nearly all of
+          # them sccache's. The matrix adds a second concurrent writer there
+          # that this key cannot gate. Pruning that is its own job.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Keep every full gate in ci.sh so local on-demand and remote runs cannot
