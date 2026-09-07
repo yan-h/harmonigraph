@@ -246,12 +246,7 @@ fn full_retirement_reply_window_keeps_exact_owner_until_both_peers_are_destroyed
         setup::SOURCE_FIELD.into(),
         serde_json::to_string(&SourceSetup {
             selected: Some(uuid),
-            calibration: Calibration {
-                offset: 65536,
-                sample_rate: 48000.0,
-                max_frames: 64,
-                validated: true,
-            },
+            calibration: Calibration { offset: 65536, validated: true },
         })
         .unwrap(),
     );

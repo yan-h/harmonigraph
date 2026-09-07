@@ -1055,26 +1055,17 @@ fn session_controls(
                 }
                 let (_, calibration) = draft.as_mut().unwrap();
                 ui.label(format!("Hub {}", saved.uuid));
-                ui.label("Clock configuration for this routing");
+                ui.label("Signed offset for this routing");
                 ui.horizontal(|ui| {
                     ui.label("Signed sample offset");
                     ui.add(egui::DragValue::new(&mut calibration.offset));
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Sample rate (Hz)");
-                    ui.add(
-                        egui::DragValue::new(&mut calibration.sample_rate).range(1.0..=768000.0),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Maximum buffer (frames)");
-                    ui.add(egui::DragValue::new(&mut calibration.max_frames).range(1..=1_048_576));
-                });
+                ui.label("Sample rate and buffer size follow the host automatically.");
                 ui.checkbox(
                     &mut calibration.validated,
-                    "I validated this routing and clock configuration",
+                    "I validated the signed offset for this routing",
                 );
-                ui.label("Revalidate after routing, delay compensation, rate or buffer changes.");
+                ui.label("Revalidate the offset after routing or delay compensation changes.");
                 if ui.button("Apply / Reinitialize").clicked() {
                     let value = crate::performance::routing::HubSetup {
                         calibration: *calibration,
@@ -1094,10 +1085,13 @@ fn session_controls(
                     ui.label(format!(
                         "Active clock: {:+} samples, {} Hz, up to {} frames — {}",
                         adopted.calibration.offset,
-                        adopted.calibration.sample_rate,
-                        adopted.calibration.max_frames,
+                        adopted.sample_rate,
+                        adopted.max_frames,
                         if adopted.valid { "valid" } else { "reinitialization required" },
                     ));
+                }
+                if !saved.calibration.validated {
+                    ui.label("Validate the routing offset to enable tuning from Tune.");
                 }
                 ui.label(if applied == accepted.generation {
                     "Setup adopted"
@@ -1171,8 +1165,6 @@ mod tests {
         text_position(&output, &format!("Hub {}", original.uuid));
         let mut restored = HubSetup::default();
         restored.calibration.offset = 37;
-        restored.calibration.sample_rate = 48000.0;
-        restored.calibration.max_frames = 64;
         let mut state = nice_plug::plugin::PluginState {
             version: String::new(),
             params: Default::default(),
@@ -1194,8 +1186,6 @@ mod tests {
         let setup::Routing::Hub(applied) = shared.value().routing else { unreachable!() };
         assert_eq!(applied.uuid, restored.uuid);
         assert_ne!(applied.calibration.offset, restored.calibration.offset);
-        assert_eq!(applied.calibration.sample_rate, restored.calibration.sample_rate);
-        assert_eq!(applied.calibration.max_frames, restored.calibration.max_frames);
         assert_eq!(applied.calibration.validated, restored.calibration.validated);
     }
 

@@ -421,6 +421,11 @@ Bitwig's **by Vendor** hosting mode is the measured initial requirement, with in
 Issue [#623](https://github.com/yan-h/harmonigraph/issues/623) records the wider process/reload investigation;
 untested cells in its matrix are not additional launch requirements for the already measured mode.
 
+Each instance takes sample rate and maximum buffer size from host activation;
+they are read-only runtime values, not saved routing configuration.
+Reloaded instances use the new host format automatically.
+Live reactivation preserves old ownership and still requires the existing settlement boundary;
+changing the host format is not permission to discard accepted output.
 Initial support permits fixed calibrated routing and reinitialization after changes that invalidate track-clock alignment.
 Changes to branch latency require offset revalidation before adaptive sequencing resumes;
 automatic calibration through arbitrary graph edits is not claimed.

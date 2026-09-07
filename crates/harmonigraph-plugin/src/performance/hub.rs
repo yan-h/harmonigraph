@@ -358,6 +358,8 @@ impl Hub {
         self.rate = rate;
         self.max_frames = frames;
         if !first {
+            self.clock.sample_rate = rate;
+            self.clock.max_frames = frames;
             self.clock.valid = false;
             self.direct.activate(rate, frames);
             return;

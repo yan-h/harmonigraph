@@ -27,8 +27,6 @@ struct Widgets {
     participation: Retained<NSButton>,
     pairing: Retained<NSPopUpButton>,
     offset: Retained<NSTextField>,
-    rate: Retained<NSTextField>,
-    frames: Retained<NSTextField>,
     status: Retained<NSTextField>,
     validated: Retained<NSButton>,
     choices: RefCell<Vec<SavedUuid>>,
@@ -82,29 +80,12 @@ impl Actions {
         let Routing::Source(mut value) = vars.shared.value().routing else {
             return;
         };
-        let parsed = (
-            w.offset.stringValue().to_string().parse::<i64>(),
-            w.rate.stringValue().to_string().parse::<f64>(),
-            w.frames.stringValue().to_string().parse::<u32>(),
-        );
-        let (Ok(offset), Ok(rate), Ok(frames)) = parsed else {
-            w.status.setStringValue(&NSString::from_str(
-                "Enter a signed sample offset, sample rate and maximum buffer size.",
-            ));
+        let Ok(offset) = w.offset.stringValue().to_string().parse::<i64>() else {
+            w.status.setStringValue(&NSString::from_str("Enter a signed sample offset."));
             return;
         };
-        if !rate.is_finite() || rate <= 0.0 || frames == 0 {
-            w.status.setStringValue(&NSString::from_str(
-                "Sample rate and maximum buffer size must be positive.",
-            ));
-            return;
-        }
-        value.calibration = super::clock::Calibration {
-            offset,
-            sample_rate: rate,
-            max_frames: frames,
-            validated: w.validated.state() != 0,
-        };
+        value.calibration =
+            super::clock::Calibration { offset, validated: w.validated.state() != 0 };
         let selection = w.pairing.indexOfSelectedItem();
         value.selected = if selection <= 0 {
             None
@@ -140,15 +121,15 @@ impl Actions {
         if let Some(adopted) = vars.shared.adopted() {
             let calibration = adopted.calibration;
             w.status.setStringValue(&NSString::from_str(&format!(
-                "{name}{pending}\n{diagnostics}\nAdopted {}: offset {} · {} Hz · ≤{} frames\n{}",
+                "{name}{pending}\n{diagnostics}\nAdopted {}: offset {} · Host: {} Hz · ≤{} frames\n{}",
                 adopted.generation,
                 calibration.offset,
-                calibration.sample_rate,
-                calibration.max_frames,
+                adopted.sample_rate,
+                adopted.max_frames,
                 if adopted.valid {
-                    "Clock validated"
+                    "Routing offset validated"
                 } else {
-                    "Clock not valid for current processing"
+                    "Validate routing offset / reinitialize to enable tuning"
                 }
             )));
         } else {
@@ -164,8 +145,6 @@ impl Actions {
         let selected = if restored {
             let calibration = source.calibration;
             w.offset.setStringValue(&NSString::from_str(&calibration.offset.to_string()));
-            w.rate.setStringValue(&NSString::from_str(&calibration.sample_rate.to_string()));
-            w.frames.setStringValue(&NSString::from_str(&calibration.max_frames.to_string()));
             w.validated.setState(if calibration.validated { 1 } else { 0 });
             source.selected
         } else {
@@ -242,28 +221,19 @@ impl Editor for NativeEditor {
             false,
         );
         view.addSubview(&pairing);
-        for (title, x) in [
-            ("Signed sample offset", 16.0),
-            ("Sample rate (Hz)", 181.0),
-            ("Max. buffer (frames)", 346.0),
-        ] {
-            let field = NSTextField::labelWithString(&NSString::from_str(title), mtm);
-            field.setFrame(rect(x, 326.0, 145.0, 26.0));
-            view.addSubview(&field);
-        }
+        label("Signed sample offset", 326.0);
+        label("Sample rate and buffer size follow the host automatically.", 292.0);
         let value = self.shared.value().routing.calibration();
         let field = |text: String, x: f64| {
             let field = NSTextField::textFieldWithString(&NSString::from_str(&text), mtm);
-            field.setFrame(rect(x, 298.0, 145.0, 24.0));
+            field.setFrame(rect(x, 326.0, 145.0, 24.0));
             view.addSubview(&field);
             field
         };
-        let offset = field(value.offset.to_string(), 16.0);
-        let rate = field(value.sample_rate.to_string(), 181.0);
-        let frames = field(value.max_frames.to_string(), 346.0);
+        let offset = field(value.offset.to_string(), 220.0);
         let validated = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("I validated this routing and clock configuration"),
+                &NSString::from_str("I validated the signed offset for this routing"),
                 None,
                 None,
                 mtm,
@@ -303,8 +273,6 @@ impl Editor for NativeEditor {
                 participation,
                 pairing,
                 offset,
-                rate,
-                frames,
                 status,
                 validated,
                 choices: RefCell::new(Vec::new()),

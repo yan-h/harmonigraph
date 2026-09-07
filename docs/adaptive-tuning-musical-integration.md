@@ -14,10 +14,15 @@ The [measured topology and calibration restrictions](adaptive-tuning.md#session-
 Keep **Participating** on in each Tune editor.
 **Automatic: exactly one hub** pairs a unique compatible hub;
 choose the intended hub explicitly when needed and resolve missing/ambiguous status before playing.
-3. In the Hub's **Session** menu and each Tune editor, enter the routing's validated signed sample offset, sample rate and maximum buffer.
-Use **I validated this routing and clock configuration** and **Apply / Reinitialize**, then check the displayed adopted clock/status.
+3. The Hub and Tune read sample rate and maximum buffer size automatically from host activation and display them read-only.
+In the Hub's **Session** menu and each Tune editor, set only the routing's signed sample offset.
+Use **I validated the signed offset for this routing** and **Apply / Reinitialize**, then check the displayed adopted clock/status.
 A zero offset alone does not establish calibration;
 revalidate after routing or delay-compensation changes.
+After a host rate or buffer change, reload the plugin instances to start a fresh session with the new automatic format.
+Live reactivation still preserves old ownership and may remain pending at the existing settlement boundary, tracked in [issue #703](https://github.com/yan-h/harmonigraph/issues/703).
+Old saved rate and buffer keys are ignored and are no longer written;
+routing offsets and their validation flags retain their meaning.
 4. In the Hub's **Tuning** pane, turn both **Auto** switches and **Learn** off, then press **Just** to release both temperament locks and set the independent Just axes.
 Use a zero C offset for comparison with the fixtures.
 The fresh locked 12-TET defaults intentionally yield zero adaptive correction, so they cannot demonstrate Just retuning.
@@ -209,7 +214,9 @@ The PR handoff carries exact committed-head CI and both-package release receipts
 The prior ordinary recovery fenced successor took 20,592 extra samples, about 467 ms, beyond its due time.
 Healthy D512 phrase tests do not erase that measured recovery limitation.
 [Issue #696](https://github.com/yan-h/harmonigraph/issues/696)'s unknown-pedal second-phrase problem remains an ordinary note-only limitation deferred for the complexity of changing the accepted-neutral contract.
-[Issue #692](https://github.com/yan-h/harmonigraph/issues/692)'s invalid-calibration Reset sequence remains deferred under the user's exposure/complexity priorities.
+Host rate and buffer values are now automatic, removing the stale zero/mismatched-format variant of [issue #692](https://github.com/yan-h/harmonigraph/issues/692).
+The broader invalid-routing Reset sequence remains deferred;
+this change does not add setup supersession or infer routing-offset validation.
 No new controller initialization, reconciliation framework or extreme stress matrix is added here.
 
 Fresh Bitwig controller initialization, listening, practical live/offline destination behavior and complete combined independent review remain outstanding.

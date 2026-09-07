@@ -255,11 +255,7 @@ fn production_initial_direct_accepts_exact_zero_delay_phrase_without_route_calib
 fn production_calibrated_direct_drains_more_than_one_capture_window_on_empty_callbacks() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
-    hub.configure_format(
-        SavedUuid::default(),
-        true,
-        Calibration { offset: 0, sample_rate: 48000.0, max_frames: 512, validated: true },
-    );
+    hub.configure_format(SavedUuid::default(), true, Calibration { offset: 0, validated: true });
     hub.activate_format(48000.0, 512);
     let mut input = vec![note(31, 0, 60, 0, true)];
     input.extend((1..512).map(|sample| expression(31, 0.125, sample)));
@@ -444,12 +440,7 @@ fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_in
         .apply(
             setup::Routing::Hub(HubSetup {
                 uuid,
-                calibration: Calibration {
-                    offset: 64,
-                    sample_rate: 48000.0,
-                    max_frames: 64,
-                    validated: true,
-                },
+                calibration: Calibration { offset: 64, validated: true },
             }),
             false,
         )

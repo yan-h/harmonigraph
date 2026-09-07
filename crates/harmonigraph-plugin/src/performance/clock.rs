@@ -6,19 +6,12 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Calibration {
     pub offset: i64,
-    pub sample_rate: f64,
-    pub max_frames: u32,
     pub validated: bool,
 }
 
 impl Calibration {
     pub fn matches(self, rate: f64, frames: u32) -> bool {
-        self.validated
-            && rate.is_finite()
-            && rate > 0.0
-            && self.sample_rate == rate
-            && self.max_frames == frames
-            && frames != 0
+        self.validated && rate.is_finite() && rate > 0.0 && frames != 0
     }
     pub fn map(self, raw: i64) -> Option<i64> {
         raw.checked_add(self.offset)
@@ -33,6 +26,10 @@ pub struct Coverage {
 
 pub struct Clock {
     pub calibration: Calibration,
+    // Host activation owns the processing format; it is never restored from
+    // project state or supplied by the routing setup controls.
+    pub sample_rate: f64,
+    pub max_frames: u32,
     pub coverage: Option<Coverage>,
     pub valid: bool,
     raw_through: Option<i64>,
@@ -82,6 +79,8 @@ impl Clock {
     pub fn new(calibration: Calibration, rate: f64, max_frames: u32) -> Self {
         Self {
             calibration,
+            sample_rate: rate,
+            max_frames,
             coverage: None,
             valid: calibration.matches(rate, max_frames),
             raw_through: None,
@@ -91,7 +90,7 @@ impl Clock {
         if !self.valid
             || raw < 0
             || frames == 0
-            || frames > self.calibration.max_frames
+            || frames > self.max_frames
             || self.raw_through.is_some_and(|end| raw != end)
         {
             self.valid = false;

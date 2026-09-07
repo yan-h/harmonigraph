@@ -98,6 +98,8 @@ struct Main {
 pub struct Adopted {
     pub generation: u64,
     pub calibration: Calibration,
+    pub sample_rate: f64,
+    pub max_frames: u32,
     pub valid: bool,
 }
 #[derive(Default)]
@@ -117,8 +119,8 @@ impl Adoption {
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.generation.store(value.generation, Ordering::SeqCst);
         self.offset.store(value.calibration.offset, Ordering::SeqCst);
-        self.rate.store(value.calibration.sample_rate.to_bits(), Ordering::SeqCst);
-        self.frames.store(value.calibration.max_frames, Ordering::SeqCst);
+        self.rate.store(value.sample_rate.to_bits(), Ordering::SeqCst);
+        self.frames.store(value.max_frames, Ordering::SeqCst);
         self.flags.store(
             u32::from(value.calibration.validated) | (u32::from(value.valid) << 1),
             Ordering::SeqCst,
@@ -137,7 +139,9 @@ impl Adoption {
         let flags = self.flags.load(Ordering::SeqCst);
         (self.sequence.load(Ordering::SeqCst) == sequence).then_some(Adopted {
             generation,
-            calibration: Calibration { offset, sample_rate, max_frames, validated: flags & 1 != 0 },
+            calibration: Calibration { offset, validated: flags & 1 != 0 },
+            sample_rate,
+            max_frames,
             valid: flags & 2 != 0,
         })
     }
@@ -211,6 +215,8 @@ impl Shared {
         self.adopted.publish(Adopted {
             generation: self.applied.load(Ordering::Acquire),
             calibration: clock.calibration,
+            sample_rate: clock.sample_rate,
+            max_frames: clock.max_frames,
             valid: clock.valid,
         });
     }

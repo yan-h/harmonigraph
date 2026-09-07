@@ -35,7 +35,9 @@ the complete musical build still needs fresh Bitwig initialization, listening an
 Explicit Stop/Reset cancels pending attacks and releases affected voices;
 actual storage exhaustion permits a visible emergency stop that rejects new attacks until Reset.
 Start with the [setup and musical verification checklist](docs/adaptive-tuning-musical-integration.md#trying-the-current-build) and the [measured process/routing requirements](docs/adaptive-tuning.md#session-pairing-and-process-boundary).
-Use one Master hub, Tune before each instrument, Bitwig **by Vendor** hosting with individual overrides off, and each instance's adopted calibration.
+Use one Master hub, Tune before each instrument, Bitwig **by Vendor** hosting with individual overrides off, and each instance's adopted routing offset.
+Sample rate and maximum buffer size come from the host automatically;
+the only clock setup is validating the signed routing offset and applying/reinitializing it.
 The default locked 12-TET configuration produces zero adaptive correction;
 choose **Just** with **Auto** and **Learn** off to verify independent Just tuning.
 VST3 still exports full Harmonigraph only.

@@ -26,6 +26,111 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
         .unwrap();
 }
 
+#[test]
+fn production_musical_host_format_is_automatic_for_first_use_and_stale_restore() {
+    let _scope = crate::test_scope::enter();
+    for (restored, rate, frames) in [(false, 44100.0, 512u32), (true, 48000.0, 256)] {
+        let mut hub = Device::new(false);
+        let mut source = Device::new(true);
+        if restored {
+            // Real state-load path: obsolete zero/mismatched host values must
+            // neither invalidate the clock nor survive the next state save.
+            for device in [&hub, &source] {
+                let mut state = device.save();
+                let field = if device.tuner { setup::SOURCE_FIELD } else { setup::HUB_FIELD };
+                let mut routing: serde_json::Value =
+                    serde_json::from_str(&state.fields[field]).unwrap();
+                routing["calibration"]["sample_rate"] = serde_json::json!(0.0);
+                routing["calibration"]["max_frames"] = serde_json::json!(17);
+                routing["calibration"]["validated"] = serde_json::json!(true);
+                state.fields.insert(field.into(), routing.to_string());
+                assert!(device.load(&state));
+                let saved: serde_json::Value =
+                    serde_json::from_str(&device.save().fields[field]).unwrap();
+                assert!(saved["calibration"].get("sample_rate").is_none());
+                assert!(saved["calibration"].get("max_frames").is_none());
+            }
+        }
+        configure(&hub, Tuning::just());
+        let mut raw = 0;
+        hub.activate_format(rate, frames);
+        source.activate_format(rate, frames);
+        if !restored {
+            // The ordinary UI action validates only the routing offset.
+            // No setup packet contains a user-entered rate or buffer size.
+            for device in [&hub, &source] {
+                let routing = match device.shared().value().routing {
+                    setup::Routing::Hub(mut value) => {
+                        value.calibration.validated = true;
+                        setup::Routing::Hub(value)
+                    }
+                    setup::Routing::Source(mut value) => {
+                        value.calibration.validated = true;
+                        setup::Routing::Source(value)
+                    }
+                };
+                device.shared().apply(routing, true).unwrap();
+            }
+        }
+        // Recovery enumerates 8192 lifetime slots in slices of 256,
+        // then exchanges its inventory and settlement acknowledgements.
+        for _ in 0..64 {
+            source.main();
+            hub.main();
+            source.run_format(raw, vec![], None, None, frames);
+            hub.run_format(raw, vec![], None, None, frames);
+            raw += i64::from(frames);
+        }
+        for device in [&hub, &source] {
+            let shared = device.shared();
+            let adopted = shared.adopted().unwrap();
+            assert_eq!((adopted.sample_rate, adopted.max_frames), (rate, frames));
+            assert!(
+                adopted.valid,
+                "tuner={} restore={restored}, {adopted:?}, source={} hub={}",
+                device.tuner,
+                inspect_source(&source, |s| s.test_reset_progress()),
+                inspect_hub(&hub, |h| h.direct.test_reset_progress())
+            );
+            assert_eq!(adopted.generation, shared.value().generation);
+        }
+        let channel = 0;
+        let mut output = Vec::new();
+        for step in 0..8 {
+            let input = if step == 0 { vec![note(1, channel, 64, 0, true)] } else { vec![] };
+            output.extend(source.run_format(raw, input, None, None, frames).values);
+            hub.run_format(raw, vec![], None, None, frames);
+            raw += i64::from(frames);
+        }
+        assert_eq!(
+            output.iter().filter(|(_, event)| event.attack().is_some()).count(),
+            1,
+            "restore={restored}, source={} hub={} output={output:?}",
+            inspect_source(&source, |s| s.test_reset_progress()),
+            inspect_hub(&hub, |h| h.direct.test_reset_progress())
+        );
+        assert!(output.iter().any(|(_, event)| matches!(event, Event::Expression { kind: CLAP_NOTE_EXPRESSION_TUNING, value, .. } if *value != 0.0)), "accepted output must contain nonzero tuning");
+        let voice = inspect_source(&source, |source| *source.state.voices().next().unwrap());
+        assert_ne!(voice.pitch_microcents, 64 * 100_000_000, "Just E must actually be retuned");
+        assert!(voice.attack_node.is_some());
+        for step in 0..16 {
+            let input = if step == 0 { vec![note(1, channel, 64, 0, false)] } else { vec![] };
+            output.extend(source.run_format(raw, input, None, None, frames).values);
+            hub.run_format(raw, vec![], None, None, frames);
+            raw += i64::from(frames);
+        }
+        assert_eq!(
+            output
+                .iter()
+                .filter(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, .. }))
+                .count(),
+            1
+        );
+        let snapshot = source.source_snapshot();
+        assert_eq!((snapshot.held, snapshot.pending, snapshot.faults), (0, 0, 0));
+    }
+}
+
 struct Phrase {
     hub: Device,
     sources: [Device; 3],
@@ -35,8 +140,7 @@ struct Phrase {
 impl Phrase {
     fn new() -> Self {
         let uuid = SavedUuid::default();
-        let calibration =
-            Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+        let calibration = Calibration { offset: 0, validated: true };
         let mut hub = Device::new(false);
         hub.configure_format(uuid, true, calibration);
         hub.activate_format(44100.0, 512);

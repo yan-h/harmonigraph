@@ -367,11 +367,7 @@ impl Device {
         self.configure_offset(uuid, participating, 0);
     }
     fn configure_offset(&self, uuid: SavedUuid, participating: bool, offset: i64) {
-        self.configure_format(
-            uuid,
-            participating,
-            Calibration { offset, sample_rate: 48000.0, max_frames: 64, validated: true },
-        );
+        self.configure_format(uuid, participating, Calibration { offset, validated: true });
     }
     fn configure_format(&self, uuid: SavedUuid, participating: bool, calibration: Calibration) {
         let mut state = self.save();
@@ -1593,12 +1589,7 @@ fn overlapping_setup_preparation_refuses_the_actual_restore_before_parameter_or_
         setup::SOURCE_FIELD.into(),
         serde_json::to_string(&SourceSetup {
             selected: Some(SavedUuid::default()),
-            calibration: Calibration {
-                offset: 17,
-                sample_rate: 48000.0,
-                max_frames: 64,
-                validated: true,
-            },
+            calibration: Calibration { offset: 17, validated: true },
         })
         .unwrap(),
     );
@@ -2710,12 +2701,7 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
         setup::SOURCE_FIELD.into(),
         serde_json::to_string(&SourceSetup {
             selected: Some(uuid),
-            calibration: Calibration {
-                offset: 65536,
-                sample_rate: 48000.0,
-                max_frames: 64,
-                validated: true,
-            },
+            calibration: Calibration { offset: 65536, validated: true },
         })
         .unwrap(),
     );
@@ -2775,8 +2761,7 @@ fn observed_callback_cost_at_empty_and_full_session_state() {
         println!("CALLBACK {name} n={} mean_ns={mean:.0} p50_ns={} p95_ns={} max_ns={} debug_assertions={}",
             times.len(), times[times.len()/2], times[times.len()*95/100], times[times.len()-1], cfg!(debug_assertions));
     }
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let run = |device: &Device, block: i64, events: Vec<Input>| {
         device.run_format(block * 512, events, None, None, 512)
     };

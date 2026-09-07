@@ -23,8 +23,7 @@ fn inspect_source<R>(device: &Device, f: impl FnOnce(&source::Source) -> R) -> R
 
 fn production_pair() -> (Device, Device) {
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -74,8 +73,7 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
 
 fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -386,8 +384,7 @@ fn production_stop_baseline_holds_recovery_until_known_release_applies() {
 fn production_late_output_automatically_redecides_bound_successor_and_keeps_held_pitch() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -1442,8 +1439,7 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
     let mut hub_max = 0;
     let mut callback_sum = 0;
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2055,8 +2051,7 @@ fn production_crossed_status_query_and_disposition_free_each_others_reply_lane()
 fn production_three_sources_form_one_sequential_assignment_chain() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2130,8 +2125,7 @@ fn production_three_sources_form_one_sequential_assignment_chain() {
 fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2177,8 +2171,7 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 fn production_full_capture_window_consumes_following_completeness_without_eviction() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2243,12 +2236,7 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
             for output_order in orders {
                 for hub_first in [false, true] {
                     let uuid = SavedUuid::default();
-                    let calibration = Calibration {
-                        offset: 0,
-                        sample_rate: 44100.0,
-                        max_frames: 512,
-                        validated: true,
-                    };
+                    let calibration = Calibration { offset: 0, validated: true };
                     let mut hub = Device::new(false);
                     hub.configure_format(uuid, true, calibration);
                     hub.activate_format(44100.0, 512);
@@ -2356,12 +2344,7 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
             for output_order in orders {
                 for hub_position in 0..4 {
                     let uuid = SavedUuid::default();
-                    let calibration = Calibration {
-                        offset: 0,
-                        sample_rate: 44100.0,
-                        max_frames: 512,
-                        validated: true,
-                    };
+                    let calibration = Calibration { offset: 0, validated: true };
                     let mut hub = Device::new(false);
                     hub.configure_format(uuid, true, calibration);
                     hub.activate_format(44100.0, 512);
@@ -2478,8 +2461,7 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
 fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
     crate::configuration::inject_recorder(recorder);
     let mut hub = Device::new(false);
@@ -2776,8 +2758,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
     for b_offset in [447i64, 448, 511] {
         for favorable in [true, false] {
             let uuid = SavedUuid::default();
-            let calibration =
-                Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+            let calibration = Calibration { offset: 0, validated: true };
             let mut hub = Device::new(false);
             hub.configure_format(uuid, true, calibration);
             hub.activate_format(44100.0, 512);
@@ -2920,8 +2901,7 @@ fn production_terminal_nonmember_fault_preserves_the_healthy_frozen_cohort() {
             setup::Routing::Hub(value) => value.uuid,
             _ => unreachable!(),
         };
-        let calibration =
-            Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+        let calibration = Calibration { offset: 0, validated: true };
         source.run_format(
             1536,
             (0..64).map(|id| note(id, 0, id as i16, 0, true)).collect(),
@@ -3394,8 +3374,7 @@ fn production_destroyed_held_source_closes_pending_peer_without_fabricating_rele
     // The real destroyed producer cannot accept an Off. Its physical debt
     // intentionally retains an owner, isolated from unrelated registry tests.
     let uuid = SavedUuid::default();
-    let calibration =
-        Calibration { offset: 0, sample_rate: 44100.0, max_frames: 512, validated: true };
+    let calibration = Calibration { offset: 0, validated: true };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);

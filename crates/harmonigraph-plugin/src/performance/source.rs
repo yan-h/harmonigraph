@@ -455,6 +455,8 @@ impl Source {
         self.max_frames = max_frames;
         if !first {
             // Reactivation cannot install accepted setup over a still-owned lease.
+            self.clock.sample_rate = rate;
+            self.clock.max_frames = max_frames;
             self.clock.valid = false;
             if let Some(local) = &mut self.local_clock {
                 // Keep the never-calibrated authority marker, but no old
