@@ -22,11 +22,97 @@ pub use egui_wgpu::{WgpuConfiguration, WgpuSetup};
 /// and their texture namespaces remain window-owned. Use a new context when
 /// changing device options; a reopened window inherits the original device.
 #[derive(Clone, Default)]
-pub struct SharedGpuContext(Arc<std::sync::Mutex<Option<egui_wgpu::WgpuSetupExisting>>>);
+pub struct SharedGpuContext(Arc<std::sync::Mutex<Option<RetainedGpu>>>);
+
+#[derive(Clone)]
+struct RetainedGpu {
+    setup: egui_wgpu::WgpuSetupExisting,
+    lost: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SharedGpuContext {
+    fn existing(&self) -> Option<egui_wgpu::WgpuSetupExisting> {
+        let cached = self.0.lock().expect("GPU context lock poisoned").clone()?;
+        // Deliver any loss callback that became pending while no window was
+        // polling. Never wait for GPU work on the editor-opening path.
+        let _ = cached.setup.device.poll(wgpu::PollType::Poll);
+        if cached.lost.load(std::sync::atomic::Ordering::Acquire) {
+            let mut slot = self.0.lock().expect("GPU context lock poisoned");
+            if slot.as_ref().is_some_and(|gpu| Arc::ptr_eq(&gpu.lost, &cached.lost)) {
+                *slot = None;
+            }
+            return None;
+        }
+        Some(cached.setup)
+    }
+
+    fn clear(&self) {
+        *self.0.lock().expect("GPU context lock poisoned") = None;
+    }
+
+    fn retain(&self, setup: egui_wgpu::WgpuSetupExisting) {
+        let mut slot = self.0.lock().expect("GPU context lock poisoned");
+        if slot.as_ref().is_some_and(|gpu| {
+            gpu.setup.instance == setup.instance && gpu.setup.device == setup.device
+        }) {
+            // Keep the original loss flag and callback when reopening, even
+            // if the device became lost during this window's construction.
+            return;
+        }
+        let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = lost.clone();
+        setup.device.set_device_lost_callback(move |_, _| {
+            // Capturing just the flag avoids a device -> callback -> device
+            // ownership cycle. A late callback cannot evict a newer device.
+            signal.store(true, std::sync::atomic::Ordering::Release);
+        });
+        *slot = Some(RetainedGpu { setup, lost });
+    }
+}
 
 impl std::fmt::Debug for SharedGpuContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SharedGpuContext")
+    }
+}
+
+#[cfg(test)]
+mod shared_context_tests {
+    use super::*;
+
+    #[test]
+    fn a_lost_device_is_evicted_before_reopening() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("no GPU adapter available; skipping");
+            return;
+        };
+        let setup = || {
+            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+            egui_wgpu::WgpuSetupExisting {
+                instance: instance.clone(), adapter: adapter.clone(), device, queue,
+            }
+        };
+        let context = SharedGpuContext::default();
+        let first = setup();
+        context.retain(first.clone());
+        assert_eq!(context.existing().unwrap().device, first.device);
+        // destroy() takes the real device-lost path; existing() must deliver
+        // its callback itself, just as it must after a window has been shut.
+        first.device.destroy();
+        assert!(context.existing().is_none());
+        assert!(context.0.lock().unwrap().is_none());
+
+        let retired = setup();
+        context.retain(retired.clone());
+        let replacement = setup();
+        context.retain(replacement.clone());
+        retired.device.destroy();
+        let _ = retired.device.poll(wgpu::PollType::Poll);
+        let signal = context.0.lock().unwrap().as_ref().unwrap().lost.clone();
+        context.retain(replacement.clone());
+        assert!(Arc::ptr_eq(&signal, &context.0.lock().unwrap().as_ref().unwrap().lost));
+        assert_eq!(context.existing().unwrap().device, replacement.device);
     }
 }
 
@@ -251,11 +337,9 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(window: &Window, mut config: GraphicsConfig) -> Result<Self, WgpuError> {
-        let existing = config.shared_context.as_ref().and_then(|context| {
-            context.0.lock().expect("GPU context lock poisoned").clone()
-        });
+        let existing = config.shared_context.as_ref().and_then(SharedGpuContext::existing);
         let instance = existing.as_ref().map_or_else(
-            || pollster::block_on(config.wgpu_options.wgpu_setup.new_instance()),
+            || wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()),
             |existing| existing.instance.clone(),
         );
 
@@ -275,19 +359,22 @@ impl Renderer {
             &instance,
             Some(&surface),
             config.renderer_options,
-        ))?);
+        )).inspect_err(|_| {
+            if let Some(context) = &config.shared_context {
+                context.clear();
+            }
+        })?);
 
         // Native device IDs are scoped to an instance. Callbacks retaining
         // device resources across windows need both halves of identity.
         state.renderer.write().callback_resources.insert(instance.clone());
         if let Some(context) = &config.shared_context {
-            *context.0.lock().expect("GPU context lock poisoned") =
-                Some(egui_wgpu::WgpuSetupExisting {
-                    instance,
-                    adapter: state.adapter.clone(),
-                    device: state.device.clone(),
-                    queue: state.queue.clone(),
-                });
+            context.retain(egui_wgpu::WgpuSetupExisting {
+                instance,
+                adapter: state.adapter.clone(),
+                device: state.device.clone(),
+                queue: state.queue.clone(),
+            });
         }
 
         let gpu_timer = EguiGpuTimer::new(&state.device, &state.queue);

@@ -47,15 +47,19 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     window.atlas.upload(&shooter.device, &shooter.queue, &atlas);
     window.marks.upload(&shooter.device, &shooter.queue, &atlas);
     window.sdf_key = 99;
+    // Exercise the reset on populated resources. The cache's template never
+    // draws, so testing only its clone would pass even if these fields leaked.
+    let reset = window.for_context(&shooter.device, &shooter.queue);
+    assert!(reset.panes.is_empty());
+    assert!(reset.atlas.view().is_none() && reset.marks.view().is_none());
+    assert_eq!(reset.sdf_key, 0);
+    drop(reset);
     shooter.resources = CallbackResources::default();
 
     let started = std::time::Instant::now();
     let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
     eprintln!("cached lattice reopen: {:?}", started.elapsed());
     assert_eq!(reopened.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
-    assert!(reopened.panes.is_empty());
-    assert!(reopened.atlas.view().is_none() && reopened.marks.view().is_none());
-    assert_eq!(reopened.sdf_key, 0);
     drop(reopened);
 
     shooter.resources.insert(instance.clone());

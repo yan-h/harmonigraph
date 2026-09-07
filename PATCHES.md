@@ -229,6 +229,9 @@ the largest valid Name size reaches the 64 MiB ceiling once and reuses it too.
 Only the instance, adapter, device and queue survive;
 each open still creates a surface and an egui renderer with a fresh texture namespace.
 The original adapter is checked against the new surface before reuse.
+Device-loss callbacks mark a retained setup unusable, and a nonblocking poll at open delivers any pending loss before deciding to reuse it.
+Failed renderer creation also clears the retained setup, so a later open can recover with a fresh device.
+Creating a fresh instance keeps the previous `new_without_display_handle` descriptor.
 Harmonigraph pairs this with its own cache of immutable lattice pipelines, keyed on instance, device identity and output format, so a closed editor does not depend on the driver's compiler cache still being warm when it reopens.
 Measured on Metal:
 constructing the lattice resources took 2.58 s cold and 49 ms warm;
