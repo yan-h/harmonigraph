@@ -1445,19 +1445,6 @@ impl Hub {
                         value.player
                     };
                     row.state.assignment(value.lifetime, binding, player);
-                    if self.sequencer.participating[index + 1]
-                        && matches!(value.event, super::event::Event::Expression { kind: 2, .. })
-                    {
-                        if let Some(voice) = row.state.voice(value.lifetime) {
-                            self.sequencer.history.commit(
-                                row.lease.unwrap(),
-                                voice.channel,
-                                voice.note,
-                                binding,
-                                true,
-                            );
-                        }
-                    }
                 }
                 if let Some(mut delta) = delta {
                     delta.assignment = row

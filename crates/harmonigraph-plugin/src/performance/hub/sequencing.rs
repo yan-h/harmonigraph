@@ -390,7 +390,7 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 #[cfg(test)]
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
-        println!("LEDGER musical [history_cell,confirmed,prospective] {:?}; policy [scratch,context] {:?}", self.history.layout(), [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]);
+        println!("LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}", self.history.layout(), [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]);
         println!(
             "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
             [
@@ -924,13 +924,7 @@ impl Hub {
                     );
                 }
                 if birth.adaptive && self.sequencer.participating[source] {
-                    self.sequencer.history.commit(
-                        key.lease,
-                        birth.channel,
-                        birth.key,
-                        binding,
-                        false,
-                    );
+                    self.sequencer.history.commit(key.lease, birth.channel, birth.key, binding);
                 }
                 self.sequencer.cohort_unsent += 1;
                 self.sequencer.cohort_recipients |= 1 << (source - 1);
