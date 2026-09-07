@@ -5,7 +5,8 @@
 //! backend). A pane that wants to show the lattice allocates a rect and
 //! adds [`lattice_paint_callback`] to the painter; pipelines and buffers are
 //! created lazily on first paint and cached in egui-wgpu's
-//! `CallbackResources`.
+//! `CallbackResources`. The plugin retains compiled handles between windows
+//! through [`LatticePipelineCache`]; textures and pane history stay window-owned.
 //!
 //! Rendering model: one instanced draw of camera-facing quads (billboards),
 //! sorted back-to-front on the CPU, rendered in `prepare()` into a per-pane
@@ -790,6 +791,8 @@ pub struct LatticeStats {
 /// `stats` receives this pane's own measurements. Pass `None` for panes whose
 /// cost isn't the one being reported, so a second lattice on screen can't
 /// overwrite the readings.
+/// `pipeline_cache` reuses compiled handles when the shell publishes its
+/// [`wgpu::Instance`] into `CallbackResources`; other shells build per window.
 pub fn lattice_paint_callback(
     rect: egui::Rect,
     scene: &Scene,
@@ -797,15 +800,17 @@ pub fn lattice_paint_callback(
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     stats: Option<std::sync::Arc<LatticeStats>>,
+    pipeline_cache: std::sync::Arc<LatticePipelineCache>,
 ) -> egui::PaintCallback {
-    egui_wgpu::Callback::new_paint_callback(
-        rect,
-        LatticeCallback::from_scene(scene, labels, rect.size(), target_format, pane_id, stats),
-    )
+    let mut callback =
+        LatticeCallback::from_scene(scene, labels, rect.size(), target_format, pane_id, stats);
+    callback.pipeline_cache = Some(pipeline_cache);
+    egui_wgpu::Callback::new_paint_callback(rect, callback)
 }
 
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
+    pipeline_cache: Option<std::sync::Arc<LatticePipelineCache>>,
     instances: Vec<GpuInstance>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
@@ -1278,6 +1283,7 @@ impl LatticeCallback {
         }
 
         LatticeCallback {
+            pipeline_cache: None,
             instances,
             glyphs,
             casters,
@@ -1712,6 +1718,48 @@ struct LatticeResources {
     timer: Option<GpuTimer>,
     #[cfg(feature = "hot-reload")]
     watcher: ShaderWatcher,
+}
+
+/// Compiled lattice pipelines retained by one UI state across editor windows.
+/// Only instance, device and target format key this slot: camera, pane dimensions,
+/// elapsed hidden time and drawing history do not affect compilation. The
+/// template never draws, so it holds no pane targets, ink history or font atlas.
+/// Reopening clones GPU handles and allocates fresh window-owned mutable state.
+#[derive(Default)]
+pub struct LatticePipelineCache {
+    // Hot reload owns live shader replacement; keep that development path's
+    // existing rebuild-on-open behavior rather than caching its baked source.
+    #[cfg(not(feature = "hot-reload"))]
+    // wgpu compares native devices by ID, and those IDs restart per instance.
+    template: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, LatticeResources)>>,
+}
+
+impl LatticePipelineCache {
+    fn resources(
+        &self,
+        instance: &wgpu::Instance,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> LatticeResources {
+        #[cfg(feature = "hot-reload")]
+        {
+            let _ = instance;
+            LatticeResources::new(device, queue, format)
+        }
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            let mut cached = self.template.lock().expect("lattice pipeline cache poisoned");
+            if cached.as_ref().is_none_or(|(owner_instance, owner, r)| {
+                owner_instance != instance || owner != device || r.target_format != format
+            }) {
+                let mut resources = LatticeResources::new(device, queue, format);
+                resources.timer = None;
+                *cached = Some((instance.clone(), device.clone(), resources));
+            }
+            cached.as_ref().expect("initialized above").2.for_context(device, queue)
+        }
+    }
 }
 
 /// Wall-clock time the GPU spends on one pane's lattice passes, read back
@@ -2757,6 +2805,7 @@ fn create_pipelines(
 /// The ordered scene pass's attachment-compatible draws. Index 0 carries
 /// only the picture; index 1 also writes the independent bloom input.
 /// Startup and hot reload build both through the same factory.
+#[derive(Clone)]
 struct ScenePipelines {
     nodes: wgpu::RenderPipeline,
     pluses: wgpu::RenderPipeline,
@@ -3424,6 +3473,51 @@ impl LatticeResources {
         }
     }
 
+    /// Clone only immutable device resources. In particular, a new egui
+    /// context must publish its own atlases and a new window must start with
+    /// empty pane history, even when their IDs match the window that closed.
+    #[cfg(not(feature = "hot-reload"))]
+    fn for_context(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self {
+            scenes: self.scenes.clone(),
+            composite_pipeline: self.composite_pipeline.clone(),
+            bright_pipeline: self.bright_pipeline.clone(),
+            downsample_pipeline: self.downsample_pipeline.clone(),
+            blur_h_pipeline: self.blur_h_pipeline.clone(),
+            blur_v_pipeline: self.blur_v_pipeline.clone(),
+            glow_gather_pipeline: self.glow_gather_pipeline.clone(),
+            glow_node_layout: self.glow_node_layout.clone(),
+            ink_strip_pipeline: self.ink_strip_pipeline.clone(),
+            ink_blur_pipeline: self.ink_blur_pipeline.clone(),
+            bind_group_layout: self.bind_group_layout.clone(),
+            composite_layout: self.composite_layout.clone(),
+            filter_layout: self.filter_layout.clone(),
+            glow_dummy_bind_group: self.glow_dummy_bind_group.clone(),
+            bloom_dummy: self.bloom_dummy.clone(),
+            strip_layout: self.strip_layout.clone(),
+            sampler: self.sampler.clone(),
+            glyph_coverage_cell_pipeline: self.glyph_coverage_cell_pipeline.clone(),
+            glyph_distance_cell_pipeline: self.glyph_distance_cell_pipeline.clone(),
+            glyph_distance_pad_pipeline: self.glyph_distance_pad_pipeline.clone(),
+            shadow_cell_pipelines: self.shadow_cell_pipelines.clone(),
+            node_cell_pipeline: self.node_cell_pipeline.clone(),
+            plus_cell_pipeline: self.plus_cell_pipeline.clone(),
+            shadow_dummy_bind_group: self.shadow_dummy_bind_group.clone(),
+            shadow_layout: self.shadow_layout.clone(),
+            caster_layout: self.caster_layout.clone(),
+            glyph_layout: self.glyph_layout.clone(),
+            glyph_sampler: self.glyph_sampler.clone(),
+            blank: self.blank.clone(),
+            blank_sdf: self.blank_sdf.clone(),
+            target_format: self.target_format,
+            atlas: text::AtlasTexture::default(),
+            marks: text::AtlasTexture::default(),
+            sdf_key: 0,
+            panes: HashMap::new(),
+            timer: GpuTimer::new(device, queue),
+        }
+    }
+
     /// Bind egui's current font texture and upload whichever fallback sheet moved.
     ///
     /// The text callback answers the same question with a great deal more
@@ -3779,7 +3873,15 @@ impl CallbackTrait for LatticeCallback {
             .get::<LatticeResources>()
             .is_none_or(|r| r.target_format != self.target_format);
         if recreate {
-            callback_resources.insert(LatticeResources::new(device, queue, self.target_format));
+            // The plugin publishes the instance that owns this device. Other
+            // shells keep their existing window-owned resource lifetime.
+            let cached =
+                self.pipeline_cache.as_ref().zip(callback_resources.get::<wgpu::Instance>());
+            let resources = cached.map_or_else(
+                || LatticeResources::new(device, queue, self.target_format),
+                |(cache, instance)| cache.resources(instance, device, queue, self.target_format),
+            );
+            callback_resources.insert(resources);
         }
         let resources: &mut LatticeResources =
             callback_resources.get_mut().expect("inserted above when missing");
