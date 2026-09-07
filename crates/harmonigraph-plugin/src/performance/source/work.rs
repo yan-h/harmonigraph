@@ -112,7 +112,7 @@ impl Work {
             high_water: 0,
         }
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.len
     }

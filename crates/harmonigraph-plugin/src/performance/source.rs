@@ -33,7 +33,7 @@ pub(super) const ASSIGNMENT_HELD: u8 = 2;
 pub(super) const TIMING_REPORTED: u8 = 4;
 pub(super) const PARTIAL_ON: u8 = 8;
 pub(super) const SHIFT_VALID: u8 = 16;
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
     pub captures: usize,
@@ -298,7 +298,7 @@ impl Source {
             0
         }
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
             captures: self.captures_outstanding,
