@@ -1536,6 +1536,16 @@ impl Source {
         }
         self.stage_work(position, NONE, start, end, output)
     }
+    /// Everything the replacement's own attack must clear before its
+    /// predecessor may be choked for it. Timing is not here: both are due at
+    /// the same sample, and `stage_work` refuses that for itself.
+    fn replacement_ready(&mut self, parent: Pending) -> bool {
+        if !self.assignment_ready(parent.life) {
+            self.note_wait = true;
+            return false;
+        }
+        !self.stage_full && self.admitted(parent.generation)
+    }
     fn stage_work(
         &mut self,
         position: usize,
@@ -1589,6 +1599,16 @@ impl Source {
             self.dispose_work(position, child);
             return true;
         }
+        // Rule two ties a replacement's forced release of its predecessor to the
+        // moment the replacement is emitted, and an attack's children are
+        // exactly that release. Resolved, the child IS a release, so it skips
+        // every check an attack owes; without this the key would be silenced
+        // while its replacement was still unassigned or unadmitted. Both
+        // staging paths reach it -- the predecessor's own indexed release scan
+        // stages this child too, and it is the one that gets here first.
+        if child != NONE && parent.event.attack().is_some() && !self.replacement_ready(parent) {
+            return false;
+        }
         if pending.event.attack().is_some() && !self.admitted(pending.generation) {
             return false;
         }
@@ -1613,7 +1633,15 @@ impl Source {
         // Rule: an established note keeps its own onset lateness for its own
         // later release and expression. Everything else — a fresh onset and
         // every shared channel control — is input time plus the fixed delay.
-        let shift = if established { life.unwrap().shift.unwrap_or(0) } else { self.delay() };
+        // A replacement's forced release of its predecessor is the exception:
+        // it happens when the REPLACEMENT emits, so it takes that fresh onset's
+        // input+D rather than however late the note it displaces was.
+        let replacement = child != NONE && parent.event.attack().is_some();
+        let shift = if established && !replacement {
+            life.unwrap().shift.unwrap_or(0)
+        } else {
+            self.delay()
+        };
         let Some(mut due) = pending.input.checked_add(shift) else {
             self.fault(CLOCK_FAULT);
             return false;

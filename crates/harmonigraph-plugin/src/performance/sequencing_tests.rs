@@ -829,15 +829,24 @@ fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emissio
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
     // Rule two: a replacement onset on the same channel and key force-releases
-    // the note it displaces, at the moment the replacement is emitted -- not
-    // at its input, and not left to the receiving instrument.
+    // the note it displaces at the moment the replacement is EMITTED -- not at
+    // its input, not on the predecessor's schedule, and not left to the
+    // receiving instrument. Both halves of that are exercised here.
     source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
-    let sounding = source.run_format(2048, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    let sounding = source.run_format(2048, vec![], None, None, 512);
     assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
     hub.run_format(2048, vec![], None, None, 512);
     assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_some());
-    let retrigger = source.run_format(2560, vec![], None, None, 512);
+    // First ordering: the Hub has not answered the replacement by input+D. The
+    // key keeps sounding rather than going silent between the two.
+    source.run_format(2560, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    assert!(
+        source.run_format(3072, vec![], None, None, 512).values.is_empty(),
+        "an unanswered replacement does not get to choke its predecessor"
+    );
+    hub.run_format(2560, vec![], None, None, 512);
+    let retrigger = source.run_format(3584, vec![], None, None, 512);
     assert_eq!(retrigger.values.len(), 3, "{:?}", retrigger.values);
     assert!(retrigger.values.iter().all(|(time, _)| *time == 0));
     assert!(
@@ -852,17 +861,37 @@ fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emissio
         retrigger.values[1].1,
         Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 60, channel: 0, .. }
     ));
-    hub.run_format(2560, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    hub.run_format(3584, vec![], None, None, 512);
     assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_none(), "the displaced note ended");
     assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 2)).is_some());
-    source.run_format(3072, vec![note(2, 0, 60, 0, false)], None, None, 512);
-    hub.run_format(3072, vec![], None, None, 512);
-    assert!(source.run_format(3584, vec![], None, None, 512).values[0].1.release());
-    hub.run_format(3584, vec![], None, None, 512);
-    source.run_format(4096, vec![], None, None, 512);
+    // Second ordering: note 2 sounded a whole callback late and carries that
+    // shift, and its own replacement is answered in time. The choke rides the
+    // replacement's schedule, so an otherwise ready replacement is not delayed
+    // by how late the note it displaces was.
+    source.run_format(4096, vec![note(3, 0, 60, 0, true)], None, None, 512);
     hub.run_format(4096, vec![], None, None, 512);
+    let replaced = source.run_format(4608, vec![], None, None, 512);
+    assert_eq!(replaced.values.len(), 3, "at the replacement's input+D: {:?}", replaced.values);
+    assert!(replaced.values.iter().all(|(time, _)| *time == 0));
+    assert!(matches!(
+        replaced.values[0].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 2, key: 60, .. }
+    ));
+    assert!(matches!(
+        replaced.values[1].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 3, key: 60, .. }
+    ));
+    hub.run_format(4608, vec![], None, None, 512);
+    source.run_format(5120, vec![note(3, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(5120, vec![], None, None, 512);
+    assert!(source.run_format(5632, vec![], None, None, 512).values[0].1.release());
+    for raw in [6144, 6656] {
+        hub.run_format(raw - 512, vec![], None, None, 512);
+        source.run_format(raw, vec![], None, None, 512);
+    }
     let settled = source.source_snapshot();
-    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "one key, both lives");
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "one key, three lives");
 }
 
 #[test]
