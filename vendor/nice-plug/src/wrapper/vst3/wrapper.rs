@@ -1316,7 +1316,7 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
                                     .enumerate()
                                 {
                                     let aux_input_idx = aux_input_no + aux_input_start_idx;
-                                    if aux_input_idx > data.numOutputs as usize {
+                                    if aux_input_idx >= data.numInputs as usize {
                                         break;
                                     }
 
@@ -1340,7 +1340,7 @@ impl<P: Vst3Plugin> IAudioProcessorTrait for Wrapper<P> {
                                     .enumerate()
                                 {
                                     let aux_output_idx = aux_output_no + aux_output_start_idx;
-                                    if aux_output_idx > data.numOutputs as usize {
+                                    if aux_output_idx >= data.numOutputs as usize {
                                         break;
                                     }
 
