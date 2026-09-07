@@ -482,6 +482,14 @@ impl Hub {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)]
             .map(|plan| (plan.terminal, plan.bound, self.sequencer.recovering()))
     }
+    /// Drop the cohort's outstanding delivery count while the plans that owe
+    /// it stay unsent — the accounting violation `service_plans` latches. No
+    /// MIDI input reaches that state, so a test constructs it. Returns the
+    /// debt cleared, so a fixture with nothing to break cannot read as one.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_clear_cohort_unsent(&mut self) -> usize {
+        std::mem::take(&mut self.sequencer.cohort_unsent)
+    }
     #[cfg(test)]
     pub(in crate::performance) fn test_cohort_delivery(&self) -> (u64, usize, u16, bool, usize) {
         (

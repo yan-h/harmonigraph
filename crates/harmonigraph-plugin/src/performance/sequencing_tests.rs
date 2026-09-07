@@ -2633,6 +2633,62 @@ fn production_canceled_unsent_assignment_settles_with_a_full_reply_ring() {
 }
 
 #[test]
+fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    source.run_format(1536, vec![note(99, 0, 60, 0, true)], None, None, 512);
+    let hub_wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    // A full reply ring is the production route to an unsent in-cohort plan:
+    // the assignment is minted and owed but cannot enqueue.
+    hub_wrapper.test_with_plugin(|plugin| {
+        let hub = plugin.aggregation.as_mut().unwrap();
+        let replies = &mut hub.offer.as_mut().unwrap().bank.rows[0].replies;
+        while replies.slots() != 0 {
+            replies
+                .push(protocol::Reply::PlanRetired {
+                    incarnation: 0,
+                    epoch: 0,
+                    life: 0,
+                    lifetime: 0,
+                    decision: 0,
+                })
+                .unwrap();
+        }
+    });
+    hub.run_format(1536, vec![], None, None, 512);
+    let session = inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().session.clone());
+    assert_eq!(session.faults.load(Ordering::Acquire), 0);
+    // Only the counter is corrupted; the plan keeps the binding, decision and
+    // unsent flag production gave it, so the branch is entered on real state.
+    assert_eq!(
+        hub_wrapper.test_with_plugin(|plugin| plugin
+            .aggregation
+            .as_mut()
+            .unwrap()
+            .test_clear_cohort_unsent()),
+        1,
+        "the fixture starts from a real outstanding cohort delivery"
+    );
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_ne!(
+        session.faults.load(Ordering::Acquire) & source::STORAGE_FAULT,
+        0,
+        "the unpayable debt latches instead of panicking the audio callback"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_cohort_delivery().1),
+        0,
+        "the counter is abandoned at zero rather than wrapped"
+    );
+    drop(source);
+    drop(hub);
+}
+
+#[test]
 fn production_terminal_partial_output_finishes_transaction_before_release_or_reset() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
