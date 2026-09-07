@@ -108,9 +108,11 @@ fn exponential_level(p: f32, shape: f32) -> f32 {
 
 impl Default for GlowCurve {
     fn default() -> Self {
-        // A late falloff carries the broad fresh-view field through the gaps
-        // before it drops at the far edge, with earlier falls still in reach.
-        GlowCurve { shape: -1.303_725_2 }
+        // An early falloff: the light spends most of its level near the node
+        // and thins across the gaps, so the fields the wide reach overlaps
+        // meet as a haze rather than a plateau. Captured from the DAW on
+        // 2026-09-07; the late fall it replaced is a drag the other way.
+        GlowCurve { shape: 1.238_095_3 }
     }
 }
 
@@ -1106,6 +1108,11 @@ pub struct ViewConfig {
     /// Off by default: the HUD is a development instrument, and it sits over
     /// the picture the plugin exists to draw. The Display tab's System page,
     /// under Performance, is where it gets switched on.
+    ///
+    /// It was ON in the DAW when the 2026-09-07 look was captured, and stayed
+    /// out of that capture for the reason above — the overlay is what the
+    /// picture is read AGAINST while it is dialled, not part of the picture.
+    /// `the_performance_overlay_ships_off` holds it.
     ///
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
@@ -2263,16 +2270,13 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on — and a fresh
-/// [`ViewConfig::marker_ink`] with it, so the resting picture opens as ONE grey
-/// and the two bars start as a pair to be moved apart. Named because both
-/// `_lightness` accessors need it without building a whole fresh view to read
+/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
+/// `_lightness` accessor needs it without building a whole fresh view to read
 /// one field off. Named, and not a second value: the `Default` below is written
 /// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
-/// Which grey this is, and why that rung, is at
-/// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
-const DEFAULT_RING_GROUND: f32 = 20.0;
+/// Where on the chrome's ladder this grey sits is said at the `Default` below.
+const DEFAULT_RING_GROUND: f32 = 11.0;
 
 /// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
 /// ground because the accessors repair the two independently without building
@@ -2356,24 +2360,25 @@ impl Default for ViewConfig {
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
-                lightness: 53.0,
-                lightness_ramp: 31.0,
+                // Brighter in the middle and over a much steeper ramp than
+                // the arc opened on (53.0 over 31.0): the low end stays dark
+                // enough to sit back while the top of the range carries real
+                // light, which is what separates octaves at a glance.
+                lightness: 60.5,
+                lightness_ramp: 65.0,
                 // Denominated in the floor every hue can hold (see
                 // `chroma_of`), which is a tighter axis than the per-hue
-                // ceiling: this is the fraction holding the mean colorfulness
-                // of THIS arc where 0.601_670_8 of the ceiling held it, so the
-                // lattice a fresh install draws is as colored as it was and
-                // only spends that color evenly. Retuning the type's own
-                // `default_chroma` does not reach here — the two are
-                // independent numbers, which is the point of writing this out.
-                chroma: 0.793_2,
-                // Flat, where the brightness ramp is not: the hue arc is
-                // already spending color on pitch, and a chroma ramp over it
-                // would say the same thing twice at the price of one end of
-                // the range going grey. Dialled rather than opened on — see
-                // `default_chroma_ramp`, which the type's own default takes
-                // for the same reason.
-                chroma_ramp: 0.0,
+                // ceiling. Retuning the type's own `default_chroma` does not
+                // reach here — the two are independent numbers, which is the
+                // point of writing this out.
+                chroma: 0.825_000_05,
+                // A slight ramp, no longer flat: the brightness ramp above it
+                // is steep enough that the bright end would read washed
+                // without a little more color under it. Small on purpose —
+                // the hue arc is still what spends color on pitch, and a
+                // ramp that competed with it would take one end of the range
+                // grey.
+                chroma_ramp: 0.069_999_99,
             },
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
@@ -2395,17 +2400,16 @@ impl Default for ViewConfig {
             // person can meet by dialling neither.
             ring_gap: 0.05,
             octave_gap: 0.05,
-            // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
-            // is the skin's `surface_faint`, two rungs ABOVE the well grey
-            // (4.7) the lattice pane stands on, and clear of the panel between
-            // them (8.8), which is near enough the ground to read as a smudge
-            // on it rather than as a raised surface. A quiet ring is therefore
-            // a faintly raised backdrop that is plainly still a reading —
-            // `the_fresh_ground_is_the_skins_faint_surface` holds the number to
-            // the skin, so retuning that rung and leaving this behind is a test
-            // failure rather than a drift.
+            // Where the DAW look was captured on 2026-09-07, a step DOWN from
+            // the `L*` 20.0 the fresh view stood on before: just above the
+            // chrome's panel (8.8) and well short of its faint surface (20.0),
+            // so a quiet ring is a dim reading barely raised off the pane and
+            // still clear of the well grey (4.7) the lattice pane stands on.
+            // Nothing ties this to the skin any more — the chrome's ladder and
+            // the ground are dialled apart.
             lattice_ground: DEFAULT_RING_GROUND,
-            // One rung above the ring ground, so the resting positions stay
+            // Well above the ring ground — 17 `L*` clear of it since the
+            // capture moved the ground down — so the resting positions stay
             // legible through the broad glow without competing with a sounding
             // node's white name.
             marker_ink: DEFAULT_MARKER_INK,
@@ -2489,16 +2493,18 @@ impl Default for ViewConfig {
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            // Long arms nearly fill the middle inside the ring stack, making
-            // the resting lattice continuous enough to read through the wide
-            // glow field.
-            plus_arm: 0.477_250_43,
-            // A narrow stroke keeps that reach from turning each crossing into
-            // a solid block.
-            plus_width: 0.064_242_415,
-            // Most of each arm is taper, so the long marker arrives at a fine
-            // point rather than carrying its full width into the ring stack.
-            plus_taper: 0.367_250_4,
+            // Arms reaching about half way from the crossing to the ring stack
+            // (`ring_inner`, in the same UV): the resting lattice reads as
+            // separate crosses with ground between them rather than as a
+            // near-continuous mesh. Captured from the DAW on 2026-09-07, with
+            // the two below.
+            plus_arm: 0.305_142_85,
+            // A hairline stroke, so the crosses stay marks rather than blocks
+            // through the wide glow field.
+            plus_width: 0.045_857_143,
+            // About two thirds of each arm is taper, so the marker arrives at
+            // a fine point rather than carrying its width to the tip.
+            plus_taper: 0.195_142_84,
             // The fresh 12-TET tuning satisfies both comma identities, so the
             // spelling locks open on the tuning's own equivalences rather than
             // showing duplicate comma spellings.
@@ -2510,28 +2516,38 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about four fifths strength: a node's rings are quiet
-            // shapes, and the bloom is what gives them presence.
-            bloom_strength: 0.806_154_85,
+            // A halo at about half strength, down from the four fifths the
+            // view opened on: a node's rings are quiet shapes and the bloom is
+            // what gives them presence, but the glow beside it now carries
+            // more of that job — see `glow_blend` and `glow_wash` below.
+            bloom_strength: 0.482_142_87,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field. The lower strength keeps those overlapping
-            // fields from flattening the rings and markers drawn over them.
+            // into a shared field, laid down at about half strength — where
+            // the DAW look was captured on 2026-09-07, up from the quarter the
+            // view opened on before.
             glow_reach: 4.546_375,
-            glow_strength: 0.274_842_2,
+            glow_strength: 0.484_285_7,
             glow_curve: GlowCurve::default(),
-            // Both groups at one style, which is the fresh picture with the
-            // groups not yet asked anything: the numbers themselves and why
-            // they are those numbers live in `impl Default for ShadowStyle`,
-            // that being the one source of a persisted field's fallback.
+            // Four groups at four styles, which is the picture as captured
+            // from the DAW: the numbers themselves live in `impl Default for
+            // ShadowSettings`, that being the one source of a persisted
+            // group's fallback.
             shadow: ShadowSettings::default(),
-            // The whole field, which is the fresh picture with no bar in it:
-            // every piece of the lattice's ink wears the light it stands in,
-            // and the bar is there to pull a SOUNDING slice back out of its own
-            // halo without the grey around it going with it.
-            glow_wash: 1.0,
-            // Each octave keeps its own arc of colour around the node instead
-            // of averaging with the opposite side.
-            glow_blend: 0.0,
+            // About a third of the field, where the picture opened on the
+            // whole of it: a sounding slice is pulled back out of its own halo
+            // and reads as ink rather than as light, while the resting grey
+            // around it still wears what it stands in. That is exactly what
+            // the bar is for, and the fresh view now uses it.
+            glow_wash: 0.365_952_37,
+            // Two thirds of the way round: an octave's arc is softened well
+            // into its neighbours rather than cut against them, which is what
+            // turns the overlapping fields of a chord into one light instead
+            // of a stack of coloured rings.
+            glow_blend: 0.669_761_9,
+            // The fixed-peak glow alone: with the blend above carrying a
+            // chord's halos into each other, the per-channel screen
+            // accumulation was adding brightness where they meet on top of a
+            // union that already reads as one light.
             glow_accumulation: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
