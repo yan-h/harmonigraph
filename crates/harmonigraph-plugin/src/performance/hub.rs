@@ -1705,6 +1705,10 @@ impl Hub {
     ) -> Option<harmonigraph_core::canonical::VoiceBaseline> {
         self.rows[source].state.voice(lifetime).copied()
     }
+    /// The policy's tuning context, as `(source slot, lifetime)`.
+    pub fn test_context(&self) -> Vec<(u8, u64)> {
+        self.sequencer.test_context()
+    }
     /// Copied records this row is holding, oldest first.
     pub fn test_inputs(&self, source: usize) -> Vec<Capture> {
         let queue = if source == 0 { &self.direct_inputs } else { &self.rows[source - 1].inputs };

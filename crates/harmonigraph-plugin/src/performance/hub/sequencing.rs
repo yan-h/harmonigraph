@@ -285,6 +285,13 @@ const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 
 #[cfg(test)]
 impl Sequencer {
+    /// Every voice the policy would score a fresh onset against, as
+    /// `(source slot, lifetime)`. Distinct from a row's factual `State`: this
+    /// is what tuning reads, and a note the Hub no longer believes is sounding
+    /// has to be gone from BOTH.
+    pub(super) fn test_context(&self) -> Vec<(u8, u64)> {
+        self.context.iter().flatten().map(|voice| (voice.source, voice.lifetime)).collect()
+    }
     pub(super) fn print_test_memory_layout(&self) {
         println!(
             "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
@@ -643,6 +650,13 @@ impl Hub {
                 (CaptureKind::Tuning { value_bits }, Some(cell)) => {
                     cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
                 }
+                // Release-first ordering puts a terminal ahead of the onset it
+                // addresses whenever one lifetime is born and ends at a single
+                // sample. Retain the identity so that onset does not leave a
+                // live context entry for a note this sample already ended.
+                (CaptureKind::Terminal, None) => {
+                    self.batch.ended(record.lease.slot, record.lifetime)
+                }
                 // A pitch expression that arrives at its own note's sample has
                 // no voice to reach yet: it is the value that note starts from.
                 (CaptureKind::Tuning { value_bits }, None) => {
@@ -740,7 +754,14 @@ impl Hub {
             (0, Selection::Unretuned)
         };
         let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
-        let Some(slot) = self.sequencer.context.iter().position(Option::is_none) else {
+        // A lifetime this sample already ended still gets its assignment — the
+        // Tune is waiting for one — but never becomes context, because the
+        // release that ended it applied before this onset existed.
+        let slot = if self.batch.already_ended(record.lease.slot, record.lifetime) {
+            None
+        } else if let Some(slot) = self.sequencer.context.iter().position(Option::is_none) {
+            Some(slot)
+        } else {
             self.configuration_exhausted();
             return false;
         };
@@ -792,20 +813,22 @@ impl Hub {
                 self.sequencer.cohort_unsent -= 1;
             }
         }
-        self.sequencer.context[slot] = Some(Voice {
-            source: record.lease.slot,
-            lifetime: record.lifetime,
-            correction: i64::from(correction),
-            player,
-            key: record.key,
-            channel: record.channel,
-            pitch: i64::from(record.key) * 100_000_000
-                + i64::from(correction)
-                + (player * 100_000_000.0).round() as i64,
-            node: selection.node(),
-            configuration_revision: configuration.revision,
-            decision,
-        });
+        if let Some(slot) = slot {
+            self.sequencer.context[slot] = Some(Voice {
+                source: record.lease.slot,
+                lifetime: record.lifetime,
+                correction: i64::from(correction),
+                player,
+                key: record.key,
+                channel: record.channel,
+                pitch: i64::from(record.key) * 100_000_000
+                    + i64::from(correction)
+                    + (player * 100_000_000.0).round() as i64,
+                node: selection.node(),
+                configuration_revision: configuration.revision,
+                decision,
+            });
+        }
         self.sequencer.decision = decision;
         true
     }

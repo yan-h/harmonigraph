@@ -857,6 +857,38 @@ fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emissio
 }
 
 #[test]
+fn production_a_lifetime_born_and_ended_at_one_sample_leaves_no_tuning_context() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Release-first ordering applies a lifetime's terminal before its own
+    // onset whenever both fall on one sample, so no later record can remove
+    // the voice that onset would insert. Two gestures reach that: a key struck
+    // and lifted at one sample, and a same-key onset repeated at one sample,
+    // whose predecessor's choke shares the replacement's sample.
+    let mut input = vec![note(1, 0, 60, 0, true), note(1, 0, 60, 0, false)];
+    for id in 2..10 {
+        input.push(note(id, 0, 64, 0, true));
+    }
+    source.run_format(1536, input, None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 9)],
+        "only the one note still standing at the end of the sample"
+    );
+    // The survivor's own release clears the last of it.
+    source.run_format(2048, vec![note(9, 0, 64, 0, false)], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), vec![], "nothing outlives the phrase");
+    for raw in [2560, 3072, 3584] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
+}
+
+#[test]
 fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice() {
     let _scope = crate::test_scope::enter();
     let stopped = || {

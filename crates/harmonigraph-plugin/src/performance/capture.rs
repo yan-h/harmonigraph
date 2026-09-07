@@ -193,6 +193,11 @@ pub(super) struct Batch {
     /// Per-note pitch expression seen in this sample's first pass for a note
     /// that has no assignment yet — the value a fresh onset starts from.
     tuning: Vec<(u8, u64, u64)>,
+    /// Lifetimes this sample ended before the Hub held a voice for them. The
+    /// release-first order puts a terminal ahead of its own onset whenever a
+    /// note is born and ends at one sample, so the onset has to learn it is
+    /// already over instead of leaving a live context entry behind.
+    terminated: Vec<(u8, u64)>,
     cursor: usize,
     pub sample: i64,
     pub active: bool,
@@ -202,6 +207,7 @@ impl Default for Batch {
         Self {
             records: Vec::with_capacity(BATCH_EVENTS),
             tuning: Vec::with_capacity(harmonigraph_core::policy::MAX_COHORT_ONSETS),
+            terminated: Vec::with_capacity(BATCH_EVENTS),
             cursor: 0,
             sample: 0,
             active: false,
@@ -212,6 +218,7 @@ impl Batch {
     pub fn begin(&mut self, sample: i64) {
         self.records.clear();
         self.tuning.clear();
+        self.terminated.clear();
         self.cursor = 0;
         self.sample = sample;
         self.active = true;
@@ -257,6 +264,18 @@ impl Batch {
         self.tuning.push((source, lifetime, value_bits));
         true
     }
+    /// A terminal that found no voice to end. One entry per record and the
+    /// pass already refuses more records than `BATCH_EVENTS`, so the reserve
+    /// cannot be outrun and the guard never allocates.
+    pub fn ended(&mut self, source: u8, lifetime: u64) {
+        if self.terminated.len() < BATCH_EVENTS {
+            self.terminated.push((source, lifetime));
+        }
+    }
+    /// True when this sample already ended the note this onset is starting.
+    pub fn already_ended(&self, source: u8, lifetime: u64) -> bool {
+        self.terminated.contains(&(source, lifetime))
+    }
     pub fn initial_tuning(&self, source: u8, lifetime: u64) -> Option<f64> {
         self.tuning
             .iter()
@@ -266,6 +285,7 @@ impl Batch {
     pub fn end(&mut self) {
         self.records.clear();
         self.tuning.clear();
+        self.terminated.clear();
         self.cursor = 0;
         self.active = false;
     }
