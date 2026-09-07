@@ -771,7 +771,10 @@ fn an_unpaired_tune_retires_its_own_accepted_output_rather_than_filling_its_jour
             (0..400u32).map(|index| raw_midi([0xb0, 1, 64], index % 512)).collect::<Vec<_>>();
         emitted += source.run_format(block * 512, controls, None, None, 512).values.len();
     }
-    assert!(emitted > super::protocol::OUTCOME_JOURNAL, "the fixture reaches past one journal: {emitted}");
+    assert!(
+        emitted > super::protocol::OUTCOME_JOURNAL,
+        "the fixture reaches past one journal: {emitted}"
+    );
     let settled = source.source_snapshot();
     assert_eq!(settled.faults, 0, "an unpaired Tune's own output is not an overflow");
     assert_eq!(settled.journal, 0, "it acknowledges what only it can acknowledge");
@@ -974,13 +977,7 @@ fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() 
     // no note, so it keeps its own input+D schedule rather than waiting
     // behind the oldest pending attack.
     assert!(source
-        .run_format(
-            1536,
-            vec![note(7, 0, 60, 0, true), raw_midi([0xf8, 0, 0], 1)],
-            None,
-            None,
-            512
-        )
+        .run_format(1536, vec![note(7, 0, 60, 0, true), raw_midi([0xf8, 0, 0], 1)], None, None, 512)
         .values
         .is_empty());
     let late = source.run_format(2048, vec![], None, None, 512);
@@ -1329,8 +1326,7 @@ fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
     // the assignment is minted and owed but cannot enqueue.
     hub_wrapper.test_with_plugin(|plugin| {
         let hub = plugin.aggregation.as_mut().unwrap();
-        let replies =
-            &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
+        let replies = &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
         while replies.slots() != 0 {
             replies
                 .push(protocol::Reply::PlanRetired {

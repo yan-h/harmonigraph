@@ -462,8 +462,8 @@ impl Hub {
             return;
         }
         let Some(offer) = &self.offer else { return };
-        let mut faults = offer.session.faults.load(Ordering::Acquire)
-            & !super::super::source::TIMING_FAILURE;
+        let mut faults =
+            offer.session.faults.load(Ordering::Acquire) & !super::super::source::TIMING_FAILURE;
         let mut local = 0u16;
         for (source, row) in self.rows.iter().enumerate() {
             let bits = offer.session.rows[source].faults.load(Ordering::Acquire)
@@ -655,9 +655,13 @@ impl Hub {
             }
             return true;
         }
-        let request =
-            Request { lease: record.lease, epoch: record.epoch, serial: record.serial,
-                request: record.request, lifetime: record.lifetime };
+        let request = Request {
+            lease: record.lease,
+            epoch: record.epoch,
+            serial: record.serial,
+            request: record.request,
+            lifetime: record.lifetime,
+        };
         let prior = (source != 0)
             .then(|| self.sequencer.plan((source - 1) * LIFETIMES + usize::from(record.request)))
             .flatten();
@@ -735,8 +739,7 @@ impl Hub {
         } else {
             (0, Selection::Unretuned)
         };
-        let player =
-            self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
+        let player = self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
         let Some(slot) = self.sequencer.context.iter().position(Option::is_none) else {
             self.configuration_exhausted();
             return false;

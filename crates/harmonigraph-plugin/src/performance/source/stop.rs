@@ -41,8 +41,7 @@ impl Source {
         }
         let position = self.enqueue_cell(Event::Stop, NONE, sample, false);
         let mut pending = self.pending.at(position).unwrap();
-        pending.channel.role =
-            channel::Role::Stop { previous: self.stops.tail, next: NONE };
+        pending.channel.role = channel::Role::Stop { previous: self.stops.tail, next: NONE };
         self.pending.set(position, pending);
         if self.stops.tail == NONE {
             self.stops.head = position as u16;

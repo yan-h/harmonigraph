@@ -1205,10 +1205,7 @@ impl Source {
         self.cancel_unsounded();
         // Credits can outlive an accepted Off until its factual ACK arrives.
         // Only actual wire state may create fresh release debt at Stop.
-        if self.state.count() != 0
-            || self.state.pedals_held()
-            || self.owed_note_off != [NONE; 64]
-        {
+        if self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64] {
             self.arm_release_debt();
         }
     }
@@ -1937,10 +1934,9 @@ impl Source {
                 actual,
                 player,
             );
-            let partial = completion.group.initial_tuning().is_some()
-                && completion.accepted & 2 == 0;
-            delta.outcome =
-                Outcome::wire(pending.life, partial);
+            let partial =
+                completion.group.initial_tuning().is_some() && completion.accepted & 2 == 0;
+            delta.outcome = Outcome::wire(pending.life, partial);
             if partial {
                 self.state.partial(delta.lifetime);
             }
@@ -1966,8 +1962,7 @@ impl Source {
                 channel::Role::Header { first_waiter, .. } => first_waiter,
                 _ => NONE,
             };
-            if pending.event.attack().is_some() {
-            }
+            if pending.event.attack().is_some() {}
             if self.pending_cursor == Some(position) {
                 self.pending_cursor = self.pending.next_position(position);
             }
@@ -2177,11 +2172,7 @@ impl Source {
     }
     fn recycle(&mut self, index: u16) {
         if self.lives.at(index).is_some_and(|l| {
-            !l.active
-                && !l.reserved
-                && l.refs == 0
-                && !l.ready_queued
-                && !l.assignment_held
+            !l.active && !l.reserved && l.refs == 0 && !l.ready_queued && !l.assignment_held
         }) {
             self.lives.remove(index);
             self.free_lives.push(index);
@@ -3266,12 +3257,7 @@ const _: () = assert!(std::mem::size_of::<Source>() <= 31288 + 64 * 8);
 #[cfg(test)]
 impl Source {
     pub fn test_stream_status(&self) -> (Option<Lease>, bool, bool, Option<Coverage>) {
-        (
-            self.offer.as_ref().map(|offer| offer.lease),
-            self.adopt_sent,
-            self.joined,
-            self.coverage,
-        )
+        (self.offer.as_ref().map(|offer| offer.lease), self.adopt_sent, self.joined, self.coverage)
     }
     pub fn test_rebase_output_prefix(&mut self, prefix: u64) -> Lease {
         assert_eq!(self.journal.len(), 0);

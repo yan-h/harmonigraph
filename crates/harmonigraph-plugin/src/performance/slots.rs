@@ -191,7 +191,6 @@ impl<T, const N: usize> Drop for OwnedReservation<T, N> {
     }
 }
 
-
 impl<T> Reservation<'_, T> {
     pub fn publish(mut self, value: T) {
         // SAFETY: this reservation exclusively owns Writing and the previous

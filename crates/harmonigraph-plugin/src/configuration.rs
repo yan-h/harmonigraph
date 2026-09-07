@@ -260,7 +260,6 @@ impl Owner {
         self.timeline.begin_cohort(raw)
     }
 
-
     /// Called only after record() has registered this subblock's segments.
     /// Seeding is a separate consumer of historical configuration, so it must
     /// finish before even the logical lookup frontier can move past its start.

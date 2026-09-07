@@ -172,7 +172,9 @@ pub enum CaptureKind {
     /// choke, or one held note's share of a channel termination.
     Terminal,
     /// Per-note pitch expression addressed to one note.
-    Tuning { value_bits: u64 },
+    Tuning {
+        value_bits: u64,
+    },
     /// A shared channel controller, carrying its channel in the record. It
     /// addresses no note of its own; the notes a termination ends arrive as
     /// their own Terminal records.

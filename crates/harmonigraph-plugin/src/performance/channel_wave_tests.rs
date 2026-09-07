@@ -2,7 +2,6 @@
 //! callbacks, including the normal prepare/host/complete path.
 use super::*;
 
-
 fn receiver(hub: &Device, slot: usize) -> (Option<u8>, usize, u64, u64) {
     let wrapper = unsafe {
         &*((*hub.plugin)
@@ -13,7 +12,6 @@ fn receiver(hub: &Device, slot: usize) -> (Option<u8>, usize, u64, u64) {
         plugin.aggregation.as_ref().unwrap().test_row_receiver(slot, 0)
     })
 }
-
 
 fn midi(channel: u8, status: u8, a: u8, b: u8, time: u32) -> Input {
     Input::Midi(clap_event_midi {

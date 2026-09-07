@@ -503,9 +503,11 @@ impl Hub {
             row.emission_gate.load(Ordering::Acquire) & BUSY != 0
                 || !row.source_detached.load(Ordering::Acquire)
                 || !row.hub_detached.load(Ordering::Acquire)
-        }) || self.rows.iter().any(|row| {
-            row.output.len() != 0 || row.inputs.len() != 0 || row.state.count() != 0
-        }) || offer.session.credits.load(Ordering::Acquire) != 0
+        }) || self
+            .rows
+            .iter()
+            .any(|row| row.output.len() != 0 || row.inputs.len() != 0 || row.state.count() != 0)
+            || offer.session.credits.load(Ordering::Acquire) != 0
         {
             self.trace.setup_wait = 7;
             return;
@@ -661,14 +663,41 @@ impl Hub {
                     self.input_work += 1;
                     self.service_revision = self.service_revision.wrapping_add(1);
                     match control {
-                        Control::Disposition { incarnation, epoch, transaction, input_cut, lifetime, request, original_on }
-                            if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                                && row.epoch == epoch && transaction != 0 => {
-                            ack.unwrap().publish(Reply::Disposition { incarnation, transaction, input_cut });
-                            row.last_disposition = Some(row.last_disposition.map_or(transaction, |old| old.max(transaction)));
-                            if original_on && (sequencing || self.sequencer.retired)
-                                && !self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime) {
-                                shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+                        Control::Disposition {
+                            incarnation,
+                            epoch,
+                            transaction,
+                            input_cut,
+                            lifetime,
+                            request,
+                            original_on,
+                        } if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
+                            && row.epoch == epoch
+                            && transaction != 0 =>
+                        {
+                            ack.unwrap().publish(Reply::Disposition {
+                                incarnation,
+                                transaction,
+                                input_cut,
+                            });
+                            row.last_disposition = Some(
+                                row.last_disposition
+                                    .map_or(transaction, |old| old.max(transaction)),
+                            );
+                            if original_on
+                                && (sequencing || self.sequencer.retired)
+                                && !self.sequencer.cancel(
+                                    index,
+                                    row.lease.unwrap(),
+                                    epoch,
+                                    input_cut,
+                                    request,
+                                    lifetime,
+                                )
+                            {
+                                shared
+                                    .faults
+                                    .fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
                             }
                         }
                         _ => {}
@@ -1375,7 +1404,7 @@ impl Hub {
             let sealed = (row.seal == Some(row.applied)
                 && row.applied == row.received
                 && row.output.len() == 0)
-            .then_some(row.seal_generation);
+                .then_some(row.seal_generation);
             if row.last_ack != Some((row.received, through)) {
                 let reply = Reply::OutputRetained {
                     incarnation: lease.incarnation,
