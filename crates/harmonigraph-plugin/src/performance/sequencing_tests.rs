@@ -744,16 +744,22 @@ fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
         .is_empty());
     hub.run_format(3072, vec![], None, None, 512);
     let control = source.run_format(4096, vec![], None, None, 512);
-    assert_eq!(control.values.len(), 2, "neither is held to the note's shift: {:?}", control.values);
-    assert!(control
-        .values
-        .iter()
-        .any(|(time, event)| *time == 0
-            && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })));
-    assert!(control
-        .values
-        .iter()
-        .any(|(time, event)| *time == 1 && matches!(event, Event::Midi { data: [0xf8, 0, 0], .. })));
+    assert_eq!(
+        control.values.len(),
+        2,
+        "neither is held to the note's shift: {:?}",
+        control.values
+    );
+    assert!(control.values.iter().any(
+        |(time, event)| *time == 0 && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })
+    ));
+    assert!(
+        control
+            .values
+            .iter()
+            .any(|(time, event)| *time == 1
+                && matches!(event, Event::Midi { data: [0xf8, 0, 0], .. }))
+    );
     hub.run_format(3584, vec![], None, None, 512);
     let release = source.run_format(4608, vec![], None, None, 512);
     assert_eq!(release.values.len(), 1, "{:?}", release.values);
@@ -1092,19 +1098,21 @@ fn production_a_broadcast_release_waiting_on_one_target_still_lets_the_clock_thr
     // and no life of its own, so the refusal that holds it belongs to one child
     // and not to the envelope.
     assert!(source
-        .run_format(2560, vec![note(-1, 0, -1, 0, false), ], None, None, 512)
+        .run_format(2560, vec![note(-1, 0, -1, 0, false),], None, None, 512)
         .values
         .is_empty());
     // Note 1's share leaves here. Note 2's is still owed, and a raw MIDI clock
     // captured now falls behind an envelope that can only refuse from here on.
     let first = source.run_format(3072, vec![raw_midi([0xf8, 0, 0], 1)], None, None, 512);
     assert_eq!(first.values.len(), 1, "{:?}", first.values);
-    assert!(matches!(
-        first.values[0],
-        (0, Event::Note { kind: CLAP_EVENT_NOTE_OFF, key: 60, .. })
-    ));
+    assert!(matches!(first.values[0], (0, Event::Note { kind: CLAP_EVENT_NOTE_OFF, key: 60, .. })));
     let clock = source.run_format(3584, vec![], None, None, 512);
-    assert_eq!(clock.values.len(), 1, "the clock does not inherit note 2's wait: {:?}", clock.values);
+    assert_eq!(
+        clock.values.len(),
+        1,
+        "the clock does not inherit note 2's wait: {:?}",
+        clock.values
+    );
     assert_eq!(clock.values[0].0, 1, "at its own input+D");
     assert!(matches!(clock.values[0].1, Event::Midi { data: [0xf8, 0, 0], .. }));
     // Note 2's share of that release is still owed, and settles once the Hub
