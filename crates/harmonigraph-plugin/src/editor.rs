@@ -949,6 +949,7 @@ impl Editor for LatticeEditor {
                     persist: Some(&serialized),
                 }
                 .open();
+                harmonigraph_ui::begin_editor_loading(egui_ctx);
             },
             // Thin shim: the real per-frame work is `frame`, above. The
             // closure exists only to own `egui_state`/`context` for the

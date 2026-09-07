@@ -87,6 +87,15 @@ pub struct Harmonigraph {
     take_events: Arc<AtomicU64>,
 }
 
+impl Drop for Harmonigraph {
+    fn drop(&mut self) {
+        // Window state can retain its own Arc during native teardown. Join the
+        // graphics worker at plugin destruction, not only at the last Arc drop.
+        let graphics = self.editor_shared.lock().ui.editor_graphics();
+        graphics.shutdown_startup();
+    }
+}
+
 /// The live shell always owns its recorder. Destruction transfers that same
 /// producer, alongside its original route owner, into bounded session retirement.
 struct RecorderSlot(Option<harmonigraph_record::Recorder>);

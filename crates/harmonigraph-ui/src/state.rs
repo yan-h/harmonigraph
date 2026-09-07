@@ -690,6 +690,12 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 }
 
 impl SharedState {
+    /// An owned handle lets plugin teardown join initialization after releasing
+    /// the shared UI lock. Ordinary editor close leaves this cache alive.
+    pub fn editor_graphics(&self) -> std::sync::Arc<harmonigraph_render::LatticePipelineCache> {
+        self.lattice_pipelines.clone()
+    }
+
     /// The synchronous reducer's last complete value, for standalone recording.
     pub fn resolved_configuration(&self) -> harmonigraph_core::configuration::ResolvedConfig {
         self.replayed_configuration.unwrap_or_else(|| self.config_reducer.resolved())
