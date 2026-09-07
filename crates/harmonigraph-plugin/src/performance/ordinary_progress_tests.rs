@@ -11,6 +11,17 @@ fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
     wrapper.test_inspect_plugin(|plugin| f(plugin.aggregation.as_ref().unwrap()))
 }
 
+/// The Hub's own observed DIRECT input — the rich owner display and recording
+/// read, held independently of what forwarding has already released.
+fn inspect_direct<R>(device: &Device, f: impl FnOnce(&state::State) -> R) -> R {
+    let wrapper = unsafe {
+        &*((*device.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    wrapper.test_inspect_plugin(|plugin| f(&plugin.configuration.as_ref().unwrap().direct.state))
+}
+
 #[test]
 fn production_initial_direct_survives_settled_host_reactivation_without_route_calibration() {
     let _scope = crate::test_scope::enter();
@@ -159,7 +170,7 @@ fn production_initial_direct_accepts_exact_zero_delay_phrase_without_route_calib
         )
     });
     assert!(
-        inspect_hub(&hub, |hub| hub.test_actual_voice(0, 2)).is_none(),
+        inspect_hub(&hub, |hub| hub.test_context_voice(0, 2)).is_none(),
         "the committed discontinuous Reset clears the old observed DIRECT lifetime"
     );
     assert_eq!(
@@ -233,74 +244,6 @@ fn production_calibrated_direct_drains_more_than_one_capture_window_on_empty_cal
     );
     assert!(inspect_hub(&hub, |hub| hub.test_inputs(0).is_empty()));
     println!("DIRECT1536 drained in {callbacks} continuous empty callbacks");
-}
-
-#[test]
-fn factual_index_survives_two_voice_baseline_permutation_and_same_key_reuse() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let mut hub = Device::aggregation(false);
-    hub.configure(uuid, true);
-    hub.activate();
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    let lease = attachment_tests::lease(&source).unwrap();
-    assert_eq!(
-        source.run(64, vec![note(11, 0, 60, 0, true), note(22, 1, 64, 1, true)], None).values.len(),
-        2
-    );
-    hub.run(64, vec![], None);
-    let before = [1, 2].map(|lifetime| {
-        inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, lifetime).unwrap().0)
-    });
-    source.run(128, vec![source.participation(false, 0)], None);
-    hub.run(128, vec![], None);
-    let after = [1, 2].map(|lifetime| {
-        inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, lifetime).unwrap().0)
-    });
-    assert_eq!(
-        after,
-        [before[1], before[0]],
-        "a real complete two-voice baseline swaps both physical slots"
-    );
-    let next = source.run(
-        192,
-        vec![
-            expression(11, 0.25, 1),
-            expression(22, -0.125, 2),
-            note(11, 0, 60, 3, false),
-            note(33, 0, 60, 4, true),
-            expression(33, 0.5, 5),
-        ],
-        None,
-    );
-    assert_eq!(next.values.len(), 5);
-    hub.run(192, vec![], None);
-    assert!(inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, 1)).is_none());
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, 2)),
-        Some((after[1], 0, -0.125))
-    );
-    assert_eq!(
-        inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, 3)),
-        Some((after[0], 0, 0.5))
-    );
-    assert_eq!(
-        source
-            .run(256, vec![note(22, 1, 64, 0, false), note(33, 0, 60, 1, false)], None)
-            .values
-            .len(),
-        2
-    );
-    hub.run(256, vec![], None);
-    source.run(320, vec![], None);
-    hub.run(320, vec![], None);
-    assert_eq!(source.source_snapshot().held, 0);
-    assert!(inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, 2)).is_none());
-    assert!(inspect_hub(&hub, |hub| hub.test_actual_voice(lease.slot, 3)).is_none());
 }
 
 #[test]
@@ -385,23 +328,29 @@ fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_in
         "forwarding's old physical release is settled"
     );
     assert_eq!(
-        inspect_hub(&hub, |hub| hub
-            .test_actual_voice(0, 1)
-            .map(|(_, correction, player)| (correction, player))),
+        inspect_direct(&hub, |state| state
+            .voice(1)
+            .map(|voice| (voice.frozen_offset_microcents, voice.player_tuning))),
         Some((0, 0.123456789)),
         "the healthy boundary retains observed held input"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_context_voice(0, 1)).is_none(),
+        "forwarding released this note at the boundary, so it is no longer \
+         tuning context for anything the Hub assigns next"
     );
     assert!(!capture.drain_canonical().iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }))), "clock reseed never fabricates a canonical On");
     hub.run(raw, vec![expression(31, 0.25, 1)], None);
     raw += 64;
     assert_eq!(
-        inspect_hub(&hub, |hub| hub
-            .test_actual_voice(0, 1)
-            .map(|(_, correction, player)| (correction, player))),
-        Some((0, 0.25))
+        inspect_direct(&hub, |state| state
+            .voice(1)
+            .map(|voice| (voice.frozen_offset_microcents, voice.player_tuning))),
+        Some((0, 0.25)),
+        "the surviving observation still follows its own input"
     );
     hub.run(raw, vec![note(31, 0, 60, 1, false)], None);
     hub.run(raw + 64, vec![], None);
-    assert!(inspect_hub(&hub, |hub| hub.test_actual_voice(0, 1)).is_none());
+    assert!(inspect_direct(&hub, |state| state.voice(1).is_none()));
     assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults), 0);
 }

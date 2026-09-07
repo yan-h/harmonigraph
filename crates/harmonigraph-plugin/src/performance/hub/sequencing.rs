@@ -2,8 +2,6 @@
 use super::*;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::{policy, LatticePos, PitchClass};
-#[cfg(test)]
-mod actual_lookup_tests;
 mod history;
 
 #[derive(Clone, Copy)]
@@ -21,26 +19,6 @@ pub(super) struct Plan {
     previous: u32,
 }
 const NO_PLAN: u32 = u32::MAX;
-const NO_VOICE: u16 = u16::MAX;
-
-/// Physical factual slots are independent of request/Plan ownership and of
-/// State's packed voice array. This directory is only a bounded lookup hint.
-const ACTUAL_KEYS_PER_SOURCE: usize = 16 * 128;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ActualKey {
-    lease: Lease,
-    epoch: u64,
-    lifetime: u64,
-}
-fn actual_address(lease: Lease, channel: u8, key: u8) -> usize {
-    usize::from(lease.slot) * ACTUAL_KEYS_PER_SOURCE + usize::from(channel) * 128 + usize::from(key)
-}
-
-pub(super) struct ActualLookup {
-    key: ActualKey,
-    index: u16,
-    address: Option<usize>,
-}
 
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
@@ -117,12 +95,13 @@ pub(super) struct Sequencer {
     plan_left: usize,
     plan_count: usize,
     plan_work: usize,
+    /// Every note the Hub believes is sounding, prospective and factual in one
+    /// table: a copied onset record puts a voice here with the pitch it was
+    /// assigned, and the accepted output that realizes it snaps that pitch to
+    /// the exact wire value. A terminal record removes it. The Hub's own
+    /// authoritative sounding-note facts stay where they always were, in each
+    /// row's `State`; this is the policy's context, not a second copy of them.
     context: Box<[Option<Voice>]>,
-    actual: Box<[Option<Voice>]>,
-    actual_keys: Box<[Option<ActualKey>]>,
-    actual_index: Box<[u16]>,
-    actual_free: Vec<u16>,
-    actual_revision: u64,
     pub(super) history: history::History,
     policy: Box<policy::PolicyScratch>,
     policy_context: Box<[policy::ContextPitch]>,
@@ -160,11 +139,6 @@ impl Default for Sequencer {
             plan_count: 0,
             plan_work: 0,
             context: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual_keys: vec![None; HELD_SESSION].into_boxed_slice(),
-            actual_index: vec![NO_VOICE; (TUNERS + 1) * ACTUAL_KEYS_PER_SOURCE].into_boxed_slice(),
-            actual_free: (0..HELD_SESSION as u16).rev().collect(),
-            actual_revision: 0,
             history: history::History::default(),
             policy: Box::default(),
             policy_context: vec![
@@ -185,37 +159,22 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
-    pub(super) fn can_reset_clock_context(&self) -> bool {
-        self.actual_revision.checked_add(1).is_some()
-    }
+    /// A clock boundary empties the Hub's belief about what is sounding.
+    ///
+    /// Nothing is reseeded across it. The copied input records own every cell
+    /// here and number their notes in the Tune's own lifetime space, so a
+    /// voice put here from anywhere else is a voice no later Terminal record
+    /// can address — it would sit in the policy's context until the next
+    /// clock boundary swept it out. The DIRECT observation this used to be
+    /// seeded from keeps its own held notes in `Direct::state`, which is
+    /// where display and recording read them; and a boundary is only
+    /// committed once forwarding has settled, so nothing is still sounding
+    /// for the seeded voices to have represented.
     pub(super) fn clear_clock_context(&mut self) {
         self.history.clear_all(self.decision);
-        let revision = self.actual_revision.checked_add(1).expect("preflighted clock boundary");
-        self.actual_free.clear();
-        for index in 0..HELD_SESSION {
-            self.context[index] = None;
-            self.actual[index] = None;
-            self.actual_keys[index] = None;
-            self.actual_free.push((HELD_SESSION - 1 - index) as u16);
+        for cell in self.context.iter_mut() {
+            *cell = None;
         }
-        self.actual_revision = revision;
-    }
-    pub(super) fn reset_clock_context(&mut self, lease: Lease, epoch: u64, direct: &State) {
-        self.clear_clock_context();
-        // A discontinuous reset has already cleared this observed-input State.
-        // A healthy reanchor preserves it, independently of forwarding's paid
-        // termination. Rebind those same factual lifetimes to the new clock.
-        for voice in direct.voices() {
-            let index = self.actual_free.pop().expect("at most 64 DIRECT voices");
-            let value = Voice::factual(0, voice);
-            self.actual[usize::from(index)] = Some(value);
-            self.context[usize::from(index)] = Some(value);
-            self.actual_keys[usize::from(index)] =
-                Some(ActualKey { lease, epoch, lifetime: voice.lifetime });
-            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
-        }
-        // Absent identities invalidate old hints without scanning the 34816
-        // address directory. No physical debt may reach this committed cut.
     }
     pub(super) fn install_plan_row(&mut self, row: usize, ledger: Box<[Option<Plan>]>) {
         self.plans[row] = Some(ledger);
@@ -316,22 +275,12 @@ impl Sequencer {
 }
 
 const _: () = assert!(std::mem::size_of::<Option<Plan>>() <= 256);
-const _: () = assert!(std::mem::size_of::<Option<ActualKey>>() <= 56);
-const _: () = assert!(std::mem::align_of::<Option<ActualKey>>() <= 8);
 const _: () = assert!(
     std::mem::size_of::<Option<Plan>>() - std::mem::size_of::<ResolvedConfig>() + 128 <= 256
 );
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() <= 256);
-// ConfirmedPitches and its rich factual companion share one confirmed budget;
-// the other half remains exclusively prospective. Keep full future config room.
-const _: () = assert!(
-    std::mem::size_of::<Option<Voice>>()
-        + std::mem::size_of::<Option<harmonigraph_core::confirmed::ConfirmedPitch>>()
-        // Node and decision are now populated in Voice. Its revision occupies
-        // eight bytes of the prepaid complete configuration; reserve the rest.
-        + (128 - std::mem::size_of::<u64>())
-        <= 256
-);
+// One context cell keeps full room for a future complete configuration beside
+// the eight bytes its revision already occupies.
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 
 #[cfg(test)]
@@ -341,22 +290,6 @@ impl Sequencer {
             "LEDGER musical [history_cell,prospective] {:?}; policy [scratch,context] {:?}",
             self.history.layout(),
             [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]
-        );
-        println!(
-            "LEDGER factual lookup [key_cell,key_backing,directory_backing] {:?}",
-            [
-                std::mem::size_of::<Option<ActualKey>>(),
-                std::mem::size_of_val(&*self.actual_keys),
-                std::mem::size_of_val(&*self.actual_index)
-            ]
-        );
-        println!(
-            "LEDGER sequencer actual [backing,free_capacity,free_metadata] {:?}",
-            [
-                std::mem::size_of_val(&*self.actual),
-                self.actual_free.capacity() * std::mem::size_of::<u16>(),
-                std::mem::size_of_val(&self.actual_free),
-            ]
         );
         println!(
             "LEDGER sequencer [owner,plan_option,paired_row_backing,plan_backing,voice_option,voice_backing] {:?}",
@@ -387,13 +320,15 @@ impl Hub {
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
         self.sequencer.policy_counts
     }
+    /// The Hub's belief about one sounding note: its slot, its frozen adaptive
+    /// correction and the player tuning last applied to it.
     #[cfg(test)]
-    pub(in crate::performance) fn test_actual_voice(
+    pub(in crate::performance) fn test_context_voice(
         &self,
         source: u8,
         lifetime: u64,
     ) -> Option<(usize, i64, f64)> {
-        self.sequencer.actual.iter().enumerate().find_map(|(index, cell)| {
+        self.sequencer.context.iter().enumerate().find_map(|(index, cell)| {
             cell.filter(|voice| voice.source == source && voice.lifetime == lifetime)
                 .map(|voice| (index, voice.correction, voice.player))
         })
@@ -1040,229 +975,33 @@ impl Hub {
 }
 
 impl Sequencer {
-    fn actual_hint(&self, key: ActualKey, hint: u16) -> bool {
-        hint != NO_VOICE && self.actual_keys[usize::from(hint)] == Some(key)
-    }
-
-    /// Resolve once under the output grant, including unsuccessful fallback
-    /// searches. The returned slot (or proven absence) is reused by application.
-    fn lookup_actual(
-        &self,
-        key: ActualKey,
-        address: Option<usize>,
-        new_on: bool,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        if key.lifetime == 0 {
-            return Some(ActualLookup { key, index: NO_VOICE, address });
-        }
-        if *work == 4096 {
-            return None;
-        }
-        *work += 1;
-        let hint = address.map_or(NO_VOICE, |address| self.actual_index[address]);
-        if self.actual_hint(key, hint) {
-            return Some(ActualLookup { key, index: hint, address });
-        }
-        if new_on {
-            return Some(ActualLookup { key, index: NO_VOICE, address });
-        }
-        if *work + HELD_SESSION > 4096 {
-            return None;
-        }
-        *work += HELD_SESSION;
-        let index = self.actual_keys.iter().position(|old| *old == Some(key));
-        Some(ActualLookup { key, index: index.map_or(NO_VOICE, |index| index as u16), address })
-    }
-
-    pub(super) fn lookup_output(
-        &self,
-        lease: Lease,
-        output: OutputDelta,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        use super::super::event::Event;
-        let address = match output.event {
-            Event::Note { channel: channel @ 0..=15, key: key @ 0..=127, .. }
-            | Event::Expression { channel: channel @ 0..=15, key: key @ 0..=127, .. } => {
-                Some(actual_address(lease, channel as u8, key as u8))
-            }
-            Event::Midi { data: [status, key @ 0..=127, _], .. }
-                if matches!(status & 0xf0, 0x80 | 0x90) =>
-            {
-                Some(actual_address(lease, status & 15, key))
-            }
-            _ => None,
-        };
-        self.lookup_actual(
-            ActualKey { lease, epoch: output.epoch, lifetime: output.lifetime },
-            address,
-            output.event.attack().is_some(),
-            work,
-        )
-    }
-
-    pub(super) fn lookup_direct(
-        &self,
-        delta: harmonigraph_core::canonical::NoteDelta,
-        work: &mut usize,
-    ) -> Option<ActualLookup> {
-        let clock = delta.timing?.clock;
-        let lease = Lease {
-            session: clock.runtime_session,
-            source: harmonigraph_core::SourceId::DIRECT,
-            incarnation: 0,
-            slot: 0,
-        };
-        self.lookup_actual(
-            ActualKey { lease, epoch: clock.epoch, lifetime: delta.lifetime },
-            Some(actual_address(lease, delta.event.channel, delta.event.note)),
-            matches!(delta.event.kind, harmonigraph_core::NoteEventKind::On { .. }),
-            work,
-        )
-    }
-
-    fn store_actual(&mut self, lookup: ActualLookup, voice: Option<Voice>) -> Result<(), ()> {
-        let ActualLookup { key, index, address } = lookup;
-        if let Some(fact) = voice {
-            // Do not overwrite a later scheduled bend or resurrect a scheduled
-            // release. Once this same planned expression is accepted, retain
-            // the exact wire pitch (including its boundary rounding).
-            if let Some(planned) = self.context.iter_mut().flatten().find(|planned| {
-                planned.source == fact.source
-                    && planned.lifetime == fact.lifetime
-                    && planned.decision == fact.decision
-                    && planned.correction == fact.correction
-                    && planned.player == fact.player
-            }) {
-                planned.pitch = fact.pitch;
-            }
-        }
-        if index != NO_VOICE {
-            // The resolved slot no longer carries this identity, so writing it
-            // would overwrite an unrelated voice. Err is the caller's existing
-            // exhaustion channel; it latches the fault and drops this store.
-            if !self.actual_hint(key, index) {
-                return Err(());
-            }
-            let slot = usize::from(index);
-            if self.actual[slot] != voice {
-                self.actual_revision = self.actual_revision.checked_add(1).ok_or(())?;
-            }
-            self.actual[slot] = voice;
-            if voice.is_none() {
-                self.actual_keys[slot] = None;
-                self.actual_free.push(index);
-                if let Some(address) =
-                    address.filter(|address| self.actual_index[*address] == index)
-                {
-                    self.actual_index[address] = NO_VOICE;
-                }
-            } else if let Some(address) = address {
-                self.actual_index[address] = index;
-            }
-        } else if let Some(voice) = voice {
-            let revision = self.actual_revision.checked_add(1).ok_or(())?;
-            let index = self.actual_free.pop().ok_or(())?;
-            let slot = usize::from(index);
-            // The free list handed back an occupied slot. Its bookkeeping is
-            // already inconsistent, so leak the slot rather than pushing it
-            // back: returning it would re-offer the same corrupt entry.
-            if self.actual[slot].is_some() {
-                return Err(());
-            }
-            self.actual[slot] = Some(voice);
-            self.actual_keys[slot] = Some(key);
-            if let Some(address) = address {
-                self.actual_index[address] = index;
-            }
-            self.actual_revision = revision;
-        }
-        Ok(())
-    }
-
-    pub(super) fn actual_output(
+    /// Accepted output realizing one planned voice: keep the exact wire pitch,
+    /// boundary rounding included, so later assignments see what actually
+    /// sounded rather than what was intended. Only when the accepted fact
+    /// still agrees with the plan — a report overtaken by a newer bend or by
+    /// a scheduled release must not move or resurrect a live context voice.
+    ///
+    /// One bounded scan of the 256 context cells, charged to nothing: the
+    /// table it replaced paid a keyed directory hint plus, on a miss, a
+    /// 256-cell fallback against the same per-callback budget the merge loop
+    /// spends on output.
+    pub(super) fn accepted_output(
         &mut self,
-        lookup: ActualLookup,
-        voice: Option<harmonigraph_core::canonical::VoiceBaseline>,
-    ) -> bool {
-        if lookup.key.lifetime == 0 {
-            return true;
-        }
-        let voice = voice.map(|voice| Voice::factual(lookup.key.lease.slot, &voice));
-        self.store_actual(lookup, voice).is_ok()
-    }
-
-    pub(super) fn actual_baseline(
-        &mut self,
-        lease: Lease,
-        epoch: u64,
-        frame: &harmonigraph_core::canonical::SourceBaseline,
-    ) -> bool {
-        let source = lease.slot;
-        let mut replaced = false;
-        for (index, cell) in self.actual.iter_mut().enumerate() {
-            if cell.is_some_and(|voice| voice.source == source) {
-                replaced = true;
-                *cell = None;
-                self.actual_keys[index] = None;
-                self.actual_free.push(index as u16);
-            }
-        }
-        // Stale directory entries are harmless: full lease/epoch/lifetime
-        // equality is required even when replacement reuses the same cell.
-        for voice in frame.voices() {
-            replaced = true;
-            let Some(index) = self.actual_free.pop() else { return false };
-            let key = ActualKey { lease, epoch, lifetime: voice.lifetime };
-            self.actual_keys[usize::from(index)] = Some(key);
-            self.actual_index[actual_address(lease, voice.channel, voice.note)] = index;
-            self.actual[usize::from(index)] = Some(Voice::factual(source, voice));
-        }
-        if replaced {
-            let Some(revision) = self.actual_revision.checked_add(1) else { return false };
-            self.actual_revision = revision;
-        }
-        true
-    }
-
-    pub(super) fn actual_direct(
-        &mut self,
-        delta: harmonigraph_core::canonical::NoteDelta,
-        lookup: ActualLookup,
-    ) -> bool {
-        use harmonigraph_core::NoteEventKind;
-        if delta.lifetime == 0 {
-            return true;
-        }
-        let voice = match delta.event.kind {
-            NoteEventKind::On { .. } => Some(Voice {
-                source: 0,
-                lifetime: delta.lifetime,
-                correction: 0,
-                player: 0.0,
-                key: delta.event.note,
-                channel: delta.event.channel,
-                pitch: delta.pitch_microcents.unwrap_or(i64::from(delta.event.note) * 100_000_000),
-                node: None,
-                configuration_revision: 0,
-                decision: 0,
-            }),
-            NoteEventKind::Off => None,
-            NoteEventKind::Tuning { .. } => {
-                if lookup.index == NO_VOICE {
-                    return true;
-                }
-                let Some(mut voice) = self.actual[usize::from(lookup.index)] else {
-                    return false;
-                };
-                let Some(pitch) = delta.pitch_microcents else { return false };
-                voice.player = (pitch - i64::from(voice.key) * 100_000_000) as f64 / 100_000_000.0;
-                voice.pitch = pitch;
-                Some(voice)
-            }
-            _ => return true,
+        source: u8,
+        voice: Option<&harmonigraph_core::canonical::VoiceBaseline>,
+    ) {
+        let Some(voice) = voice.filter(|voice| voice.lifetime != 0) else {
+            return;
         };
-        self.store_actual(lookup, voice).is_ok()
+        let fact = Voice::factual(source, voice);
+        if let Some(planned) = self.context.iter_mut().flatten().find(|planned| {
+            planned.source == fact.source
+                && planned.lifetime == fact.lifetime
+                && planned.decision == fact.decision
+                && planned.correction == fact.correction
+                && planned.player == fact.player
+        }) {
+            planned.pitch = fact.pitch;
+        }
     }
 }
