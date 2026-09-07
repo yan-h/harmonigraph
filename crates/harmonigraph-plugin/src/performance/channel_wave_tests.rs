@@ -155,7 +155,7 @@ fn stop_cancels_an_unattempted_prefix_before_an_already_captured_new_consumer() 
 }
 
 #[test]
-fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack() {
+fn withdrawal_terminates_the_forwarded_voice_before_forgetting_its_ownership() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -177,12 +177,14 @@ fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack(
             .plugin_data
             .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
     };
-    let (lease, adopted, acknowledged, _) =
+    let (lease, adopted, _, _) =
         wrapper.test_inspect_plugin(|plugin| plugin.source.as_ref().unwrap().test_stream_status());
-    assert!(adopted && !acknowledged);
-    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
+    assert!(adopted);
+    assert_eq!(source.source_snapshot().held, 1);
     let row = &session.rows[usize::from(lease.unwrap().slot - 1)];
     assert_eq!(row.emission_gate.load(Ordering::Acquire), source::OPEN);
+    // Re-select the same Hub: the registry withdraws this lease and mints a
+    // new incarnation, which is the membership reset boundary.
     let shared = source.shared();
     let setup::Routing::Source(mut routing) = shared.value().routing else { unreachable!() };
     routing.selected = Some(SavedUuid::default());
@@ -191,29 +193,27 @@ fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack(
     hub.run(64, vec![], None);
     assert!(row.withdrawn.load(Ordering::Acquire));
     assert_eq!(row.emission_gate.load(Ordering::Acquire), source::CLOSED);
-    assert_eq!(source.source_snapshot().faults, 0);
-    assert_eq!(source.source_snapshot().held, 1);
-    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
-    let output = source.run(
-        128,
-        vec![
-            expression(73, 0.1234567890123, 4),
-            midi(0, 0xb0, 11, 90, 8),
-            note(73, 0, 60, 16, false),
-        ],
-        None,
-    );
-    assert_eq!(source.source_snapshot().faults, 0);
-    assert!(output.values.iter().any(|(time, event)| *time == 4
-        && matches!(event, Event::Expression { id: 73, value, .. } if *value == 0.1234567890123)),
-        "an established expression must not wait for the future baseline ACK after withdrawal");
-    assert!(output.values.iter().any(
-        |(time, event)| *time == 8 && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })
-    ));
-    assert!(output.values.iter().any(|(time, event)| *time == 16
-        && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 73, .. })));
-    assert_eq!(source.source_snapshot().baseline_cut, Some(0));
-    assert_eq!(session.credits.load(Ordering::Acquire), 1);
+    // The Tune owes the receiving instrument a release for the voice it
+    // forwarded. It pays that before the lease is allowed to settle, so no
+    // note is stranded in a session neither side owns any more.
+    let mut released = 0;
+    let mut raw = 128;
+    for _ in 0..8 {
+        released += source
+            .run(raw, vec![], None)
+            .values
+            .iter()
+            .filter(|(_, event)| event.release())
+            .count();
+        hub.run(raw, vec![], None);
+        raw += 64;
+        if source.source_snapshot().held == 0 {
+            break;
+        }
+    }
+    assert_eq!(released, 1, "exactly one physical Note-Off for the withdrawn voice");
+    assert_eq!(source.source_snapshot().held, 0);
+    assert_eq!(source.source_snapshot().faults, 0, "an ordinary reset is not a fault");
     drop(hub);
     drop(source);
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
@@ -221,7 +221,7 @@ fn established_controls_survive_withdrawal_before_a_future_initial_snapshot_ack(
 }
 
 #[test]
-fn a_join_floor_retry_keeps_new_stream_controls_behind_the_fresh_zero_cut_baseline() {
+fn a_join_floor_retry_keeps_new_stream_controls_behind_the_moved_join_boundary() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut source = Device::aggregation(true);
@@ -246,7 +246,7 @@ fn a_join_floor_retry_keeps_new_stream_controls_behind_the_fresh_zero_cut_baseli
     assert_eq!(
         coverage.unwrap().start,
         64,
-        "the initial snapshot starts behind Hub's published128 frontier"
+        "the join request starts behind Hub's published128 frontier"
     );
     hub.run(128, vec![], None);
     let retry = source.run(128, vec![midi(0, 0xb0, 88, 37, 2), midi(0, 0x90, 60, 64, 4)], None);
@@ -255,7 +255,7 @@ fn a_join_floor_retry_keeps_new_stream_controls_behind_the_fresh_zero_cut_baseli
     assert_eq!(coverage.unwrap().start, 128, "the real Hub reply moved the join floor");
     assert!(
         !joined && retry.values.is_empty(),
-        "acknowledging an obsolete zero-cut snapshot is not stream admission"
+        "naming a later join floor is not stream admission"
     );
     hub.run(192, vec![], None);
     let output = source.run(192, vec![], None);

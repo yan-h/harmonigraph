@@ -698,13 +698,6 @@ impl Hub {
                         if row.lease.is_none() {
                             row.lease = Some(lease);
                             row.epoch = epoch;
-                            row.coverage =
-                                Some(Coverage { start: coverage.start, through: coverage.start });
-                            // The first callback's actual progress travels with
-                            // Adopt in its one normal cell. A second message is
-                            // not needed to preserve the initial join boundary.
-                            row.report = Some((coverage, output_cut));
-                            self.sequencer.captured[index + 1] = input_start_cut;
                             shared.hub_detached.store(false, Ordering::Release);
                             row.participating = participating;
                             if self.sequencer.participation_serial[index + 1] == 0 {
@@ -713,6 +706,19 @@ impl Hub {
                             // The row joins holding nothing, and a take needs
                             // to see that it exists before its first note.
                             row.repair = true;
+                        }
+                        // A request repeated after a moved join floor carries
+                        // the Tune's fresh coverage, so it is the same message
+                        // and not a second lease. The first callback's actual
+                        // progress travels with it in its one normal cell.
+                        if row.lease == Some(lease)
+                            && !row.member
+                            && coverage.start >= row.joining.unwrap_or(coverage.start)
+                        {
+                            row.coverage =
+                                Some(Coverage { start: coverage.start, through: coverage.start });
+                            row.report = Some((coverage, output_cut));
+                            self.sequencer.captured[index + 1] = input_start_cut;
                         }
                     }
                     Control::Progress { incarnation, epoch, coverage, output_cut }
@@ -911,7 +917,6 @@ impl Hub {
             }
             if !row.member
                 && row.lease.is_some()
-                && row.joining.is_none()
                 && row.coverage.is_some_and(|c| c.through > c.start)
                 && self.clock.valid
                 && offer.session.alive.load(Ordering::Acquire)
@@ -921,6 +926,7 @@ impl Hub {
             {
                 row.member = true;
                 self.membership = self.membership.saturating_add(1);
+                row.joining = None;
                 if !shared.withdrawn.load(Ordering::Acquire)
                     && shared.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE == 0
                     && offer.session.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE
@@ -934,10 +940,11 @@ impl Hub {
                     );
                 }
             }
-            // The membership revision is what sequences a row's input against
-            // the right session shape, so every member is told each new one.
-            // A baseline round trip used to carry it; nothing else did.
-            if row.member && row.acknowledged_membership != self.membership {
+            // The revision this row's input is sequenced against, told once at
+            // its own join — the same point the snapshot acknowledgement used
+            // to carry it. Zero is "never acknowledged": the first member is
+            // revision one, and a fresh lease clears the field.
+            if row.member && row.acknowledged_membership == 0 {
                 if let Some(ack) = shared.to_source.reserve() {
                     ack.publish(Reply::Enrolled {
                         incarnation: row.lease.unwrap().incarnation,
@@ -1571,16 +1578,9 @@ impl Hub {
             row.applied,
         )
     }
-    pub fn test_row_retirement(&self, slot: usize) -> (u64, u64, usize, Option<(u64, i64)>) {
+    pub fn test_row_retirement(&self, slot: usize) -> (u64, u64, usize, bool) {
         let row = &self.rows[slot];
-        (
-            row.received,
-            row.applied,
-            row.output.len(),
-            row.baseline.as_ref().map(|baseline| {
-                (baseline.frame.output_cut, (baseline.frame.time * self.rate).round() as i64)
-            }),
-        )
+        (row.received, row.applied, row.output.len(), row.repair)
     }
     pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
         std::array::from_fn(|index| {
@@ -1592,7 +1592,7 @@ impl Hub {
         let row = self.rows.iter_mut().find(|row| row.lease == Some(lease)).unwrap();
         assert_eq!(row.output.len(), 0);
         assert_eq!(row.applied, row.received);
-        assert!(row.baseline.is_none() && row.report.is_none());
+        assert!(row.report.is_none());
         row.received = prefix;
         row.applied = prefix;
         row.last_ack = Some((prefix, row.coverage.unwrap().through));
@@ -1601,14 +1601,8 @@ impl Hub {
         self.sequencer.print_test_memory_layout();
         use std::mem::{size_of, size_of_val};
         println!(
-            "LEDGER hub [owner,row,row_backing,state,baseline_option] {:?}",
-            [
-                size_of::<Self>(),
-                size_of::<Row>(),
-                size_of_val(&*self.rows),
-                size_of::<State>(),
-                size_of::<Option<Baseline>>()
-            ]
+            "LEDGER hub [owner,row,row_backing,state] {:?}",
+            [size_of::<Self>(), size_of::<Row>(), size_of_val(&*self.rows), size_of::<State>()]
         );
         println!(
             "LEDGER hub row queues [cell,count,backing] output={:?} inputs={:?}",
