@@ -46,6 +46,15 @@ impl Plugin for AuxiliaryFixture {
         auxiliary: &mut AuxiliaryBuffers,
         _: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Report a malformed slice outside the FFI callback, before using any
+        // iterator whose safety relies on samples() matching the slice length.
+        if auxiliary.inputs[0]
+            .as_slice_immutable()
+            .iter()
+            .any(|channel| channel.len() != buffer.samples())
+        {
+            return ProcessStatus::Error("auxiliary input length differs from callback length");
+        }
         for (main, input) in buffer.as_slice().iter_mut().zip(auxiliary.inputs[0].as_slice()) {
             for (sample, sidechain) in main.iter_mut().zip(input.iter()) {
                 *sample += sidechain;
@@ -127,10 +136,16 @@ fn descriptor(channels: &mut [*mut f32; 2]) -> clap_audio_buffer {
 #[test]
 fn omitted_auxiliary_descriptors_are_not_read_or_written() {
     let device = Device::new();
-    for (block, (input_present, output_present)) in
-        [(true, true), (false, true), (true, false), (false, false), (true, true)]
-            .into_iter()
-            .enumerate()
+    for (block, (frames, input_present, output_present)) in [
+        (32, true, true),
+        (64, false, true),
+        (16, true, false),
+        (64, false, false),
+        (64, true, true),
+        (32, false, true),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let mut main_input = [[0.25; 64]; 2];
         let mut auxiliary_input = [[0.5; 64]; 2];
@@ -147,7 +162,7 @@ fn omitted_auxiliary_descriptors_are_not_read_or_written() {
         let mut outputs = [descriptor(&mut main_out), descriptor(&mut aux_out)];
         let process = clap_process {
             steady_time: block as i64 * 64,
-            frames_count: 64,
+            frames_count: frames as u32,
             transport: ptr::null(),
             audio_inputs: inputs.as_ptr(),
             audio_outputs: outputs.as_mut_ptr(),
@@ -160,17 +175,16 @@ fn omitted_auxiliary_descriptors_are_not_read_or_written() {
             unsafe { ((*device.plugin).process.unwrap())(device.plugin, &process) },
             CLAP_PROCESS_CONTINUE_IF_NOT_QUIET,
         );
-        assert_eq!(
-            auxiliary_output,
-            [[if output_present { 0.75 } else { -1.0 }; 64]; 2],
-            "auxiliary output present={output_present}"
-        );
         // Missing output storage makes the wrapper skip Plugin::process(),
         // after copying main input to output, just as for a missing main bus.
+        let mut expected_main = [-1.0; 64];
+        expected_main[..frames].fill(if input_present && output_present { 0.75 } else { 0.25 });
+        assert_eq!(main_output, [expected_main; 2], "auxiliary input present={input_present}");
+        let mut expected_auxiliary = [-1.0; 64];
+        expected_auxiliary[..frames].fill(if output_present { 0.75 } else { -1.0 });
         assert_eq!(
-            main_output,
-            [[if input_present && output_present { 0.75 } else { 0.25 }; 64]; 2],
-            "auxiliary input present={input_present}"
+            auxiliary_output, [expected_auxiliary; 2],
+            "auxiliary output present={output_present}"
         );
         assert_eq!(auxiliary_input, [[0.5; 64]; 2], "host input must stay unchanged");
     }

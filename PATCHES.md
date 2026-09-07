@@ -33,8 +33,11 @@ See the [configuration](docs/adaptive-tuning-effective-configuration.md), [perfo
 Missing inputs keep the existing silent-buffer fallback;
 missing outputs keep the existing skip-processing behavior and leave undeclared storage untouched.
 The existing debug diagnostics remain in place.
-`tests/clap_auxiliary.rs` reaches both bounds through an exported stereo plugin with auxiliary input and output ports, including disappearance and return between callbacks.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and production configuration/performance/setup seams.
+`src/wrapper/util/buffer_management.rs` sizes all auxiliary input storage to the current callback before copying or clearing it, so omitted inputs cannot expose the shorter slices left by a preceding callback.
+This moves the existing resize within preallocated capacity ahead of the presence check;
+it is necessary for #638's silent-input fallback to remain safe across variable callback sizes.
+`tests/clap_auxiliary.rs` reaches both bounds through an exported stereo plugin with auxiliary input and output ports, including disappearance, return and changing callback lengths.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering, auxiliary descriptor bounds and storage sizing, and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
