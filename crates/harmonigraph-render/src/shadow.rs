@@ -56,7 +56,7 @@ pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f
 pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
     let style = style.clamped();
     if style.casts() {
-        spectral_sigma_points(style) * style.kernel.reach_sigmas()
+        spectral_sigma_points(style) * style.kernel.reach_sigmas(style.falloff)
     } else {
         0.0
     }
@@ -116,6 +116,16 @@ pub(crate) struct Caster {
     /// chain sweeps only the cells that hold coverage, and the scene draw reads
     /// it back off [`ShadowCaster::shade`].
     pub kernel: harmonigraph_scene::ShadowKernel,
+    /// Its group's Shadow falloff ([`harmonigraph_scene::ShadowStyle::falloff`])
+    /// — the exponent the standoff's decay is bent by inside a reach this does
+    /// not move.
+    ///
+    /// Per caster for the same reason the kernel is: the groups are dialled
+    /// separately and one frame's casters may disagree. Carried on a Gaussian
+    /// caster too and never read there, rather than made optional — the packer
+    /// treats it as one more number a row spends, and a row whose meaning
+    /// depended on a neighbouring field is a row that has to be read twice.
+    pub falloff: f32,
     /// Whether this caster's distance is evaluated by its own scene draw
     /// instead of read out of a cell.
     ///
@@ -138,6 +148,7 @@ pub(crate) fn caster_of(
     glyphs: &[crate::GlyphInstance],
     sigma_points: f32,
     kernel: harmonigraph_scene::ShadowKernel,
+    falloff: f32,
 ) -> Caster {
     let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in glyphs {
@@ -146,7 +157,14 @@ pub(crate) fn caster_of(
             max[axis] = max[axis].max(g.rect[axis] + g.rect[axis + 2]);
         }
     }
-    let empty = Caster { rect: [0.0; 4], level: 0.0, sigma_points, kernel, direct_distance: false };
+    let empty = Caster {
+        rect: [0.0; 4],
+        level: 0.0,
+        sigma_points,
+        kernel,
+        falloff,
+        direct_distance: false,
+    };
     if !(max[0] > min[0] && max[1] > min[1]) {
         return empty;
     }
@@ -321,7 +339,9 @@ pub(crate) struct ShadowCaster {
     /// the other and the target's own pixel scale never enters, so a Render
     /// scale moves neither. Per caster because [`Caster::sigma_points`] is.
     ///
-    /// w: unused.
+    /// w: its group's Shadow falloff, the exponent `standoff_coverage` bends
+    /// the decay by. Beside σ because the two are read together and only by
+    /// the distance path — a Gaussian row carries it and never looks.
     pub shade: [f32; 4],
 }
 
@@ -393,7 +413,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         // the kind — the two renderers reach different multiples of it and
         // `ShadowKernel::reach_sigmas` is the one place that is written down.
         let texels = sigma * scale;
-        let pad = ((c.kernel.reach_sigmas() * texels).ceil() + 1.0) / k;
+        let pad = ((c.kernel.reach_sigmas(c.falloff) * texels).ceil() + 1.0) / k;
         // The BLUR chain's σ, which a distance cell has none of because it
         // bypasses that chain.
         (scale, k, if is_distance(c) { 0.0 } else { texels }, pad)
@@ -492,7 +512,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
             who: [c as f32, kind, pad, 0.0],
         });
         if whole {
-            entry.shade = [level, kind, caster.sigma_points, 0.0];
+            entry.shade = [level, kind, caster.sigma_points, caster.falloff];
             entry.cell = cell;
             if !direct {
                 entry.map = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, 0.0];
@@ -767,13 +787,38 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 /// where this buffer is rewritten and regrown every frame. One layout carrying
 /// both would rebuild the atlas's bind groups whenever a name arrived.
 pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    // The VERTEX stage as well: a caster's quad is its widest term's box, and
+    // that box is in here (`vs_shadow_box` in text.wgsl).
+    storage_list_layout(
+        device,
+        "lattice_shadow_casters_layout",
+        wgpu::ShaderStages::VERTEX_FRAGMENT,
+    )
+}
+
+/// A buffer for `capacity` casters' kernels and the bind group naming it
+/// ([`storage_list`]).
+pub(crate) fn caster_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    storage_list::<ShadowCaster>(device, layout, capacity, "lattice_shadow_casters")
+}
+
+/// The layout every per-frame list the shaders walk binds through: one
+/// read-only storage buffer at binding 0, visible to `stages`. The casters
+/// above and the glow's lit nodes (`glow_node_layout` in lib.rs) are the two.
+pub(crate) fn storage_list_layout(
+    device: &wgpu::Device,
+    label: &str,
+    stages: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("lattice_shadow_casters_layout"),
+        label: Some(label),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            // The VERTEX stage as well: a caster's quad is its widest term's
-            // box, and that box is in here (`vs_shadow_box` in text.wgsl).
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility: stages,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only: true },
                 has_dynamic_offset: false,
@@ -784,26 +829,28 @@ pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// A buffer for `capacity` casters' kernels and the bind group naming it.
+/// A buffer for `capacity` entries of `T` and the bind group naming it, under
+/// a [`storage_list_layout`].
 ///
 /// The two together because they cannot come apart: a storage buffer's bind
 /// group names the buffer, so a pane that outgrows one rebuilds both. Floored
 /// at one entry, an empty storage binding being a validation error and a frame
-/// with no caster in it still having to bind SOMETHING for the pipeline's
+/// with nothing in the list still having to bind SOMETHING for the pipeline's
 /// layout.
-pub(crate) fn caster_buffer(
+pub(crate) fn storage_list<T: bytemuck::Pod>(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     capacity: usize,
+    label: &str,
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lattice_shadow_casters"),
-        size: (std::mem::size_of::<ShadowCaster>() * capacity.max(1)) as u64,
+        label: Some(label),
+        size: (std::mem::size_of::<T>() * capacity.max(1)) as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("lattice_shadow_casters_bind_group"),
+        label: Some(&format!("{label}_bind_group")),
         layout,
         entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
     });
@@ -815,6 +862,7 @@ pub(crate) fn caster_buffer(
 /// One module and one constructor because they share a cell quad off the same
 /// box stream and differ only in which axis they read. No blend anywhere here:
 /// each writes its cell's texels outright.
+#[derive(Clone)]
 pub(crate) struct CellPipelines {
     pub(crate) blur_x: wgpu::RenderPipeline,
     pub(crate) blur_y: wgpu::RenderPipeline,
@@ -836,42 +884,41 @@ pub(crate) fn create_cell_pipelines(
         })
     };
     let blur_layout = layout("lattice_shadow_blur_pipeline_layout", &[Some(atlas)]);
-    let pipeline = |entry: &str,
-                    vertex: &str,
-                    pipeline_layout: &wgpu::PipelineLayout,
-                    format: wgpu::TextureFormat| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(entry),
-            layout: Some(pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some(vertex),
-                compilation_options: Default::default(),
-                buffers: &[ShadowBox::LAYOUT],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        })
-    };
+    let pipeline =
+        |entry: &str, pipeline_layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    // Share one entry point so Metal can reuse the compiled vertex stage.
+                    entry_point: Some("vs_cell"),
+                    compilation_options: Default::default(),
+                    buffers: &[ShadowBox::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
     CellPipelines {
-        blur_x: pipeline("fs_blur_x", "vs_cell", &blur_layout, ATLAS_FORMAT),
-        blur_y: pipeline("fs_blur_y", "vs_cell_blur", &blur_layout, ATLAS_FORMAT),
+        blur_x: pipeline("fs_blur_x", &blur_layout, ATLAS_FORMAT),
+        blur_y: pipeline("fs_blur_y", &blur_layout, ATLAS_FORMAT),
     }
 }
 
@@ -909,6 +956,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_points: 1.0,
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            falloff: 1.0,
             direct_distance: false,
         }
     }
@@ -1230,7 +1278,12 @@ pub(crate) mod tests {
         for kernel in
             [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
         {
-            let style = |width, depth| harmonigraph_scene::ShadowStyle { width, depth, kernel };
+            let style = |width, depth| harmonigraph_scene::ShadowStyle {
+                width,
+                depth,
+                kernel,
+                ..Default::default()
+            };
             assert!(spectral_shadow_reach(style(1.0, 1.0)) > 0.0, "the live fixture is shut");
             assert_eq!(spectral_shadow_reach(style(0.0, 1.0)), 0.0, "width endpoint");
             assert_eq!(spectral_shadow_reach(style(1.0, 0.0)), 0.0, "depth endpoint");
@@ -1373,9 +1426,129 @@ pub(crate) mod tests {
         for (name, want) in [
             ("SHADOW_TAIL", harmonigraph_scene::SHADOW_TAIL),
             ("SHADOW_STOP", harmonigraph_scene::SHADOW_STOP),
+            ("SHADOW_FALLOFF_FLOOR", harmonigraph_scene::SHADOW_FALLOFF_MIN),
         ] {
             let held: f32 = shader_const(&common, name).parse().expect("a number");
             assert_eq!(held, want, "common.wgsl's {name} and the scene's have parted");
+        }
+    }
+
+    /// The preview the falloff bar draws is the profile the shader spends.
+    ///
+    /// `standoff_level` in the scene crate and `standoff_coverage` in
+    /// common.wgsl are the same arithmetic written twice, because WGSL is a
+    /// string here and Rust cannot call into it. Two spellings of one curve
+    /// part silently — the bar would go on drawing the old shape over a picture
+    /// that had moved, which is worse than a bar with no preview at all.
+    ///
+    /// Two halves, because neither is enough alone. The scene's function is
+    /// held against a TRANSCRIPTION of the shader, which catches a number that
+    /// has drifted; and the shader's source is held to still spelling the terms
+    /// that transcription repeats, which catches the edit that would leave the
+    /// transcription describing a function no longer there.
+    #[test]
+    fn the_falloff_preview_is_the_shaders_profile() {
+        let common = crate::with_common("");
+        let body = common
+            .split_once("fn standoff_coverage(")
+            .expect("common.wgsl declares the standoff")
+            .1;
+        let body = &body[..body.find("\n}").expect("the function ends")];
+        // The three terms the Rust repeats, each named here so a shader edit
+        // that drops one fails rather than passing on the numbers it kept.
+        for term in [
+            "max(d, 0.0) / max(w, 1.0e-6)",
+            "exp(-SHADOW_TAIL * t)",
+            "smoothstep(1.0, shadow_stop(f), u)",
+        ] {
+            assert!(body.contains(term), "the standoff no longer spells `{term}`");
+        }
+        // And the curves themselves, over the bar and the whole padded reach.
+        for step in 0..=6 {
+            let falloff = harmonigraph_scene::SHADOW_FALLOFF_MIN
+                + (harmonigraph_scene::SHADOW_FALLOFF_MAX - harmonigraph_scene::SHADOW_FALLOFF_MIN)
+                    * step as f32
+                    / 6.0;
+            // Out to THIS falloff's own stop, which is past the fixed one
+            // below the crossover — a sweep bounded by `SHADOW_STOP` would
+            // stop short of the padding a low falloff asks for and never
+            // compare the stretch the two might disagree on.
+            let reach = harmonigraph_scene::shadow_stop(falloff);
+            for u_step in 0..=16 {
+                let u = reach * u_step as f32 / 16.0;
+                let want = reference_standoff(falloff, u);
+                let held = harmonigraph_scene::standoff_level(falloff, u);
+                assert!(
+                    (held - want).abs() < 1.0e-6,
+                    "at falloff {falloff}, {u} widths out, the bar previews {held} where the \
+                     shader draws {want}",
+                );
+            }
+        }
+    }
+
+    /// `standoff_coverage` transcribed straight from common.wgsl — the shader's
+    /// side of the comparison above, kept apart from the scene's so that
+    /// editing one to match the other is not what makes the test pass.
+    fn reference_standoff(falloff: f32, u: f32) -> f32 {
+        let f = falloff.max(harmonigraph_scene::SHADOW_FALLOFF_MIN);
+        let t = if f == 1.0 { u } else { u.powf(f) };
+        let w = ((u - 1.0) / (reference_stop(f) - 1.0)).clamp(0.0, 1.0);
+        (-harmonigraph_scene::SHADOW_TAIL * t).exp() * (1.0 - w * w * (3.0 - 2.0 * w))
+    }
+
+    /// `shadow_stop` transcribed from common.wgsl, on the same terms —
+    /// including the branch, which is where a wrong crossover would show.
+    fn reference_stop(falloff: f32) -> f32 {
+        let common = crate::with_common("");
+        let folds: f32 = shader_const(&common, "SHADOW_INVISIBLE_FOLDS").parse().expect("a number");
+        let free: f32 = shader_const(&common, "SHADOW_FALLOFF_FREE").parse().expect("a number");
+        if falloff >= free {
+            return harmonigraph_scene::SHADOW_STOP;
+        }
+        harmonigraph_scene::SHADOW_STOP.max(folds.powf(1.0 / falloff))
+    }
+
+    /// The radius a distance cell is padded to is the radius its window shuts
+    /// at, at every falloff on the bar.
+    ///
+    /// The pin that matters most in this PR. `SHADOW_STOP` used to be one
+    /// number both sides spelled, and a drift between them was a cell cut off
+    /// in a straight line; now it is a FUNCTION both sides solve, and the same
+    /// failure is available from an algebra slip rather than only from a typo.
+    /// The shader's own folds constant is read out of its source rather than
+    /// recomputed here, so a hand-edited digit fails.
+    #[test]
+    fn the_shaders_falloff_stop_is_the_packers() {
+        let common = crate::with_common("");
+        let folds: f32 = shader_const(&common, "SHADOW_INVISIBLE_FOLDS").parse().expect("a number");
+        let want =
+            (1.0 / harmonigraph_scene::SHADOW_INVISIBLE).ln() / harmonigraph_scene::SHADOW_TAIL;
+        assert!(
+            (folds - want).abs() < 1.0e-6,
+            "common.wgsl folds the threshold at {folds} where the scene solves {want}",
+        );
+        // The crossover both sides BRANCH on. A drift here is a step in the
+        // stop at exactly the falloff where the two expressions are supposed to
+        // meet, which the sweep below would have to land on to see.
+        let free: f32 = shader_const(&common, "SHADOW_FALLOFF_FREE").parse().expect("a number");
+        assert_eq!(
+            free,
+            harmonigraph_scene::SHADOW_FALLOFF_FREE,
+            "common.wgsl takes the floor from {free} where the scene takes it from {}",
+            harmonigraph_scene::SHADOW_FALLOFF_FREE,
+        );
+        for step in 0..=12 {
+            let falloff = harmonigraph_scene::SHADOW_FALLOFF_MIN
+                + (harmonigraph_scene::SHADOW_FALLOFF_MAX - harmonigraph_scene::SHADOW_FALLOFF_MIN)
+                    * step as f32
+                    / 12.0;
+            let (held, want) = (reference_stop(falloff), harmonigraph_scene::shadow_stop(falloff));
+            assert!(
+                (held - want).abs() < 1.0e-5,
+                "at falloff {falloff} the shader shuts its window at {held} where the packer \
+                 pads to {want}",
+            );
         }
     }
 
@@ -1394,6 +1567,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
+            falloff: 1.0,
             direct_distance: false,
         };
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
@@ -1428,6 +1602,57 @@ pub(crate) mod tests {
         assert!((blur.boxes[0].cell_map[0] - SIGMA_CELL_MAX / sigma).abs() < 1e-5);
     }
 
+    /// A cell is padded to the stop ITS OWN falloff solves for, so the sharp
+    /// end of the bar buys its longer tail with atlas instead of having it cut
+    /// off at a fixed radius.
+    ///
+    /// The other half of `the_shaders_falloff_stop_is_the_packers`: that one
+    /// holds the two spellings of the radius together, this one checks the
+    /// packer is reading the falloff at all. Both are needed — the formula
+    /// agreeing everywhere is no use if `pack` still asks for the constant, and
+    /// the failure is silent either way.
+    #[test]
+    fn a_low_falloff_pads_its_cell_for_the_tail_it_asks_for() {
+        use harmonigraph_scene::{ShadowKernel, SHADOW_FALLOFF_MIN};
+        let sigma = 40.0;
+        let pad_at = |falloff: f32| {
+            let caster = Caster {
+                rect: [40.0, 40.0, 20.0, 20.0],
+                level: 1.0,
+                sigma_points: sigma,
+                kernel: ShadowKernel::Distance,
+                falloff,
+                direct_distance: false,
+            };
+            pack_at(&[caster], sigma, 1.0, 8192, ShadowKernel::Distance).boxes[0].who[2]
+        };
+        // Every falloff pads to its own stop, the fresh one included — which is
+        // where the floor holds and so where nothing moves.
+        // Two texels of slack and not the `1/k + 1` the fixed-stop test beside
+        // this one uses: `pad` is `(ceil(reach · k) + 1) / k`, so the ceil is
+        // worth a whole texel wherever `reach · k` is not already an integer —
+        // which it is at the fresh stop, and is not at most of these.
+        let slack = 2.0 / DISTANCE_TEXELS_PER_POINT;
+        for falloff in [SHADOW_FALLOFF_MIN, 0.5, 0.64, 1.0, 2.0] {
+            let want = 2.0 * harmonigraph_scene::shadow_stop(falloff) * sigma;
+            let pad = pad_at(falloff);
+            assert!(
+                pad >= want && pad <= want + slack,
+                "at falloff {falloff} the cell is padded {pad} points where its curve reaches \
+                 {want}",
+            );
+        }
+        // And the bottom of the bar really does cost more atlas than the fresh
+        // value, or the pad is not following the exponent at all.
+        assert!(
+            pad_at(SHADOW_FALLOFF_MIN) > 1.7 * pad_at(1.0),
+            "the sharpest falloff pads {} against the fresh {}, so a low falloff is being cut \
+             off rather than held",
+            pad_at(SHADOW_FALLOFF_MIN),
+            pad_at(1.0),
+        );
+    }
+
     /// A frame whose GROUPS disagree packs each caster at its own kernel and
     /// its own width, on one shelf.
     ///
@@ -1449,6 +1674,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_points: sigma,
             kernel,
+            falloff: 1.0,
             direct_distance: false,
         };
         let (near, far) = (10.0, 40.0);
@@ -1490,6 +1716,7 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
+            falloff: 1.0,
             direct_distance: true,
         };
         let distance = pack_at(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
@@ -1514,13 +1741,14 @@ pub(crate) mod tests {
             level: 1.0,
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
+            falloff: 1.0,
             direct_distance: false,
         };
         let exact = pack_at(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
         assert_eq!(exact.boxes[0].who[1], DISTANCE_KIND);
 
-        let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance);
+        let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance, 1.0);
         let name = pack_at(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(name.boxes[0].cell[2] > 0.0 && name.boxes[0].cell[3] > 0.0);
         assert_eq!(name.boxes[0].who[1], DISTANCE_KIND);

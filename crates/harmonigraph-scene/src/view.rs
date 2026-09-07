@@ -8,6 +8,7 @@ use crate::{
     Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
     GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
     MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1267,6 +1268,9 @@ pub struct ViewConfig {
     /// heading, beside a Reach that is a distance, a "spread" reads as how far
     /// the light goes, and this moves no light at all — only what colour it is.
     pub glow_blend: f32,
+    /// Blend from the fixed-peak glow (0) to the original per-channel screen
+    /// accumulation (1). Only overlapping halos change; a lone glow is identical.
+    pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
     /// one while the light is coming up, [`glow_release`](Self::glow_release)
@@ -2200,15 +2204,21 @@ impl ViewConfig {
         // than by name, so a group added at step 7 arrives sanitized. The width
         // is what every caster's quad is grown by — a number from outside the
         // bar is a quad nothing can fill — and the depth is a SHARE of the
-        // frame, so the unit interval.
+        // frame, so the unit interval. The falloff bottoms out where the
+        // standoff's window still shuts on nothing visible, which is why zero
+        // is not its floor the way it is the other two's.
         for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
             style.width = finite_or(style.width, fresh.width).clamp(0.0, GLOW_SHADOW_MAX);
             style.depth = finite_or(style.depth, fresh.depth).clamp(0.0, 1.0);
+            style.falloff = finite_or(style.falloff, fresh.falloff)
+                .clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
         }
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
+        self.glow_accumulation =
+            finite_or(self.glow_accumulation, fresh.glow_accumulation).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -2522,6 +2532,7 @@ impl Default for ViewConfig {
             // Each octave keeps its own arc of colour around the node instead
             // of averaging with the opposite side.
             glow_blend: 0.0,
+            glow_accumulation: 0.0,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of

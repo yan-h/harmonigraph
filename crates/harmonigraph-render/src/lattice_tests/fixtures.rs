@@ -14,7 +14,7 @@ pub(super) fn one_shadow(
     depth: f32,
     kernel: harmonigraph_scene::ShadowKernel,
 ) -> harmonigraph_scene::ShadowSettings {
-    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth };
+    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth, ..Default::default() };
     harmonigraph_scene::ShadowSettings {
         lattice_geometry: style,
         lattice_text: style,
@@ -234,6 +234,7 @@ pub(super) fn parity_scene() -> Scene {
         // every glow bar is dialled in.
         marker_unit: 0.34 * 1.8,
         glow_blend: 0.5,
+        glow_accumulation: 0.0,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
     }

@@ -15,7 +15,7 @@ use crate::*;
 /// Pairwise rather than each-against-Off, because "it changed something" is
 /// the weaker half of the claim and the one an accident passes: two patterns
 /// that fell through to the same arm of the shader, or a mode index off by one
-/// anywhere along `Pulse::shader_index` -> misc6.w -> `shimmer_pattern`, would
+/// anywhere along `Pulse::shader_index` -> ShimmerParams::pattern -> `shimmer_pattern`, would
 /// each differ from Off perfectly well while being the same picture as each
 /// other. The row is only a row if its options are distinguishable.
 ///

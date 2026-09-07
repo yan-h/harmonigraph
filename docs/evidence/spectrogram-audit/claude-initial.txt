@@ -1,0 +1,103 @@
+## Initial verdict
+
+**Accept with corrections — do not merge the SG1/SG3 briefs as written.**
+
+This is a strong audit. The evidence discipline is better than most implementation PRs here: every fixture's boundary is stated, the CPU/GPU attribution is refused rather than assumed, the #519 numbers are correctly declined as an additive 0.4 ms cost, and the S/M/H/E/Q labels are actually used. I verified the arithmetic against source and it holds: the slab widths implied by the visible-slab counts (751/353/704/587 → rungs 0.016/0.512/0.256/1.024 s) are exactly what `held_slab` produces; `ring_slots(1024) = 1032`; `8192 × 3828 = 31,358,976` matches the probe's printed `max_history_bytes`; the SG3 hop/window crossings (559/1118/2237 s) follow from `span / 6553.6` vs `fft_samples / sr`; `stats()` really does return `(min, median)`, so the `profile_picture_panes` labelling is right.
+
+**SG2's caller attribution is correct.** `render.rs:227` slices `[now, now+step)` and `render.rs:230` passes `now`, while `push_samples` (`spectrum.rs:393-395`, `465`) contracts `now` as the *newest* sample. The anchor is constant at `−(step − 1/sr)` from the first batch, which is exactly the −33.3125/−16.6458/−8.3125 ms measured. This is a caller error, not an analyzer-clock problem, and the plan says so.
+
+Findings below are ordered by severity. Four change the briefs; the rest are optional.
+
+---
+
+## Blocking
+
+### F1 — SG3's "smallest useful change" deletes the only existing bound on whole-song column memory
+`docs/spectrogram-rendering-plan.md`, SG3 "Smallest useful change" · `crates/harmonigraph-ui/src/spectrum.rs:207-210`
+
+**Trigger:** adopting "bound the sampling hop" (hop ≤ FFT window) without the streaming fold.
+
+**Evidence:** today `hop = max(span / (WHOLE_SONG_SLAB_CAP × COLUMNS_PER_SLAB), 0.008)` = `max(span/6553.6, 0.008)`, so the retained column count is capped at **6,553.6 regardless of span** — ~25.1 MB, and that cap is the stated purpose of the formula (`spectrum.rs:172-180`, "A three-minute render at the live rate would hold 22 500 columns (86 MB)"). Capping the hop at the window makes the count `span / window_seconds`, unbounded in span and inversely proportional to the FFT window. Inside the plan's own SG3 test matrix (30 min; 48/96/192 kHz; all FFT sizes): 30 min Balanced/48 kHz = 10,547 columns ≈ 40 MB; 30 min Fast/192 kHz = 84,375 columns ≈ **323 MB**. The SG3 gate "Bound retained data by the output slab budget plus explicit margins" is unsatisfiable by the cheap option alone, so the cheap and larger options are not independent as the brief presents them.
+
+**Smallest correction:** state the resulting column count as `span / window` in the brief, and require the MAX-into-slabs streaming fold (currently the "larger alternative") as part of *any* hop cap — or add an explicit column cap and accept that it re-opens blind spots above some span. Either way, SG3 stops having a cheap standalone option; say that rather than implying one.
+
+### F2 — SG1 names one of two unbounded entry points; the fallback path is equally unbounded
+Plan SG1 "Problem/evidence" · `crates/harmonigraph-ui/src/spectrogram.rs:1079`, `919-950`
+
+**Trigger:** the same 600 s gap, but with `layout_same == false` — e.g. the Span was dragged across a ladder rung while audio was stopped, or the pane resized.
+
+**Evidence:** `window()` then takes `!can_increment` → `rebuild()`, whose `start = history.partition_point(|c| c.time < cutoff).min(first)`. With `cutoff ≈ newest − keep·bucket ≈ 584.9 s`, `partition_point` returns 125 but `.min(first = 124)` forces the pre-gap column back in, and the fold walks the identical 38,400 empty slabs. The measured fixture only ever exercises the increment arm (`can_increment` is true because `t = 63 ≤ back = 63`), so the probe cannot distinguish the two sites. A repair landed only in the increment path leaves a reachable duplicate that the SG1 acceptance list would catch only because it happens to say "both cold rebuild and warm increment."
+
+**Smallest correction:** move the bound to where the run's *span* is chosen — clamp the fold's start so `newest_key − start_key ≤ keep` — and name both `SpectrogramAgg::window`'s increment and `SpectrogramAgg::rebuild`'s `.min(first)` in SG1's problem statement.
+
+### F3 — SG1's visual-risk list omits the two effects a bounded gap actually has on the picture
+Plan SG1 "Visual risk" · `crates/harmonigraph-ui/src/panes/spectral/spectrogram.rs:246-273` · `crates/harmonigraph-ui/src/spectrogram.rs:775`
+
+**Trigger:** the first frames after a bounded/reset gap recovery.
+
+**Evidence:** (a) **Far-edge extent.** Today a resumed stream returns `keep` slabs of which nearly all were `resize(.., 0)`-filled, so `layout.t_origin` sits ~1,032 slabs back and `d_far = time.depth_of(layout.t_origin)` fills the whole depth region with black. A bounded grid returns only the post-gap slabs, so `d_far` collapses and the strip *regrows from the now-line* — the documented startup behaviour (`spectrogram.rs:246-250`, "the drawn strip GROWS from the now-line"). That is the most likely user-visible difference from the fix and it is not listed. (b) **A blank frame.** `build` returns `None` when `w < 2` (`spectrogram.rs:775`), and `draw_spectrogram` then returns at line 242-244 *before* `frame_data` and before adding any callback — so a reset leaving 1 slab drops the heatmap entirely for that frame rather than re-sending the standing run. Both are unlisted; neither is covered by "skipping the wrong first slab / one-slab holds / stale energy / partial-edge repair / coarse history."
+
+**Smallest correction:** add the post-gap far-edge extent and the `w < 2` no-callback case to SG1's visual acceptance, require a sequential-image fixture across the resume (the plan's own "single goldens cannot prove those contracts" rule applies), and decide explicitly whether black-filled-window or regrown-sliver is the wanted picture.
+
+---
+
+## Priority change
+
+### F4 — SG2 should lead, not SG1
+Plan priority table and "Implementation order" item 1
+
+SG2 is the only defect in the packet that is present in **every frame of every export**, and it is **fps-dependent** — 30 fps and 120 fps renders of one take place the heatmap at different offsets against the ribbons, which contradicts the live/offline agreement the codebase treats as a contract (`spectrum.rs:508-512`, "This is what lets a ridge sit under the note ribbon that made it"). The fix is one expression at `render.rs:227/230`.
+
+SG1, by contrast, needs the sample feed to cease or skip time for tens of seconds *while* pre-gap columns are still inside the 610 s retention (I confirmed the boundary: past 610 s the old columns are trimmed, `t ≤ back` fails, and `window` falls to a cheap rebuild), and it costs a one-shot 14–18 ms hitch plus retained capacity — real, but rare and non-visual.
+
+Gating SG2 behind integrated #617 is defensible for its *integration fixture*, not for the *fix*: a one-line change in a file another branch is editing is a rebase, not a coordination boundary.
+
+**Correction:** promote SG2 to first, or state explicitly that only its `render.rs` integration fixture waits on #617 while the endpoint correction lands immediately.
+
+---
+
+## Optional
+
+### F5 — SG4-A has no fixture in the packet that could demonstrate it
+Plan SG4 "A" · `crates/harmonigraph-render/src/spectrogram.rs:503,513`
+
+The 3,828-byte scratch (`let mut slab = vec![0u8; stride]`, allocated even when `self.grid.dirty` is empty) lives inside `CallbackTrait::prepare`, which is outside the packet's measured boundary (`run_for` + `frame_data`) *and* outside `profile_picture_panes`' timed region. SG4's acceptance list measures the CPU stage, not `prepare`. The allocation counters used are `#[cfg(test)]`-private to `tests/profile.rs` — `probe.patch` had to widen `ALLOCS`/`BYTES` and `mod profile` to `pub(crate)` — while the README forbids treating the probe as committed coverage. So as scheduled, SG4-A can only graduate on argument. My recommendation: drop it to "opportunistic, no acceptance claim" (one 4 KB allocation per callback is below every noise floor in the packet), or name the render-crate probe that would show it. The aligned-slice observation is sound, though: `slab_stride(3828) == 3828`, so the borrowed-slice write is legal at the production shape and the padded path is only needed for `bins % 4 != 0`.
+
+### F6 — a cheaper SG4 step exists between A and B and is currently folded into B
+Plan SG4 "B" · `crates/harmonigraph-ui/src/spectrogram.rs:370-382, 1205-1227`
+
+The dirty set is already derivable with **no new storage and no circular store**: `view` mutates exactly slab 0 (lines 1205-1215) plus the leading held run (1222-1227); `window`/`fold` touch exactly the tail slabs newer than `last_time`; keys entering the run are those outside the previous `first_key..` range. All three are known at fold time from the existing flat `SlabGrid`. That removes `SentRun::moved`'s full-run byte scan (~2.9 MB/update at the 12 s/1,024 fixture) without touching the store's shape or the eviction/recovery contract, and `the_gpu_grid_equals_a_full_upload_after_any_sequence` can retain the byte comparison as a debug-only oracle. It does *not* remove `view`'s `to_vec()` — that still needs the snapshot reuse the plan describes. Suggest making this SG4-B and demoting the keyed/circular store to SG4-C, adopted only if this doesn't capture the benefit. This is the kind of "reject the attractive architecture" the brief asks for: the circular store buys the second 2.9 MB, not the first.
+
+### F7 — two "M" rows in one table are not comparable and the narrower boundary reads larger
+Plan "Measurements and size estimates", rows 1-2
+
+`profile_picture_panes` reports 0.121 ms for the *whole* Spectral pane while the scratch data-path row reports 0.226 ms for a *subset* of it. The rows are not comparable (≈5 s of history vs 17 s+), and — worth stating outright — with no acknowledgement the profile run takes `accept`'s full-upload branch (`spectrogram.rs:421` filter fails → `patched = None`), which **skips `SentRun::moved` entirely**, so it under-measures exactly the CPU work SG4 targets. The plan lists each row's limits separately but never reconciles them, and a reader can take 0.121 ms as a ceiling on SG4's savings. One clause fixes it.
+
+### F8 — SG1's bound has an unstated scope question: `fold` is shared with the batch/whole-song driver
+`crates/harmonigraph-ui/src/spectrogram.rs:872-881, 789`
+
+`SlabGrid::fold` drives both `SpectrogramAgg` and `aggregate_slabs`, which is the whole-song batch path *and* the oracle in `incremental_aggregation_matches_batch_step_for_step`. `keep` has no meaning in the batch driver (whole-song capacity is its own run length, line 789). So the bound must live in the aggregator, or take an explicit parameter both drivers pass — otherwise the two paths silently diverge at large gaps while the equivalence test's fixture is far too small to notice. This is precisely the fixture-reach failure mode `AGENTS.md` calls a standing prior. Say which side owns the bound.
+
+### F9 — SG1's reach statement is narrower than the evidence README's, and neither names a host action
+Plan SG1 vs. README "Defect reproductions"
+
+The plan says "no sample feeding during the gap"; the README says "cease **or skip time**". I confirmed that closing the editor is *not* a trigger — `drain_audio` "always drains AND always feeds" (`plugin/src/editor.rs:326-345`) and `background.rs` runs the same path — so the hypothesis has to be a host that stops delivering audio (audio engine off, plugin deactivated, track disabled), or an anchor snap large enough to skip time (`ANCHOR_SNAP = 1.0`, `spectrum.rs:467`). Naming the hypothesised action makes the "actual host pause/resume check" the plan already lists a cheap, decidable gate rather than an open one.
+
+### F10 — SG6's GPU arm is effectively downstream of a lattice deliverable
+Plan "Implementation order" item 5 vs. `docs/lattice-rendering-plan.md:23`
+
+I confirmed the timer topology claim: `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:673-676` writes index 0 at the *beginning* of the egui pass and `:169-188` writes index 1 at the *beginning* of an independent 1×1 tail pass with no dependency on it — so the bracket can close early on Metal, exactly as #519 warned. But #642 A ("complete the total GPU bracket") is priority 1 in the lattice plan and owns that same bracket. The dependency table says "Coordinate #642"; the ordered list doesn't record that SG6's GPU arm cannot produce a trustworthy number until #642 A lands. One line in item 5.
+
+---
+
+## Things I checked and found sound (no action)
+
+- **SG3 separates coverage from cost.** "No promised speedup", "faithful analysis may be slower", and "distinguish no blind spots from faithful peak capture" are all correct and correctly separated. The burst fixture is valid: the analyzer's ring is `vec![0.0; fft_size]` (`core/src/spectrum.rs:175`), so samples between windows are genuinely discarded, and the 1,800 s hop's windows `[0.104, 0.2747]` and `[0.3787, 0.5493]` do straddle the 0.320–0.330 s burst.
+- **The shader description is accurate** — per-bucket clamp before resampling (`spectrogram.wgsl:110-115`), area-weighted mean when minifying, centre interpolation when magnifying, `textureLoad` on a 4,096-entry `Rgba8Unorm` LUT, no sampler/mip/order-4 mean. The rejection of raw-byte mipmaps/prefix sums as an *exact* replacement is correct, and the level-space caveat ("adds level and tilt invalidation") is the right objection.
+- **The cache-audit row on GPU eviction is right.** `evict_unseen` runs only from `prepare` (`render/src/spectrogram.rs:450`), and an evicted pane is safe because `pane.grid == None` forces the full staging branch (line 479) regardless of the CPU's acknowledged serial.
+- **SG5's fidelity warning is the right one.** `release_gpu_grids` deliberately keeps the aggregators (`spectrum.rs:351-362`), and old `SpectrumHistory` tiers really cannot reproduce previously folded fine slabs — so "drop all CPU state on hiding" is correctly rejected rather than deferred.
+- **`Arc::make_mut` caveat holds** — `grid()` clones the Arc into the callback (`spectrogram.rs:467`), so uniqueness is not guaranteed at accept time.
+
+## Remaining uncertainty
+
+I could not verify the branch write-set claims (#636 `f6f1bdeb`, #637 `ee330330`, #639 `ddeeb507`, #653 `152bf183` and the dirty canonical-recovery worktree) — those are outside this worktree's reachable state and the plan itself scopes them as "an observed write set, not a promise." Everything else in this report is anchored in source at `70e9f48d`. I have not run any build or test; all measurement claims above are re-derived from the packet's logs plus source arithmetic, not re-measured. Read-only throughout — no files edited, no issues touched, no build or plugin load.

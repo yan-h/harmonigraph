@@ -372,11 +372,13 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         kernel: harmonigraph_scene::ShadowKernel::Gaussian,
         width: 0.75,
         depth: 0.85,
+        ..Default::default()
     };
     state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Distance,
         width: 0.75,
         depth: 0.85,
+        ..Default::default()
     };
     let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
@@ -534,10 +536,18 @@ fn spectral_shadow_frame_ms(
     state.spectrum_config.roll_fraction = 0.65;
     state.spectrum_config.roll_seconds = WINDOW;
     (state.spectrum_config.low_midi, state.spectrum_config.high_midi) = (48.0, 84.0);
-    state.view.shadow.spectral_geometry =
-        harmonigraph_scene::ShadowStyle { kernel: geometry, width: 0.75, depth: 0.85 };
-    state.view.shadow.spectral_text =
-        harmonigraph_scene::ShadowStyle { kernel: text, width: 0.75, depth: 0.85 };
+    state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+        kernel: geometry,
+        width: 0.75,
+        depth: 0.85,
+        ..Default::default()
+    };
+    state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+        kernel: text,
+        width: 0.75,
+        depth: 0.85,
+        ..Default::default()
+    };
     let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
         .map(|note| NoteRecord {

@@ -25,16 +25,15 @@
 // Composite-only bindings (declared module-wide; pipelines whose entry
 // points don't reference them omit them from their layout).
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-// Head of the scene pass's Uniforms buffer (same binding, shorter view):
-// only misc2.w (bloom strength; 0 = off) is read here.
-struct BlitUniforms {
-    view_proj: mat4x4<f32>,
-    cam_right: vec4<f32>,
-    cam_up: vec4<f32>,
-    misc: vec4<f32>,
-    misc2: vec4<f32>,
+// The first 16 bytes of the lattice buffer: CompositeParams in uniforms.rs.
+// Binding 3 is this shorter view; the full lattice binds Uniforms at binding 0.
+struct CompositeParams {
+    @align(16) darkest_pitch: f32,
+    brightest_pitch: f32,
+    render_scale: f32,
+    bloom_strength: f32,
 };
-@group(0) @binding(3) var<uniform> bu: BlitUniforms;
+@group(0) @binding(3) var<uniform> bu: CompositeParams;
 // The strength on its own, for a caller with no scene uniforms to take the
 // head of — the roll, which draws its notes straight into the egui pass and
 // wants only the halo laid over them. Its own binding rather than a second
@@ -142,7 +141,7 @@ fn fs_blur_v(in: BlitOut) -> @location(0) vec4<f32> {
 fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
-    let rgb = scene.rgb + bloom.rgb * bu.misc2.w;
+    let rgb = scene.rgb + bloom.rgb * bu.bloom_strength;
     // The quad covers the pane, including transparent pixels and the pure-alpha
     // masks that cast black shadows. Leave zero source RGB exact: premultiplied
     // blending still ADDS it, so noise there would invent light and stipple the

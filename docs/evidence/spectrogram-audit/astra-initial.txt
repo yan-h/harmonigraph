@@ -1,0 +1,40 @@
+# Astra initial review
+
+**Verdict: support the audit and its priority order, with SG3’s implementation contract needing clarification.** The evidence supports SG1’s allocation defect, SG2’s offline caller error, and SG3’s missed observations. It does not justify a GPU rewrite or committing to SG4’s more elaborate delta architecture.
+
+I verified the packet checksums, read the required evidence and documentation, and inspected production source and the named tuning branches’ cumulative write sets. No files were changed, probes rerun, or Claude report accessed.
+
+1. **[P2 — resolve before selecting SG3’s bounded preaggregation design] One preaggregated grid cannot exactly serve the current arbitrary placement grids.**
+   Plan: `docs/spectrogram-rendering-plan.md:237–240,256`. Source: `ui/src/spectrogram.rs:639–663,754–789`; `ui/src/spectrum.rs:75–108`; `offline/src/render.rs:195–243`.
+
+   Each whole-song placement chooses `bucket = window / target_cols`, where `target_cols` depends on that placement’s physical depth. Those widths need not divide one another. MAX-folding observations first into a shared 4,096-slab grid loses which side of a later placement boundary produced a peak. Folding that representation again can move or spread energy across the boundary. MAX is associative only when the grouping preserves the relevant partitions.
+
+   **Smallest correction:** state that exact streaming preaggregation needs one accumulator per distinct output grid, or another representation that retains sufficient boundary information. Alternatively, explicitly permit a shared-grid approximation or change all placements to nested grids, with visual acceptance. Resolve placements before precompute if their grids determine accumulation; that expands the scope into offline composition and changes the stated overlap boundary.
+
+   This is a source-established design constraint, **not evidence of a present rendering bug**. A useful acceptance fixture has two non-nested placement widths and a transient immediately beside a boundary that only one grid has.
+
+2. **[P2 — resolve SG3’s alternative-specific acceptance] The “smallest” capped-hop repair does not meet the stated output-budget memory bound.**
+   Plan: `docs/spectrogram-rendering-plan.md:235–256`. Source: `ui/src/spectrum.rs:204–245`.
+
+   Keeping `WholeSong.columns` while capping hop to the FFT window makes retained columns grow with duration and sample rate. For 30 minutes at Fast/192 kHz, even the weakest cap of one window gives approximately 84,375 columns: **323 MB of column payload**, before allocation metadata and margins. An attenuation policy requiring overlap increases that. This cannot meet “bound retained data by the output slab budget plus explicit margins” using the present representation.
+
+   **Smallest correction:** give the capped-hop alternative an explicit duration/rate-dependent memory admission limit and distinguish it from the fixed-budget streaming alternative. If the fixed output-budget bound is mandatory, say that preaggregation is required and revise the small/medium scope accordingly. Do not let implementation discover that its advertised small repair fails the issue’s acceptance criteria.
+
+   The defect deserves early attention; this changes the **scope and decision gate**, not the correctness priority.
+
+3. **[P2 — strengthen SG3’s quality/cost gate] Include taper configuration in the attenuation and workload evaluation.**
+   Plan: `docs/spectrogram-rendering-plan.md:252–255`. Source: `ui/src/spectrum.rs:204`; `core/src/spectrum.rs:297–334,619–650`.
+
+   The current probe uses one Hann taper. Multiple tapers use a different window family and execute one transform per taper. Both the transient-phase response and the analysis cost therefore depend on a setting omitted from SG3’s explicit measurement matrix.
+
+   **Smallest correction:** add representative one-taper and maximum-taper phase sweeps and performance cases before accepting a universal hop/attenuation policy. A compact discriminating set is sufficient; there is no need to multiply every long-duration case by every taper count. This blocks claims that one measured tolerance or analysis budget covers all supported configurations, **not the existing blind-interval finding**.
+
+The other components are appropriately restrained:
+
+- **SG1:** prioritize it. The sample-ingestion reproduction reaches the production anchor/analyzer/history path, and the allocation claim correctly distinguishes requested bytes from retained capacity. Preserve the explicit cold-rebuild, intermediate-bound, short-gap and timestamp gates.
+- **SG2:** attribution is sound. `render.rs` supplies a future frame slice with its starting clock, while `push_samples` dates the last supplied frame. The plan correctly requires actual slicing integration, partial tails and an explicit lookahead choice.
+- **SG4:** take A early. For B, retain the stop-after-reuse option: measured median savings are bounded by roughly 0.07–0.24 ms per tested surface before accounting for replacement work. A complicated packet protocol has not yet earned its maintenance cost.
+- **SG5:** keep conditional. CPU fine-slab retention has a real fidelity role; a lifecycle cleanup should not silently turn it into reconstructible cache data.
+- **SG6:** retain the attribution gate. Neither the synchronized offline differential nor the historical independent-tail timer establishes current fragment cost.
+
+The tuning independence claims hold for dedicated spectrogram source modules at the inspected heads. The canonical-recovery dirty write set still overlaps replay/editor/take work. SG3’s per-placement streaming option would cross that boundary, so it should not inherit the precompute-only option’s “can start independently” classification.

@@ -269,7 +269,11 @@ struct RollUniforms {
     _axis_pad: [f32; 2],
     shadow: [f32; 4],
     shadow_atlas_size: [f32; 2],
-    _shadow_pad: [f32; 2],
+    /// The group's Shadow falloff, in what was the block's own tail padding —
+    /// the distance path's only other per-group number, and one the vertex
+    /// stage never reads.
+    shadow_falloff: f32,
+    _shadow_pad: f32,
 }
 
 fn shadow_uniform(style: harmonigraph_scene::ShadowStyle) -> [f32; 4] {
@@ -474,8 +478,17 @@ impl RollResources {
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way every other thing
         // the roll draws does.
-        let filter =
-            |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
+        let blit_shader = crate::blit_module(device);
+        let filter = |entry| {
+            crate::create_post_pipeline(
+                device,
+                &blit_shader,
+                entry,
+                target_format,
+                &filter_layout,
+                None,
+            )
+        };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("roll_bloom_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -495,6 +508,7 @@ impl RollResources {
             blur_v_pipeline: filter("fs_blur_v"),
             bloom_pipeline: crate::create_post_pipeline(
                 device,
+                &blit_shader,
                 "fs_bloom_add",
                 target_format,
                 &bloom_layout,
@@ -811,6 +825,7 @@ impl CallbackTrait for RollCallback {
                     level: 1.0,
                     sigma_points: sigma,
                     kernel: style.kernel,
+                    falloff: style.falloff,
                     direct_distance: true,
                 }
             })
@@ -836,7 +851,8 @@ impl CallbackTrait for RollCallback {
             // Patched with the shared target's actual retained allocation by
             // the surface finalizer after every spectral group has arrived.
             shadow_atlas_size: [1.0; 2],
-            _shadow_pad: [0.0; 2],
+            shadow_falloff: style.falloff,
+            _shadow_pad: 0.0,
         };
 
         // The roll's own rect in device pixels, which is what the bloom chain
@@ -1166,6 +1182,7 @@ mod tests {
                 width: 0.5,
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Distance,
+                ..Default::default()
             },
             bloom,
             target_format: FORMAT,
@@ -1422,11 +1439,13 @@ mod tests {
                 width: 0.0,
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
             harmonigraph_scene::ShadowStyle {
                 width: 1.0,
                 depth: 0.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
         ] {
             let uniform = shadow_uniform(shadow);
@@ -1474,7 +1493,12 @@ mod tests {
                 let physical = (64.0 * ppp).round() as u32;
                 let size = [physical.div_ceil(64) * 64, physical];
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
-                let shadow = harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, kernel };
+                let shadow = harmonigraph_scene::ShadowStyle {
+                    width: 0.5,
+                    depth: 1.0,
+                    kernel,
+                    ..Default::default()
+                };
                 let reach = crate::shadow::spectral_shadow_reach(shadow);
                 let note = RollInstance {
                     center: [32.0, 32.0],

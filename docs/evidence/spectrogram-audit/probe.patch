@@ -1,0 +1,232 @@
+diff --git a/crates/harmonigraph-ui/src/spectrogram.rs b/crates/harmonigraph-ui/src/spectrogram.rs
+index afbb3406..15b5c342 100644
+--- a/crates/harmonigraph-ui/src/spectrogram.rs
++++ b/crates/harmonigraph-ui/src/spectrogram.rs
+@@ -26,6 +26,10 @@ use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
+ use crate::SpectrumConfig;
+ use harmonigraph_scene::Gradient;
+ 
++#[cfg(test)]
++#[path = "spectrogram_audit_scratch.rs"]
++mod audit_scratch;
++
+ /// Most time slabs a live window is ever cut into, whatever the pane's size —
+ /// and so, with the window, the FINEST slab any given moment can be drawn into.
+ /// That is what [`SpectrumHistory`](harmonigraph_core::SpectrumHistory) sizes its
+diff --git a/crates/harmonigraph-ui/src/tests/mod.rs b/crates/harmonigraph-ui/src/tests/mod.rs
+index 3b4df3ab..f87bc14c 100644
+--- a/crates/harmonigraph-ui/src/tests/mod.rs
++++ b/crates/harmonigraph-ui/src/tests/mod.rs
+@@ -20,7 +20,7 @@ mod lattice;
+ mod perf;
+ mod persist;
+ pub(crate) mod probe;
+-mod profile;
++pub(crate) mod profile;
+ mod scale;
+ mod settings;
+ mod shell;
+diff --git a/crates/harmonigraph-ui/src/tests/profile.rs b/crates/harmonigraph-ui/src/tests/profile.rs
+index 54425e69..20d806f7 100644
+--- a/crates/harmonigraph-ui/src/tests/profile.rs
++++ b/crates/harmonigraph-ui/src/tests/profile.rs
+@@ -37,8 +37,8 @@ use harmonigraph_core::NoteEvent;
+ /// be measuring a build nobody runs.
+ struct Counting;
+ 
+-static ALLOCS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+-static BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++pub(crate) static ALLOCS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++pub(crate) static BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+ 
+ unsafe impl std::alloc::GlobalAlloc for Counting {
+     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+diff --git a/crates/harmonigraph-ui/src/spectrogram_audit_scratch.rs b/crates/harmonigraph-ui/src/spectrogram_audit_scratch.rs
+new file mode 100644
+index 00000000..3a58a5b2
+--- /dev/null
++++ b/crates/harmonigraph-ui/src/spectrogram_audit_scratch.rs
+@@ -0,0 +1,183 @@
++//! Temporary audit probes. No proposed renderer change is implemented here.
++use super::*;
++use std::sync::atomic::Ordering::Relaxed;
++use std::time::Instant;
++
++fn counts() -> (usize, usize) {
++    use crate::tests::profile::{ALLOCS, BYTES};
++    (ALLOCS.load(Relaxed), BYTES.load(Relaxed))
++}
++
++fn measured<T>(f: impl FnOnce() -> T) -> (T, f64, usize, usize) {
++    let before = counts();
++    let start = Instant::now();
++    let out = f();
++    let ms = start.elapsed().as_secs_f64() * 1000.0;
++    let after = counts();
++    (out, ms, after.0 - before.0, after.1 - before.1)
++}
++
++fn push(s: &mut crate::AudioSpectrum, time: f64, i: usize) {
++    let mut db = Box::new([65u8; SPECTRUM_BINS]);
++    db[400 + (i * 13) % 3000] = 230;
++    s.history.push(crate::SpectrogramColumn { time, db });
++    s.history.trim_older_than(time - crate::AudioSpectrum::HISTORY_MAX_SECONDS);
++}
++
++fn view(window: f64, depth: f32) -> PaneView {
++    PaneView {
++        ppp: 1.0,
++        pitch_len: 1024.0,
++        depth_len: depth,
++        window,
++        scale: PitchScale { min_midi: 15.48682, max_midi: 135.07623, span: 119.58941 },
++        cfg: SpectrumConfig::default(),
++        whole: false,
++    }
++}
++
++fn plan(s: &mut crate::AudioSpectrum, v: &PaneView, now: f64) -> Plan {
++    let h = s.history();
++    let cols = Columns {
++        first: h.partition_point(|c| c.time < now - v.window).saturating_sub(1),
++        len: h.len(),
++        newest: h.back().unwrap().time,
++    };
++    Plan::new(v, &cols, s.spectrogram.at(0).held_bucket)
++}
++
++fn frame(
++    s: &mut crate::AudioSpectrum,
++    v: &PaneView,
++    now: f64,
++) -> (f64, usize, usize, usize, usize, u32) {
++    let p = plan(s, v, now);
++    let (g, ms, allocs, bytes) = measured(|| {
++        run_for(s, None, 0, &p, v).unwrap();
++        frame_data(s, 0, &v.cfg).unwrap().0
++    });
++    let dirty = g.dirty.len();
++    let slabs = g.run.len() / SPECTRUM_BINS;
++    // CPU-only fixture: explicitly acknowledge receipt, without pretending
++    // this measures a GPU upload. GPU tests independently cover this handshake.
++    g.uploaded.store(g.serial, Relaxed);
++    (ms, allocs, bytes, dirty, slabs, g.capacity)
++}
++
++#[test]
++#[ignore]
++fn audit_cpu_and_gap() {
++    println!("bins={SPECTRUM_BINS} max_history_bytes={}", crate::SpectrumHistory::max_bytes());
++    for (window, depth) in [(12.0, 1024.0), (180.0, 512.0), (180.0, 1024.0), (600.0, 1024.0)] {
++        let mut s = crate::AudioSpectrum::default();
++        let v = view(window, depth);
++        let mut i = 0;
++        while (i as f64) * 0.008 < window + 5.0 {
++            push(&mut s, i as f64 * 0.008, i);
++            i += 1;
++        }
++        let cold = frame(&mut s, &v, i as f64 * 0.008);
++        let mut samples = Vec::new();
++        for k in 0..136 {
++            for _ in 0..2 {
++                push(&mut s, i as f64 * 0.008, i);
++                i += 1;
++            }
++            let x = frame(&mut s, &v, i as f64 * 0.008);
++            if k >= 16 {
++                samples.push(x);
++            }
++        }
++        samples.sort_by(|a, b| a.0.total_cmp(&b.0));
++        let n = samples.len();
++        println!("window={window} depth={depth} cold={cold:?} warm_p50={:?} warm_p95_ms={:.6} mean_requested_bytes={} mean_allocs={} dirty_range={:?} refolds={} full_uploads={}",
++            samples[n/2], samples[n*95/100].0,
++            samples.iter().map(|x| x.2).sum::<usize>()/n,
++            samples.iter().map(|x| x.1).sum::<usize>()/n,
++            (samples.iter().map(|x|x.3).min(),samples.iter().map(|x|x.3).max()),
++            s.spectrogram.at(0).agg.as_ref().unwrap().rebuilds(),
++            s.spectrogram.at(0).gpu.full_uploads());
++        let stopped = frame(&mut s, &v, i as f64 * 0.008);
++        let mut zoom = view(window, depth);
++        zoom.scale.span = 12.0;
++        zoom.pitch_len = 2816.0;
++        let zoomed = frame(&mut s, &zoom, i as f64 * 0.008);
++        println!("same_history_stopped={stopped:?} pitch_zoom={zoomed:?}");
++    }
++    for gap in [1.0, 60.0, 600.0] {
++        let mut s = crate::AudioSpectrum::default();
++        let v = view(12.0, 1024.0);
++        for i in 0..125 {
++            push(&mut s, i as f64 * 0.008, i);
++        }
++        frame(&mut s, &v, 1.0);
++        for i in 0..3 {
++            push(&mut s, 1.0 + gap + i as f64 * 0.008, i);
++        }
++        let x = frame(&mut s, &v, 1.0 + gap + 0.024);
++        let agg = s.spectrogram.at(0).agg.as_ref().unwrap();
++        println!(
++            "gap={gap}s resumed={x:?} retained_grid_len={} retained_grid_capacity_bytes={}",
++            agg.grid.centers.len(),
++            agg.grid.power.capacity()
++        );
++    }
++    let mut s = crate::AudioSpectrum::default();
++    let v = view(12.0, 1024.0);
++    let chunk = vec![0.1; 800];
++    for i in 0..60 {
++        s.push_samples(&chunk, 1, 48000.0, (i + 1) as f64 / 60.0, &v.cfg);
++    }
++    frame(&mut s, &v, 1.0);
++    for i in 0..2 {
++        s.push_samples(&chunk, 1, 48000.0, 601.0 + i as f64 / 60.0, &v.cfg);
++    }
++    let x = frame(&mut s, &v, 601.0 + 1.0 / 60.0);
++    println!(
++        "gap_via_push_samples resumed={x:?} retained_grid_capacity_bytes={}",
++        s.spectrogram.at(0).agg.as_ref().unwrap().grid.power.capacity()
++    );
++}
++
++#[test]
++#[ignore]
++fn audit_whole_song_coverage_and_timing() {
++    // A 10 ms tone burst entirely between the windows sampled by a long
++    // whole-song hop. Remaining audio is silence; no synthetic columns.
++    let samples: Vec<f32> = (0..96000)
++        .map(|i| {
++            let t = i as f32 / 48000.0;
++            if (0.320..0.330).contains(&t) {
++                (t * 1000.0 * std::f32::consts::TAU).sin()
++            } else {
++                0.0
++            }
++        })
++        .collect();
++    for span in [12.0, 180.0, 600.0, 1800.0] {
++        let (ws, ms, a, b) = measured(|| {
++            crate::WholeSong::precompute(
++                &samples,
++                1,
++                48000.0,
++                0.0,
++                0.0,
++                span,
++                &SpectrumConfig::default(),
++            )
++        });
++        let peak = ws.columns.iter().flat_map(|c| c.db.iter()).copied().max().unwrap_or(0);
++        println!("whole_span={span} columns={} peak_byte={peak} cpu_ms={ms:.6} allocs={a} requested_bytes={b}",ws.columns.len());
++    }
++    for fps in [30, 60, 120] {
++        let mut s = crate::AudioSpectrum::default();
++        let step = 1.0 / fps as f64;
++        let chunk = vec![0.1; 48000 / fps];
++        for i in 0..fps {
++            s.push_samples(&chunk, 1, 48000.0, i as f64 * step, &SpectrumConfig::default());
++        }
++        let last = s.history.back().unwrap().time;
++        let expected = (s.frames_seen - 1) as f64 / 48000.0 - s.column_lag();
++        println!("offline_chunk_convention fps={fps} last_center={last:.9} sample_grid_center={expected:.9} offset_ms={:.6}",(last-expected)*1000.0);
++    }
++}

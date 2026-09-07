@@ -207,6 +207,7 @@ pub(crate) fn draw_lattice(
             state.target_format,
             pane_id(surface),
             stats,
+            state.lattice_pipelines.clone(),
         ),
     );
     if let Some(mut badge) = badge {

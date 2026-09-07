@@ -1,0 +1,52 @@
+   Compiling num-traits v0.2.19
+   Compiling crc32fast v1.5.0
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling pxfm v0.1.30
+   Compiling byteorder-lite v0.1.0
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling half v2.7.1
+   Compiling euclid v0.22.14
+   Compiling moxcms v0.8.1
+   Compiling flate2 v1.1.9
+   Compiling naga v29.0.4
+   Compiling guillotiere v0.7.0
+   Compiling png v0.18.1
+   Compiling vello_common v0.0.9
+   Compiling harmonigraph-golden v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-golden)
+   Compiling image v0.25.10
+   Compiling vello_cpu v0.0.9
+   Compiling epaint v0.35.0
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4
+   Compiling egui v0.35.0
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling wgpu-core v29.0.4
+   Compiling egui_dock v0.20.1
+   Compiling wgpu v29.0.4
+   Compiling egui-wgpu v0.35.0
+   Compiling harmonigraph-render v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-render)
+   Compiling harmonigraph-perf v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-ui)
+   Compiling harmonigraph-offline v0.3.0 (/Users/yan/.codex/worktrees/5e74/harmonigraph/crates/harmonigraph-offline)
+    Finished `release` profile [optimized] target(s) in 58.32s
+     Running unittests src/main.rs (target/release/deps/harmonigraph_offline-f62dbface63e0294)
+
+running 1 test
+test golden::what_the_heatmap_costs_a_frame ... 
+== what one rendered frame costs, and the heatmap's share ==
+        size   sliver  heatmap    curve       heatmap-        curve-      px
+  256 x 128     1.561    1.762    1.774    0.218 ±0.152   0.214 ±0.041   0.03M  (223 frames)
+  256 x 384     1.560    1.791    1.946    0.209 ±0.102   0.346 ±0.152   0.10M  (223 frames)
+  512 x 768     1.748    1.845    1.956    0.108 ±0.048   0.211 ±0.036   0.39M  (223 frames)
+ 1024 x 1536    2.018    3.437    3.244    1.411 ±0.522   0.963 ±0.340   1.57M  (223 frames)
+ 2048 x 1024    2.000    4.294    3.640    2.156 ±0.235   1.610 ±0.120   2.10M  (223 frames)
+(heatmap- and curve- are each pane's cost over the sliver frame, as
+ median ± the scatter the median stepped over; a row whose scatter is
+ the size of its figure is this machine, not the pane)
+
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 55 filtered out; finished in 89.63s
+

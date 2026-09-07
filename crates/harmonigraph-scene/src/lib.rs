@@ -52,8 +52,9 @@ pub use spectral::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{
-    Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel, ShadowSettings, ShadowStyle,
-    REACH_SIGMAS, SHADOW_STOP, SHADOW_TAIL,
+    shadow_stop, standoff_level, Gradient, NoteNames, Pulse, SevensLabel, ShadowKernel,
+    ShadowSettings, ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_FREE, SHADOW_FALLOFF_MAX,
+    SHADOW_FALLOFF_MIN, SHADOW_INVISIBLE, SHADOW_STOP, SHADOW_TAIL,
 };
 pub use view::{DrawnWindow, FrameParams, GlowCurve, RingStack, ViewConfig};
 
@@ -933,6 +934,9 @@ pub struct Scene {
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,
+    /// Share of the original accumulating glow blend, clamped to 0..=1
+    /// (see [`ViewConfig::glow_accumulation`]).
+    pub glow_accumulation: f32,
     /// How many rows the frame's ink strip has to hold — the ceiling on every
     /// [`GlowStep::row`] in `nodes`, plus one.
     ///

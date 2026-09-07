@@ -51,6 +51,10 @@ struct Locals {
     screen_points: [f32; 2],
     shadow_atlas_size: [f32; 2],
     shadow: [f32; 4],
+    /// The group's Shadow falloff in x, read only on the distance path; the
+    /// rest is the 16 bytes a uniform block's row takes. Its own row because
+    /// `shadow` has no fifth component to spend.
+    falloff: [f32; 4],
 }
 
 struct Resources {
@@ -257,6 +261,7 @@ impl CallbackTrait for DotShadowCallback {
                 level: 0.75 * f32::from(dot.color[3]) / 255.0,
                 sigma_points: sigma,
                 kernel: style.kernel,
+                falloff: style.falloff,
                 direct_distance: true,
             })
             .collect();
@@ -272,6 +277,7 @@ impl CallbackTrait for DotShadowCallback {
                 if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
                 crate::spectral_shadow_reach(style),
             ],
+            falloff: [style.falloff, 0.0, 0.0, 0.0],
         };
         let coverage = resources.coverage.clone();
         let pane = resources.pane(device, self.pane_id, self.pass_nr);
@@ -374,11 +380,13 @@ mod tests {
                 width: 0.0,
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
             harmonigraph_scene::ShadowStyle {
                 width: 1.0,
                 depth: 0.0,
                 kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+                ..Default::default()
             },
         ] {
             let cb = DotShadowCallback {
@@ -426,7 +434,12 @@ mod tests {
                         radius: 4.0,
                         color: [255; 4],
                     }],
-                    shadow: harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, kernel },
+                    shadow: harmonigraph_scene::ShadowStyle {
+                        width: 0.5,
+                        depth: 1.0,
+                        kernel,
+                        ..Default::default()
+                    },
                     target_format: wgpu::TextureFormat::Rgba8Unorm,
                     pane_id: 0,
                     shadow_surface_id: 0,

@@ -1,0 +1,56 @@
+    Finished `release` profile [optimized] target(s) in 0.32s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_ui-73c77dd12ccacf82)
+
+running 49 tests
+test panes::spectral::tests::the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields ... ok
+test spectrogram::tests::a_gap_in_the_columns_keeps_a_row_for_every_silent_slab ... ok
+test spectrogram::tests::a_gradient_draws_its_own_ends ... ok
+test spectrogram::tests::a_held_empty_slab_leaves_the_window_with_the_slab_it_copied ... ok
+test spectrogram::tests::a_live_frame_after_a_whole_song_one_cuts_on_a_rung ... ok
+test spectrogram::tests::a_long_window_keeps_the_fast_path_once_the_store_starts_merging ... ok
+test spectrogram::tests::a_preset_composes_the_pair_its_arm_names ... ok
+test spectrogram::tests::a_refold_that_moves_most_of_the_run_is_uploaded_whole ... ok
+test spectrogram::tests::a_run_the_gpu_never_saw_is_uploaded_whole ... ok
+test spectrogram::tests::a_second_frame_on_the_same_columns_reuses_the_run_it_sent ... ok
+test spectrogram::tests::a_short_loud_column_keeps_its_peak_through_aggregation ... ok
+test spectrogram::tests::a_short_window_keeps_the_fast_path_across_merges ... ok
+test spectrogram::tests::a_single_missed_slab_holds_instead_of_going_black ... ok
+test spectrogram::tests::a_slab_is_anchored_to_absolute_time_not_ring_position ... ok
+test spectrogram::tests::a_slow_drag_with_tremor_crosses_a_rung_once ... ok
+test spectrogram::tests::a_span_dithering_across_a_rung_settles_on_one_width ... ok
+test spectrogram::tests::a_span_drag_refolds_once_per_rung_crossed ... ok
+test spectrogram::tests::a_take_longer_than_the_render_window_folds_inside_the_slab_cap ... ok
+test spectrogram::tests::an_acknowledged_delta_is_not_handed_over_twice ... ok
+test spectrogram::tests::cells_are_opaque_and_run_dark_to_bright ... ok
+test spectrogram::tests::columns_going_back_in_time_still_get_a_row ... ok
+test spectrogram::tests::dragging_the_span_holds_the_grid_between_ladder_steps ... ok
+test spectrogram::tests::gpu::a_bucket_above_a_dragged_down_floor_still_draws_a_colour ... ok
+test spectrogram::tests::gpu::a_pane_resize_does_not_re_send_the_grid_every_frame ... ok
+test spectrogram::tests::gpu::a_ramp_of_stored_bytes_renders_dark_to_bright ... ok
+test spectrogram::tests::gpu::brightness_across_resolutions ... ignored
+test spectrogram::tests::gpu::energy_at_one_bucket_of_one_slab_lights_that_texel_and_no_other ... ok
+test spectrogram::tests::gpu::slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads ... ok
+test spectrogram::tests::gpu::the_curve_and_the_heatmap_read_a_run_of_buckets_alike ... ok
+test spectrogram::tests::gpu::the_gpu_grid_equals_a_full_upload_after_any_sequence ... ok
+test spectrogram::tests::gpu::the_noise_floor_settles_as_the_pitch_axis_zooms_out ... ok
+test spectrogram::tests::holding_the_sliver_leaves_the_data_mapping_alone ... ok
+test spectrogram::tests::incremental_aggregation_matches_batch_step_for_step ... ok
+test spectrogram::tests::incremental_aggregation_matches_the_raw_columns_across_a_tier_merge ... ok
+test spectrogram::tests::no_cache_layer_falls_back_as_the_window_scrolls ... ok
+test spectrogram::tests::quantizing_a_bucket_does_not_move_its_colour ... ok
+test spectrogram::tests::the_fold_covers_the_whole_depth_region_a_short_render_draws ... ok
+test spectrogram::tests::the_held_marks_are_trimmed_with_the_slabs_they_describe ... ok
+test spectrogram::tests::the_held_width_survives_a_frame_through_the_surface ... ok
+test spectrogram::tests::the_leading_sliver_holds_the_newest_slabs_centre ... ok
+test spectrogram::tests::the_lut_key_folds_two_gradients_that_draw_one_picture ... ok
+test spectrogram::tests::the_plan_decides_the_layout_without_a_frame ... ok
+test spectrogram::tests::the_quiet_end_of_the_ramp_fades_instead_of_cutting_off ... ok
+test spectrogram::tests::the_run_key_names_the_fold_and_not_the_read ... ok
+test spectrogram::tests::the_shade_table_matches_the_mapping_it_replaces ... ok
+test spectrogram::tests::the_time_to_slab_mapping_is_a_straight_line ... ok
+test tests::persist::a_persist_blob_predating_the_spectrogram_loads_with_it_on ... ok
+test tests::spectral::resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum ... ok
+test tests::spectrum::spectrogram_history_stays_bounded ... ok
+
+test result: ok. 48 passed; 0 failed; 1 ignored; 0 measured; 656 filtered out; finished in 20.86s
+

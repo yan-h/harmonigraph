@@ -57,7 +57,10 @@ struct Locals {
     /// σ, depth, kernel kind (Distance = 1), and whole kernel reach, in points.
     shadow: vec4<f32>,
     shadow_atlas_size: vec2<f32>,
-    _shadow_pad: vec2<f32>,
+    // The group's Shadow falloff (`ShadowStyle::falloff`), read only on the
+    // distance path, in what was the block's own tail padding.
+    shadow_falloff: f32,
+    _shadow_pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -240,7 +243,7 @@ fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
     if reach <= 0.0 || locals.shadow.y <= 0.0 {
         return 0.0;
     }
-    var full = standoff_coverage(d, 2.0 * locals.shadow.x);
+    var full = standoff_coverage(d, 2.0 * locals.shadow.x, locals.shadow_falloff);
     if locals.shadow.z < 0.5 * DISTANCE_KIND {
         full = shadow_kernel(in.who, in.at);
     }

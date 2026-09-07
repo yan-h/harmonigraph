@@ -707,6 +707,7 @@ pub fn create(
         egui_state: params.editor_state.clone(),
         params,
         shared,
+        gpu_context: egui_baseview::SharedGpuContext::default(),
         // On macOS the system reports scaling; elsewhere a host that never
         // calls set_scale_factor gets 1.0 (same policy as nih_plug_egui).
         #[cfg(target_os = "macos")]
@@ -785,6 +786,7 @@ struct LatticeEditor {
     params: Arc<HarmonigraphParams>,
     shared: Arc<Mutex<EditorShared>>,
     scaling_factor: AtomicCell<Option<f32>>,
+    gpu_context: egui_baseview::SharedGpuContext,
 }
 
 /// baseview uses a different raw-window-handle version than nih-plug, so
@@ -913,6 +915,8 @@ impl Editor for LatticeEditor {
             Some(Size::new(f64::from(width), f64::from(height)))
         });
 
+        let mut graphics = graphics_config();
+        graphics.shared_context = Some(self.gpu_context.clone());
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
             EguiWindowSettings::new()
@@ -922,7 +926,7 @@ impl Editor for LatticeEditor {
                         .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
                         .unwrap_or(WindowScalePolicy::SystemScaleFactor),
                 )
-                .with_graphics_config(graphics_config())
+                .with_graphics_config(graphics)
                 .with_size_source(size_source),
             WindowState::new(self.shared.clone(), self.params.clone()),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {

@@ -231,3 +231,45 @@ fn a_rejection_names_the_module_it_is_about() {
     .expect_err("text.wgsl declares none of the lattice's entry points");
     assert!(err.contains("text.wgsl"), "{err}");
 }
+
+/// Reload both attachment choices with real modules, then draw their labels,
+/// shadows and glow. Merely validating WGSL cannot catch a pass/pipeline
+/// attachment mismatch or a variant left on the old generation.
+#[cfg(feature = "hot-reload")]
+#[test]
+fn a_reload_rebuilds_and_draws_both_bloom_variants() {
+    use super::fixtures::*;
+    let _guard = reload::test_lock();
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = parity_scene();
+    scene.glow_reach = 0.8;
+    let labels =
+        |scene: &Scene| names(vec![(0, vec![name_glyph(scene, [112.0, 110.0, 24.0, 36.0])])]);
+    let plain = shooter.shot_with(&scene, labels(&scene));
+    scene.bloom_strength = 1.0;
+    let bloomed = shooter.shot_with(&scene, labels(&scene));
+    let dir = scratch("real-pipelines");
+    let (common, lattice, text_path) =
+        (dir.join("common.wgsl"), dir.join("lattice.wgsl"), dir.join("text.wgsl"));
+    std::fs::write(&common, COMMON_SRC).unwrap();
+    std::fs::write(&lattice, SHADER_SRC).unwrap();
+    std::fs::write(&text_path, text::TEXT_SRC).unwrap();
+    let old = {
+        let resources = shooter.resources.get_mut::<LatticeResources>().unwrap();
+        resources.watcher = ShaderWatcher::watching(lattice, text_path, common.clone());
+        assert!(poll_now(&mut resources.watcher).is_none());
+        resources.scenes.each_ref().map(|s| s.nodes.clone())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&common, format!("{COMMON_SRC}\n// reload both attachments\n")).unwrap();
+    shooter.resources.get_mut::<LatticeResources>().unwrap().watcher.next_check =
+        std::time::Instant::now();
+    assert_eq!(bloomed, shooter.draw(&scene, labels(&scene)));
+    let resources = shooter.resources.get::<LatticeResources>().unwrap();
+    for (before, after) in old.iter().zip(&resources.scenes) {
+        assert_ne!(*before, after.nodes, "both pipeline variants must rebuild");
+    }
+    scene.bloom_strength = 0.0;
+    assert_eq!(plain, shooter.draw(&scene, labels(&scene)));
+    std::fs::remove_dir_all(dir).unwrap();
+}

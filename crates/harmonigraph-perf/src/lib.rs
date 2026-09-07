@@ -1245,9 +1245,8 @@ mod tests {
     /// `pub` field of a public struct counts as read whether or not anything
     /// reads it.
     ///
-    /// Reading the source is the cheap way to ask the question, in the same
-    /// shallow way `harmonigraph-render`'s `struct_field_names` reads its two
-    /// `Uniforms` — one field per line, an identifier before the first `:`.
+    /// Reading the source is the cheap way to ask the question: one field per
+    /// line, an identifier before the first `:`.
     /// What it cannot check is that a field reaches the RIGHT stage; the
     /// overlay's own `every_breakdown_row_reports_the_cost_it_names` is what
     /// relates a reading to the label it prints under.

@@ -756,3 +756,11 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
     );
 }
+
+// The same visible shadow when the scene has no bloom attachment.
+@fragment
+fn fs_shadow_box_plain(in: BoxOut) -> @location(0) vec4<f32> {
+    let full = shadow_kernel(in.who, in.at);
+    let t = shadow_transmittance(full, locals.shadow_depth, in.level);
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
+}
