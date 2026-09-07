@@ -223,22 +223,22 @@ pub(super) fn text_scales(
     }
 }
 
-/// How loud `power` reads at pitch `midi`, on a 0..1 height scale: the
-/// configured floor is 0, the configured ceiling is 1, and the tilt lifts
-/// treble by its slope above the 1 kHz pivot. Audio colors use
-/// [`spectrogram_level_db`] and their own dB window.
+/// How loud `power` reads at pitch `midi`, on a 0..1 height scale.
+/// The lattice Fold still carries power; resampled display footprints carry dB.
 pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
     loudness_db(cfg, power_db(power), midi)
 }
 
 /// A bucket's power as dB — the form the spectrogram's history already stores,
-/// and the only thing [`loudness`] does with power before mapping it.
+/// before [`loudness_db`] maps it to a position.
 pub(crate) fn power_db(power: f32) -> f32 {
     10.0 * power.max(1e-12).log10()
 }
 
-/// [`loudness`] from a bucket already in dB, so the analyzer curve's height
-/// mapping never takes a `log10` per pixel.
+/// How loud a dB value reads at pitch `midi`, on a 0..1 height scale: the
+/// configured floor is 0, the configured ceiling is 1, and the tilt lifts
+/// treble by its slope above the 1 kHz pivot. Audio colors use
+/// [`spectrogram_level_db`] and their own dB window.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     loudness_raw(cfg, power_db, midi).clamp(0.0, 1.0)
 }
