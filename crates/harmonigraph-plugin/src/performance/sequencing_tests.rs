@@ -710,6 +710,53 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
+fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // The Hub runs a callback behind, so this onset cannot emit at input+D and
+    // waits with rule one. It lands 512 samples late.
+    assert!(source
+        .run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512)
+        .values
+        .is_empty());
+    assert!(source.run_format(2048, vec![], None, None, 512).values.is_empty());
+    hub.run_format(1536, vec![], None, None, 512);
+    let late = source.run_format(2560, vec![], None, None, 512);
+    assert!(late.values[0].1.attack().is_some());
+    assert_eq!(late.values[0].0, 0, "one whole callback past input+D");
+    hub.run_format(2048, vec![], None, None, 512);
+    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
+    hub.run_format(2560, vec![], None, None, 512);
+    // The note's own release carries the same extra shift, so the sounding
+    // duration is the played duration. A shared channel control sent in the
+    // same callback keeps the ordinary input+D schedule instead.
+    assert!(source
+        .run_format(
+            3584,
+            vec![note(7, 0, 60, 0, false), raw_midi([0xb0, 11, 90], 0)],
+            None,
+            None,
+            512
+        )
+        .values
+        .is_empty());
+    hub.run_format(3072, vec![], None, None, 512);
+    let control = source.run_format(4096, vec![], None, None, 512);
+    assert_eq!(control.values.len(), 1, "the shared control is not held to the note's shift");
+    assert_eq!(control.values[0].0, 0);
+    assert!(matches!(control.values[0].1, Event::Midi { data: [0xb0, 11, 90], .. }));
+    hub.run_format(3584, vec![], None, None, 512);
+    let release = source.run_format(4608, vec![], None, None, 512);
+    assert_eq!(release.values.len(), 1, "{:?}", release.values);
+    assert_eq!(release.values[0].0, 0);
+    assert!(release.values[0].1.release());
+    // Input 1536..3584 played; output 2560..4608 sounded.
+    assert_eq!(4608 - 2560, 3584 - 1536);
+    assert_eq!(source.source_snapshot().faults, 0);
+    hub.run_format(4096, vec![], None, None, 512);
+}
+
+#[test]
 fn an_unpaired_tune_retires_its_own_accepted_output_rather_than_filling_its_journal() {
     let _scope = crate::test_scope::enter();
     let mut source = Device::new(true);
