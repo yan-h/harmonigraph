@@ -1578,10 +1578,6 @@ impl Hub {
             row.applied,
         )
     }
-    pub fn test_row_retirement(&self, slot: usize) -> (u64, u64, usize, bool) {
-        let row = &self.rows[slot];
-        (row.received, row.applied, row.output.len(), row.repair)
-    }
     pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
         std::array::from_fn(|index| {
             let row = &self.rows[index];

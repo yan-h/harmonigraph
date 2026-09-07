@@ -585,15 +585,22 @@ impl Source {
         }
         if self.offer.as_ref().is_some_and(|offer| {
             offer.session.rows[usize::from(offer.lease.slot - 1)].withdrawn.load(Ordering::Acquire)
-        }) && !self.withdrawal_reset
-        {
-            // Once per withdrawal. `stop` is the established reset: it cancels
-            // every unsounded attack and arms the emergency lane for the
-            // voices this Tune has forwarded, which is also what lets the
-            // lease settle instead of waiting for input the new pairing will
-            // never deliver.
-            self.withdrawal_reset = true;
-            self.stop();
+        }) {
+            if !self.withdrawal_reset {
+                // Once per withdrawal. `stop` is the established reset: it
+                // cancels every unsounded attack and arms the emergency lane
+                // for the voices this Tune has forwarded, which is also what
+                // lets the lease settle instead of waiting for input the new
+                // pairing will never deliver.
+                self.withdrawal_reset = true;
+                self.stop();
+            }
+        } else {
+            // A row can be un-withdrawn without ever being detached — a Hub
+            // clock boundary fences every row and then reopens them. Arm the
+            // next withdrawal from the observed flag rather than from the
+            // adoption that may never come.
+            self.withdrawal_reset = false;
         }
         let mut adopted = false;
         let bridge = self.shared.source.as_ref().unwrap();

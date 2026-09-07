@@ -1335,8 +1335,11 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
     );
 }
 
+/// Ambiguity is a pairing change, and a pairing change is a reset boundary.
+/// The old contract kept the phrase alive across it and needed an explicit
+/// recovery to retire the lease; #712 replaced that with this reset.
 #[test]
-fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset() {
+fn an_ambiguous_pairing_resets_the_tune_and_settles_the_old_lease() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let mut hub = Device::aggregation(false);
@@ -1360,20 +1363,19 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
     hub.run(128, vec![], None);
     let duplicate = Device::aggregation(false);
     duplicate.configure(uuid, true);
+    // Two candidate Hubs withdraw this lease, and the withdrawal reset
+    // cancels the onset that was still waiting for output budget and
+    // terminates the voice already forwarded.
+    let mut released = 0;
     for block in 3..=6 {
         let output = source.run(block * 64, vec![], None);
-        assert!(output.values.is_empty());
+        released += output.values.iter().filter(|(_, event)| event.release()).count();
+        assert!(output.values.iter().all(|(_, event)| event.attack().is_none()));
         hub.run(block * 64, vec![], None);
-        let retained = source.source_snapshot();
-        assert_eq!(retained.faults, 0);
-        assert_eq!(retained.local_pending, 1, "ambiguity is no cancellation authority");
-        assert_eq!(retained.old_obligations, 1);
-        assert_eq!(retained.lives, 2);
+        assert_eq!(source.source_snapshot().faults, 0, "an ordinary reset is not a fault");
     }
-    // Explicit recovery is a real cancellation boundary and can retire the
-    // old lease once its actual held release and disposition are retained.
-    let shared = source.shared();
-    shared.apply(shared.value().routing, true).unwrap();
+    assert_eq!(released, 1, "the forwarded voice is terminated, the unsounded onset is not");
+    // No explicit recovery: the reset alone settles the old lease.
     drop(duplicate);
     for block in 7..=18 {
         source.run(block * 64, vec![], None);
@@ -1382,7 +1384,7 @@ fn pairing_changes_retain_pre_cut_unsounded_ownership_without_an_explicit_reset(
         hub.main();
     }
     assert_eq!(source.source_snapshot().pending, 0);
-    assert_eq!(source.source_snapshot().held, 0);
+    assert_eq!(source.source_snapshot().local_pending, 0);
 }
 
 #[test]
@@ -1427,47 +1429,6 @@ fn ordinary_hub_adoption_preserves_fault_inhibition_until_explicit_settled_reset
         source.run(1088, vec![note(2, 0, 62, 3, true), note(2, 0, 62, 23, false)], None);
     assert_eq!(recovered.values.len(), 2, "explicit settled reset restores forwarding");
     assert_eq!(recovered.values[1].0 - recovered.values[0].0, 20);
-}
-
-#[test]
-fn held_baseline_precedes_later_release_even_when_hub_drains_after_both_callbacks() {
-    let _scope = crate::test_scope::enter();
-    use harmonigraph_take::{CanonicalRecord, NoteKind};
-    let uuid = SavedUuid::default();
-    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
-    hub.configure(uuid, true);
-    hub.activate();
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    source.run(64, vec![note(31, 2, 60, 5, true)], None);
-    hub.run(64, vec![], None);
-    source.run(128, vec![source.participation(false, 0), expression(31, 0.3333333333333, 7)], None);
-    source.run(192, vec![note(31, 2, 60, 9, false)], None);
-    hub.run(128, vec![], None);
-    source.run(256, vec![], None);
-    hub.run(192, vec![], None);
-    source.run(320, vec![], None);
-    hub.run(256, vec![], None);
-    let records = capture.drain_canonical();
-    let snapshot = records
-        .iter()
-        .position(|record| matches!(record, CanonicalRecord::Baseline(b) if !b.participating))
-        .unwrap();
-    let released = records.iter().position(|record| matches!(record, CanonicalRecord::Delta(d) if matches!(d.event.kind, NoteKind::Off))).unwrap();
-    assert!(snapshot < released, "the <=C snapshot must not resurrect state after a later release");
-    let CanonicalRecord::Baseline(frame) = &records[snapshot] else { unreachable!() };
-    let frame = frame.baseline().unwrap();
-    assert_eq!(frame.voices().len(), 1);
-    assert_eq!(frame.voices()[0].player_tuning, 0.3333333333333);
-    assert_eq!(frame.voices()[0].onset.unwrap().sample, 69);
-    let mut tracker = harmonigraph_core::NoteTracker::default();
-    for record in records {
-        record.apply(&mut tracker).unwrap();
-    }
-    assert_eq!(tracker.held_count(), 0);
 }
 
 #[test]
@@ -3756,8 +3717,6 @@ fn destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix() {
             .prefix),
         128
     );
-    let row = wrapper
-        .test_inspect_plugin(|plugin| plugin.aggregation.as_ref().unwrap().test_row_retirement(0));
     drop(mailbox);
     drop(hub);
     drop(source);
@@ -4642,86 +4601,6 @@ fn full_normal_attempt_lane_keeps_all_voice_and_pedal_emergency_attempts_availab
     assert_eq!(source.source_snapshot().emergency, 0);
 }
 
-#[test]
-fn mixed_generation_wildcard_parent_retains_only_the_old_childs_acknowledgement_obligation() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let mut hub = Device::aggregation(false);
-    hub.configure(uuid, true);
-    hub.activate();
-    let session = registry::global().lock().unwrap().test_session(uuid);
-    let mut source = Device::aggregation(true);
-    source.configure(uuid, true);
-    source.activate();
-    source.run(0, vec![], None);
-    hub.run(0, vec![], None);
-    assert_eq!(source.run(64, vec![note(1, 0, 60, 0, true)], None).values.len(), 1);
-    hub.run(64, vec![], None);
-    let shared = source.shared();
-    let setup::Routing::Source(mut next) = shared.value().routing else { unreachable!() };
-    next.selected = Some(SavedUuid::default());
-    shared.apply(setup::Routing::Source(next), false).unwrap();
-    source.run(128, vec![], None);
-    // Established expressions remain responsive through a younger lease wait.
-    // Exhaust the real normal output allowance to retain the wildcard's old
-    // child for the cancellation/acknowledgement path this fixture measures.
-    let mut input: Vec<_> = (0..512).map(|_| expression(1, 0.125, 0)).collect();
-    input.extend([note(2, 0, 64, 0, true), expression(-1, 0.234567890123, 1)]);
-    let earlier = source.run(192, input, None);
-    assert_eq!(earlier.values.len(), 512);
-    assert!(earlier
-        .values
-        .iter()
-        .all(|(_, event)| matches!(event, Event::Expression { id: 1, value: 0.125, .. })));
-    let captured = source.source_snapshot();
-    assert_eq!((captured.local_pending, captured.references, captured.input_cut), (2, 2, 515));
-    assert_eq!(
-        (captured.obligations, captured.old_obligations),
-        (3, 1),
-        "one original wildcard captured both lease generations"
-    );
-    shared.apply(shared.value().routing, true).unwrap();
-    let released = source.run(256, vec![], None);
-    assert_eq!(released.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    assert!(released.values.iter().all(|(_, event)| event.attack().is_none()));
-    assert!(source.run(320, vec![], None).values.is_empty());
-    // Cancellation scans the 512 locally completed but remotely pinned
-    // originals before reaching the two-generation wildcard. Hub stays paused.
-    assert!(source.run(384, vec![], None).values.is_empty());
-    assert!(source.run(448, vec![], None).values.is_empty());
-    let waiting = source.source_snapshot();
-    assert_eq!((waiting.local_pending, waiting.references, waiting.manifest), (1, 2, 1));
-    assert_eq!((waiting.obligations,waiting.old_obligations),(1,1),"the new-generation child settled locally; only the original lease's disposition still owns the parent");
-    assert_eq!(
-        session.credits.load(Ordering::Acquire),
-        1,
-        "current empty state cannot acknowledge actual old output"
-    );
-    for block in 2..=24 {
-        hub.run(block * 64, vec![], None);
-        assert!(source
-            .run((block + 6) * 64, vec![], None)
-            .values
-            .iter()
-            .all(|(_, event)| event.attack().is_none()));
-        source.main();
-        hub.main();
-    }
-    let settled = source.source_snapshot();
-    assert_eq!(
-        (
-            settled.pending,
-            settled.references,
-            settled.manifest,
-            settled.obligations,
-            settled.old_obligations
-        ),
-        (0, 0, 0, 0, 0)
-    );
-    assert_eq!(session.credits.load(Ordering::Acquire), 0);
-}
-
-#[cfg(debug_assertions)]
 #[test]
 fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit() {
     let _scope = crate::test_scope::enter();

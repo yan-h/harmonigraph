@@ -194,11 +194,13 @@ fn withdrawal_terminates_the_forwarded_voice_before_forgetting_its_ownership() {
     assert!(row.withdrawn.load(Ordering::Acquire));
     assert_eq!(row.emission_gate.load(Ordering::Acquire), source::CLOSED);
     // The Tune owes the receiving instrument a release for the voice it
-    // forwarded. It pays that before the lease is allowed to settle, so no
-    // note is stranded in a session neither side owns any more.
+    // forwarded, and pays it here rather than leaving a note sounding in a
+    // session neither side owns any more. The host-side reservation outlives
+    // that release: ownership of the note id is only given up at the host's
+    // own termination boundary, which is the instance drop below.
     let mut released = 0;
     let mut raw = 128;
-    for _ in 0..8 {
+    for _ in 0..16 {
         released += source
             .run(raw, vec![], None)
             .values
@@ -206,14 +208,20 @@ fn withdrawal_terminates_the_forwarded_voice_before_forgetting_its_ownership() {
             .filter(|(_, event)| event.release())
             .count();
         hub.run(raw, vec![], None);
+        source.main();
+        hub.main();
         raw += 64;
-        if source.source_snapshot().held == 0 {
+        if released != 0 && source.source_snapshot().emergency == 0 {
             break;
         }
     }
     assert_eq!(released, 1, "exactly one physical Note-Off for the withdrawn voice");
-    assert_eq!(source.source_snapshot().held, 0);
-    assert_eq!(source.source_snapshot().faults, 0, "an ordinary reset is not a fault");
+    let settled = source.source_snapshot();
+    assert_eq!(
+        (settled.emergency, settled.journal, settled.faults),
+        (0, 0, 0),
+        "the termination is accepted and acknowledged, and an ordinary reset is not a fault"
+    );
     drop(hub);
     drop(source);
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
