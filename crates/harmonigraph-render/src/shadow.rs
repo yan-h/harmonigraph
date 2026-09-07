@@ -884,42 +884,41 @@ pub(crate) fn create_cell_pipelines(
         })
     };
     let blur_layout = layout("lattice_shadow_blur_pipeline_layout", &[Some(atlas)]);
-    let pipeline = |entry: &str,
-                    vertex: &str,
-                    pipeline_layout: &wgpu::PipelineLayout,
-                    format: wgpu::TextureFormat| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(entry),
-            layout: Some(pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some(vertex),
-                compilation_options: Default::default(),
-                buffers: &[ShadowBox::LAYOUT],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        })
-    };
+    let pipeline =
+        |entry: &str, pipeline_layout: &wgpu::PipelineLayout, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    // Share one entry point so Metal can reuse the compiled vertex stage.
+                    entry_point: Some("vs_cell"),
+                    compilation_options: Default::default(),
+                    buffers: &[ShadowBox::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
     CellPipelines {
-        blur_x: pipeline("fs_blur_x", "vs_cell", &blur_layout, ATLAS_FORMAT),
-        blur_y: pipeline("fs_blur_y", "vs_cell_blur", &blur_layout, ATLAS_FORMAT),
+        blur_x: pipeline("fs_blur_x", &blur_layout, ATLAS_FORMAT),
+        blur_y: pipeline("fs_blur_y", &blur_layout, ATLAS_FORMAT),
     }
 }
 
