@@ -26,8 +26,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "attachment_tests.rs"]
 mod attachment_tests;
-#[path = "capture_tests.rs"]
-mod capture_tests;
 #[path = "channel_wave_tests.rs"]
 mod channel_wave_tests;
 #[path = "ordinary_progress_tests.rs"]

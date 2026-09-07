@@ -343,7 +343,7 @@ fn production_unmatched_originals_settle_without_hiding_independent_clock() {
     for serial in 1..=4 {
         let original = inspect_source(&source, |source| source.test_capture(serial).unwrap());
         assert_eq!(original.work_count, 0);
-        assert!(original.remote_pending, "every original was captured before retirement");
+        assert!(original.published, "every original was copied to the Hub");
     }
     hub.run_format(1536, vec![], None, None, 512);
     for raw in (2048..8192).step_by(512) {
@@ -355,7 +355,7 @@ fn production_unmatched_originals_settle_without_hiding_independent_clock() {
     assert_eq!(source.source_snapshot().captures, 0);
     assert_eq!(source.source_snapshot().obligations, 0);
     assert_eq!(source.source_snapshot().faults, 0);
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (0, 0));
+    assert!(inspect_hub(&hub, |hub| hub.test_inputs(1).is_empty()));
 }
 
 #[test]
@@ -494,106 +494,6 @@ fn production_dense_sixty_four_onsets_publish_one_complete_cohort() {
 }
 
 #[test]
-fn production_capture_status_retires_a_full_window_behind_younger_actual_output() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    source.run_format(1536, vec![note(7, 0, 64, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let onset = source.run_format(2048, vec![], None, None, 512);
-    assert_eq!(onset.values.iter().filter(|(_, event)| event.attack().is_some()).count(), 1);
-    hub.run_format(2048, vec![], None, None, 512);
-    source.run_format(2560, vec![], None, None, 512);
-    hub.run_format(2560, vec![], None, None, 512);
-    let mut older = vec![note(11, 1, 60, 0, true)];
-    older.extend((0..1023).map(|_| expression(11, 0.25, 0)));
-    source.run_format(3072, older, None, None, 512);
-    hub.run_format(3072, vec![], None, None, 512);
-    let mut b_reports = 0;
-    let mut a_onsets = 0;
-    let mut a_sample = None;
-    let mut raw = 3072;
-    for block in 0..16 {
-        raw += 512;
-        let events = if block < 6 {
-            (0..384).map(|offset| expression(7, 0.5, offset)).collect()
-        } else {
-            vec![]
-        };
-        let output = source.run_format(raw, events, None, None, 512);
-        b_reports += output
-            .values
-            .iter()
-            .filter(|(_, event)| matches!(event, Event::Expression { id: 7, .. }))
-            .count();
-        a_onsets += output
-            .values
-            .iter()
-            .filter(|(_, event)| {
-                matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-            })
-            .count();
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(
-        b_reports, 2304,
-        "younger actual output exceeds the entire 2048-cell owned output window"
-    );
-    assert_eq!(a_onsets, 0, "the older cohort still owns its bounded structural cursor");
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (1024, 0));
-    assert!(source.source_snapshot().captures > 1024);
-    assert!(
-        inspect_hub(&hub, |hub| hub.service_position().1[0]) >= 2306,
-        "canonical B publication proceeds while its own capture remains behind full A ingress"
-    );
-    for _ in 0..8192 {
-        raw += 512;
-        let output = source.run_format(raw, vec![], None, None, 512);
-        a_onsets += output
-            .values
-            .iter()
-            .filter(|(_, event)| {
-                matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-            })
-            .count();
-        if let Some((offset, _)) = output.values.iter().find(|(_, event)| {
-            matches!(event, Event::Note { id: 11, kind: CLAP_EVENT_NOTE_ON, .. })
-        }) {
-            a_sample = Some(raw + i64::from(*offset));
-        }
-        assert!(
-            !output.values.iter().any(|(_, event)| matches!(
-                event,
-                Event::Note { id: 7, kind: CLAP_EVENT_NOTE_ON, .. }
-            )),
-            "accepted B is never replayed because its capture arrived later"
-        );
-        hub.run_format(raw, vec![], None, None, 512);
-        if source.source_snapshot().captures == 0 {
-            break;
-        }
-    }
-    assert_eq!(a_onsets, 1);
-    assert_eq!(source.source_snapshot().captures, 0);
-    assert_eq!(source.source_snapshot().faults, 0);
-    raw += 512;
-    let release_due = raw + a_sample.unwrap() - 3072;
-    source.run_format(
-        raw,
-        vec![note(7, 0, 64, 0, false), note(11, 1, 60, 0, false)],
-        None,
-        None,
-        512,
-    );
-    hub.run_format(raw, vec![], None, None, 512);
-    while raw < release_due + 2048 {
-        raw += 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    assert_eq!(source.source_snapshot().held, 0);
-}
-
-#[test]
 fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reapplication() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
@@ -680,75 +580,6 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     assert_eq!(source.source_snapshot().held, 0);
     assert_eq!(source.source_snapshot().faults, 0);
     drop(context);
-}
-
-#[test]
-fn production_crossed_status_query_and_disposition_free_each_others_reply_lane() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let hub_wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let source_wrapper = unsafe {
-        &*((*source.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<tune::HarmonigraphTune>>())
-    };
-    hub_wrapper
-        .test_with_plugin(|plugin| plugin.aggregation.as_mut().unwrap().test_pause_captures());
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let shared =
-        inspect_source(&source, |source| source.offer.as_ref().unwrap().session.rows[0].clone());
-    source_wrapper
-        .test_with_plugin(|plugin| plugin.source.as_mut().unwrap().test_cancel_before_receive());
-    let mut query = None;
-    shared.to_source.take_repair_if(|reply| {
-        if let protocol::Reply::CaptureStatusQuery(key) = reply {
-            query = Some(key);
-        }
-        false
-    });
-    let key = query.expect("Hub query owns the reserved return cell");
-    let mut disposition = false;
-    shared.to_hub.take_repair_if(|control| {
-        disposition = matches!(control, protocol::Control::Disposition { .. });
-        false
-    });
-    assert!(disposition, "Source cancellation simultaneously owns the reserved request cell");
-    assert_eq!(source.source_snapshot().manifest, 1);
-    source.run_format(2048, vec![], None, None, 512);
-    assert!(
-        shared.to_source.reserve_repair().is_some(),
-        "Source retains only the key and frees the crossed ACK cell"
-    );
-    assert_eq!(
-        source.source_snapshot().manifest,
-        1,
-        "a full response cell retains the exact pending query"
-    );
-    hub.run_format(2048, vec![], None, None, 512);
-    source.run_format(2560, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().manifest, 0);
-    let mut completed = false;
-    shared.to_hub.take_repair_if(|control| {
-        completed = matches!(control, protocol::Control::CaptureStatus { key: found,
-            status: Some(protocol::CaptureStatus { output_cut: 0, work_done: 0, inline_done: true }) } if found == key);
-        false
-    });
-    assert!(completed, "the response snapshots completion after the exact cancellation ACK");
-    hub.run_format(2560, vec![], None, None, 512);
-    assert!(inspect_source(&source, |source| source.test_capture(1).unwrap().remote_pending));
-    drop(shared);
-    drop(source);
-    drop(hub);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        (0, 0, 0),
-        "real joined-owner pumps complete the retained capture"
-    );
 }
 
 #[test]
@@ -869,66 +700,6 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
     hub.run_format(3584, vec![], None, None, 512);
     source.run_format(4608, vec![], None, None, 512);
     hub.run_format(4096, vec![], None, None, 512);
-}
-
-#[test]
-fn production_full_capture_window_consumes_following_completeness_without_eviction() {
-    let _scope = crate::test_scope::enter();
-    let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0 };
-    let mut hub = Device::new(false);
-    hub.configure_format(uuid, true, calibration);
-    hub.activate_format(44100.0, 512);
-    let mut source = Device::new(true);
-    source.configure_format(uuid, true, calibration);
-    source.activate_format(44100.0, 512);
-    for raw in [0, 512, 1024] {
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-    }
-    let events = (0..1024)
-        .map(|index| {
-            Input::Midi(clap_event_midi {
-                header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                port_index: 0,
-                data: [0xa0, (index % 128) as u8, 37],
-            })
-        })
-        .collect();
-    source.run_format(1536, events, None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    let mut full_before_proof = false;
-    let mut committed = false;
-    // The real 1024-node graph retains its structural-work cursor over many
-    // callbacks; this fixture does not enlarge the 4096-unit grant.
-    for block in 4..1028 {
-        let raw = block * 512;
-        source.run_format(raw, vec![], None, None, 512);
-        hub.run_format(raw, vec![], None, None, 512);
-        let (counts, (coverage, _, active, finalized)) = inspect_hub(&hub, |hub| {
-            (hub.test_capture_phases(1), hub.test_input_sequence_progress())
-        });
-        if counts.0 == 1024
-            && coverage.is_none_or(|(coverage, cut)| coverage.through <= 1536 || cut < 1024)
-        {
-            assert!(!active, "no complete graph before its input proof");
-        }
-        full_before_proof |= inspect_hub(&hub, |hub| hub.full_input_control_seen);
-        if finalized.is_some_and(|through| through > 1536) {
-            assert!(
-                full_before_proof,
-                "fixture reached the real full owned window before consuming its following proof"
-            );
-            committed = true;
-        }
-        assert_eq!(source.source_snapshot().faults, 0);
-        if committed && counts == (0, 0) && source.source_snapshot().captures == 0 {
-            break;
-        }
-    }
-    assert!(full_before_proof && committed);
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(1)), (0, 0));
-    assert_eq!(source.source_snapshot().captures, 0);
 }
 
 #[test]

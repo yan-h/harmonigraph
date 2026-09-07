@@ -2790,6 +2790,9 @@ impl Source {
                     self.capture_published = record.serial;
                     self.capture_cursor = self.pending.next_position(position);
                     self.service_revision = self.service_revision.wrapping_add(1);
+                    // Publication is the last thing an envelope can be waiting
+                    // on. Nothing else revisits it, so settle it here.
+                    self.remove_finished(position);
                 }
                 return Some(record);
             }
@@ -3312,7 +3315,7 @@ pub(super) struct CaptureSnapshot {
     pub work_head: u16,
     pub work_count: u8,
     pub local_done: bool,
-    pub remote_pending: bool,
+    pub published: bool,
 }
 #[cfg(test)]
 impl Source {
@@ -3334,10 +3337,25 @@ impl Source {
                 local_done: pending.inline_done
                     && pending.work_remaining == 0
                     && pending.work_linked == 0,
-                remote_pending: self.pending.remote_pending(index),
+                published: self.pending.published(index),
             });
         }
         None
+    }
+    pub fn test_pending_dump(&self) -> String {
+        let mut out = String::new();
+        let mut position = self.pending.front_position();
+        while let Some(index) = position {
+            let p = self.pending.at(index).unwrap();
+            out.push_str(&format!(
+                "[{index} serial={} ev={:?} life={} inline_done={} work={}/{}/{} staged={} cq={} published={} sealed={} disp={}] ",
+                p.serial, p.event, p.life, p.inline_done, p.work_count, p.work_remaining,
+                p.work_linked, p.staged, p.cleanup_queued, self.pending.published(index),
+                self.pending.sealed(index), p.disposition
+            ));
+            position = self.pending.next_position(index);
+        }
+        out
     }
     pub(super) fn test_cancel_before_receive(&mut self) {
         self.visits = 0;

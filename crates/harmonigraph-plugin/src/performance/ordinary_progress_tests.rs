@@ -231,7 +231,7 @@ fn production_calibrated_direct_drains_more_than_one_capture_window_on_empty_cal
         (0, 0, 0, 0),
         "{snapshot:?}"
     );
-    assert_eq!(inspect_hub(&hub, |hub| hub.test_capture_phases(0)), (0, 0));
+    assert!(inspect_hub(&hub, |hub| hub.test_inputs(0).is_empty()));
     println!("DIRECT1536 drained in {callbacks} continuous empty callbacks");
 }
 
