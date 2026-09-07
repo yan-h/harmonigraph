@@ -25,7 +25,11 @@ pub enum SourceReturn {
 }
 pub struct HubOffer {
     pub session: Arc<SessionControl>,
-    pub bank: Box<HubBank>,
+    /// Absent until this Hub first pairs a Tune. The sixteen ring triples are
+    /// ~8.3 MB and no Harmonigraph without a Tune has any use for them, so
+    /// they are built at the same main-thread pairing boundary as a row's
+    /// storage and delivered through `HubBridge::banks`.
+    pub bank: Option<Box<HubBank>>,
 }
 pub struct SourceBridge {
     pub offers: Slots<SourceOffer>,
@@ -45,6 +49,7 @@ impl Default for SourceBridge {
 }
 pub struct HubBridge {
     pub offers: Slots<HubOffer>,
+    pub banks: Slots<Box<HubBank>>,
     pub returns: Slots<u64>,
     pub retired_pending: AtomicBool,
     pub wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
@@ -53,6 +58,7 @@ impl Default for HubBridge {
     fn default() -> Self {
         Self {
             offers: Slots::default(),
+            banks: Slots::default(),
             returns: Slots::default(),
             retired_pending: AtomicBool::new(false),
             wake: OnceLock::new(),
@@ -66,6 +72,7 @@ struct HubEntry {
     bridge: Arc<HubBridge>,
     session: Arc<SessionControl>,
     sources: [Option<SourceEndpoints>; TUNERS],
+    banked: bool,
     leases: [Option<u64>; TUNERS],
     returned: Option<HubOffer>,
     retired: bool,
@@ -114,7 +121,6 @@ impl Registry {
         self.collect();
         let index = self.hubs.iter().position(Option::is_none)?;
         let id = self.id()?;
-        let (bank, sources) = bank();
         let session = Arc::new(SessionControl {
             runtime: id,
             credits: std::sync::atomic::AtomicUsize::new(0),
@@ -126,14 +132,16 @@ impl Registry {
             rows: std::array::from_fn(|_| Arc::new(SourceControl::default())),
         });
         // A newly constructed instance has no outstanding hub offer. Even a
-        // defensive refusal retains the actual bank in this off-thread entry.
-        let returned = bridge.offers.publish(HubOffer { session: session.clone(), bank }).err();
+        // defensive refusal retains the actual offer in this off-thread entry.
+        let returned =
+            bridge.offers.publish(HubOffer { session: session.clone(), bank: None }).err();
         self.hubs[index] = Some(HubEntry {
             id,
             uuid,
             bridge,
             session,
-            sources,
+            sources: std::array::from_fn(|_| None),
+            banked: false,
             leases: [None; TUNERS],
             returned,
             retired: false,
@@ -384,6 +392,18 @@ impl Registry {
                     continue;
                 }
             }
+            // Pairing is this Hub's first use for tuning rings, and it is on
+            // the main thread. A Harmonigraph that never pairs a Tune never
+            // builds them.
+            if !self.hubs[hub_index].as_ref().unwrap().banked {
+                let (bank, sources) = bank();
+                let hub = self.hubs[hub_index].as_mut().unwrap();
+                if hub.bridge.banks.publish(bank).is_err() {
+                    continue;
+                }
+                hub.sources = sources;
+                hub.banked = true;
+            }
             let Some(slot) =
                 self.hubs[hub_index].as_ref().unwrap().sources.iter().position(Option::is_some)
             else {
@@ -411,9 +431,9 @@ impl Registry {
             // thread. A Hub that never pairs a Tune never builds a ledger; one
             // that does gets exactly the rows it pairs, moved in, never
             // allocated or freed on audio.
-            if !row.plans_held.load(Ordering::Acquire) {
-                if let Some(cell) = row.plans.reserve_at(0) {
-                    cell.publish(super::hub::PlanRow::default());
+            if !row.store_held.load(Ordering::Acquire) {
+                if let Some(cell) = row.store.reserve_at(0) {
+                    cell.publish(super::hub::RowStore::default());
                 }
             }
             row.expected_incarnation.store(incarnation, Ordering::Release);

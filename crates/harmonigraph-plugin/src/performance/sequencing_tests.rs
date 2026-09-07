@@ -710,7 +710,7 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
-fn an_unpaired_hub_holds_no_plan_ledger_and_pairing_allocates_one_row() {
+fn an_unpaired_hub_allocates_nothing_for_tuning_and_pairing_allocates_one_row() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
     let calibration = Calibration { offset: 0 };
@@ -723,7 +723,11 @@ fn an_unpaired_hub_holds_no_plan_ledger_and_pairing_allocates_one_row() {
     assert_eq!(
         inspect_hub(&hub, |hub| hub.test_plan_ledger_bytes()),
         0,
-        "a Harmonigraph with no paired Tune allocates nothing for tuning"
+        "a Harmonigraph with no paired Tune allocates no plan ledger"
+    );
+    assert!(
+        inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().bank.is_none()),
+        "nor any of the sixteen ring triples"
     );
     let mut source = Device::new(true);
     source.configure_format(uuid, true, calibration);
@@ -737,6 +741,7 @@ fn an_unpaired_hub_holds_no_plan_ledger_and_pairing_allocates_one_row() {
         hub::Hub::test_plan_row_bytes(),
         "pairing one Tune allocates exactly that Tune's row"
     );
+    assert!(inspect_hub(&hub, |hub| hub.offer.as_ref().unwrap().bank.is_some()));
 }
 
 #[test]
@@ -1104,7 +1109,8 @@ fn production_unpayable_cohort_debt_faults_instead_of_panicking() {
     // the assignment is minted and owed but cannot enqueue.
     hub_wrapper.test_with_plugin(|plugin| {
         let hub = plugin.aggregation.as_mut().unwrap();
-        let replies = &mut hub.offer.as_mut().unwrap().bank.rows[0].replies;
+        let replies =
+            &mut hub.offer.as_mut().unwrap().bank.as_mut().unwrap().rows[0].replies;
         while replies.slots() != 0 {
             replies
                 .push(protocol::Reply::PlanRetired {

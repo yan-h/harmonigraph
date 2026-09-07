@@ -2740,6 +2740,8 @@ fn all_retired_peers_drain_a_full_actual_reply_window_without_a_live_callback() 
             .as_ref()
             .unwrap()
             .bank
+            .as_ref()
+            .unwrap()
             .rows[0]
             .replies
             .slots()),

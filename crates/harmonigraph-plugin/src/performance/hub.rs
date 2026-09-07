@@ -20,17 +20,27 @@ use std::sync::Arc;
 
 mod sequencing;
 
-/// One paired row's plan ledger. Allocated by the registry on the main thread
-/// at pairing and moved — never allocated, never freed — on audio. A Hub with
-/// no paired Tune holds none of these, which is the whole point: the ledger
-/// used to be one 16 x LIFETIMES block built in `Hub::new` for every
-/// Harmonigraph instance, Tunes or not.
-pub struct PlanRow(Box<[Option<sequencing::Plan>]>);
-impl Default for PlanRow {
+/// The storage one paired row needs: its plan ledger and the backings of the
+/// two queues it fills. The registry allocates the whole bundle on the main
+/// thread at pairing and the Hub moves it in — nothing here is allocated or
+/// freed on audio. A Hub with no paired Tune holds none of it, which is the
+/// whole point: all three used to be built in `Hub::new`, sixteen times over,
+/// for every Harmonigraph instance whether or not a Tune ever appeared.
+pub struct RowStore {
+    plans: Box<[Option<sequencing::Plan>]>,
+    output: Box<[Option<OutputDelta>]>,
+    inputs: Box<[Option<Capture>]>,
+}
+impl Default for RowStore {
     fn default() -> Self {
-        Self(vec![None; LIFETIMES].into_boxed_slice())
+        Self {
+            plans: vec![None; LIFETIMES].into_boxed_slice(),
+            output: (0..ROW_OUTPUT).map(|_| None).collect(),
+            inputs: (0..CAPTURES_PER_SOURCE).map(|_| None).collect(),
+        }
     }
 }
+const ROW_OUTPUT: usize = 2048;
 
 #[derive(Clone, Copy)]
 struct ChannelWitness {
@@ -46,7 +56,7 @@ struct Row {
     lease: Option<Lease>,
     epoch: u64,
     state: State,
-    output: Queue<OutputDelta, 2048>,
+    output: Queue<OutputDelta, ROW_OUTPUT>,
     received: u64,
     received_actual: Option<i64>,
     actual_order: bool,
@@ -83,7 +93,7 @@ impl Default for Row {
             lease: None,
             epoch: 0,
             state: State::default(),
-            output: Queue::default(),
+            output: Queue::detached(),
             received: 0,
             received_actual: None,
             actual_order: true,
@@ -97,7 +107,7 @@ impl Default for Row {
             baseline_id: 0,
             detach: None,
             last_ack: None,
-            inputs: Queue::default(),
+            inputs: Queue::detached(),
             last_disposition: None,
             input_coverage: None,
             input_settled: (0, 0),
@@ -560,6 +570,12 @@ impl Hub {
     fn clock_id(&self) -> ClockId {
         self.publication_clock
     }
+    /// None before this Hub's first pairing, when it holds no rings at all.
+    /// Nothing addressed to a row can exist then, so every caller treats it
+    /// the same way it treats a full ring: nothing sent, retry later.
+    pub(super) fn row_replies(&mut self, row: usize) -> Option<&mut HubEndpoints> {
+        Some(&mut self.offer.as_mut()?.bank.as_mut()?.rows[row])
+    }
     fn presentation(&self, sample: i64) -> f64 {
         let (anchor, time) = self.anchor.unwrap_or((0, 0.0));
         time + (sample as f64 - anchor as f64) / self.rate
@@ -568,17 +584,30 @@ impl Hub {
         let sequencing = self.sequences_inputs();
         // Whether a copied record can still reach the ordering pass at all.
         let keep = sequencing && !self.sequencer.terminal_session;
+        // The rings arrive at the same main-thread pairing boundary as a row's
+        // storage; taking them here is a move, not an allocation.
+        if self.offer.as_ref().is_some_and(|offer| offer.bank.is_none()) {
+            if let Some(bank) = self.shared.hub.as_ref().and_then(|bridge| bridge.banks.take()) {
+                self.offer.as_mut().unwrap().bank = Some(bank);
+            }
+        }
         let Some(offer) = &mut self.offer else {
             return;
         };
+        let Some(bank) = offer.bank.as_mut().map(|bank| &mut **bank) else {
+            return;
+        };
+        let session = &offer.session;
         for step in 0..TUNERS {
             let index = (self.rotation + step) % TUNERS;
-            let shared = &offer.session.rows[index];
-            // A move, not an allocation: the registry built this row's plan
-            // ledger on the main thread when it handed out the lease.
-            if let Some(ledger) = shared.plans.take_at(0) {
-                self.sequencer.install_plan_row(index, ledger);
-                shared.plans_held.store(true, Ordering::Release);
+            let shared = &session.rows[index];
+            // A move, not an allocation: the registry built this row's storage
+            // on the main thread when it handed out the lease.
+            if let Some(store) = shared.store.take_at(0) {
+                self.sequencer.install_plan_row(index, store.plans);
+                self.rows[index].output.attach(store.output);
+                self.rows[index].inputs.attach(store.inputs);
+                shared.store_held.store(true, Ordering::Release);
             }
             let row = &mut self.rows[index];
             if row.lease.is_some_and(|lease| {
@@ -752,12 +781,12 @@ impl Hub {
                 if self.input_work == 4096 {
                     break;
                 }
-                match offer.bank.rows[index].intents.peek() {
+                match bank.rows[index].intents.peek() {
                     Ok(Intent::Capture(_)) if row.inputs.free() == 0 => break,
                     Ok(_) => {}
                     Err(_) => break,
                 }
-                let Ok(intent) = offer.bank.rows[index].intents.pop() else {
+                let Ok(intent) = bank.rows[index].intents.pop() else {
                     break;
                 };
                 self.input_work += 1;
@@ -805,7 +834,7 @@ impl Hub {
                 if self.collected == 4096 || row.output.free() == 0 {
                     break;
                 }
-                let Ok(delta) = offer.bank.rows[index].outputs.pop() else {
+                let Ok(delta) = bank.rows[index].outputs.pop() else {
                     break;
                 };
                 self.collected += 1;
@@ -1478,11 +1507,15 @@ impl Hub {
         let Some(offer) = &mut self.offer else {
             return;
         };
+        let Some(bank) = offer.bank.as_mut().map(|bank| &mut **bank) else {
+            return;
+        };
+        let session = &offer.session;
         for (index, row) in self.rows.iter_mut().enumerate() {
             let Some(lease) = row.lease else {
                 continue;
             };
-            if offer.session.rows[index].hub_detached.load(Ordering::Acquire) {
+            if session.rows[index].hub_detached.load(Ordering::Acquire) {
                 continue;
             }
             let sealed = (row.seal == Some(row.applied)
@@ -1497,7 +1530,7 @@ impl Hub {
                     cut: row.received,
                     complete_through: through,
                 };
-                if offer.bank.rows[index].replies.push(reply).is_ok() {
+                if bank.rows[index].replies.push(reply).is_ok() {
                     row.last_ack = Some((row.received, through));
                     self.service_revision = self.service_revision.wrapping_add(1);
                 }
@@ -1510,7 +1543,7 @@ impl Hub {
                         generation,
                         cut: row.applied,
                     };
-                    if offer.bank.rows[index].replies.push(reply).is_ok() {
+                    if bank.rows[index].replies.push(reply).is_ok() {
                         row.last_sealed_ack = Some((row.applied, generation));
                         self.service_revision = self.service_revision.wrapping_add(1);
                     }
@@ -1525,7 +1558,7 @@ impl Hub {
                     && row.baseline.is_none()
             }) {
                 row.member = false;
-                if !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
+                if !session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
                     self.service_revision = self.service_revision.wrapping_add(1);
                 }
                 // The source returns its actual endpoints after observing this.

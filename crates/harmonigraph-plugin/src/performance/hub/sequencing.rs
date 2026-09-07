@@ -110,7 +110,7 @@ pub(super) struct Sequencer {
     /// the main thread when it hands out that row's lease; the Hub only ever
     /// moves the box in. Plan indices stay flat — `row * LIFETIMES + request` —
     /// so the intrusive list still links freely across rows.
-    plans: [Option<super::PlanRow>; TUNERS],
+    plans: [Option<Box<[Option<Plan>]>>; TUNERS],
     plan_head: u32,
     plan_tail: u32,
     plan_cursor: u32,
@@ -217,23 +217,23 @@ impl Sequencer {
         // Absent identities invalidate old hints without scanning the 34816
         // address directory. No physical debt may reach this committed cut.
     }
-    pub(super) fn install_plan_row(&mut self, row: usize, ledger: super::PlanRow) {
+    pub(super) fn install_plan_row(&mut self, row: usize, ledger: Box<[Option<Plan>]>) {
         self.plans[row] = Some(ledger);
     }
     #[cfg(test)]
     fn plan_ledger_bytes(&self) -> usize {
-        self.plans.iter().flatten().map(|row| std::mem::size_of_val(&*row.0)).sum()
+        self.plans.iter().flatten().map(|row| std::mem::size_of_val(&**row)).sum()
     }
     fn plan(&self, index: usize) -> Option<Plan> {
-        self.plans[index / LIFETIMES].as_ref()?.0[index % LIFETIMES]
+        self.plans[index / LIFETIMES].as_ref()?[index % LIFETIMES]
     }
     fn plan_mut(&mut self, index: usize) -> Option<&mut Plan> {
-        self.plans[index / LIFETIMES].as_mut()?.0[index % LIFETIMES].as_mut()
+        self.plans[index / LIFETIMES].as_mut()?[index % LIFETIMES].as_mut()
     }
     /// None only for a row with no ledger, which is a row that was never
     /// paired. Every plan index reaching this comes from a leased row.
     fn plan_cell(&mut self, index: usize) -> Option<&mut Option<Plan>> {
-        Some(&mut self.plans[index / LIFETIMES].as_mut()?.0[index % LIFETIMES])
+        Some(&mut self.plans[index / LIFETIMES].as_mut()?[index % LIFETIMES])
     }
     /// False when the slot is already live: overwriting it would strand the
     /// old plan's links in the intrusive list and overcount `plan_count`, so
@@ -849,7 +849,7 @@ impl Hub {
             self.sequencer.cohort_unsent += 1;
             self.sequencer.cohort_recipients |= 1 << (source - 1);
             let reply = Reply::Assignment { request, binding };
-            if self.offer.as_mut().unwrap().bank.rows[source - 1].replies.push(reply).is_ok() {
+            if self.row_replies(source - 1).is_some_and(|row| row.replies.push(reply).is_ok()) {
                 self.sequencer.plan_mut(index).unwrap().sent = true;
                 self.sequencer.cohort_unsent -= 1;
             }
@@ -904,7 +904,7 @@ impl Hub {
                 epoch: self.rows[source].epoch,
                 through: self.sequencer.decision,
             };
-            if self.offer.as_mut().unwrap().bank.rows[source].replies.push(reply).is_err() {
+            if !self.row_replies(source).is_some_and(|row| row.replies.push(reply).is_ok()) {
                 continue;
             }
             self.sequencer.cohort_recipients &= !bit;
@@ -1024,7 +1024,7 @@ impl Hub {
                 self.configuration_exhausted();
                 continue;
             }
-            if self.offer.as_mut().unwrap().bank.rows[source].replies.push(reply).is_err() {
+            if !self.row_replies(source).is_some_and(|row| row.replies.push(reply).is_ok()) {
                 continue;
             }
             if owes_cohort {
