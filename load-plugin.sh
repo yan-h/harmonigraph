@@ -50,7 +50,12 @@ LOADED="$BUNDLED/.loaded"   # records which worktree build is currently in the s
 # script scope rather than in the function, so the trap that removes it is still
 # looking at a variable that exists once the function has returned.
 STAGE=""
-cleanup() { [[ -n "$STAGE" ]] && rm -rf "$STAGE"; return 0; }
+PENDING_BIN=""
+cleanup() {
+  [[ -n "$PENDING_BIN" ]] && rm -f "$PENDING_BIN"
+  [[ -n "$STAGE" ]] && rm -rf "$STAGE"
+  return 0
+}
 trap cleanup EXIT
 
 # --- gather worktrees (parallel indexed arrays; no bash-4 assoc arrays) ------
@@ -162,7 +167,7 @@ load_build() {  # $1 = worktree index
   # Somewhere for the signature to be produced that the host is not looking at.
   STAGE="$(mktemp -d)"
 
-  local updated=0 ext bundle staged live_bin ino_before ino_after
+  local updated=0 ext bundle staged live_bin
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
     if [[ ! -d "$bundle" ]]; then
@@ -170,21 +175,10 @@ load_build() {  # $1 = worktree index
       echo "         (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
       continue
     fi
-    # Sign a staging copy FIRST, then write the finished bytes through the
-    # destination's own inode. The order is load-bearing in both directions, and
-    # neither half is the tidier equivalent of the other:
-    #
-    #   - `cp` writes through the inode already at the path. Bitwig's plugin host
-    #     keeps the library it opened mapped for as long as its sandbox PROCESS
-    #     lives, so the only swap such a host can see is one that changes the
-    #     bytes behind the inode it is already holding. Give it a fresh inode at
-    #     the same path and it stays on the old build until that process dies.
-    #   - `codesign` does NOT write through an inode. It writes a new file and
-    #     renames it into place on every run, whether or not the signature
-    #     changes size. Signing the LIVE bundle therefore discards the very inode
-    #     a preceding `cp` just wrote, and leaves a running host mapped to an
-    #     unlinked file — the silent way this swap stops working, with a bundle
-    #     that still verifies and a DAW that still shows the previous build.
+    # Sign away from the installed bundle. Never overwrite an executable inode
+    # that a host or scanner has mapped: two ordinary loads produced macOS
+    # CODESIGNING Invalid Page kills despite successful disk verification (#705).
+    # A fresh inode leaves existing mappings intact until their process exits.
     staged="$STAGE/$NAME.$ext"
     cp -R "$bundle" "$staged"
     cp "$dylib" "$staged/Contents/MacOS/$NAME"
@@ -192,22 +186,17 @@ load_build() {  # $1 = worktree index
     codesign --verify --verbose=1 "$staged"
 
     live_bin="$bundle/Contents/MacOS/$NAME"
-    ino_before="$(stat -f %i "$live_bin")"
-    cp "$staged/Contents/MacOS/$NAME" "$live_bin"
+    # The sibling is on the destination filesystem, so rename is atomic.
+    # Preserve the signed executable's mode; mktemp starts with mode 0600.
+    PENDING_BIN="$(mktemp "$bundle/Contents/MacOS/.$NAME.XXXXXX")"
+    cp -p "$staged/Contents/MacOS/$NAME" "$PENDING_BIN"
+    mv -f "$PENDING_BIN" "$live_bin"
+    PENDING_BIN=""
     # The seal names the bundle's other files; the executable seals itself, so
     # this moves only when a resource does. Copied unconditionally rather than
     # reasoned about per change — it is one small file.
     cp "$staged/Contents/_CodeSignature/CodeResources" \
        "$bundle/Contents/_CodeSignature/CodeResources"
-    ino_after="$(stat -f %i "$live_bin")"
-
-    # A tripwire on the paragraph above, because its failure is silent: every
-    # step here still succeeds when the inode moves, and only the DAW knows.
-    if [[ "$ino_before" != "$ino_after" ]]; then
-      echo "WARNING: $live_bin changed inode ($ino_before -> $ino_after)." >&2
-      echo "         A host holding the old one keeps serving the old build until its" >&2
-      echo "         sandbox process exits; restart Bitwig to be sure of this build." >&2
-    fi
     # Bitwig caches the bundle's class list by Info.plist's mtime and size,
     # not by the executable (#631). Refresh that fingerprint on every install,
     # including a rollback to a build with fewer classes. Only the timestamp
@@ -286,7 +275,7 @@ load_build() {  # $1 = worktree index
   } > "$LOADED"
 
   echo
-  echo "Now loaded: $branch. Deactivate + reactivate the plugin in Bitwig to pick it up."
+  echo "Installed: $branch. Fully quit and reopen Bitwig to load this build."
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
     local head_short loaded_sha
@@ -301,15 +290,10 @@ load_build() {  # $1 = worktree index
     echo "WARNING: no build tag readable in that dylib, so the overlay cannot confirm" >&2
     echo "         which build is live. Expect it to read 'unknown'." >&2
   fi
-  # That reload only re-reads the file if Harmonigraph's sandbox process exits when
-  # the plugin unloads, which is a question of Bitwig's Plug-in Hosting Mode under
-  # Settings -> Plug-ins. "by Vendor" puts every plug-in sharing a VENDOR string
-  # into ONE process, and that process lives as long as ANY of them is loaded — so
-  # a second plug-in of your own pins the old Harmonigraph image in memory and the
-  # reload is a no-op. "by Plug-in" and "Individually" each give it a process of its
-  # own; "with Bitwig" loads it into the audio engine, which unloads nothing.
-  echo "(Needs a sandbox process of its own to re-read the file: Bitwig's 'by Vendor'"
-  echo " hosting mode shares one process across every plug-in with your VENDOR string.)"
+  # Atomic replacement deliberately leaves surviving host mappings alone.
+  # The measured by-Vendor topology can keep them alive across device toggles.
+  echo "(Existing plugin-host processes keep the previous build until they exit;"
+  echo " a device deactivate/reactivate or rescan alone may not restart them.)"
 }
 
 # Echo the index of the worktree containing directory $1, or nothing.

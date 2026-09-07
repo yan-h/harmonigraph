@@ -4,8 +4,8 @@
 # load the result into the ONE bundle slot Bitwig scans. Build-and-load in a
 # single shot; `load-plugin.sh` is the same swap without the build.
 #
-# Run this after ANY change you want to see in the DAW, then deactivate and
-# reactivate the plugin in Bitwig. Works from the main checkout or any worktree.
+# Run this after ANY change you want to see in the DAW, then fully quit and
+# reopen Bitwig. Works from the main checkout or any worktree.
 #
 # Why this script exists (two footguns it sidesteps):
 #   1. `cargo xtask bundle` picks the *topmost* Cargo.toml ancestor, so run
@@ -17,13 +17,10 @@
 # Plain `cargo build` resolves the *nearest* workspace root (= the branch);
 # `load-plugin.sh` then puts that artifact into the shared slot.
 #
-# The SWAP is not here. It is a delicate sequence — sign a staging copy, then
-# write the finished bytes through the live executable's own inode, because
-# `cp` writes through an inode and `codesign` replaces one, and a host mapped
-# to an unlinked file goes on serving the old build with everything reporting
-# success. One copy of that lives in `load-plugin.sh` and this script calls it;
-# a second copy here is what drifted out of step with it once already, and
-# nothing in a build notices when it does.
+# The SWAP is not here. load-plugin.sh signs a staging bundle and installs its
+# executable by atomic rename from a fresh sibling inode. Existing host mappings
+# keep their old code until the process exits. Both entry points use that one
+# implementation so signing, replacement and discovery cannot drift apart.
 # That shared swap also refreshes Info.plist's discovery timestamp (#631),
 # so Bitwig can enumerate changed CLAP classes after either install path.
 set -euo pipefail

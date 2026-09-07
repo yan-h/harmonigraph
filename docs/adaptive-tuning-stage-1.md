@@ -1,17 +1,21 @@
 # Adaptive tuning stage 1: bundle discovery
 
-Stage 1 addresses [#631](https://github.com/yan-h/harmonigraph/issues/631) only.
+Stage 1 originally addressed [#631](https://github.com/yan-h/harmonigraph/issues/631) only.
+The inode-preserving installation decision below is historical and is superseded by [#705](https://github.com/yan-h/harmonigraph/issues/705):
+the current loader installs the signed executable through a fresh sibling inode and atomic rename, preserves the discovery refresh, and requires a full Bitwig quit/reopen.
+The current fixture loads each successive dylib and verifies old open files stay unchanged.
 The committed base is merged main `8d1ce70b26cd6805947c862591b7fd23be3eddd4`, incorporating [#630](https://github.com/yan-h/harmonigraph/pull/630) and [#633](https://github.com/yan-h/harmonigraph/pull/633).
 The implementation branch is `codex/631-clap-discovery` in the Codex-managed worktree `/Users/yan/.codex/worktrees/7f30/harmonigraph`.
 The draft PR and final handoff record the exact stage head, avoiding a self-referential commit hash here.
 
 ## Requirement and decision
 
-Installing a bundle with an added CLAP class must invalidate Bitwig's class-discovery fingerprint while preserving the signed bundle and the live executable's inode.
+The stage required installation of an added CLAP class to invalidate Bitwig's discovery fingerprint while preserving the signed bundle.
+It retained the then-existing executable inode policy, which #705 later replaced.
 Both installation entry points must carry this behavior.
 No adaptive tuning implementation, plugin descriptor, persisted state or Rust code changes in this stage.
 
-`load-plugin.sh` retains the existing order:
+The stage originally retained the existing `load-plugin.sh` order:
 sign and verify a staging bundle, then copy the signed executable through the live inode and copy its resource seal.
 It now refreshes `Contents/Info.plist`'s modification time before verifying the live bundle.
 The plist bytes stay identical, so the refresh does not invalidate their code signature.
@@ -30,7 +34,8 @@ Cache deletion, descriptor changes and fake audio ports were unnecessary.
 These are the original issue's host measurements, not a new live-host trial performed for this stage.
 
 Changing the plist's contents or bundle version would require installing newly signed metadata and adds no benefit to this timestamp-based fix.
-Signing the live bundle is rejected because codesign replaces its executable inode, leaving a surviving host mapped to the old file.
+The stage rejected signing the live bundle because codesign replaces its executable inode, leaving a surviving host mapped to the old file.
+The current loader deliberately preserves surviving mappings and requires their process to exit before loading the new build.
 Duplicating the swap in `update-plugin.sh` would restore a previously observed source of drift.
 A bare touch without checking the resulting timestamp could collide with a rapid preceding install, so the retry is part of the contract.
 
