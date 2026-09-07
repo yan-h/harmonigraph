@@ -315,3 +315,132 @@ pub(crate) fn cell_color(gradient: Gradient, level: f32) -> Color32 {
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color32::from_rgb(byte(c.x), byte(c.y), byte(c.z))
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+    use harmonigraph_core::spectrum::SPECTRUM_BINS;
+    use harmonigraph_render::{wgpu::TextureFormat, SpectrogramGrid, SpectrogramHeadless};
+    use std::sync::Arc;
+
+    #[test]
+    fn resumed_slabs_fill_the_black_window_and_recover_gpu_uploads() {
+        let Some(mut gpu) = SpectrogramHeadless::new() else { return };
+        const SIZE: [u32; 2] = [256, 64];
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 64.0));
+        let ctx = egui::Context::default();
+        let mut fresh_generation = 0;
+        for cold in [false, true] {
+            let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+            state.spectrum_config.roll_seconds = 12.0;
+            let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+            for i in 0..160 {
+                state.spectrum.push_history(100.0 + i as f64 * 0.008, &[1.0; SPECTRUM_BINS]);
+            }
+            for (step, now) in [101.28, 701.27, 701.28, 701.40, 701.53].into_iter().enumerate() {
+                if step == 0 && cold {
+                    continue;
+                }
+                if step > 0 {
+                    state.spectrum.push_history(now, &[0.25; SPECTRUM_BINS]);
+                }
+                if step == 3 {
+                    state.spectrum_config.roll_seconds = 24.0; // rung-change rebuild
+                }
+                let cfg = state.spectrum_config;
+                let axes = Axes::new(rect, &cfg);
+                let output = ctx.run_ui(
+                    egui::RawInput { screen_rect: Some(rect), ..Default::default() },
+                    |ui| {
+                        draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, now, 0);
+                    },
+                );
+                assert_eq!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|s| matches!(s.shape, egui::Shape::Callback(_)))
+                        .count(),
+                    1,
+                    "the first resumed occupied slab must already produce a callback"
+                );
+                let time = TimeAxis::new(&state, 0.0, now);
+                let hist = state.spectrum.history();
+                let columns = Columns {
+                    first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
+                    len: hist.len(),
+                    newest: hist.back().unwrap().time,
+                };
+                let view = PaneView {
+                    ppp: 1.0,
+                    pitch_len: axes.pitch_len(),
+                    depth_len: time.region_depth_len(&axes),
+                    window: time.window(),
+                    scale,
+                    cfg,
+                    whole: false,
+                };
+                let plan = Plan::new(&view, &columns, None);
+                let layout = run_for(&mut state.spectrum, None, 0, &plan, &view).unwrap();
+                let far = time.depth_of(layout.t_origin);
+                if step > 0 {
+                    assert_eq!(far, 1.0, "a long gap must not regrow the far edge like startup");
+                }
+                let vertices = heatmap_vertices(&axes, &time, &layout, 0.0, far);
+                let (grid, shades) = frame_data(&mut state.spectrum, 0, &cfg).unwrap();
+                let read = read_of(&view, plan.rows);
+                let delta = gpu.frame(
+                    0,
+                    SIZE,
+                    vertices.clone(),
+                    grid.clone(),
+                    read.clone(),
+                    shades.clone(),
+                );
+                fresh_generation += 1;
+                let full = gpu.frame(
+                    1,
+                    SIZE,
+                    vertices,
+                    SpectrogramGrid {
+                        generation: fresh_generation,
+                        serial: 1,
+                        uploaded: Arc::default(),
+                        dirty: Vec::new(),
+                        ..grid
+                    },
+                    read,
+                    shades,
+                );
+                assert_eq!(delta, full, "resume {step}, cold={cold}");
+                if step > 0 {
+                    let pixel = axes.at(0.5, 0.5);
+                    let at = (pixel.y as usize * SIZE[0] as usize + pixel.x as usize) * 4;
+                    assert_eq!(&delta[at..at + 3], &[0, 0, 0], "the real gap is black");
+                    assert!(
+                        delta.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
+                        "resumed energy is visible"
+                    );
+                }
+                if step == 2 {
+                    state.release_context_resources();
+                }
+            }
+        }
+
+        // Once retention has removed every old column, the cold pane retains
+        // its established startup rule: wait for two columns and two slabs.
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        state.spectrum_config.roll_seconds = 12.0;
+        state.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
+        state.spectrum.push_history(622.0, &[0.25; SPECTRUM_BINS]);
+        assert_eq!(state.spectrum.history().len(), 1, "the fixture must exceed history retention");
+        let axes = Axes::new(rect, &state.spectrum_config);
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+                draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, 622.0, 0);
+            });
+        assert!(!output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))));
+    }
+}

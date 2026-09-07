@@ -123,7 +123,9 @@ struct ShadowCaster {
     // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and
     // `DISTANCE_KIND` a distance; z: its σ in the pane's POINTS, which is what
     // a distance read out of the cell is measured against, one Shadow width
-    // being 2σ; w unused.
+    // being 2σ; w: its group's Shadow falloff, the exponent the standoff's
+    // decay is bent by (`standoff_coverage`), which a Gaussian row carries
+    // and never reads.
     shade: vec4<f32>,
 };
 
@@ -188,14 +190,24 @@ fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
     let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
     let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
     if shadow_casters[who].shade.y >= 0.5 * DISTANCE_KIND {
-        return clamp(standoff_coverage(held, 2.0 * shadow_casters[who].shade.z), 0.0, 1.0);
+        return clamp(
+            standoff_coverage(
+                held,
+                2.0 * shadow_casters[who].shade.z,
+                shadow_casters[who].shade.w,
+            ),
+            0.0,
+            1.0,
+        );
     }
     return min(GAUSSIAN_GAIN * clamp(held, 0.0, 1.0), 1.0);
 }
 
 // How much of a shadow stands `d` points out from the ink, 0..=1, for a caster
-// whose Shadow is `w` points wide — the standoff's own decay, windowed to
-// exactly nothing at [`SHADOW_STOP`] widths.
+// whose Shadow is `w` points wide and whose group is dialled to `falloff`
+// (`ShadowStyle::falloff`) — the standoff's own decay, windowed to exactly
+// nothing at `shadow_stop(falloff)` widths, which is `SHADOW_STOP` wherever
+// that floor is already generous.
 //
 // `exp(-TAIL u)` and not a ramp: a ramp ending at the width ends at a closed
 // contour of one radius, and a closed contour is the shape the eye picks out of
@@ -203,11 +215,69 @@ fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
 // instead is the window, a couple of widths out, where the decay is under the
 // eye's own threshold rather than at a fiftieth of its depth.
 //
-fn standoff_coverage(d: f32, w: f32) -> f32 {
+// The falloff is an exponent on `u` and NOT on the result. On the result it
+// would be `exp(-TAIL · f · u)`, the same decay at `w / f`, so the bar would
+// only respell the Shadow width and would do it while the cell stayed padded
+// for the width nobody moved. On `u` it bends the profile: the fall is spent
+// early or late inside a reach that does not move.
+//
+// The window is left on `u` for that same reason — it is a fact about how far
+// the CELL was padded (`shadow_stop` below, and in harmonigraph_scene), which
+// the exponent reaches only through that one shared solve. Because `1^f` is 1,
+// one width out holds `exp(-TAIL)` at every falloff, so the Shadow bar keeps
+// its meaning intact across this one.
+fn standoff_coverage(d: f32, w: f32, falloff: f32) -> f32 {
     let u = max(d, 0.0) / max(w, 1.0e-6);
-    return exp(-SHADOW_TAIL * u)
-        * (1.0 - smoothstep(1.0, SHADOW_STOP, u));
+    // `pow(u, 1)` is `exp2(log2(u))`, which is the identity only to within a
+    // rounding, so the fresh bar takes the decay it took before this parameter
+    // existed rather than a near copy of it — which is what keeps every golden
+    // byte-identical while nothing is dialled.
+    let f = max(falloff, SHADOW_FALLOFF_FLOOR);
+    var t = u;
+    if f != 1.0 {
+        t = pow(u, f);
+    }
+    return exp(-SHADOW_TAIL * t)
+        * (1.0 - smoothstep(1.0, shadow_stop(f), u));
 }
+
+// How many Shadow widths out this falloff's cell was padded, and so where its
+// window shuts — `shadow_stop` in harmonigraph_scene, pinned by
+// `the_shaders_falloff_stop_is_the_packers`.
+//
+// Derived from the falloff rather than sent beside it: the packer solves the
+// same equation to size the cell, and one number on the wire cannot drift from
+// itself. `SHADOW_STOP` is the floor, so every falloff at or above 0.64 shuts
+// exactly where it always did.
+fn shadow_stop(falloff: f32) -> f32 {
+    // Above the crossover the solve lands under the floor and the floor is the
+    // answer, so the `pow` is skipped rather than computed and discarded —
+    // every falloff from here up costs a fragment exactly what it did before
+    // this bar existed. The `max` still guards the other branch: the constant
+    // is a rounded literal and the floor is the thing that must hold.
+    if falloff >= SHADOW_FALLOFF_FREE {
+        return SHADOW_STOP;
+    }
+    return max(SHADOW_STOP, pow(SHADOW_INVISIBLE_FOLDS, 1.0 / falloff));
+}
+
+// The falloff at which the solve above meets the floor — `SHADOW_FALLOFF_FREE`
+// in harmonigraph_scene, pinned by `the_shaders_falloff_stop_is_the_packers`.
+const SHADOW_FALLOFF_FREE: f32 = 0.64025325;
+
+// `ln(1 / SHADOW_INVISIBLE) / SHADOW_TAIL` — where the plain exponential
+// reaches the threshold, and the base `shadow_stop` raises. A constant because
+// both of its terms are, and `log` of a constant per fragment is a term the
+// compiler is not obliged to fold.
+const SHADOW_INVISIBLE_FOLDS: f32 = 1.5586027;
+
+// The bottom of the Shadow falloff bar (`SHADOW_FALLOFF_MIN` in
+// harmonigraph_scene, pinned by
+// `the_shaders_distance_kind_and_window_are_the_packers`), held here
+// against a caster row that never went through `ShadowStyle::clamped` — a
+// zeroed row would otherwise read as `pow(u, 0)`, a flat shadow over the whole
+// padded box.
+const SHADOW_FALLOFF_FLOOR: f32 = 0.35;
 
 // How many e-folds the decay has spent by one Shadow width, and how many widths
 // out its window has shut — `SHADOW_TAIL` and `SHADOW_STOP` in

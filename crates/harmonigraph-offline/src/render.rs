@@ -208,29 +208,8 @@ pub fn render(
     state.set_background(settings.layout.background);
 
     let frames = settings.frame_count();
-    let step = 1.0 / settings.fps;
     for frame in 0..frames {
-        // Time is computed from the frame index rather than accumulated,
-        // so a long render can't drift off the audio by accumulated
-        // floating-point error.
-        let now = settings.start + frame as f64 * step;
-
-        replay.advance_to(&mut state, now);
-        if let Some(audio) = audio {
-            // Exactly one frame's worth of samples, taken from where the
-            // bounce actually is at `now`. The analyzer counts the samples it
-            // is given and stamps its columns off `now`, both of which come
-            // from the frame index — so the spectrum is as deterministic as
-            // everything else, and its column rate does not depend on the
-            // render's fps the way a frame-clock throttle would make it.
-            let chunk =
-                audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
-            if !chunk.is_empty() {
-                let config = state.spectrum_config;
-                state.spectrum.push_samples(chunk, audio.channels, audio.sample_rate, now, &config);
-            }
-        }
-        begin_frame(&mut state, &replay.params, now);
+        let now = prepare_frame(replay, &mut state, audio, settings, frame);
 
         // No panels and no dock: the layout owns the frame, and the
         // background is the render pass's clear color rather than a
@@ -262,6 +241,35 @@ pub fn render(
     Ok(frames)
 }
 
+/// Advance one export frame through the same replay/audio path the renderer
+/// draws. Feed through the frame clock and preserve the analyzer's half-window
+/// lag. Future columns would advance live retention past the picture's far edge
+/// at low frame rates; the first frame therefore feeds an empty slice.
+fn prepare_frame(
+    replay: &mut Replay,
+    state: &mut SharedState,
+    audio: Option<&Audio>,
+    settings: &Settings,
+    frame: u64,
+) -> f64 {
+    // Frame-index time avoids accumulated floating-point drift.
+    let step = 1.0 / settings.fps;
+    let now = settings.start + frame as f64 * step;
+    replay.advance_to(state, now);
+    if let Some(audio) = audio {
+        let from = settings.start + frame.saturating_sub(1) as f64 * step;
+        let (chunk, end) =
+            audio.slice_seconds(from - settings.audio_start, now - settings.audio_start);
+        if !chunk.is_empty() {
+            let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
+            let config = state.spectrum_config;
+            state.spectrum.push_samples(chunk, audio.channels, audio.sample_rate, newest, &config);
+        }
+    }
+    begin_frame(state, &replay.params, now);
+    now
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +283,7 @@ mod tests {
             let t = i as f64 * 0.7;
             for &note in chord {
                 notes.push(NoteRecord {
+                    source: 0,
                     t,
                     channel: 0,
                     note,
@@ -282,16 +291,198 @@ mod tests {
                 });
             }
             notes.push(NoteRecord {
+                source: 0,
                 t: t + 0.2,
                 channel: 0,
                 note: chord[0],
                 kind: NoteKind::Tuning { semitones: 0.25 },
             });
             for &note in chord {
-                notes.push(NoteRecord { t: t + 0.6, channel: 0, note, kind: NoteKind::Off });
+                notes.push(NoteRecord {
+                    source: 0,
+                    t: t + 0.6,
+                    channel: 0,
+                    note,
+                    kind: NoteKind::Off,
+                });
             }
         }
-        Take { header: Header::default(), notes, params: Vec::new(), truncated: false }
+        Take {
+            header: Header::default(),
+            events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
+            params: Vec::new(),
+            configurations: Vec::new(),
+            truncated: false,
+            incomplete: None,
+        }
+    }
+
+    fn transient_audio() -> Audio {
+        let mut samples = vec![0.0; 62_271 * 2];
+        samples[38_400 * 2] = 1.0;
+        samples[38_400 * 2 + 1] = -1.0;
+        Audio { sample_rate: 48_000.0, samples, channels: 2 }
+    }
+
+    fn transient_take(origin: f64) -> Take {
+        let onset = origin + 0.8;
+        Take {
+            events: vec![
+                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
+                    source: 0,
+                    t: onset,
+                    channel: 0,
+                    note: 69,
+                    kind: NoteKind::On { velocity: 0.8 },
+                }),
+                harmonigraph_take::CanonicalRecord::Note(NoteRecord {
+                    source: 0,
+                    t: onset + 0.05,
+                    channel: 0,
+                    note: 69,
+                    kind: NoteKind::Off,
+                }),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn scrolling_audio_uses_the_supplied_sample_grid() {
+        const SR: f64 = 48_000.0;
+        const FRAMES: usize = 62_271;
+        const HOP: usize = 384;
+        let audio = transient_audio();
+        for (origin, offset, first) in
+            [(0.0, 0.0, 0usize), (7.125, 0.0, 0), (7.125, 0.41731, 20_031), (7.125, -0.00713, 0)]
+        {
+            let mut previous_bins: Option<Vec<Vec<u8>>> = None;
+            for fps in [1.0, 4.0, 30.0, 60.0, 120.0, 30_000.0 / 1001.0] {
+                let settings = Settings {
+                    fps,
+                    start: origin + offset,
+                    end: origin + 3.5,
+                    audio_start: origin,
+                    ..settings()
+                };
+                let mut replay = Replay::new(transient_take(origin));
+                let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+                state.learn_active = false;
+                let window = state.spectrum_config.window.samples();
+                let lag = window as f64 / (2.0 * SR);
+                let audio_end = origin + FRAMES as f64 / SR;
+                let mut partial_tail = false;
+                for frame in 0..settings.frame_count() {
+                    let before = state.spectrum.history().len();
+                    let now =
+                        prepare_frame(&mut replay, &mut state, Some(&audio), &settings, frame);
+                    let from = settings.start + frame.saturating_sub(1) as f64 / fps;
+                    if from < audio_end && now > audio_end {
+                        partial_tail = true;
+                        assert!(
+                            state.spectrum.history().len() > before,
+                            "partial tail must emit a column: {fps}, {offset}"
+                        );
+                    }
+                    if from >= audio_end {
+                        assert_eq!(state.spectrum.history().len(), before, "empty tail added data");
+                    }
+                    if frame == 0 {
+                        assert_eq!(
+                            state.spectrum.history().len(),
+                            0,
+                            "no pre-roll on the first frame"
+                        );
+                    }
+                    assert!(
+                        state.spectrum.history().iter().all(|c| c.time <= now),
+                        "future columns would evict visible history at {fps} fps"
+                    );
+                }
+                assert!(partial_tail);
+                // Enumerate source sample indices, independent of slicing and
+                // the analyzer's anchor. Late starts retain their hop phase.
+                let first_ready = window.div_ceil(HOP) * HOP;
+                let expected: Vec<_> = (first_ready..=FRAMES - first)
+                    .step_by(HOP)
+                    .map(|fed| origin + (first + fed - 1) as f64 / SR - lag)
+                    .collect();
+                let history = state.spectrum.history();
+                assert_eq!(history.len(), expected.len());
+                assert!(!expected.is_empty());
+                for (column, expected) in history.iter().zip(expected) {
+                    assert!(
+                        (column.time - expected).abs() < 1e-9,
+                        "{fps} fps, start {offset}: {} instead of {expected}",
+                        column.time
+                    );
+                }
+                assert!((state.spectrum.column_lag() - lag).abs() < 1e-12);
+                let bins: Vec<_> = history.iter().map(|c| c.db.to_vec()).collect();
+                if let Some(previous) = &previous_bins {
+                    assert_eq!(&bins, previous, "batching changed spectrum bytes at {fps} fps");
+                }
+                previous_bins = Some(bins);
+                let note = state
+                    .roll()
+                    .notes()
+                    .find(|n| n.source == harmonigraph_core::SourceId(0) && n.note == 69)
+                    .expect("the MIDI event reached the replayed roll");
+                assert_eq!(note.start, origin + 0.8);
+                let energy = |c: &harmonigraph_ui::SpectrogramColumn| {
+                    c.db.iter().map(|&v| u64::from(v)).sum::<u64>()
+                };
+                let peak = history.iter().map(energy).max().unwrap();
+                assert!(peak > 0, "anti-phase transient reached the analyzer");
+                // Quantized dB can make a short plateau around a symmetric
+                // impulse. Its midpoint dates the peak without favoring a side.
+                let peaks: Vec<_> =
+                    history.iter().filter(|c| energy(c) == peak).map(|c| c.time).collect();
+                let peak_time = (peaks[0] + peaks[peaks.len() - 1]) * 0.5;
+                assert!(
+                    (peak_time - note.start).abs() <= (HOP + 1) as f64 / SR,
+                    "transient {peak_time} versus replayed MIDI {} at {fps} fps",
+                    note.start
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rendering_sliced_audio_twice_is_byte_identical() {
+        let audio = transient_audio();
+        let mut take = transient_take(7.125);
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        state.spectrum_config.roll_seconds = 1.0;
+        state.spectrum_config.roll_fraction = 1.0;
+        state.spectrum_config.show_roll = false;
+        take.header.ui_state = Some(state.save_persist());
+        let settings = Settings {
+            layout: Layout::preset("spectral").unwrap(),
+            fps: 30_000.0 / 1001.0,
+            start: 7.125 + 0.41731,
+            end: 7.125 + 1.4,
+            audio_start: 7.125,
+            ..settings()
+        };
+        let run = |audio| {
+            let mut frames = Vec::new();
+            let result = render(&mut Replay::new(take.clone()), audio, &settings, |bytes| {
+                frames.push(bytes.to_vec());
+                Ok(true)
+            });
+            match result {
+                Ok(_) => Some(frames),
+                Err(e) if e.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {e}");
+                    None
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        let Some(first) = run(Some(&audio)) else { return };
+        assert_eq!(first, run(Some(&audio)).unwrap());
+        assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
     }
 
     fn settings() -> Settings {
@@ -339,11 +530,13 @@ mod tests {
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             width: 0.75,
             depth: f32::from(enabled),
+            ..Default::default()
         };
         state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
             kernel: harmonigraph_scene::ShadowKernel::Distance,
             width: 0.75,
             depth: f32::from(enabled),
+            ..Default::default()
         };
         let mut take = take();
         take.header.ui_state = Some(state.save_persist());

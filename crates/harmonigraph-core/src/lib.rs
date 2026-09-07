@@ -19,9 +19,14 @@
 //! functions and constants are reached through their module
 //! (`harmonigraph_core::tuning::microcents`, `harmonigraph_core::coords::positions_within`).
 
+pub mod canonical;
+pub mod cohort;
+pub mod configuration;
+pub mod confirmed;
 pub mod coords;
 pub mod history;
 pub mod notes;
+pub mod policy;
 pub mod roll;
 pub mod spectrogram;
 pub mod spectrum;
@@ -30,7 +35,8 @@ pub mod tuning;
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
 pub use notes::{
-    Envelope, HeldEnd, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState,
+    Envelope, HeldEnd, NoteEvent, NoteEventKind, NoteTracker, SourceId, Time, Voice, VoiceKey,
+    VoiceState,
 };
 pub use roll::{NoteRoll, RollNote};
 pub use spectrogram::{SpectrogramColumn, SpectrumHistory};

@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::sync::mpsc;
 use std::time::Instant;
 
-use harmonigraph_core::{NoteEvent, NoteEventKind};
+use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use harmonigraph_ui::SharedState;
 
@@ -124,6 +124,7 @@ struct Recorder {
     writer: harmonigraph_take::Writer,
     /// Last value seen for each parameter, so only changes are written.
     last: [f32; ParamKey::ALL.len()],
+    configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
 }
 
 impl Recorder {
@@ -138,7 +139,11 @@ impl Recorder {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 eprintln!("recording take: {path}");
-                Some(Recorder { writer, last: [f32::NAN; ParamKey::ALL.len()] })
+                Some(Recorder {
+                    writer,
+                    last: [f32::NAN; ParamKey::ALL.len()],
+                    configuration: None,
+                })
             }
             Err(err) => {
                 eprintln!("could not record take to {path}: {err}");
@@ -148,24 +153,19 @@ impl Recorder {
     }
 
     fn note(&mut self, event: &NoteEvent) {
-        let kind = match event.kind {
-            NoteEventKind::On { velocity } => harmonigraph_take::NoteKind::On { velocity },
-            NoteEventKind::Off => harmonigraph_take::NoteKind::Off,
-            NoteEventKind::Tuning { semitones } => {
-                harmonigraph_take::NoteKind::Tuning { semitones }
-            }
-            NoteEventKind::AllOff => harmonigraph_take::NoteKind::AllOff,
-        };
-        let _ = self.writer.note(harmonigraph_take::NoteRecord {
-            t: event.time,
-            channel: event.channel,
-            note: event.note,
-            kind,
-        });
+        let _ = self.writer.note((*event).into());
     }
 
     /// Write any parameter that moved since the last frame.
-    fn params(&mut self, params: &StandaloneParams, now: f64) {
+    fn params(&mut self, params: &StandaloneParams, state: &mut SharedState, now: f64) {
+        harmonigraph_ui::resolve_tuning(state, params);
+        let configuration = state.resolved_configuration();
+        if self.configuration != Some(configuration) {
+            let _ = self
+                .writer
+                .configuration(harmonigraph_take::ConfigurationRecord::new(now, configuration));
+            self.configuration = Some(configuration);
+        }
         for (i, key) in ParamKey::ALL.into_iter().enumerate() {
             let value = params.get(key);
             if self.last[i] != value {
@@ -328,6 +328,7 @@ impl MidiDecoder {
                     self.held.push((channel, note));
                 }
                 out.push(NoteEvent {
+                    source: SourceId::DIRECT,
                     time,
                     channel,
                     note,
@@ -337,6 +338,7 @@ impl MidiDecoder {
                 // bent channel must start at the bent pitch.
                 if self.bend[channel as usize] != 0.0 {
                     out.push(NoteEvent {
+                        source: SourceId::DIRECT,
                         time,
                         channel,
                         note,
@@ -348,7 +350,13 @@ impl MidiDecoder {
             0x80 | 0x90 => {
                 let note = d1;
                 self.held.retain(|&held| held != (channel, note));
-                out.push(NoteEvent { time, channel, note, kind: NoteEventKind::Off });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel,
+                    note,
+                    kind: NoteEventKind::Off,
+                });
             }
             0xE0 => {
                 // 14-bit bend, center 8192.
@@ -358,6 +366,7 @@ impl MidiDecoder {
                 for &(ch, note) in &self.held {
                     if ch == channel {
                         out.push(NoteEvent {
+                            source: SourceId::DIRECT,
                             time,
                             channel,
                             note,
@@ -367,11 +376,17 @@ impl MidiDecoder {
                 }
             }
             // All sound off / all notes off. The tracker's release is
-            // global rather than per-channel; close enough for a panic
+            // source-wide rather than per-channel; close enough for a panic
             // button on a dev harness.
             0xB0 if d1 == 120 || d1 == 123 => {
                 self.held.clear();
-                out.push(NoteEvent { time, channel, note: 0, kind: NoteEventKind::AllOff });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel,
+                    note: 0,
+                    kind: NoteEventKind::SourceReset,
+                });
             }
             _ => {}
         }
@@ -472,9 +487,49 @@ impl App {
         switch_to
     }
 
-    fn switch_source(&mut self, source: MidiSource, now: f64) {
-        // Silence whatever the previous source left sounding.
-        self.state.tracker.all_notes_off(now);
+    /// One ordered fan-out for input and source-switch controls.
+    fn handle_event(&mut self, event: NoteEvent) {
+        if self.log_events {
+            self.state.log(format!(
+                "{:7.2}s source{} ch{:<2} note {:<3} {}",
+                event.time,
+                event.source.0,
+                event.channel + 1,
+                event.note,
+                match event.kind {
+                    NoteEventKind::On { .. } => "on",
+                    NoteEventKind::Off => "off",
+                    NoteEventKind::Tuning { .. } => "tune",
+                    NoteEventKind::SourceReset => "source-reset",
+                    NoteEventKind::SessionReset => "session-reset",
+                }
+            ));
+        }
+        if let Some(recorder) = &mut self.recorder {
+            recorder.note(&event);
+        }
+        self.state
+            .tracker
+            .handle_canonical(harmonigraph_core::canonical::CanonicalEvent::Note(event.into()))
+            .expect("validated direct observation");
+    }
+
+    fn switch_source(&mut self, source: MidiSource, now: f64) -> f64 {
+        // Stop the producer, then publish its queued input BEFORE the reset.
+        // Otherwise an old queued attack can resurrect this source after the
+        // switch, and the live view and take disagree about what was cleared.
+        self.connection = None;
+        let mut pending = Vec::new();
+        while let Ok(raw) = self.midi_rx.try_recv() {
+            self.decoder.decode(raw, &mut pending);
+        }
+        // `now` was sampled before closing the producer; its last callback
+        // may be newer. Keep the reset after all old input in take-time order.
+        let reset_at = pending.iter().map(|event| event.time).fold(now, f64::max);
+        for event in pending {
+            self.handle_event(event);
+        }
+        self.handle_event(NoteEvent::source_reset(reset_at, SourceId::DIRECT));
         self.decoder.reset();
         match source {
             MidiSource::Mock => {
@@ -485,6 +540,7 @@ impl App {
             }
             MidiSource::Port(name) => self.connect(&name),
         }
+        reset_at
     }
 
     /// Gather this frame's events from the active source: the mock
@@ -500,6 +556,19 @@ impl App {
         }
         events
     }
+
+    /// Apply a source-picker result and this frame's input together. Old
+    /// queued input can advance the reset past the original frame clock;
+    /// replacement attacks and the rest of the frame must follow that cut.
+    fn input_frame(&mut self, switch_to: Option<MidiSource>, mut now: f64) -> f64 {
+        if let Some(source) = switch_to {
+            now = self.switch_source(source, now);
+        }
+        for event in self.collect_events(now) {
+            self.handle_event(event);
+        }
+        now
+    }
 }
 
 impl eframe::App for App {
@@ -510,33 +579,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = self.start.elapsed().as_secs_f64();
 
-        if let Some(source) = self.source_picker(ui.ctx()) {
-            self.switch_source(source, now);
-        }
-
-        for event in self.collect_events(now) {
-            if self.log_events {
-                self.state.log(format!(
-                    "{:7.2}s ch{:<2} note {:<3} {}",
-                    event.time,
-                    event.channel + 1,
-                    event.note,
-                    match event.kind {
-                        NoteEventKind::On { .. } => "on",
-                        NoteEventKind::Off => "off",
-                        NoteEventKind::Tuning { .. } => "tune",
-                        NoteEventKind::AllOff => "all-off",
-                    }
-                ));
-            }
-            if let Some(recorder) = &mut self.recorder {
-                recorder.note(&event);
-            }
-            self.state.tracker.handle_event(event);
-        }
-        if let Some(recorder) = &mut self.recorder {
-            recorder.params(&self.params, now);
-        }
+        let source = self.source_picker(ui.ctx());
+        let now = self.input_frame(source, now);
 
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
@@ -555,6 +599,9 @@ impl eframe::App for App {
             window_width: window.x,
         }
         .draw();
+        if let Some(recorder) = &mut self.recorder {
+            recorder.params(&self.params, &mut self.state, now);
+        }
 
         // A pane folded sideways (or came back) leaves every other pane its
         // width and asks the window for the difference. The plugin has to
@@ -652,7 +699,13 @@ impl MockMidi {
         if let Some((prev_index, true)) = self.last {
             let (notes, channel) = CHORDS[prev_index];
             for &note in notes {
-                out.push(NoteEvent { time: now, channel, note, kind: NoteEventKind::Off });
+                out.push(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time: now,
+                    channel,
+                    note,
+                    kind: NoteEventKind::Off,
+                });
             }
         }
         // Start the new chord.
@@ -660,6 +713,7 @@ impl MockMidi {
             let (notes, channel) = CHORDS[index];
             for &note in notes {
                 out.push(NoteEvent {
+                    source: SourceId::DIRECT,
                     time: now,
                     channel,
                     note,
@@ -727,6 +781,88 @@ impl MockSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_frame_uses_current_just_defaults_edits_and_learning() {
+        let mut app = App::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        let path = std::env::temp_dir()
+            .join(format!("harmonigraph-config-frame-{}.take", std::process::id()));
+        let mut recorder = Recorder {
+            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
+                .unwrap(),
+            last: [f32::NAN; ParamKey::ALL.len()],
+            configuration: None,
+        };
+        recorder.params(&app.params, &mut app.state, 0.0);
+        let first = app.state.tuning;
+        assert_eq!(
+            first.three,
+            harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST)
+        );
+        assert_eq!(first.five, (4 * i64::from(first.three) - 2_400_000_000) as i32);
+        app.params.set(ParamKey::Three, 690.0);
+        app.params.set(ParamKey::Five, 390.0);
+        recorder.params(&app.params, &mut app.state, 1.0);
+        let edited = app.state.tuning;
+        app.state.learn_active = true;
+        for note in [60, 64, 67] {
+            app.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, note, 0.8));
+        }
+        recorder.params(&app.params, &mut app.state, 2.0);
+        let learned = app.state.tuning;
+        assert_eq!(learned.three, 700_000_000);
+        assert_eq!(learned.five, 400_000_000);
+        drop(recorder);
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            take.configurations.iter().map(|r| (r.t, r.resolved().tuning)).collect::<Vec<_>>(),
+            [(0.0, first), (1.0, edited), (2.0, learned)]
+        );
+    }
+
+    #[test]
+    fn source_switch_after_newer_queued_input_replays_the_live_mock_chord() {
+        use harmonigraph_core::{NoteTracker, VoiceState};
+        let mut app = App::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        app.source = MidiSource::Port("queued fixture".into());
+        let path =
+            std::env::temp_dir().join(format!("harmonigraph-switch-{}.take", std::process::id()));
+        app.recorder = Some(Recorder {
+            writer: harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default())
+                .unwrap(),
+            last: [f32::NAN; ParamKey::ALL.len()],
+            configuration: None,
+        });
+        // The callback raced the frame's clock read. Mock's first chord is
+        // sounding at both times, so the replacement really emits attacks.
+        app.midi_tx.send(RawMidi { time: 1.001, data: [0x90, 72, 100] }).unwrap();
+        let now = app.input_frame(Some(MidiSource::Mock), 1.0);
+        drop(app.recorder.take());
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!take.truncated);
+        assert_eq!(
+            take.notes().count(),
+            CHORDS[0].0.len() + 2,
+            "old attack, reset, and real mock attacks"
+        );
+        let held = |tracker: &NoteTracker| {
+            tracker
+                .voices()
+                .filter(|voice| voice.state == VoiceState::Held)
+                .map(|voice| (voice.key(), voice.pitch, voice.on_time))
+                .collect::<Vec<_>>()
+        };
+        let live = held(&app.state.tracker);
+        assert_eq!(live.len(), CHORDS[0].0.len(), "the replacement chord is held live");
+        let mut replay = NoteTracker::new();
+        for record in &take.events {
+            record.apply(&mut replay).unwrap();
+        }
+        assert_eq!(held(&replay), live, "time-sorted take replay must keep the replacement chord");
+        assert_eq!(now, 1.001, "the rest of the frame also observes the switch boundary");
+    }
 
     /// Decode a sequence of raw messages at time 0.
     fn decode_all(decoder: &mut MidiDecoder, messages: &[[u8; 3]]) -> Vec<NoteEvent> {
@@ -818,13 +954,13 @@ mod tests {
         // CC 123 (all notes off).
         let events = decode_all(&mut decoder, &[[0xB0, 123, 0]]);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, NoteEventKind::AllOff);
+        assert_eq!(events[0].kind, NoteEventKind::SourceReset);
         // Held state is gone: a later bend tunes nothing.
         assert!(decode_all(&mut decoder, &[[0xE0, 0x7F, 0x7F]]).is_empty());
         // CC 120 (all sound off) does the same.
         decode_all(&mut decoder, &[[0x90, 60, 100]]);
         let events = decode_all(&mut decoder, &[[0xB5, 120, 0]]);
-        assert_eq!(events[0].kind, NoteEventKind::AllOff);
+        assert_eq!(events[0].kind, NoteEventKind::SourceReset);
     }
 
     #[test]

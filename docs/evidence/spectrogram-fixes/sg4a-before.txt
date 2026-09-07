@@ -1,0 +1,15 @@
+STAGING bins=256 dirty=1 requests=1 bytes=256
+STAGING bins=256 dirty=2 requests=1 bytes=256
+STAGING bins=256 dirty=3 requests=1 bytes=256
+STAGING bins=3827 dirty=0 requests=1 bytes=3828
+STAGING bins=3827 dirty=1 requests=1 bytes=3828
+STAGING bins=3827 dirty=2 requests=1 bytes=3828
+STAGING bins=3827 dirty=3 requests=1 bytes=3828
+STAGING bins=3828 dirty=0 requests=1 bytes=3828
+STAGING bins=3828 dirty=1 requests=1 bytes=3828
+STAGING bins=3828 dirty=2 requests=1 bytes=3828
+STAGING bins=3828 dirty=3 requests=1 bytes=3828
+STAGING bins=3829 dirty=0 requests=1 bytes=3832
+STAGING bins=3829 dirty=1 requests=1 bytes=3832
+STAGING bins=3829 dirty=2 requests=1 bytes=3832
+STAGING bins=3829 dirty=3 requests=1 bytes=3832

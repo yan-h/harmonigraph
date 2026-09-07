@@ -328,7 +328,8 @@ fn a_lattice_with_no_node_grows_no_glow() {
     assert_eq!(differing_pixels(&on, &off), 0, "the glow lit something no node drew",);
 }
 
-/// The MIDDLE of a node glows, and a SHEET behind it makes it glow more.
+/// The MIDDLE of a node glows, and a SHEET behind it adds to that rather than
+/// taking it away.
 ///
 /// Two halves, and the second is #435. The first: inside the innermost ring
 /// there is nothing painted at all — [`parity_scene`]'s octave band is an
@@ -338,13 +339,24 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// a neighbouring pixel, because the thing that must not happen is the middle
 /// going DARK: nothing else is drawn there to take the light's place.
 ///
-/// The second: a node on a sheet BEHIND adds its halo to the field, and the
-/// field is composited under every node (`fs_glow_over`), so the near node's
-/// middle comes out brighter than it is with nothing behind it. A nearer node's
-/// body taking the light of the sheets behind off itself is what inverts this —
-/// its middle would then hold its own light alone while the ground a few pixels
-/// away held everyone's, and the node would read as a hole rather than as a
-/// lamp.
+/// The second: a node on a sheet BEHIND joins the field, which is composited
+/// under every node (`fs_glow_over`), so the near node's middle comes out
+/// brighter than it is with nothing behind it. A nearer node's body taking the
+/// light of the sheets behind off itself is what this guards — its middle would
+/// then hold its own light alone while the ground a few pixels away held
+/// everyone's, and the node would read as a hole rather than as a lamp.
+///
+/// The second half drops the Strength, and that is what makes it a measurement
+/// at all under #680's union. At the 1.5 the first half reads at, the middle
+/// pixel is SATURATED: it reads the same 357 with the near node's light alone,
+/// with the far node's alone, and with both — so a claim about the two together
+/// cannot fail, whatever the operator does or a node's body does to the light
+/// behind it. Under the screen fold the far node's colour went on adding into
+/// the channels there anyway, which is exactly the wash #680 is about; under the
+/// union the coverage is already at `glow_layer`'s clamp and nothing can lift
+/// it. Below the clamp the union does answer — the norm's own
+/// `(1 + (a_far/a_near)^p)^(1/p)` — and the reading moves 143 to 154, which is
+/// what the strict comparison below is measuring.
 #[test]
 fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     const SIZE: [u32; 2] = [256, 256];
@@ -382,8 +394,15 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 
     // A second sheet: one node behind, its light reaching far enough to wash
     // over the near node's whole footprint.
+    //
+    // Under the Strength the half above reads at, the middle saturates and the
+    // three readings — near alone, far alone, both — are one number. This one
+    // leaves the near node's own middle short of `glow_layer`'s clamp, which is
+    // the headroom the far node's term needs to be legible in.
+    const SHEETS_STRENGTH: f32 = 0.5;
     let mut flat = at(0.8);
     flat.glow_reach = 3.0;
+    flat.glow_strength = SHEETS_STRENGTH;
     let mut far = flat.nodes[0];
     far.world_pos.z = -1.0;
     far.world_pos.x += 0.6;
@@ -391,12 +410,16 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     let mut sheets = at(0.8);
     sheets.glow_reach = 3.0;
+    sheets.glow_strength = SHEETS_STRENGTH;
     sheets.nodes.push(far);
     rows_per_node(&mut sheets);
     rows_per_node(&mut flat);
 
     let one_sheet = shooter.shot(&flat);
     let two_sheets = shooter.shot(&sheets);
+    // STRICT, which is what carries the fixture's own reach: a far node that
+    // never lit the middle, or one dropped before it lit anything at all, reads
+    // equal here and fails.
     assert!(
         middle(&two_sheets) > middle(&one_sheet),
         "a sheet behind left the near node's middle at {} against {} with nothing behind it: \

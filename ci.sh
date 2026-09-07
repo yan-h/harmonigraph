@@ -2,16 +2,59 @@
 # Canonical full CI gate: formatting, markdown clause breaks, workspace clippy with warnings denied,
 # workspace tests, the plugin package check, harmonigraph-render's own tests,
 # vendored GUI crates' tests, the optional CLAP probe fixture, doc links, the harmonigraph-core dependency
-# guard, worktree reclaim safety, and the registered-worktree bundle swap.
+# guard, the security-audit trigger split, the CI group split, worktree reclaim
+# safety, and the registered-worktree bundle swap.
 #
-# GitHub Actions invokes this script unchanged on the toolchain pinned by
-# rust-toolchain.toml. It remains available locally when a full run is useful.
+# GitHub Actions invokes this script on the toolchain pinned by
+# rust-toolchain.toml, once per GROUP below. It remains available locally when a
+# full run is useful.
 #
-# Run it directly: ./ci.sh
+#   ./ci.sh              # every gate, in file order — the local default
+#   ./ci.sh workspace    # one group, which is what one CI job runs
 set -euo pipefail
 cd "$(dirname "$0")"
 
-run() { echo; echo "▶ $*"; "$@"; }
+# The gates below are independent, so running them in one serial job makes the
+# wall clock their SUM (~11 min) when it only has to be their longest. Splitting
+# them across jobs is the whole reason a group argument exists.
+#
+# TWO groups, and the number is a deliberate ceiling rather than a starting
+# point: the GitHub Free plan allows 5 concurrent macOS jobs ACROSS THE ACCOUNT,
+# and this workflow is macOS-only because the code under test is (baseview's
+# macOS view, the CLAP boundary, WGPU on Metal). Splitting finer keeps making
+# one PR faster in isolation and starts making every OTHER PR slower, because
+# one run eats a budget that several parallel branches share — and this repo's
+# normal state is several parallel branches. At two, two PRs fit inside the cap
+# with a job to spare; at five, one PR fills it alone and the second run queues
+# for the whole of the first. Measured job queue wait today is 6-10s, and that
+# is the property to protect. Rebalance the groups before adding a third.
+#
+# The split is along the seam the comments below already describe: `workspace`
+# is what the workspace's own feature unification covers, `isolated` is every
+# gate that exists precisely BECAUSE that unification hides something — the
+# plugin resolved on its own dependency edge, the optional probe feature,
+# harmonigraph-render's own tests, and the `exclude`d vendored crates.
+CI_GROUPS=(workspace isolated)
+CI_GROUP="${1:-all}"
+case " ${CI_GROUPS[*]} all " in
+  *" $CI_GROUP "*) ;;
+  *)
+    echo "✗ unknown CI group '$CI_GROUP' (want one of: ${CI_GROUPS[*]} all)" >&2
+    exit 2
+    ;;
+esac
+
+# A gate belongs to whichever `group` marker most recently preceded it, so the
+# gates keep their file order and their comments keep their subjects. A gate
+# ahead of the FIRST marker would run locally and in no CI job at all, which is
+# silent, so .claude/tests/ci-groups.sh fails on one.
+current_group=
+group() { current_group=$1; }
+in_group() { [ "$CI_GROUP" = all ] || [ "$CI_GROUP" = "$current_group" ]; }
+
+run() { in_group || return 0; echo; echo "▶ $*"; "$@"; }
+
+group workspace
 
 # Formatting, first because it is the cheapest gate here and the only one whose
 # failure is fixed without reading anything: `cargo fmt --all`. The config is
@@ -39,6 +82,8 @@ run .claude/semantic-breaks.py --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 
+group isolated
+
 # The standalone harness enables harmonigraph-render's `hot-reload` feature,
 # and cargo unifies features across a --workspace build, so every check
 # above compiles harmonigraph-plugin with hot-reload on — a configuration
@@ -47,6 +92,9 @@ run cargo test --workspace
 # Checking the plugin package on its own resolves features from only its
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
+
+# The default CLAP configuration owner is exercised without enabling the probe.
+run cargo test -p harmonigraph-plugin --features nice-plug/assert_process_allocs configuration::tests::
 
 # #615's optional apparatus exercises the actual CLAP boundary and callback
 # allocation guard. Default workspace tests cannot see this feature.
@@ -77,11 +125,16 @@ run cargo test -p harmonigraph-render
 #
 # Each crate is its own workspace root, so keep both of their targets under
 # `target/debug`: the idle-worktree reclaimer owns that whole subtree.
+# Production opt-in CLAP performance boundary, independent of the optional probe.
+run cargo test --manifest-path vendor/nice-plug/Cargo.toml \
+  --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests --test clap_boundary
 run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/debug/vendor-baseview
 run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
   --no-default-features --features wgpu,tracing \
   --config 'patch.crates-io.baseview.path="vendor/baseview"' \
   --target-dir target/debug/vendor-egui-baseview
+
+group workspace
 
 # Doc links, which is the only mechanical check on comments this tree has.
 # Comments are ~40% of the non-blank lines under crates/ and carry the
@@ -113,23 +166,35 @@ run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
 # skip cannot erase the scan it was meant to complement.
 run .claude/tests/audit-workflow.sh
 
+# The same shape of subject one workflow further along: the group list above and
+# the matrix in ci.yml are two copies of one fact, and nothing else notices when
+# they stop agreeing. A group added here but not there simply stops running,
+# reporting nothing, which is the failure this whole split could otherwise
+# introduce.
+run .claude/tests/ci-groups.sh
+
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.
 # That split is only defensible while the crate stays a self-contained
 # library, so its dependency list must stay empty: a GPL (or otherwise
 # restrictive) dependency would silently contradict its stated license.
 # Adding one is allowed, but must be a deliberate edit here, not a drive-by.
-echo
-echo "▶ harmonigraph-core dependency guard"
-deps=$(cargo metadata --no-deps --format-version 1 \
-  | python3 -c 'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="harmonigraph-core"][0]; print(" ".join(sorted(d["name"] for d in p["dependencies"])))')
-if [ -n "$deps" ]; then
-  echo "✗ harmonigraph-core must stay dependency-free (it is MIT OR Apache-2.0," >&2
-  echo "  unlike the GPL workspace around it). Found: $deps" >&2
-  echo "  If the dependency is intended and permissively licensed, update" >&2
-  echo "  this guard in ci.sh and the rationale in crates/harmonigraph-core/README.md." >&2
-  exit 1
+#
+# The one gate that is a shell block rather than a command, so it consults the
+# group itself where the others let `run` do it.
+if in_group; then
+  echo
+  echo "▶ harmonigraph-core dependency guard"
+  deps=$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="harmonigraph-core"][0]; print(" ".join(sorted(d["name"] for d in p["dependencies"])))')
+  if [ -n "$deps" ]; then
+    echo "✗ harmonigraph-core must stay dependency-free (it is MIT OR Apache-2.0," >&2
+    echo "  unlike the GPL workspace around it). Found: $deps" >&2
+    echo "  If the dependency is intended and permissively licensed, update" >&2
+    echo "  this guard in ci.sh and the rationale in crates/harmonigraph-core/README.md." >&2
+    exit 1
+  fi
+  echo "  ok — no dependencies"
 fi
-echo "  ok — no dependencies"
 
 # The only gate here that guards a script rather than the crates. Its subjects
 # — which worktrees Claude owns and which of their locks are live — decide
@@ -148,4 +213,8 @@ run .claude/tests/reclaim-locks.sh
 run .claude/tests/plugin-swap.sh
 
 echo
-echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + reclaim safety + plugin swap)"
+if [ "$CI_GROUP" = all ]; then
+  echo "✅ full CI passed (fmt + markdown breaks + workspace clippy + workspace tests + plugin check + render tests + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+else
+  echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
+fi

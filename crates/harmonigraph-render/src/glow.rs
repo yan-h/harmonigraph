@@ -293,8 +293,17 @@ impl GlowResources {
         });
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way egui blends.
-        let filter =
-            |entry| crate::create_post_pipeline(device, entry, target_format, &filter_layout, None);
+        let blit_shader = crate::blit_module(device);
+        let filter = |entry| {
+            crate::create_post_pipeline(
+                device,
+                &blit_shader,
+                entry,
+                target_format,
+                &filter_layout,
+                None,
+            )
+        };
         GlowResources {
             disc_pipeline: create_disc_pipeline(device, target_format, &locals_layout),
             locals_layout,
@@ -304,6 +313,7 @@ impl GlowResources {
             blur_v_pipeline: filter("fs_blur_v"),
             add_pipeline: crate::create_post_pipeline(
                 device,
+                &blit_shader,
                 "fs_bloom_add",
                 target_format,
                 &add_layout,

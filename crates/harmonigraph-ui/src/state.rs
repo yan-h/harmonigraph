@@ -150,6 +150,9 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
+    /// Device-bound compiled pipelines outlive windows, while their pane
+    /// buffers and textures remain in each window's callback resources.
+    pub(crate) lattice_pipelines: std::sync::Arc<harmonigraph_render::LatticePipelineCache>,
     /// The ground the lattice pane paints its rect with, which it also hands
     /// the scene (see [`harmonigraph_scene::Scene::background`]). Defaults to
     /// the skin's well, the recessed grey every picture pane paints — right for
@@ -171,6 +174,11 @@ pub struct SharedState {
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
+    pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
+    /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
+    pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
+    pub configuration_status: u32,
+    pub configuration_pending: bool,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
     /// Per comma (indexed by [`Comma::index`]): the tuning axes (microcents)
@@ -682,6 +690,17 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 }
 
 impl SharedState {
+    /// An owned handle lets plugin teardown join initialization after releasing
+    /// the shared UI lock. Ordinary editor close leaves this cache alive.
+    pub fn editor_graphics(&self) -> std::sync::Arc<harmonigraph_render::LatticePipelineCache> {
+        self.lattice_pipelines.clone()
+    }
+
+    /// The synchronous reducer's last complete value, for standalone recording.
+    pub fn resolved_configuration(&self) -> harmonigraph_core::configuration::ResolvedConfig {
+        self.replayed_configuration.unwrap_or_else(|| self.config_reducer.resolved())
+    }
+
     pub fn new(target_format: TextureFormat) -> Self {
         SharedState {
             tracker: NoteTracker::new(),
@@ -694,8 +713,13 @@ impl SharedState {
             drawn_this_frame: None,
             console: Console::default(),
             target_format,
+            lattice_pipelines: Default::default(),
             background: harmonigraph_scene::skin::well_color(),
             learn_active: false,
+            config_reducer: Default::default(),
+            replayed_configuration: None,
+            configuration_status: 0,
+            configuration_pending: false,
             last_learned_classes: None,
             temper_judged: [None; Comma::COUNT],
             camera_presets: Vec::new(),

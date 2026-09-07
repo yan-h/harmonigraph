@@ -18,6 +18,145 @@ fn pipelines_build_against_a_headless_device() {
     let _resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
+/// Use the real prepare/paint path, populate its pane and atlas, then destroy
+/// the window's resource map. The retained cache must reuse compiled objects
+/// without keeping either the old pixels or a pane's temporal state alive.
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn reopening_reuses_pipelines_with_fresh_window_resources() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else {
+        return;
+    };
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    (shooter.device, shooter.queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    shooter.resources.insert(instance.clone());
+    let cache = std::sync::Arc::new(LatticePipelineCache::default());
+    let scene = parity_scene();
+    let first = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+        cb.pipeline_cache = Some(cache.clone());
+    });
+    let window = shooter.resources.get_mut::<LatticeResources>().unwrap();
+    assert!(!window.panes.is_empty(), "the first window must actually draw");
+    let pipeline = window.scenes[0].nodes.clone();
+    let atlas = FontAtlas {
+        image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
+        key: 99,
+    };
+    window.atlas.upload(&shooter.device, &shooter.queue, &atlas);
+    window.marks.upload(&shooter.device, &shooter.queue, &atlas);
+    window.sdf_key = 99;
+    // Exercise the reset on populated resources. The cache's template never
+    // draws, so testing only its clone would pass even if these fields leaked.
+    let reset = window.for_context(&shooter.device, &shooter.queue);
+    assert!(reset.panes.is_empty());
+    assert!(reset.atlas.view().is_none() && reset.marks.view().is_none());
+    assert_eq!(reset.sdf_key, 0);
+    drop(reset);
+    shooter.resources = CallbackResources::default();
+
+    let started = std::time::Instant::now();
+    let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
+    eprintln!("cached lattice reopen: {:?}", started.elapsed());
+    assert_eq!(reopened.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
+    drop(reopened);
+
+    shooter.resources.insert(instance.clone());
+    // Keep the SAME pane ID: a reopened egui context starts its ID space over.
+    let second = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+        cb.pipeline_cache = Some(cache.clone());
+    });
+    assert_eq!(differing_pixels(&first, &second), 0, "reopening changed the picture");
+    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+}
+
+/// The worker builds the same programs as synchronous first paint, and its
+/// result enters the existing cache rather than being rebuilt on first use.
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
+    use crate::startup::Status;
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    (shooter.device, shooter.queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let scene = parity_scene();
+    let synchronous = shooter.shot(&scene);
+    shooter.resources = CallbackResources::default();
+    shooter.resources.insert(instance.clone());
+    let cache = std::sync::Arc::new(LatticePipelineCache::default());
+    // Finish a job for another surface format before serving this window.
+    // A late result must not bypass the cache's device/format identity.
+    let old_format = if shooter.format == wgpu::TextureFormat::Bgra8Unorm {
+        wgpu::TextureFormat::Rgba8Unorm
+    } else {
+        wgpu::TextureFormat::Bgra8Unorm
+    };
+    assert!(matches!(
+        cache.poll_startup(&instance, &shooter.device, &shooter.queue, old_format),
+        Status::Preparing(_)
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format) {
+            Status::Ready { built: true } => break,
+            Status::Preparing(_) => {
+                assert!(std::time::Instant::now() < deadline, "startup worker did not finish");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            other => panic!("unexpected startup result: {other:?}"),
+        }
+    }
+    let pipeline = cache.template.lock().unwrap().as_ref().unwrap().2.scenes[0].nodes.clone();
+    let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
+        callback.pipeline_cache = Some(cache.clone());
+    });
+    assert_eq!(differing_pixels(&synchronous, &asynchronous), 0);
+    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+    shooter.resources = CallbackResources::default();
+    assert_eq!(
+        cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format),
+        Status::Ready { built: false },
+        "a second window must reuse the completed job"
+    );
+}
+
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn pipeline_cache_rebuilds_for_another_device_or_format() {
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        eprintln!("no GPU adapter available; skipping");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let cache = LatticePipelineCache::default();
+    let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    assert_ne!(rgba.composite_pipeline, bgra.composite_pipeline);
+    assert_eq!(bgra.target_format, wgpu::TextureFormat::Bgra8Unorm);
+    let (other, other_queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let replaced =
+        cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+    assert_ne!(bgra.scenes[0].nodes, replaced.scenes[0].nodes);
+
+    // Separate instances can mint equal device IDs. Test that case explicitly.
+    let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    let other_instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(other_instance.request_adapter(&Default::default())).unwrap();
+    let (other, other_queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
+    let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+    let retained = cache.template.lock().unwrap();
+    let (owner_instance, owner, _) = retained.as_ref().unwrap();
+    assert_eq!(owner_instance, &other_instance);
+    assert_eq!(owner, &other);
+}
+
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
 /// returns `Some` and the readback cycle is live. Without the feature the
 /// timer is `None` and any test about it would pass vacuously — hence a
@@ -158,8 +297,8 @@ fn offscreen_composite_matches_direct_draw() {
         shadow: &res.shadow_layout,
         casters: &res.caster_layout,
     };
-    let (node_pipeline, plus_pipeline) =
-        create_pipelines(&device, &with_common(SHADER_SRC), format, layouts, false);
+    let shader = lattice_module(&device, &with_common(SHADER_SRC));
+    let (node_pipeline, plus_pipeline) = create_pipelines(&device, &shader, format, layouts, false);
     // The stand-in light at group 1: this path has no glow pass to composite,
     // and the fixture asks for none (`parity_scene` holds the reach at 0), so
     // the offscreen path is reading the same transparent nothing.

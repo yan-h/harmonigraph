@@ -302,3 +302,24 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         samples.len(),
     );
 }
+
+/// Device setup and pipeline compilation on successive fresh renderers.
+/// Run after a shader change to observe a cold Metal compiler cache; a warm
+/// driver can make every iteration fast. This isolates the remaining first-
+/// open cost from the retained-pipeline reopen path covered in `device.rs`.
+#[test]
+#[ignore = "manual editor startup timing"]
+fn timing_editor_pipeline_startup() {
+    for opening in 0..3 {
+        let started = std::time::Instant::now();
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        eprintln!("opening {opening}: device {:?}", started.elapsed());
+        let started = std::time::Instant::now();
+        let resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+        eprintln!("opening {opening}: lattice {:?}", started.elapsed());
+        drop(resources);
+    }
+}

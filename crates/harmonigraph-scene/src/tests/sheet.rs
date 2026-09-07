@@ -3,7 +3,7 @@
 
 use super::harness::*;
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
 
 #[test]
 fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
@@ -40,7 +40,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // 2 × 1000¢ → pitch class 800¢ = G#/Ab, MIDI 68). It lights node
     // (0,0,2) only, and the field under it is untouched.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 68, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
     let played = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     assert!(
         played.nodes.iter().any(|n| !n.on_home && n.activation > 0.0),

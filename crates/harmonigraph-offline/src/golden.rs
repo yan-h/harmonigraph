@@ -266,9 +266,11 @@ impl Shot {
         (cfg.low_midi, cfg.high_midi) = self.range;
         Take {
             header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-            notes: Vec::new(),
+            events: Vec::new(),
             params: Vec::new(),
+            configurations: Vec::new(),
             truncated: false,
+            incomplete: None,
         }
     }
 
@@ -370,21 +372,31 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         kernel: harmonigraph_scene::ShadowKernel::Gaussian,
         width: 0.75,
         depth: 0.85,
+        ..Default::default()
     };
     state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Distance,
         width: 0.75,
         depth: 0.85,
+        ..Default::default()
     };
-    let notes = [60u8, 64, 67, 72]
+    let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
-        .map(|note| NoteRecord { t: 0.0, channel: 0, note, kind: NoteKind::On { velocity: 0.85 } })
+        .map(|note| NoteRecord {
+            source: 0,
+            t: 0.0,
+            channel: 0,
+            note,
+            kind: NoteKind::On { velocity: 0.85 },
+        })
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes,
+        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     check_take("spectrogram-spectral-shadows-mixed", shot, take);
 }
@@ -445,9 +457,11 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     (cfg.low_midi, cfg.high_midi) = whole_axis();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes: Vec::new(),
+        events: Vec::new(),
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     let mut layout = Layout::preset("spectral").expect("the spectral preset exists");
     if drawn == Drawn::Sliver {
@@ -522,19 +536,35 @@ fn spectral_shadow_frame_ms(
     state.spectrum_config.roll_fraction = 0.65;
     state.spectrum_config.roll_seconds = WINDOW;
     (state.spectrum_config.low_midi, state.spectrum_config.high_midi) = (48.0, 84.0);
-    state.view.shadow.spectral_geometry =
-        harmonigraph_scene::ShadowStyle { kernel: geometry, width: 0.75, depth: 0.85 };
-    state.view.shadow.spectral_text =
-        harmonigraph_scene::ShadowStyle { kernel: text, width: 0.75, depth: 0.85 };
-    let notes = [60u8, 64, 67, 72]
+    state.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+        kernel: geometry,
+        width: 0.75,
+        depth: 0.85,
+        ..Default::default()
+    };
+    state.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+        kernel: text,
+        width: 0.75,
+        depth: 0.85,
+        ..Default::default()
+    };
+    let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
-        .map(|note| NoteRecord { t: 0.0, channel: 0, note, kind: NoteKind::On { velocity: 0.85 } })
+        .map(|note| NoteRecord {
+            source: 0,
+            t: 0.0,
+            channel: 0,
+            note,
+            kind: NoteKind::On { velocity: 0.85 },
+        })
         .collect();
     let take = Take {
         header: Header { ui_state: Some(state.save_persist()), ..Default::default() },
-        notes,
+        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
+        configurations: Vec::new(),
         truncated: false,
+        incomplete: None,
     };
     let settings = Settings {
         layout: Layout::preset("spectral").expect("the spectral preset exists"),

@@ -17,8 +17,8 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:1,sample_rate:48000.0,...))
-//! Note((t:0.5,channel:0,note:60,kind:On((velocity:0.8))))
+//! Header((version:3,sample_rate:48000.0,...))
+//! Note((t:0.5,source:0,channel:0,note:60,kind:On((velocity:0.8))))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
 //!
@@ -33,7 +33,11 @@
 //! events with. They are deliberately NOT wall-clock or frame times: the
 //! whole point is that the replay chooses its own frame rate.
 
+pub mod canonical;
+pub use canonical::{CanonicalRecord, IncompleteRecord};
+pub mod configuration;
 pub mod params;
+pub use configuration::ConfigurationRecord;
 pub mod render;
 
 pub use params::{ParamKey, MAX_TUNING_OFFSET};
@@ -44,15 +48,19 @@ use std::io::{BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 /// Bumped when a change would make an older reader misread a take.
-/// [`Take::read`] refuses anything newer than it understands rather than
-/// silently rendering something wrong.
-pub const FORMAT_VERSION: u32 = 1;
+/// [`Take::read`] accepts exactly this version. Version 1 lacked source/reset
+/// scope; version 2 lacked resolved configuration boundaries; version 3 lacked
+/// canonical baselines, sample provenance and publication gaps. Refusing an old
+/// header prevents its final record from looking like an interrupted write.
+/// There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
 
 /// What a take opens with: everything constant for the whole recording.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Header {
     pub version: u32,
     /// The audio clock the event times are in.
@@ -60,7 +68,6 @@ pub struct Header {
     /// Transport position (samples from song start) of time 0, when the
     /// host told us. Lets the take be lined up against a bounced WAV that
     /// starts somewhere else.
-    #[serde(default)]
     pub start_samples: Option<u64>,
     /// The shell's UI state blob (`SharedState::save_persist`) as of the
     /// recording: view settings, camera, spectrum/roll config. This is
@@ -69,19 +76,15 @@ pub struct Header {
     /// In the plugin this is only up to date if the editor window was
     /// closed before the project was saved — the same trap
     /// `read-plugin-state.py` documents.
-    #[serde(default)]
     pub ui_state: Option<String>,
     /// Editor size in logical points when recorded, as a hint for
     /// choosing the render aspect ratio.
-    #[serde(default)]
     pub window_points: Option<(f32, f32)>,
     /// Free-form: which shell wrote this, and out of what.
-    #[serde(default)]
     pub source: String,
     /// File name (not path) of the audio recorded with this take, if
     /// any. A sibling of the take file, so the pair can be moved
     /// together. The renderer uses it when no audio is given explicitly.
-    #[serde(default)]
     pub audio_file: Option<String>,
     /// Take time corresponding to the audio's first sample.
     ///
@@ -89,7 +92,6 @@ pub struct Header {
     /// arming mid-song does not, and without it the spectrum and the
     /// muxed track would both sit at the wrong place by exactly however
     /// far in you started.
-    #[serde(default)]
     pub audio_start: Option<f64>,
 }
 
@@ -113,27 +115,75 @@ impl Default for Header {
 /// is MIT/Apache and must not gain a serde dependency (see `ci.sh`), so it
 /// cannot derive the impls this needs — and the take format must be free to
 /// outlive an internal enum, which reusing one would forfeit.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum NoteKind {
     On {
         velocity: f32,
     },
+    #[default]
     Off,
     /// Per-note tuning offset in semitones (MPE / CLAP note expression).
     Tuning {
         semitones: f32,
     },
-    /// Release everything (transport reset).
-    AllOff,
+    /// Release this record's source; channel and note are ignored.
+    SourceReset,
+    /// Release every source; source, channel and note are ignored.
+    SessionReset,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NoteRecord {
     /// Seconds on the audio clock, from the start of the recording.
     pub t: f64,
+    /// Canonical stream identity, with 0 reserved for observed direct input.
+    /// This is not a saved runtime session, epoch or source-incarnation token.
+    pub source: u64,
     pub channel: u8,
     pub note: u8,
     pub kind: NoteKind,
+}
+
+// Both writers and both replay modes share these conversions. Controls stay
+// ordered among note deltas, at their original timestamps. Future complete
+// baseline controls must extend this same stream, not a separate state feed.
+impl From<harmonigraph_core::NoteEvent> for NoteRecord {
+    fn from(event: harmonigraph_core::NoteEvent) -> Self {
+        use harmonigraph_core::NoteEventKind as Core;
+        Self {
+            t: event.time,
+            source: event.source.0,
+            channel: event.channel,
+            note: event.note,
+            kind: match event.kind {
+                Core::On { velocity } => NoteKind::On { velocity },
+                Core::Off => NoteKind::Off,
+                Core::Tuning { semitones } => NoteKind::Tuning { semitones },
+                Core::SourceReset => NoteKind::SourceReset,
+                Core::SessionReset => NoteKind::SessionReset,
+            },
+        }
+    }
+}
+
+impl From<NoteRecord> for harmonigraph_core::NoteEvent {
+    fn from(record: NoteRecord) -> Self {
+        use harmonigraph_core::{NoteEventKind as Core, SourceId};
+        Self {
+            time: record.t,
+            source: SourceId(record.source),
+            channel: record.channel,
+            note: record.note,
+            kind: match record.kind {
+                NoteKind::On { velocity } => Core::On { velocity },
+                NoteKind::Off => Core::Off,
+                NoteKind::Tuning { semitones } => Core::Tuning { semitones },
+                NoteKind::SourceReset => Core::SourceReset,
+                NoteKind::SessionReset => Core::SessionReset,
+            },
+        }
+    }
 }
 
 /// One automatable parameter changing value. `id` is the host-facing
@@ -152,6 +202,9 @@ pub enum Record {
     Header(Header),
     Note(NoteRecord),
     Param(ParamRecord),
+    Configuration(ConfigurationRecord),
+    Canonical(CanonicalRecord),
+    Incomplete(IncompleteRecord),
 }
 
 /// A whole take, read into memory. Takes are small — a busy ten-minute
@@ -161,15 +214,17 @@ pub struct Take {
     pub header: Header,
     /// Note events in the order they were recorded (which is time order:
     /// the audio thread stamps them from a monotonic sample counter).
-    pub notes: Vec<NoteRecord>,
+    pub events: Vec<CanonicalRecord>,
     /// Parameter changes, time-ordered. Only *changes* are recorded, so
     /// the value at any moment is the last record at or before it.
     pub params: Vec<ParamRecord>,
+    pub configurations: Vec<ConfigurationRecord>,
     /// The final line was incomplete, so the recording was cut off mid
     /// write — a killed export, a crash. Everything before it is intact
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
+    pub incomplete: Option<IncompleteRecord>,
 }
 
 /// Why a take could not be read.
@@ -180,8 +235,9 @@ pub enum ReadError {
     Parse(usize, ron::error::SpannedError),
     /// The file did not start with a Header record.
     MissingHeader,
-    /// Written by a newer version of this format.
+    /// Written in an unsupported older or newer format.
     Version(u32),
+    InvalidCanonical(usize),
 }
 
 impl std::fmt::Display for ReadError {
@@ -190,6 +246,9 @@ impl std::fmt::Display for ReadError {
             ReadError::Io(e) => write!(f, "{e}"),
             ReadError::Parse(line, e) => write!(f, "line {line}: {e}"),
             ReadError::MissingHeader => write!(f, "no Header record (is this a take file?)"),
+            ReadError::InvalidCanonical(line) => {
+                write!(f, "line {line}: invalid complete canonical record")
+            }
             ReadError::Version(v) => {
                 write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")
             }
@@ -205,6 +264,27 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
+/// Check syntax independently of Record's typed deserialization. RON can
+/// report an expected closing delimiter/comma at EOF instead of Error::Eof.
+fn unfinished_ron(line: &str) -> bool {
+    use ron::error::Error;
+    let Ok(mut parser) = ron::Deserializer::from_str(line) else { return false };
+    match <serde::de::IgnoredAny as serde::Deserialize>::deserialize(&mut parser) {
+        // RON searches for the closing quote before consuming string contents,
+        // so a genuine string EOF can leave a nonempty remainder.
+        Err(Error::Eof | Error::ExpectedStringEnd) => true,
+        Err(
+            Error::ExpectedArrayEnd
+            | Error::ExpectedMapEnd
+            | Error::ExpectedStructLikeEnd
+            | Error::ExpectedComma
+            | Error::ExpectedMapColon
+            | Error::ExpectedIdentifier,
+        ) => parser.remainder().is_empty(),
+        _ => false,
+    }
+}
+
 impl Take {
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Take, ReadError> {
         let file = std::fs::File::open(path)?;
@@ -213,13 +293,12 @@ impl Take {
 
     pub fn parse(input: impl BufRead) -> Result<Take, ReadError> {
         // Read the lines up front so the last one can be recognized: a
-        // record that fails to parse *there* is a half-written line from
-        // an interrupted export, which the format is line-oriented
-        // specifically to survive. The same failure anywhere earlier is
-        // real corruption and must not be waved through.
+        // syntactically unfinished final record can be a half-written line.
+        // A complete record with an invalid type/value is corruption even there.
         let lines = input.lines().collect::<Result<Vec<String>, _>>()?;
         let mut take = Take::default();
         let mut have_header = false;
+        let mut event_lines = Vec::new();
         for (i, line) in lines.iter().enumerate() {
             let line = line.trim();
             // Blank lines and `#` comments are ignored, so a take stays
@@ -229,7 +308,7 @@ impl Take {
             }
             let record = match ron::from_str::<Record>(line) {
                 Ok(record) => record,
-                Err(_) if i + 1 == lines.len() => {
+                Err(_) if i + 1 == lines.len() && unfinished_ron(line) => {
                     take.truncated = true;
                     break;
                 }
@@ -237,14 +316,33 @@ impl Take {
             };
             match record {
                 Record::Header(header) => {
-                    if header.version > FORMAT_VERSION {
+                    if header.version != FORMAT_VERSION {
                         return Err(ReadError::Version(header.version));
                     }
                     take.header = header;
                     have_header = true;
                 }
-                Record::Note(note) => take.notes.push(note),
+                Record::Note(note) => {
+                    let record = CanonicalRecord::Note(note);
+                    record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
+                    event_lines.push(i + 1);
+                    take.events.push(record);
+                }
+                Record::Canonical(record) => {
+                    record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
+                    if let CanonicalRecord::Gap(gap) = &record {
+                        take.incomplete = Some(IncompleteRecord {
+                            first_publication: gap.first,
+                            last_publication: gap.last,
+                            reason: gap.reason,
+                        });
+                    }
+                    event_lines.push(i + 1);
+                    take.events.push(record);
+                }
+                Record::Incomplete(incomplete) => take.incomplete = Some(incomplete),
                 Record::Param(param) => take.params.push(param),
+                Record::Configuration(config) => take.configurations.push(config),
             }
         }
         if !have_header {
@@ -258,17 +356,32 @@ impl Take {
         // everything after it late. Stable, so simultaneous events keep
         // the order they were played in (note-off before the note-on that
         // replaces it, and so on).
-        take.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
+        let mut ordered: Vec<_> = take.events.drain(..).zip(event_lines).collect();
+        ordered.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
+        let mut validation = harmonigraph_core::NoteTracker::new();
+        for (record, line) in ordered {
+            record.apply(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
+            take.events.push(record);
+        }
         take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
+        take.configurations.sort_by(|a, b| a.t.total_cmp(&b.t));
         Ok(take)
     }
 
     /// Seconds from the first recorded event to the last. Zero for a take
     /// with nothing in it.
     pub fn duration(&self) -> f64 {
-        let last_note = self.notes.last().map(|n| n.t).unwrap_or(0.0);
+        let last_note = self
+            .events
+            .iter()
+            .map(|event| match event {
+                CanonicalRecord::Gap(g) => g.through,
+                _ => event.time(),
+            })
+            .max_by(f64::total_cmp)
+            .unwrap_or(0.0);
         let last_param = self.params.last().map(|p| p.t).unwrap_or(0.0);
-        last_note.max(last_param)
+        last_note.max(last_param).max(self.configurations.last().map_or(0.0, |c| c.t))
     }
 
     /// When recording actually began: the earliest event of any kind, or
@@ -288,13 +401,18 @@ impl Take {
     /// seconds, and everything before that is guaranteed empty — nothing was
     /// captured there to draw.
     pub fn first_event(&self) -> Option<f64> {
-        let first_note = self.notes.first().map(|n| n.t);
+        let first_note = self.events.first().map(CanonicalRecord::time);
         let first_param = self.params.first().map(|p| p.t);
-        match (first_note, first_param) {
-            (Some(n), Some(p)) => Some(n.min(p)),
-            (only, None) => only,
-            (None, only) => only,
-        }
+        [first_note, first_param, self.configurations.first().map(|c| c.t)]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+    }
+
+    /// Derived note-only inspection. Replay consumes `events`, including every
+    /// baseline/gap in its original equal-time order.
+    pub fn notes(&self) -> impl Iterator<Item = NoteRecord> + '_ {
+        self.events.iter().filter_map(CanonicalRecord::note)
     }
 }
 
@@ -342,6 +460,21 @@ impl Writer {
 
     pub fn note(&mut self, note: NoteRecord) -> std::io::Result<()> {
         self.write(&Record::Note(note))
+    }
+
+    pub fn canonical(&mut self, record: CanonicalRecord) -> std::io::Result<()> {
+        record.validate().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid canonical record")
+        })?;
+        self.write(&Record::Canonical(record))
+    }
+
+    pub fn incomplete(&mut self, record: IncompleteRecord) -> std::io::Result<()> {
+        self.write(&Record::Incomplete(record))
+    }
+
+    pub fn configuration(&mut self, config: ConfigurationRecord) -> std::io::Result<()> {
+        self.write(&Record::Configuration(config))
     }
 
     pub fn param(&mut self, param: ParamRecord) -> std::io::Result<()> {
@@ -397,11 +530,19 @@ mod tests {
     fn first_event_survives_a_take_with_no_notes() {
         let take = |notes: Vec<NoteRecord>, params: Vec<ParamRecord>| Take {
             header: Header::default(),
-            notes,
+            events: notes.into_iter().map(CanonicalRecord::Note).collect(),
             params,
+            configurations: Vec::new(),
             truncated: false,
+            incomplete: None,
         };
-        let note = |t| NoteRecord { t, channel: 0, note: 60, kind: NoteKind::On { velocity: 0.8 } };
+        let note = |t| NoteRecord {
+            source: 0,
+            t,
+            channel: 0,
+            note: 60,
+            kind: NoteKind::On { velocity: 0.8 },
+        };
         let param = |t| ParamRecord { t, id: "pitch-class-fade".into(), value: 1.0 };
 
         // Notes and params: the earlier wins, and it is the param snapshot
@@ -425,10 +566,22 @@ mod tests {
             ..Default::default()
         };
         let notes = vec![
-            NoteRecord { t: 0.0, channel: 0, note: 60, kind: NoteKind::On { velocity: 0.8 } },
-            NoteRecord { t: 0.5, channel: 0, note: 60, kind: NoteKind::Tuning { semitones: -0.5 } },
-            NoteRecord { t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
-            NoteRecord { t: 2.0, channel: 3, note: 0, kind: NoteKind::AllOff },
+            NoteRecord {
+                source: 0,
+                t: 0.0,
+                channel: 0,
+                note: 60,
+                kind: NoteKind::On { velocity: 0.8 },
+            },
+            NoteRecord {
+                source: 0,
+                t: 0.5,
+                channel: 0,
+                note: 60,
+                kind: NoteKind::Tuning { semitones: -0.5 },
+            },
+            NoteRecord { source: 0, t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
+            NoteRecord { source: 0, t: 2.0, channel: 3, note: 0, kind: NoteKind::SessionReset },
         ];
         let params = vec![ParamRecord { t: 0.0, id: "pitch-class-fade".into(), value: 2.5 }];
         (header, notes, params)
@@ -464,7 +617,7 @@ mod tests {
         assert_eq!(take.header.start_samples, header.start_samples);
         assert_eq!(take.header.ui_state, header.ui_state);
         assert_eq!(take.header.window_points, header.window_points);
-        assert_eq!(take.notes, notes);
+        assert_eq!(take.notes().collect::<Vec<_>>(), notes);
         assert_eq!(take.params, params);
     }
 
@@ -489,7 +642,22 @@ mod tests {
         let take = Take::parse(std::io::Cursor::new(&text.as_bytes()[..cut]))
             .unwrap_or_else(|e| panic!("truncated take should still read: {e}"));
         // The partial last line is the only casualty, and the take says so.
-        assert_eq!(take.notes, notes[..notes.len() - 1]);
+        assert_eq!(take.notes().collect::<Vec<_>>(), notes[..notes.len() - 1]);
+        assert!(take.truncated);
+
+        // A real parameter line cut inside a NONEMPTY string reaches RON's
+        // ExpectedStringEnd path, which leaves the unterminated text unconsumed.
+        let (header, notes, params) = sample();
+        let parameter = ron::to_string(&Record::Param(params[0].clone())).unwrap();
+        let inside_id = parameter.find("id:\"").unwrap() + "id:\"".len() + 3;
+        let text = format!(
+            "{}\n{}\n{}",
+            ron::to_string(&Record::Header(header)).unwrap(),
+            ron::to_string(&Record::Note(notes[0])).unwrap(),
+            &parameter[..inside_id]
+        );
+        let take = Take::parse(std::io::Cursor::new(text)).unwrap();
+        assert_eq!(take.notes().collect::<Vec<_>>(), notes[..1]);
         assert!(take.truncated);
     }
 
@@ -519,7 +687,7 @@ mod tests {
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
         for t in out_of_order {
-            let note = NoteRecord { t, channel: 0, note: 60, kind: NoteKind::Off };
+            let note = NoteRecord { source: 0, t, channel: 0, note: 60, kind: NoteKind::Off };
             text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
             text.push('\n');
             let param = ParamRecord { t, id: "pitch-class-fade".into(), value: t as f32 };
@@ -527,7 +695,7 @@ mod tests {
             text.push('\n');
         }
         let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
-        let note_times: Vec<f64> = take.notes.iter().map(|n| n.t).collect();
+        let note_times: Vec<f64> = take.notes().map(|n| n.t).collect();
         let param_times: Vec<f64> = take.params.iter().map(|p| p.t).collect();
         assert_eq!(note_times, vec![0.5, 1.0, 3.0, 5.0, 7.0]);
         assert_eq!(param_times, vec![0.5, 1.0, 3.0, 5.0, 7.0]);
@@ -542,13 +710,13 @@ mod tests {
         let mut text = ron::to_string(&Record::Header(header)).unwrap();
         text.push('\n');
         for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
-            let note = NoteRecord { t: 2.0, channel: 0, note: 60, kind };
+            let note = NoteRecord { source: 0, t: 2.0, channel: 0, note: 60, kind };
             text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
             text.push('\n');
         }
         let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
-        assert_eq!(take.notes[0].kind, NoteKind::Off);
-        assert!(matches!(take.notes[1].kind, NoteKind::On { .. }));
+        assert_eq!(take.notes().next().unwrap().kind, NoteKind::Off);
+        assert!(matches!(take.notes().nth(1).unwrap().kind, NoteKind::On { .. }));
     }
 
     #[test]
@@ -564,12 +732,12 @@ mod tests {
             ron::to_string(&Record::Header(header)).unwrap()
         );
         let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
-        assert!(take.notes.is_empty());
+        assert!(take.notes().next().is_none());
     }
 
     #[test]
     fn a_file_without_a_header_is_rejected() {
-        let note = NoteRecord { t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
+        let note = NoteRecord { source: 0, t: 0.0, channel: 0, note: 60, kind: NoteKind::Off };
         let text = ron::to_string(&Record::Note(note)).unwrap();
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
@@ -587,6 +755,82 @@ mod tests {
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Version(_))
         ));
+    }
+
+    #[test]
+    fn invalid_complete_final_baseline_and_out_of_order_cut_are_refused() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        let row = VoiceBaseline {
+            note: 60,
+            velocity: 0.8,
+            pitch_microcents: 6_000_000_000,
+            ..Default::default()
+        };
+        let baseline = SourceBaseline::new(
+            SourceId::DIRECT,
+            1,
+            2.0,
+            0.0,
+            5,
+            true,
+            &[row],
+            [ChannelBaseline::default(); 16],
+        )
+        .unwrap();
+        let full = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Baseline(&baseline),
+        )))
+        .unwrap();
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for invalid in [
+            full.replace("note:60", "note:256"),
+            full.replace("ObservedDirect", "UnknownProvenance"),
+        ] {
+            assert_ne!(invalid, full);
+            let parsed = Take::parse(std::io::Cursor::new(format!("{header}\n{invalid}")));
+            assert!(
+                matches!(parsed, Err(ReadError::Parse(2, _))),
+                "complete malformed record was accepted: {parsed:?}"
+            );
+        }
+        let mut record = canonical::BaselineRecord::from(&baseline);
+        record.voices = vec![row.into(); 65];
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let invalid =
+            ron::to_string(&Record::Canonical(CanonicalRecord::Baseline(Box::new(record))))
+                .unwrap();
+        let text = format!("{header}\n{invalid}");
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(text)),
+            Err(ReadError::InvalidCanonical(2))
+        ));
+        let frame = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Baseline(&baseline),
+        )))
+        .unwrap();
+        let mut delta: NoteDelta = NoteEvent::on(3.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        delta.sequence = 4;
+        let later = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
+            CanonicalEvent::Note(delta),
+        )))
+        .unwrap();
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{later}"))),
+            Err(ReadError::InvalidCanonical(3))
+        ));
+    }
+
+    #[test]
+    fn an_old_header_is_refused_before_a_final_record_can_look_truncated() {
+        for version in [0, 1, 2, 3] {
+            for last in ["Note((t:0.0,channel:0,note:60,kind:On((velocity:0.8))))", "Note((t:"] {
+                let text = format!("Header((version:{version},sample_rate:48000.0))\n{last}");
+                let error = Take::parse(std::io::Cursor::new(text)).unwrap_err();
+                assert!(matches!(error, ReadError::Version(v) if v == version));
+                assert!(error.to_string().contains(&format!("format version {version}")));
+            }
+        }
     }
 }
 

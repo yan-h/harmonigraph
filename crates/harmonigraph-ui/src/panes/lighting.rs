@@ -6,6 +6,7 @@ use crate::SharedState;
 use harmonigraph_scene::{
     GlowCurve, ShadowKernel, ShadowSettings, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX,
     GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX,
+    SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
 };
 
 pub(super) fn lighting_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -45,7 +46,18 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow gain")
         .unit(1.0, "×")
             .show(ui)
-            .on_hover_text("Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.");
+            .on_hover_text(
+                "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.",
+            );
+        ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Glow accumulation")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Controls how light builds up where note glows overlap. \
+                 0% caps their combined brightness at the level set by Glow gain. \
+                 100% lets their light build up where they overlap. \
+                 A single note's glow stays unchanged.",
+            );
         ValueBar::new(
             &mut view.glow_curve.shape,
             GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
@@ -172,4 +184,28 @@ fn shadow_group(
                  100% turns the area beneath solid shapes black. \
                  Thin strokes may cast lighter shadows.",
     );
+    // Distance only. On a blur the same exponent would be a rescale of σ — the
+    // Shadow width bar again, under a second name — because a Gaussian is its
+    // own family under a power. `ShadowStyle::falloff` has the arithmetic.
+    ui.add_enabled_ui(style.kernel.is_distance(), |ui| {
+        ValueBar::new(
+            &mut style.falloff,
+            SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
+            "Shadow falloff",
+        )
+        .decimals(2)
+        // The curve's x is one Shadow width across, which is the span the bar
+        // redistributes and the span the number is about.
+        .curve(harmonigraph_scene::standoff_level)
+        .show(ui)
+        .on_hover_text(
+            "Where inside the width the shadow spends its darkness. \
+             Low values keep a sharp edge against the shape and trail off; \
+             high values hold the darkness out to a plateau and drop late. \
+             The width and darkness both keep their meaning at every setting. \
+             Below 0.64 the shadow is drawn on a larger surface to hold its \
+             longer tail, which costs memory and speed for this group. \
+             Contour shadows only.",
+        );
+    });
 }

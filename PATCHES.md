@@ -16,7 +16,20 @@ The disposable [tuning probe](docs/tuning-probe.md) consumes the hook and verifi
 The context publishes the initial latency while activation is still in progress, as the CLAP latency contract requires, instead of requesting a redundant restart from an already-active wrapper.
 This fixes the Bitwig offline-export stall measured by #615;
 the exported-factory fixture checks one initial latency notification and no restart for a nonzero delay.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics and activation notification ordering.
+- **Production CLAP ownership** (`src/wrapper/clap/{configuration,configuration_adapter,input_adapter,performance,performance_adapter,setup,wrapper}.rs` and `src/wrapper/clap.rs`): the effective-configuration and performance opt-ins share one acknowledged host-input pool.
+The ordinary processing walker, configuration owner and performance owner must all finish an input before its owned cell is reused.
+The fixed 512-normal/128-emergency scheduler exposes prepare, actual accepted-prefix completion and finalization;
+an opted-in plugin cannot infer acceptance from legacy `send_event`.
+Prepared nonautomatable setup validates and reserves capacity before parameter/state mutation, then adopts at the enclosing input boundary.
+Main-thread registration, setup service and joined lifecycle hooks keep registry locking and endpoint reclamation outside audio callbacks.
+Joined wrapper destruction takes the configuration runtime and calls `clap_configuration_retire(unfinished)` before `clap_main_destroy` transfers recording ownership.
+The hook disposes unfinished input, command and learning ownership without claiming successful application or advancing a sample prefix;
+the plugin retains original recording routes until joined actual output has a publication disposition.
+Tune's performance-only opt-in creates no configuration mailbox.
+`allocation_probe.rs` instruments the actual debug allocation guard on the calling thread, including deallocation, for exported-factory ownership fixtures;
+it does not measure RSS or other threads.
+See the [configuration](docs/adaptive-tuning-effective-configuration.md), [performance boundary](docs/adaptive-tuning-clap-performance.md) and [aggregation](docs/adaptive-tuning-companion-aggregation.md) handoffs for the contracts and measured limits.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply the hook sites, both lifecycle diagnostics, activation notification ordering and production configuration/performance/setup seams.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
@@ -225,10 +238,22 @@ a full texture delta and the GPU texture temporarily multiplied that cost into r
 The cap is still eight times the largest glyph Harmonigraph allows, and puts a 64 MiB ceiling on egui's CPU image before its 80% rebuild clears historical sizes.
 At the fresh Name size, a full-range zoom reaches 32 MiB on its first sweep and stays there through every return trip;
 the largest valid Name size reaches the 64 MiB ceiling once and reuses it too.
+- **Patch 15** (`src/renderer/wgpu/renderer.rs`, re-exports): let an editor keep a `SharedGpuContext` across window lifetimes.
+Only the instance, adapter, device and queue survive;
+each open still creates a surface and an egui renderer with a fresh texture namespace.
+The original adapter is checked against the new surface before reuse.
+Device-loss callbacks mark a retained setup unusable, and a nonblocking poll at open delivers any pending loss before deciding to reuse it.
+Failed renderer creation also clears the retained setup, so a later open can recover with a fresh device.
+Creating a fresh instance keeps the previous `new_without_display_handle` descriptor.
+Harmonigraph pairs this with its own cache of immutable lattice pipelines, keyed on instance, device identity and output format, so a closed editor does not depend on the driver's compiler cache still being warm when it reopens.
+Measured on Metal:
+constructing the lattice resources took 2.58 s cold and 49 ms warm;
+reusing their compiled handles took 1.4 µs in the headless reopen test.
+The first open of a newly loaded instance still compiles, and hot-reload builds retain their existing rebuild behavior.
 - **Upgrade**: download the new crates.io tarball into
 `vendor/egui-baseview`, re-apply the two conversions, the texture-delta forced render, the occlusion/skipped-present patch, the staged-upload flush, the repaint-deadline fix, the frame-timer plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers, the upload split with its per-frame-reconfigure fix, the `layer_present` module with its hooks and objc2 deps —
 both the resize half and the occlusion hide/unhide —
-the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit.
+the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit and shared GPU context.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
 helper on any HiDPI display.
 PR to the RustAudio repo.
