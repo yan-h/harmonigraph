@@ -94,6 +94,12 @@ impl Source {
         }
     }
 
+    /// The supplementary out-of-order wake, and the only thing its refusal
+    /// below still decides is which ready event gets the scarce remaining
+    /// output allowance of THIS callback: `schedule_pending` steps over an
+    /// attack without an assignment and over an event addressed to a note
+    /// that has not sounded, so it reaches this onset on its own and rule one
+    /// no longer depends on the wake happening here.
     pub(super) fn wake_onset(
         &mut self,
         channel: Option<u8>,

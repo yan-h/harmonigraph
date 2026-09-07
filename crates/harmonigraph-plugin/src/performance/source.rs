@@ -254,6 +254,9 @@ pub struct Source {
     work_cleanup_tail: u16,
     draining_finished: bool,
     pending_cursor: Option<usize>,
+    /// This callback's normal output allowance is spent, so no later staging
+    /// attempt in it can succeed and the walk stops rather than scanning on.
+    stage_full: bool,
     capture_cursor: Option<usize>,
     /// Copies of the input event at `capture_group_position`, waiting for room
     /// in the intent ring. They are self-contained, so nothing remote depends
@@ -435,6 +438,7 @@ impl Source {
             work_cleanup_tail: NONE,
             draining_finished: false,
             pending_cursor: None,
+            stage_full: false,
             capture_cursor: None,
             capture_group: Queue::default(),
             capture_group_position: 0,
@@ -689,6 +693,7 @@ impl Source {
 
     pub fn begin(&mut self, callback: api::Callback) {
         self.intent_pushed = 0;
+        self.stage_full = false;
         self.callback = Some(callback);
         self.stops.emergency_start = 0;
         self.visits = 0;
@@ -1415,8 +1420,14 @@ impl Source {
         self.compact();
     }
 
+    /// Rule one waits with the note an event is addressed to, and nothing else
+    /// waits behind it. So a blocked entry — an attack still without its
+    /// assignment, most often — pins the cursor but does not end the walk: the
+    /// unaddressed events behind it, a raw MIDI clock among them, keep their
+    /// own input+D schedule. The visit budget bounds the scan.
     fn schedule_pending(&mut self, start: i64, end: i64, output: &mut api::Output<'_>) {
         let mut next = self.pending_cursor;
+        let mut blocked = false;
         while self.visits < 2048 {
             let Some(position) = next else {
                 break;
@@ -1428,10 +1439,34 @@ impl Source {
                 continue;
             }
             if !self.stage_pending(position, start, end, output) {
+                blocked = true;
+                // Rule one: an attack with no assignment yet, and an event
+                // addressed to a note that has not sounded, wait with that
+                // note and with nothing else. The walk steps over both rather
+                // than stopping the track behind them, so an unaddressed raw
+                // MIDI event and a later onset on the same channel each keep
+                // their own input+D schedule. Any other refusal is this
+                // callback's spent output allowance or one life's own ordered
+                // queue, and stops the walk exactly as it always did.
+                if !self.stage_full && self.waits_for_its_note(pending) {
+                    continue;
+                }
                 break;
             }
-            self.pending_cursor = next;
+            if !blocked {
+                self.pending_cursor = next;
+            }
         }
+    }
+
+    /// The two late-playback rules name exactly these two waits: an attack
+    /// without its assignment, and an event addressed to a note that has not
+    /// sounded. Neither holds anything but the note it belongs to.
+    fn waits_for_its_note(&self, pending: Pending) -> bool {
+        if pending.event.attack().is_some() {
+            return !self.assignment_ready(pending.life);
+        }
+        pending.life != NONE && self.lives.at(pending.life).is_some_and(|life| !life.sounded)
     }
 
     fn charge(&mut self, count: usize) -> bool {
@@ -1627,6 +1662,7 @@ impl Source {
             return false;
         };
         if output.stage(group).is_err() {
+            self.stage_full = true;
             return false;
         }
         let mut parent = self.pending.at(position).unwrap();

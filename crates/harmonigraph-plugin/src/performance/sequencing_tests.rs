@@ -710,6 +710,36 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
+fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // One callback carries an onset and, behind it, an unaddressed raw MIDI
+    // clock. The Hub is not run, so no assignment can come back and the onset
+    // waits — rule one holds it with its own note. The clock is addressed to
+    // no note, so it keeps its own input+D schedule rather than waiting
+    // behind the oldest pending attack.
+    assert!(source
+        .run_format(
+            1536,
+            vec![note(7, 0, 60, 0, true), raw_midi([0xf8, 0, 0], 1)],
+            None,
+            None,
+            512
+        )
+        .values
+        .is_empty());
+    let late = source.run_format(2048, vec![], None, None, 512);
+    assert_eq!(late.values.len(), 1, "only the clock, and it is not held back");
+    assert_eq!(late.values[0].0, 1, "at its own input+D, not the attack's");
+    assert!(matches!(late.values[0].1, Event::Midi { data: [0xf8, 0, 0], .. }));
+    assert_eq!(source.source_snapshot().faults, 0);
+    // The attack keeps its place in its own order once its assignment lands.
+    hub.run_format(1536, vec![], None, None, 512);
+    let attack = source.run_format(2560, vec![], None, None, 512);
+    assert!(attack.values[0].1.attack().is_some());
+}
+
+#[test]
 fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations() {
     let _scope = crate::test_scope::enter();
     let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
