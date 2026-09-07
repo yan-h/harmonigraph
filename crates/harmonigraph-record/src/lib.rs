@@ -78,6 +78,8 @@ use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 #[cfg(all(test, feature = "test-support"))]
+mod audio_tests;
+#[cfg(all(test, feature = "test-support"))]
 mod canonical_tests;
 pub mod configuration;
 pub mod publication;
@@ -463,7 +465,7 @@ impl Recorder {
     }
 
     pub fn wants_audio(&self) -> bool {
-        self.with_audio.load(Ordering::Relaxed)
+        self.with_audio.load(Ordering::Relaxed) && !self.fence.failed.load(Ordering::Acquire)
     }
 
     /// Declare where the audio about to be written sits in take time.
@@ -491,6 +493,9 @@ impl Recorder {
     /// that commits everything), but nothing declares that, and an odd
     /// capacity or a partial drain would end the argument silently.
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
+        if self.fence.failed.load(Ordering::Acquire) {
+            return;
+        }
         let room =
             interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
@@ -791,7 +796,12 @@ impl Control {
     }
 
     pub fn status(&self) -> String {
-        self.status.lock().clone()
+        let status = self.status.lock().clone();
+        if status == CONFIGURATION_FAILURE {
+            self.fence.failure_message.lock().clone().unwrap_or(status)
+        } else {
+            status
+        }
     }
 
     /// The take most recently finished this session, if any.
@@ -1084,10 +1094,17 @@ pub fn channel() -> (Recorder, Control) {
                                     thread_fence.canonical_enabled.load(Ordering::Acquire);
                                 open
                             });
-                        if epoch != 0
-                            && open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none())
-                        {
-                            thread_fence.fail();
+                        #[cfg(feature = "test-support")]
+                        if let Some(audio) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+                            if let Some(limit) = *thread_fence.test_wav_limit.lock() {
+                                audio.limit_frames_for_test(limit);
+                            }
+                            if thread_fence.test_wav_finish_failure.load(Ordering::Acquire) {
+                                audio.fail_finish_for_test();
+                            }
+                        }
+                        if open.as_ref().is_none_or(|o| spec.is_some() && o.audio.is_none()) {
+                            thread_fence.fail_with_message(thread_status.lock().clone());
                             failure.account(&mut open, epoch, &thread_status, harmonigraph_take::IncompleteRecord {
                                 reason: harmonigraph_take::canonical::GapReasonRecord::ProducerLost,
                                 ..Default::default()
@@ -1105,8 +1122,12 @@ pub fn channel() -> (Recorder, Control) {
                     } else {
                         // Drain what the audio thread already queued
                         // before closing, or the tail of the take is lost.
-                        drain(&mut consumer, &mut open, &thread_status);
-                        let finished = open.take().map(|o| o.finish());
+                        drain_with_audio(&mut consumer, None, &mut open, &thread_status, Some(&thread_fence));
+                        let finished = if thread_fence.failed.load(Ordering::Acquire) {
+                            None
+                        } else {
+                            finish_open(&mut open, &thread_fence)
+                        };
                         if let Some(path) = &finished {
                             *thread_last_take.lock() = Some(path.clone());
                         }
@@ -1139,7 +1160,7 @@ pub fn channel() -> (Recorder, Control) {
                 },
             );
             let had_audio = !thread_fence.enabled.load(Ordering::Acquire)
-                && drain_audio(&mut audio_consumer, &mut open);
+                && drain_audio(&mut audio_consumer, &mut open, &thread_fence);
             let had_publications = fanout.drain(
                 &mut publications, Some(&mut display), &mut open, &thread_fence, &failure,
             ) != 0;
@@ -1609,8 +1630,8 @@ impl CanonicalFanout {
                     if let Some(current) = open.as_mut() {
                         if let Some(pass) = current.addressed(address) {
                             pass.source_complete = true;
-                            if current.finish_completed_passes().is_err() {
-                                fence.fail();
+                            if let Err(error) = current.finish_completed_passes() {
+                                fence.fail_with_message(error.to_string());
                             }
                         } else {
                             fence.fail();
@@ -1749,19 +1770,24 @@ impl CanonicalFanout {
     }
 }
 
-/// Move queued audio into the WAV. Separate from [`drain`] because the
+/// Move queued audio into the WAV. Separate from [`drain_with_audio`] because the
 /// volume is different by orders of magnitude: one ring read per pass
 /// rather than per sample.
-fn drain_audio(consumer: &mut rtrb::Consumer<f32>, open: &mut Option<Open>) -> bool {
+fn drain_audio(
+    consumer: &mut rtrb::Consumer<f32>,
+    open: &mut Option<Open>,
+    fence: &RecordFence,
+) -> bool {
     let available = consumer.slots();
     if available == 0 {
         return false;
     }
     let Ok(chunk) = consumer.read_chunk(available) else { return false };
-    if let Some(audio) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+    if let Some(current) = open.as_mut() {
         let (first, second) = chunk.as_slices();
-        let _ = audio.write(first);
-        let _ = audio.write(second);
+        if let Err(error) = current.write_audio(first, second) {
+            fence.fail_with_message(error.to_string());
+        }
     }
     chunk.commit_all();
     true
@@ -1824,11 +1850,13 @@ impl Open {
 
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
-                *status.lock() = if pass <= 1 {
-                    format!("recording to {}", path.display())
-                } else {
-                    format!("pass {pass} -> {}", path.display())
-                };
+                if spec.is_none() || audio.is_some() {
+                    *status.lock() = if pass <= 1 {
+                        format!("recording to {}", path.display())
+                    } else {
+                        format!("pass {pass} -> {}", path.display())
+                    };
+                }
                 Some(Open {
                     epoch: 0,
                     retained: Vec::new(),
@@ -1876,13 +1904,46 @@ impl Open {
     /// with the music sits unused beside it. An unvoiced tail is left on disk
     /// rather than deleted: it is evidence about what the host did, and it costs
     /// a few hundred bytes.
-    fn finish(self) -> std::path::PathBuf {
+    fn finish(&mut self) -> std::io::Result<std::path::PathBuf> {
         let path = self.take_path();
-        if let Some(audio) = self.audio {
-            let _ = audio.finish();
+        // Attempt both even if one fails. Keep this owner available so the
+        // caller can write its incomplete marker before retiring it.
+        let notes = self.writer.flush().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot finalize {}: {error}", self.path().display()),
+            )
+        });
+        let audio = self.finish_audio();
+        notes.and(audio).map(|_| path)
+    }
+
+    fn finish_audio(&mut self) -> std::io::Result<()> {
+        self.audio.take().map_or(Ok(()), |audio| {
+            audio.finish().map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "cannot finalize {}: {error}",
+                        self.path().with_extension("wav").display()
+                    ),
+                )
+            })
+        })
+    }
+
+    fn write_audio(&mut self, first: &[f32], second: &[f32]) -> std::io::Result<()> {
+        let Some(audio) = self.audio.as_mut() else { return Ok(()) };
+        if let Err(error) = audio.write(first).and_then(|_| audio.write(second)) {
+            let path = self.path().with_extension("wav");
+            let repair = self.finish_audio();
+            let repair = repair.err().map(|error| format!("; {error}")).unwrap_or_default();
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("cannot write {}: {error}{repair}", path.display()),
+            ));
         }
-        drop(self.writer);
-        path
+        Ok(())
     }
 
     /// Which of this pass and its predecessors is the take: this one if anything
@@ -1902,20 +1963,23 @@ impl Open {
     }
 
     /// Close this pass's files and open the next pass's.
-    fn next_pass(open: &mut Option<Open>, status: &Mutex<String>) -> bool {
-        let Some(current) = open.as_ref() else { return true };
+    fn next_pass(open: &mut Option<Open>, status: &Mutex<String>) -> std::io::Result<()> {
+        let Some(current) = open.as_ref() else { return Ok(()) };
         if current.epoch != 0 && current.retained.len() + 1 >= RECORD_PASSES {
-            return false;
+            return Err(std::io::Error::other("recording pass capacity exhausted"));
         }
-        let Some(pass) = current.pass.checked_add(1) else { return false };
+        let pass = current
+            .pass
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("recording pass number exhausted"))?;
         let mut header = current.header.clone();
         header.audio_start = None;
         let Some(mut next) = Open::create(header, current.base.clone(), pass, current.spec, status)
         else {
-            return false;
+            return Err(std::io::Error::other(status.lock().clone()));
         };
         if current.spec.is_some() && next.audio.is_none() {
-            return false;
+            return Err(std::io::Error::other(status.lock().clone()));
         }
         // Keep the entire old owner until creation and the capacity check pass.
         let mut previous = open.take().unwrap();
@@ -1927,20 +1991,12 @@ impl Open {
                 if previous.voiced { previous.pass } else { previous.last_voiced_number };
             next.retained = std::mem::take(&mut previous.retained);
             next.retained.push(previous);
-        } else {
-            previous.finish();
+        } else if let Err(error) = previous.finish() {
+            *open = Some(previous);
+            return Err(error);
         }
         *open = Some(next);
-        true
-    }
-
-    fn finish_configuration(mut self) -> std::io::Result<std::path::PathBuf> {
-        let path = self.take_path();
-        self.writer.flush()?;
-        if let Some(audio) = self.audio {
-            audio.finish()?;
-        }
-        Ok(path)
+        Ok(())
     }
 
     fn ready(&self, epoch: u64) -> bool {
@@ -1957,12 +2013,12 @@ impl Open {
             if self.retained[index].configuration_complete
                 && (!self.source_enabled || self.retained[index].source_complete)
             {
+                self.retained[index].finish()?;
                 let old = self.retained.remove(index);
                 if old.voiced && old.pass > self.last_voiced_number {
                     self.last_voiced = Some(old.path());
                     self.last_voiced_number = old.pass;
                 }
-                old.finish_configuration()?;
             } else {
                 index += 1;
             }
@@ -2015,10 +2071,17 @@ fn finish_ready(
     if !open.as_ref().is_some_and(|o| o.ready(epoch)) {
         return None;
     }
-    match open.take().unwrap().finish_configuration() {
-        Ok(path) => Some(path),
-        Err(_) => {
-            fence.fail();
+    finish_open(open, fence)
+}
+
+fn finish_open(open: &mut Option<Open>, fence: &RecordFence) -> Option<std::path::PathBuf> {
+    match open.as_mut()?.finish() {
+        Ok(path) => {
+            *open = None;
+            Some(path)
+        }
+        Err(error) => {
+            fence.fail_with_message(error.to_string());
             None
         }
     }
@@ -2026,6 +2089,7 @@ fn finish_ready(
 
 /// Move everything queued into the writer (discarding it if none is
 /// open). Returns whether anything was there.
+#[cfg(test)]
 fn drain(
     consumer: &mut rtrb::Consumer<Entry>,
     open: &mut Option<Open>,
@@ -2070,11 +2134,17 @@ fn drain_with_boundaries(
     while let Ok(entry) = consumer.pop() {
         any = true;
         if matches!(entry, Entry::NewPass) {
+            if fence.is_some_and(|f| f.failed.load(Ordering::Acquire)) {
+                continue;
+            }
             // A completed source cut in the other lane can release a pass
             // before this allocation. Queue ordering alone is not exhaustion.
             before_new_pass(open);
-            if !Open::next_pass(open, status) {
-                fail();
+            if let Err(error) = Open::next_pass(open, status) {
+                if let Some(fence) = fence {
+                    fence.fail_with_message(error.to_string());
+                }
+                *status.lock() = error.to_string();
                 let epoch = open.as_ref().map_or(0, |o| o.epoch);
                 failure.account(
                     open,
@@ -2116,8 +2186,11 @@ fn drain_with_boundaries(
                     } else {
                         fail();
                     }
-                    if current.finish_completed_passes().is_err() {
-                        fail();
+                    if let Err(error) = current.finish_completed_passes() {
+                        if let Some(fence) = fence {
+                            fence.fail_with_message(error.to_string());
+                        }
+                        *status.lock() = error.to_string();
                     }
                 } else {
                     fail();
@@ -2143,10 +2216,13 @@ fn drain_with_boundaries(
                         continue;
                     }
                     if let Ok(chunk) = consumer.read_chunk(count) {
-                        if let Some(writer) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+                        if let Some(current) = open.as_mut() {
                             let (first, second) = chunk.as_slices();
-                            if writer.write(first).and_then(|_| writer.write(second)).is_err() {
-                                fail();
+                            if let Err(error) = current.write_audio(first, second) {
+                                if let Some(fence) = fence {
+                                    fence.fail_with_message(error.to_string());
+                                }
+                                *status.lock() = error.to_string();
                             }
                         }
                         chunk.commit_all();
@@ -4181,8 +4257,13 @@ mod tests {
     fn re_rendering_with_no_take_yet_explains_itself() {
         let (_rec, ctrl) = channel();
         assert_eq!(ctrl.last_take(), None, "nothing recorded this session");
+        ctrl.fence.fail_with_message("cannot write take.wav".into());
+        *ctrl.status.lock() = CONFIGURATION_FAILURE.into();
+        assert!(ctrl.status().contains("cannot write take.wav"));
         ctrl.render_now(RenderRequest::render_now(&RenderConfig::default(), "(dummy)".into()));
         assert_eq!(ctrl.status(), "no take recorded yet to render");
+        ctrl.start(48_000.0, String::new(), true);
+        assert!(ctrl.status().contains("reload the plugin"));
 
         // And the finished take the writer thread reports is the one the button
         // reaches for.
