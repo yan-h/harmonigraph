@@ -71,6 +71,58 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
 }
 
+/// The worker builds the same programs as synchronous first paint, and its
+/// result enters the existing cache rather than being rebuilt on first use.
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
+    use crate::startup::Status;
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    (shooter.device, shooter.queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let scene = parity_scene();
+    let synchronous = shooter.shot(&scene);
+    shooter.resources = CallbackResources::default();
+    shooter.resources.insert(instance.clone());
+    let cache = std::sync::Arc::new(LatticePipelineCache::default());
+    // Finish a job for another surface format before serving this window.
+    // A late result must not bypass the cache's device/format identity.
+    let old_format = if shooter.format == wgpu::TextureFormat::Bgra8Unorm {
+        wgpu::TextureFormat::Rgba8Unorm
+    } else {
+        wgpu::TextureFormat::Bgra8Unorm
+    };
+    assert!(matches!(
+        cache.poll_startup(&instance, &shooter.device, &shooter.queue, old_format),
+        Status::Preparing(_)
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format) {
+            Status::Ready { built: true } => break,
+            Status::Preparing(_) => {
+                assert!(std::time::Instant::now() < deadline, "startup worker did not finish");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            other => panic!("unexpected startup result: {other:?}"),
+        }
+    }
+    let pipeline = cache.template.lock().unwrap().as_ref().unwrap().2.scenes[0].nodes.clone();
+    let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
+        callback.pipeline_cache = Some(cache.clone());
+    });
+    assert_eq!(differing_pixels(&synchronous, &asynchronous), 0);
+    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+    shooter.resources = CallbackResources::default();
+    assert_eq!(
+        cache.poll_startup(&instance, &shooter.device, &shooter.queue, shooter.format),
+        Status::Ready { built: false },
+        "a second window must reuse the completed job"
+    );
+}
+
 #[cfg(not(feature = "hot-reload"))]
 #[test]
 fn pipeline_cache_rebuilds_for_another_device_or_format() {

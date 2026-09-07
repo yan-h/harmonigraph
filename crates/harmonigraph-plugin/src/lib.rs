@@ -81,6 +81,14 @@ pub struct Harmonigraph {
     take_events: Arc<AtomicU64>,
 }
 
+impl Drop for Harmonigraph {
+    fn drop(&mut self) {
+        // Window state can retain its own Arc during native teardown. Join the
+        // graphics worker at plugin destruction, not only at the last Arc drop.
+        self.editor_shared.lock().ui.shutdown_editor_graphics();
+    }
+}
+
 #[derive(Params)]
 pub struct HarmonigraphParams {
     /// Window size in logical pixels, persisted with the plugin state.

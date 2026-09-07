@@ -10,6 +10,8 @@ mod perf;
 /// The open/frame/close sequence a windowed shell runs around [`root_ui`],
 /// and the one window floor both shells hold.
 pub mod shell;
+mod startup;
+pub use startup::{begin_editor_loading, editor_loading_status};
 pub(crate) mod text;
 mod text_sdf;
 pub mod theme;
@@ -226,6 +228,9 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// feed while holding the state would be holding the backend's own borrow.
 /// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    if startup::draw(ui, state) {
+        return;
+    }
     begin_frame(state, params, now);
     if let Some(stranded) = end_stranded_drag(ui.ctx()) {
         state.console.log(stranded);
