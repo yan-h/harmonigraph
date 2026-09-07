@@ -3,26 +3,39 @@
 ## Status, evidence, and scope
 
 Audited on 2026-09-05 from current `origin/main`, `70e9f48dddb3c14e5cb2d2173d5604f8a4c34e84`, in the Codex-managed `codex/spectrogram-rendering-audit` worktree.
-This is an audit and documentation change;
-none of the proposed rendering changes is implemented.
+The three selected repairs landed in [#710](https://github.com/yan-h/harmonigraph/pull/710), `2546bd9b`;
+nothing else proposed below is implemented.
 Tracker:
 [#654](https://github.com/yan-h/harmonigraph/issues/654).
 The method follows [the lattice plan](lattice-rendering-plan.md) and [#643](https://github.com/yan-h/harmonigraph/issues/643), but the dependencies are established independently for this path.
 
-**Recommendation:** prioritize offline timestamp correctness (SG2), coordinate its replay-file edits, and start bounded gap recovery (SG1) independently while that coordination happens.
-Resolve whole-song coverage and memory together (SG3), take the tiny upload-allocation improvement, then measure a staged CPU handoff refactor.
-Keep the current GPU resampling architecture unless validated GPU measurements justify replacing it.
-The strongest performance evidence concerns CPU allocation and resource retention;
-the evidence does not support a combined FPS forecast.
+**Scope decision, 2026-09-06, settled:** Yan was satisfied with spectrogram performance and selected **SG1, SG4A and SG2** for their resource/correctness benefit relative to ongoing maintenance.
+SG3, SG4B/C, SG5 and SG6 are **deferred and not planned**, and their issues are closed as not planned.
+The original evidence and component briefs remain preserved below;
+their earlier priority and dependency language does not schedule the deferred work.
+No implementation, profiling campaign or periodic re-evaluation of those components is planned.
+A dependency landing, spare agent capacity or an issue's existence does not restart them.
+Reopen only for the documented trigger and explicit reprioritization by Yan.
 
-| Component | Issue | Reviewed priority |
+**The selected work is done.** [#710](https://github.com/yan-h/harmonigraph/pull/710) bounded gap recovery without a storage redesign, removed unnecessary upload staging without a pool, and repaired the offline slice timestamp contract without a clock redesign.
+It closed [#654](https://github.com/yan-h/harmonigraph/issues/654), [#655](https://github.com/yan-h/harmonigraph/issues/655), [#656](https://github.com/yan-h/harmonigraph/issues/656) and [#658](https://github.com/yan-h/harmonigraph/issues/658), and split the pre-existing resize/`Span` cache defect it uncovered out to [#714](https://github.com/yan-h/harmonigraph/issues/714).
+
+| Component | Issue | Outcome |
 |---|---|---|
-| SG1: bounded gap recovery | [#655](https://github.com/yan-h/harmonigraph/issues/655) | Immediate independent correctness/resource repair |
-| SG2: offline slice timestamps | [#656](https://github.com/yan-h/harmonigraph/issues/656) | Highest recurring correctness priority; coordinate replay edits |
-| SG3: whole-song temporal coverage | [#657](https://github.com/yan-h/harmonigraph/issues/657) | Early correctness/quality decision |
-| SG4: CPU handoff and staging | [#658](https://github.com/yan-h/harmonigraph/issues/658) | Tiny staging slice early; larger work measured |
-| SG5: lifetime/retention | [#659](https://github.com/yan-h/harmonigraph/issues/659) | After explicit fidelity and memory gates |
-| SG6: attribution and experiments | [#660](https://github.com/yan-h/harmonigraph/issues/660) | Measurement as needed; rewrites conditional |
+| SG1: bounded gap recovery | [#655](https://github.com/yan-h/harmonigraph/issues/655) | **Done** in #710; closed completed |
+| SG2: offline slice timestamps | [#656](https://github.com/yan-h/harmonigraph/issues/656) | **Done** in #710; closed completed |
+| SG4A: upload staging only | [#658](https://github.com/yan-h/harmonigraph/issues/658) | **Done** in #710; closed completed |
+| SG3: whole-song temporal coverage | [#657](https://github.com/yan-h/harmonigraph/issues/657) | Deferred, not planned; the known missed-transient defect remains |
+| SG4B/C: CPU handoff/storage refactors | [#670](https://github.com/yan-h/harmonigraph/issues/670) | Deferred, not planned; it did not follow SG1/SG4A |
+| SG5: lifetime/retention | [#659](https://github.com/yan-h/harmonigraph/issues/659) | Deferred, not planned |
+| SG6: attribution and experiments | [#660](https://github.com/yan-h/harmonigraph/issues/660) | Deferred as a dedicated project; the selected fixes carried their own verification |
+
+| Deferred work | Reopening condition, followed by explicit reprioritization |
+|---|---|
+| SG3 | A concrete export needs the missing temporal detail or reliably exhibits the archived artifact. Coverage, attenuation, memory and non-nested placements must then be resolved together; deferral does not mean the defect was fixed. |
+| SG4B/C | A reproduced CPU preparation problem or necessary ownership change justifies a simpler local improvement. Require representative stage evidence before explicit dirty tracking; circular storage additionally needs material cost remaining after smaller changes. |
+| SG5 | A concrete memory-pressure/lifetime problem remains after SG1. Preserve folded temporal fidelity and compare retirement against reopen cost. |
+| SG6 | A concrete rendering performance or visual problem requires attribution to decide a necessary change. Start with the smallest probe for that question; broader GPU/text/export experiments require a demonstrated bottleneck. |
 
 [Evidence and reproduction packet](evidence/spectrogram-audit/README.md) contains commands, fixture reach, raw results, limitations, and the temporary probe patch.
 Labels used here are **S** (established by source), **M** (measured in this audit), **H** (historical measurement), **E** (calculated estimate), and **Q** (hypothesis requiring measurement).
@@ -154,7 +167,7 @@ This is about 239.25 MiB of retained vector capacity, not a 483 MiB live allocat
 The normal 1,032-slot assumption also breathes to 1,034 slots for the returned gap fixture, because `ring_capacity` adds two to the visible retained run.
 That is bounded output but does not bound the intermediate fill.
 
-## Prioritized component briefs
+## Audited component briefs
 
 The SG identifiers below name independently scoped issues, not proposed new runtime abstractions.
 Effort is relative:
@@ -163,8 +176,11 @@ medium changes an ownership or time contract;
 large adds an alternate pipeline.
 Every performance change has a measurement gate;
 correctness repairs need not justify themselves with FPS.
+The current disposition above overrides historical scheduling language in these briefs.
 
 ### SG1 — bound gap expansion and retained capacity
+
+**Implemented in #710.** The brief below is the evidence it was built from, not outstanding work.
 
 **Problem/evidence:** `SlabGrid::fold` materializes every missing slab before `SpectrogramAgg::view` trims it with `Vec::drain`, which does not shrink capacity.
 Both live entry points are unbounded:
@@ -210,6 +226,8 @@ preserve their fixture reach.
 
 ### SG2 — align offline streaming audio with the draw clock
 
+**Implemented in #710.** The brief below is the evidence it was built from, not outstanding work.
+
 **Problem/evidence:** `offline/src/render.rs` takes audio `[now, now + step)` and calls `push_samples(..., now)`, whose contract dates the newest sample of that batch.
 M:
 after one second at 48 kHz, 30/60/120 fps shift the recorded column centers by −33.3125/−16.6458/−8.3125 ms against sample indices.
@@ -238,6 +256,8 @@ Compare timestamps and a known transient against MIDI, within one sample plus th
 Preserve repeated-render determinism and explicitly assess expected golden changes.
 
 ### SG3 — prevent temporal blind spots in whole-song precomputation
+
+**Deferred, not planned.** The measured defect and proposed acceptance criteria below remain evidence for a future explicit decision.
 
 **Problem/evidence:** the whole-song hop grows as `span / (4096 × 1.6)`, while the FFT retains only its window of samples.
 At 1,800 seconds and 48 kHz Balanced, the hop is about 274.66 ms versus a 170.67 ms window;
@@ -300,6 +320,9 @@ This is a rendering-coverage defect, separate from #310's optional multi-resolut
 
 ### SG4 — reduce CPU handoff and upload staging churn in stages
 
+**A is implemented in #710, under #658.** B and C are deferred, not planned, in #670;
+they were never subsequent stages of the implemented change.
+
 **Problem/evidence:** M/S:
 ordinary changing runs allocate/copy about 1.3–2.9 MB per update and compare the entire visible byte run to choose 1–3 dirty slabs.
 Prefix `Vec::drain` additionally shifts retained bytes when slabs leave the grid.
@@ -343,6 +366,9 @@ otherwise stop after the smaller measured steps.
 
 ### SG5 — make surface lifetime and retention deliberate
 
+**Deferred, not planned.** SG1 still owns repair of pathological gap capacity;
+broader surface eviction and lifetime work is parked.
+
 **Problem/evidence:** S:
 GPU eviction runs only from a spectrogram callback;
 hiding the last one does not run that sweep.
@@ -370,6 +396,8 @@ any intentional loss needs explicit visual acceptance.
 Do not duplicate the lattice history allocator or assume its capacity/reseed handshake is this spectrogram serial protocol.
 
 ### SG6 — validate attribution before GPU or overlay architecture changes
+
+**Deferred, not planned as a dedicated campaign.** The focused verification that established SG1, SG4A and SG2 was part of those changes.
 
 **Problem/evidence:** H/S:
 #519's historical numbers and the new offline differential cannot isolate current shader cost;
@@ -408,13 +436,17 @@ Use complete spectral composition at 1×/2×, 512/1,024/2,816 pitch pixels and a
 Report CPU, GPU, allocator requests, retained bytes, and upload payload separately, with cold pipeline state distinct from warm steady state.
 No experiment graduates on theoretical operation count or target-size savings alone.
 
-## Implementation order and active-work overlap
+## Selected implementation order and overlap record
 
-1. SG2 leads on recurring export correctness; coordinate its actual caller and integration fixture with replay work. SG1 can start immediately in its separate module while that coordination happens.
-2. SG3 whole-song coverage policy and phase-swept baseline, followed by a memory-admitted or streaming repair with its corresponding scope.
-3. SG4 A can be an early independent small change; evaluate flat-store SG4 B after SG1, and only then consider circular-store C.
-4. SG5 explicit retention only after the memory/reopen/fidelity trade is established.
-5. SG6 GPU/overlay/export experiments only when attribution warrants them; its measurement gates may be used earlier wherever a decision needs evidence.
+1. SG1 and SG4A can start in separate managed worktrees after refreshing file overlap. Their CPU-aggregation and GPU-staging modules are disjoint; serialize machine-intensive measurements.
+2. SG2 remains selected for recurring export correctness. Coordinate its actual caller and integration fixture with current replay work before writing shared files; there is no blanket wait for the entire tuning feature.
+3. Complete the selected changes with their checks, builds and independent reviews. No SG4B/C, SG3, SG5 or SG6 project follows automatically.
+
+The following branch inventory is the historical audit record.
+The orchestration proposal has a fresh check at `ce4ae624`:
+the selected lattice batch has merged and its optional follow-ups are parked;
+current tuning #669 still overlaps offline rendering/replay and shared frame state but not the dedicated spectrogram CPU/upload modules.
+Always refresh the inventory before dispatch.
 
 There is no semantic dependency on the complete adaptive-tuning feature.
 The spectrogram consumes selected audio power/history and resolved drawing coordinates, not the tuning solver's assignment decisions.
@@ -488,4 +520,5 @@ Neither received the other's report before its initial verdict.
 [Reports and individually validated dispositions](evidence/spectrogram-audit/review-disposition.md) preserve every finding, accepted correction, qualification and declined dependency claim.
 The revised plan and issues are coordinator-validated documentation changes;
 they were not submitted for another independent verdict.
-Draft PR [#663](https://github.com/yan-h/harmonigraph/pull/663) is open and not merged.
+The audit merged in [PR #663](https://github.com/yan-h/harmonigraph/pull/663) as `ef21ca1f`.
+The later selection/deferral decision changes scheduling, not the historical reviewers' verdicts or measurements.

@@ -69,6 +69,25 @@ There is no measured benefit supporting a depth-sorting refactor today.
 The format-derived allocation saving does not establish physical bandwidth or frame-time savings.
 Reintroducing depth would require a demonstrated consumer and composition rule, not infrastructure held for a hypothetical effect.
 
+## Spectrogram follow-ups beyond the selected fixes
+
+**State, 2026-09-06, settled.** Yan was satisfied with current performance and selected only SG1 bounded gap recovery, SG4A direct upload staging and SG2 offline timestamp repair, which landed together in [#710](https://github.com/yan-h/harmonigraph/pull/710).
+Every issue below is closed as not planned.
+The [spectrogram plan](spectrogram-rendering-plan.md) and [#654](https://github.com/yan-h/harmonigraph/issues/654) preserve the audit and current scope.
+The following options are deferred and not planned, with no scheduled implementation, profiling campaign or periodic re-evaluation.
+Reopening requires the stated concrete trigger and explicit reprioritization;
+landing a prerequisite or having spare agent capacity is insufficient.
+
+| Option | Evidence and reason to leave it parked | Reopening trigger |
+|---|---|---|
+| [SG3 / #657: whole-song temporal coverage](https://github.com/yan-h/harmonigraph/issues/657) | The missed-transient defect remains documented. A faithful fix may increase FFT work, and bounded streaming needs explicit placement-grid and memory contracts. | A concrete export requires the missing temporal detail; decide coverage, attenuation and memory together. |
+| [SG4B/C / #670: CPU handoff/storage refactors](https://github.com/yan-h/harmonigraph/issues/670) | The measured warm stage is roughly 0.07–0.24 ms; explicit dirty/slot/snapshot state has an ongoing maintenance cost. SG4A shipped separately in #710. | A reproduced preparation bottleneck or necessary ownership change justifies a simpler improvement; circular storage additionally needs material residual cost after smaller steps. |
+| [SG5 / #659: surface retirement](https://github.com/yan-h/harmonigraph/issues/659) | More eviction can lose folded temporal detail or increase reopen work. SG1 already owns pathological gap capacity. | Demonstrated memory pressure or a necessary lifetime change, with fidelity and reopen acceptance. |
+| [SG6 / #660: dedicated attribution/GPU/text/export experiments](https://github.com/yan-h/harmonigraph/issues/660) | No measured shader/overlay bottleneck justifies a campaign or new representation. | A concrete performance or visual problem needs a targeted attribution decision; grow the experiment only from evidence. |
+
+The original component measurements, reproductions and proposed acceptance criteria remain in their issues.
+The focused checks that validated the three selected fixes were part of those fixes and are not a restart of SG6.
+
 ## Not deferred — closed
 
 - **Render-style final trim.** **Done.** The aesthetic pass the entry asked
