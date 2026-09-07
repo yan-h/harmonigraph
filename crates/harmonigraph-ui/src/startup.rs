@@ -110,6 +110,38 @@ mod tests {
     use crate::panes::Tab;
 
     #[test]
+    fn loading_frames_age_released_notes_without_pruning_live_voices() {
+        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
+            eprintln!("hot reload uses synchronous initialization; no loading frames");
+            return;
+        }
+        struct Defaults;
+        impl crate::params::ParamBackend for Defaults {
+            fn get(&self, key: crate::params::ParamKey) -> f32 {
+                key.default_value()
+            }
+            fn set(&self, _: crate::params::ParamKey, _: f32) {}
+        }
+        let ctx = egui::Context::default();
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.workspace.dock = egui_dock::DockState::new(vec![Tab::Lattice]);
+        use harmonigraph_core::NoteEvent;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
+        state.tracker.handle_event(NoteEvent::on(4.0, 0, 64, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.99, 0, 64));
+        state.tracker.handle_event(NoteEvent::on(4.0, 0, 67, 1.0));
+        assert_eq!(state.tracker.voices().count(), 3);
+        begin_editor_loading(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::root_ui(ui, &mut state, &Defaults, 5.0);
+        });
+        assert!(matches!(editor_loading_status(&ctx), Some(Status::Preparing(_))));
+        let remaining: Vec<_> = state.tracker.voices().map(|voice| voice.note).collect();
+        assert_eq!(remaining, vec![67, 64], "only the expired release should be pruned");
+    }
+
+    #[test]
     fn hidden_lattice_tabs_do_not_trigger_graphics_preparation() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.workspace.dock = egui_dock::DockState::new(vec![Tab::Spectral, Tab::Lattice]);

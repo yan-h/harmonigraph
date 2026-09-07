@@ -685,10 +685,10 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 }
 
 impl SharedState {
-    /// Stop graphics preparation before the plugin library can be unloaded.
-    /// The editor's ordinary close/reopen path deliberately leaves it alive.
-    pub fn shutdown_editor_graphics(&self) {
-        self.lattice_pipelines.shutdown_startup();
+    /// An owned handle lets plugin teardown join initialization after releasing
+    /// the shared UI lock. Ordinary editor close leaves this cache alive.
+    pub fn editor_graphics(&self) -> std::sync::Arc<harmonigraph_render::LatticePipelineCache> {
+        self.lattice_pipelines.clone()
     }
 
     pub fn new(target_format: TextureFormat) -> Self {

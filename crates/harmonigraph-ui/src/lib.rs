@@ -228,10 +228,11 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// feed while holding the state would be holding the backend's own borrow.
 /// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    // Loading frames still receive notes and automation from the shell.
+    begin_frame(state, params, now);
     if startup::draw(ui, state) {
         return;
     }
-    begin_frame(state, params, now);
     if let Some(stranded) = end_stranded_drag(ui.ctx()) {
         state.console.log(stranded);
     }

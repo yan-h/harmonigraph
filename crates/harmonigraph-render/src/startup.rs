@@ -303,8 +303,13 @@ impl LatticePipelineCache {
                 Status::Preparing(Stage::Graphics)
             }
             Err(error) => {
-                eprintln!("Could not start Harmonigraph graphics initialization: {error}");
-                Status::Failed
+                eprintln!(
+                    "Could not start Harmonigraph graphics initialization: {error}; using synchronous initialization"
+                );
+                // No worker ran, so the loading callback can safely construct
+                // resources through the existing synchronous cache path.
+                // A panicked worker or shutdown must remain terminal instead.
+                Status::Ready { built: false }
             }
         }
     }
