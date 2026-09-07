@@ -271,9 +271,10 @@ fn precompiled_shadow_blur_probe() {
         shooter.resources.get_mut::<LatticeResources>().unwrap().shadow_cell_pipelines.blur_x =
             erased.clone();
         let missing = shooter.shot(&scene);
-        assert!(
-            differing_pixels(&expected, &missing) > 100,
-            "fixture must visibly exercise the replaced blur pipeline"
+        let changed = differing_pixels(&expected, &missing);
+        assert!(changed > 100, "fixture must visibly exercise the replaced blur pipeline");
+        eprintln!(
+            "METAL_PROBE parity width={width} changed_pixels=0 erased_control_pixels={changed}"
         );
         shooter.resources.get_mut::<LatticeResources>().unwrap().shadow_cell_pipelines.blur_x =
             original;

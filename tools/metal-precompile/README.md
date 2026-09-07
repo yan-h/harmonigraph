@@ -11,6 +11,35 @@ It is a useful first case because it uses a texture, a sampler and one instance 
 without runtime storage arrays or pipeline constants.
 It does not establish that every other shader can use passthrough with the same amount of work.
 
+## Measured result
+
+On the local macOS 26.6.2 machine, four fresh processes per mode and condition,
+alternating both orders:
+
+| Pipeline construction | WGSL, median | Precompiled, median |
+|---|---:|---:|
+| Metal disk cache blocked | 323.161 ms | 22.484 ms |
+| Disk cache available and warmed | 1.058 ms | 0.365 ms |
+
+Cold ranges were 272.436–400.236 ms for WGSL and 17.820–26.094 ms for precompiled libraries.
+The cold median reduction was 300.676 ms, or 93.0%.
+The two precompiled libraries total about 12.5 KiB;
+loading them took 0.106–0.586 ms in the cold trials.
+The remaining time was mostly native GPU pipeline-state creation.
+
+Both full-frame parity comparisons passed byte-exactly,
+and deliberately erasing the blur changed more than 100 pixels in each fixture.
+The generated vertex and fragment source hashes also matched those captured from the production wgpu Metal backend during the earlier profile.
+This is evidence for one pipeline on one machine, not a measured whole-editor speedup.
+Steady-state GPU execution time was not benchmarked by this experiment.
+
+The libraries were built with Apple Metal compiler `32023.883` using Metal 3.2,
+fast math, preserved invariance and a macOS 15 deployment target.
+The source, entry names, binary hashes and exact flags are recorded in the artifact's `manifest.json`.
+The first artifact build is [Actions run 34079729758](https://github.com/yan-h/harmonigraph/actions/runs/34079729758).
+Raw local logs and the alternating-process runner are in `/tmp/harmonigraph-precompiled-blur-results/`;
+the durable investigation is [issue #699](https://github.com/yan-h/harmonigraph/issues/699).
+
 ## Build the libraries
 
 The export test uses Naga and does not need a GPU or Apple's compiler:

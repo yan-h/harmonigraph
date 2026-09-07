@@ -5,7 +5,10 @@ on:
     paths:
       - .github/workflows/metal-precompile-probe.yml
       - tools/metal-precompile/**
+      - Cargo.lock
+      - crates/harmonigraph-render/Cargo.toml
       - crates/harmonigraph-render/src/lattice_tests/metal_precompile.rs
+      - crates/harmonigraph-render/src/shadow.rs
       - crates/harmonigraph-render/src/shaders/shadow.wgsl
   workflow_dispatch:
 
