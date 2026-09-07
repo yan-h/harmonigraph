@@ -1264,11 +1264,18 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
 /// past that floor rather than assuming it.
 #[test]
 fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
-    /// How many panes across the atlas may be. A caster's box is clipped to the
-    /// pane plus the blur's reach, so a frame's cells cover a few panes' worth
-    /// of area however deep the lattice runs; a number of panes is what says
-    /// the atlas is sized off the PICTURE and not off one projection.
-    const PANES: u32 = 8;
+    /// How many CLIPPED BOXES across the atlas may be — the pane plus the
+    /// kernel's reach at either edge, which is what a caster's box is clipped
+    /// to. A frame's cells cover a few of those however deep the lattice runs,
+    /// so counting them is what says the atlas is sized off the PICTURE and
+    /// not off one projection.
+    ///
+    /// The reach is half the unit and not a detail of it: a bound counted in
+    /// bare PANES holds only while the Shadow is narrow enough for the reach
+    /// to be a rounding error on the pane, and silently becomes a bound on the
+    /// Shadow bar once it is not. Widening the fresh lattice geometry to the
+    /// top of the bar was what walked a correctly clipped frame through it.
+    const BOXES: f32 = 8.0;
     let shot = super::golden::names_overlapping_on_one_sheet();
     let pane = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32);
     let projector = shot.scene.projector(pane);
@@ -1348,13 +1355,21 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
              zeroed cell is drawn at the atlas origin over the markers' own",
                 casting.len(),
             );
+            // The widest a box can be after the clip, in points: the pane with
+            // this kernel's reach added at both edges. Off the casters' own
+            // falloffs rather than a fixed number of σ, because a distance
+            // group dialled under 0.64 asks for a longer tail and gets a
+            // bigger cell for it (`ShadowKernel::reach_sigmas`).
+            let reach = sigma
+                * casters.iter().map(|c| kernel.reach_sigmas(c.falloff)).fold(0.0f32, f32::max);
+            let box_points = glam::Vec2::new(SIZE[0] as f32, SIZE[1] as f32) + 2.0 * reach;
             assert!(
-            packed.size[0] <= PANES * SIZE[0] && packed.size[1] <= PANES * SIZE[1],
-            "{kernel:?} at {width}: the atlas came out {:?} for a {:?} pane: a caster's box is \
-             sized off a projection the pane cannot show",
-            packed.size,
-            SIZE,
-        );
+                packed.size[0] as f32 <= BOXES * box_points.x
+                    && packed.size[1] as f32 <= BOXES * box_points.y,
+                "{kernel:?} at {width}: the atlas came out {:?} for a clipped box of {box_points} \
+                 points: a caster's box is sized off a projection the pane cannot show",
+                packed.size,
+            );
         }
     }
 }
@@ -2190,9 +2205,10 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
 /// Shadow wide enough to erase it from a blur.
 ///
 /// #521's form metric, which is what a distance row is in the tree for: how
-/// much darker the shadow is beside a stroke than midway between two strokes,
-/// as a share of the first. The table there gives a Gaussian 100% at the fresh
-/// Shadow and 0% at the top of the bar — one slab under the whole word — and
+/// much more of the light the shadow takes beside a stroke than midway between
+/// two strokes, as a share of the first. The table there gives a Gaussian 100%
+/// at the fresh Shadow and 0% at the top of the bar — one slab under the whole
+/// word, which is where `SHADOW` stands the fixture below — and
 /// the reason is that a blur is a low-pass filter, so detail finer than σ is
 /// gone whatever the depth. A distance is not a filter and has no such scale.
 ///
@@ -2208,7 +2224,11 @@ fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() 
 #[test]
 fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
     use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    const SHADOW: f32 = 0.8;
+    /// The TOP of the bar, which is where the table in the doc above puts a
+    /// Gaussian at 0% — the condition the control arm has to meet for the
+    /// distance arm's reading to say anything. Short of it the blur still
+    /// holds a tenth of the counter: 0.8 reads 0.11 and 0.7 reads 0.17.
+    const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
     const DEPTH: f32 = 0.85;
     /// Two strokes, and the counter between them, in points — a 30pt
     /// monospace stem and the gap inside a letter, at the scale the fixture's
@@ -2237,20 +2257,31 @@ fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
         let bare = shooter.shot(&scene);
         let cast = shooter.shot_with(&scene, a_name(vec![left, right]));
         let row = at.y.round() as u32;
-        let dark = |x: f32| {
+        // What SHARE of the light standing at `x` the two strokes take away,
+        // not how many levels of it.
+        //
+        // A share because the two readings do not stand on equally bright
+        // ground — the counter runs past the band's own edge at one end, as
+        // the fixture says above. A shadow multiplies what is under it, so a
+        // count of removed levels carries that difference and reads the band's
+        // own gradient as the letterform's form; the share divides it back
+        // out. The count read the gradient with one sign while the fresh
+        // ground stood at `L*` 20 and the other at 11, which is a measurement
+        // of the ground and not of a kernel.
+        let covered = |x: f32| {
             let x = x.round() as u32;
-            bright_at(&bare, x, row) - bright_at(&cast, x, row)
+            1.0 - bright_at(&cast, x, row) as f64 / bright_at(&bare, x, row) as f64
         };
         // Two points along the counter: hard against the left stroke's inner
         // edge, and the middle of the gap.
-        let beside = dark(at.x - GAP / 2.0 + 2.0);
-        let middle = dark(at.x);
+        let beside = covered(at.x - GAP / 2.0 + 2.0);
+        let middle = covered(at.x);
         assert!(
-            beside > 20,
-            "{kernel:?} darkens the point beside the stroke by {beside}, which is too little to \
+            beside > 0.2,
+            "{kernel:?} takes {beside:.2} of the light beside the stroke, which is too little to \
              take a share of — the fixture is not reaching the shadow",
         );
-        (beside - middle) as f64 / beside as f64
+        (beside - middle) / beside
     };
     let blurred = form(Gaussian);
     let distance = form(Distance);

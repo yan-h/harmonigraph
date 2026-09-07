@@ -1105,9 +1105,14 @@ pub struct ViewConfig {
     /// [`Self::show_perf_detail`]). Interactive shells only — the offline
     /// renderer never draws it, keeping its frames deterministic.
     ///
-    /// On in the fresh view, which is the look captured from the DAW on
-    /// 2026-09-07: the HUD sits over the picture, and the Display tab's
-    /// System page, under Performance, is where it gets switched off.
+    /// Off by default: the HUD is a development instrument, and it sits over
+    /// the picture the plugin exists to draw. The Display tab's System page,
+    /// under Performance, is where it gets switched on.
+    ///
+    /// It was ON in the DAW when the 2026-09-07 look was captured, and stayed
+    /// out of that capture for the reason above — the overlay is what the
+    /// picture is read AGAINST while it is dialled, not part of the picture.
+    /// `the_performance_overlay_ships_off` holds it.
     ///
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
@@ -2505,9 +2510,7 @@ impl Default for ViewConfig {
             marvel: true,
             marvel_auto: true,
             frameless: false,
-            // On, as the DAW look was captured (see the field): the HUD is
-            // the instrument the picture is read against while it is dialled.
-            show_perf: true,
+            show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
             // A halo at about four fifths strength: a node's rings are quiet
