@@ -396,10 +396,9 @@ impl Source {
             }
         } else {
             if let Some(channel) = parent.event.channel_control().map(usize::from) {
-                if self.channel_history_needed(parent)
-                    || self.channels.head[channel]
-                        .is_some_and(|head| usize::from(head.index) != position)
-                        && (parent.channel.accepted || parent.serial > self.cancel_cut)
+                if self.channels.head[channel]
+                    .is_some_and(|head| usize::from(head.index) != position)
+                    && (parent.channel.accepted || parent.serial > self.cancel_cut)
                 {
                     return;
                 }

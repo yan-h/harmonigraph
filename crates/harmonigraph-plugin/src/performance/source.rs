@@ -189,6 +189,10 @@ pub struct Source {
     owed_note_off: [u16; 64],
     emergency: [Option<Release>; 64],
     channel_reset: [u8; 16],
+    /// Largest accepted onset shift seen since the last quiescence, reported
+    /// as this Tune's extra delay above the fixed D. A gauge, not a schedule:
+    /// nothing reads it back to decide when anything emits.
+    late_shift: i64,
     emergency_output: Queue<OutputDelta, 128>,
     journal: Queue<OutputDelta, OUTCOME_JOURNAL>,
     sent: usize,
@@ -223,7 +227,6 @@ pub struct Source {
     acknowledged: u64,
     complete_through: i64,
     sealed_ack: Option<u64>,
-    wave_shift: i64,
     stopping: bool,
     transport_playing: bool,
     producer_joined: bool,
@@ -368,6 +371,7 @@ impl Source {
             owed_note_off: [NONE; 64],
             emergency: [None; 64],
             channel_reset: [0; 16],
+            late_shift: 0,
             emergency_output: Queue::default(),
             journal: Queue::default(),
             sent: 0,
@@ -402,7 +406,6 @@ impl Source {
             acknowledged: 0,
             complete_through: i64::MIN,
             sealed_ack: None,
-            wave_shift: 0,
             stopping: false,
             transport_playing: false,
             producer_joined: false,
@@ -1174,7 +1177,6 @@ impl Source {
         self.stopping = self.cancel_cursor.is_some_and(|position| {
             self.pending.at(position).is_some_and(|pending| pending.serial <= self.cancel_cut)
         });
-        self.cancel_wave_history(cut);
     }
     fn local_cancel_cut_settled(&self) -> bool {
         !self.stopping
@@ -1563,18 +1565,10 @@ impl Source {
         {
             return false;
         }
-        if pending.event.attack().is_some() && !self.onset_wave_ready(position, start, output) {
-            return false;
-        }
-        let shift = if established {
-            life.unwrap().shift.unwrap_or(0)
-        } else if let Some(channel) = pending.event.channel_control() {
-            self.channels.waves[usize::from(channel)]
-                .shift
-                .unwrap_or(self.wave_shift.max(self.delay()))
-        } else {
-            self.wave_shift.max(self.delay())
-        };
+        // Rule: an established note keeps its own onset lateness for its own
+        // later release and expression. Everything else — a fresh onset and
+        // every shared channel control — is input time plus the fixed delay.
+        let shift = if established { life.unwrap().shift.unwrap_or(0) } else { self.delay() };
         let Some(mut due) = pending.input.checked_add(shift) else {
             self.fault(CLOCK_FAULT);
             return false;
@@ -1713,9 +1707,6 @@ impl Source {
 
     pub fn prepare(&mut self, group: api::Group) -> bool {
         assert!(self.permit.is_none());
-        if group.token.0[3] == wave::SETUP_TOKEN {
-            return self.prepare_wave_setup(group);
-        }
         if matches!(group.token.0[3], 1 | 2) {
             return self.prepare_emergency(group);
         }
@@ -1849,10 +1840,6 @@ impl Source {
     }
 
     pub fn complete(&mut self, completion: api::Completion, output: &mut api::Output<'_>) {
-        if completion.group.token.0[3] == wave::SETUP_TOKEN {
-            self.complete_wave_setup(completion, output);
-            return;
-        }
         if matches!(completion.group.token.0[3], 1 | 2) {
             self.complete_emergency(completion);
             self.schedule_emergency(output);
@@ -1936,7 +1923,6 @@ impl Source {
                 _ => NONE,
             };
             if pending.event.attack().is_some() {
-                self.accept_onset_wave(pending, actual);
             }
             if self.pending_cursor == Some(position) {
                 self.pending_cursor = self.pending.next_position(position);
@@ -2088,6 +2074,7 @@ impl Source {
                 value.shift = shift.unwrap_or_default();
                 value.flags =
                     (value.flags & !SHIFT_VALID) | (u8::from(shift.is_some()) * SHIFT_VALID);
+                self.late_shift = self.late_shift.max(shift.unwrap_or_default());
             }
             if event.release() {
                 value.terminal = Some((self.sequence, mapped_actual, mapped));
@@ -2174,18 +2161,8 @@ impl Source {
             && self.baseline_acked
             && self.owed_note_off == [NONE; 64]
             && self.channel_reset == [0; 16]
-            && self.state.channels().iter().zip(&self.channels.waves).all(|(channel, wave)| {
-                wave.shift.is_none()
-                    || [64, 66, 69].into_iter().all(|cc| {
-                        channel.controller_valid[cc / 64] & (1 << (cc % 64)) != 0
-                            && channel.controllers[cc] < 64
-                    })
-            })
         {
-            self.wave_shift = 0;
-            for wave in &mut self.channels.waves {
-                wave.shift = None;
-            }
+            self.late_shift = 0;
         }
     }
 
@@ -2310,7 +2287,6 @@ impl Source {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let delta = self.record(event, NONE, actual, actual);
-                self.accept_wave_neutralization(index, bit);
                 self.emergency_output
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("prepared emergency cell"));
@@ -2596,7 +2572,7 @@ impl Source {
         self.shared.status.store(self.diagnostics(), Ordering::Release);
         self.shared
             .extra_delay
-            .store(self.wave_shift.saturating_sub(self.delay()).max(0) as u64, Ordering::Relaxed);
+            .store(self.late_shift.saturating_sub(self.delay()).max(0) as u64, Ordering::Relaxed);
         if self.direct.is_some() {
             self.publish_seal();
             return;
@@ -2670,7 +2646,7 @@ impl Source {
             i64::from(self.output_settled()),
             i64::from(self.local_cancel_cut_settled()),
             i64::from(self.diagnostics()),
-            self.wave_shift.saturating_sub(self.delay()).max(0),
+            self.late_shift.saturating_sub(self.delay()).max(0),
             self.trace.input_on as i64,
             self.trace.input_off as i64,
             self.trace.last_input_key.map_or(-1, i64::from),

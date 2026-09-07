@@ -1307,17 +1307,17 @@ fn duplicate_after_adoption_retains_old_release_then_adopts_new_incarnation() {
         new_phrase.extend(source.run(block * 64, vec![], None).values);
         hub.run(block * 64, vec![], None);
     }
+    // The new-side phrase survives the two-owner detach and rematch. The three
+    // known channel controls are NOT reissued: with the wave's controller
+    // history gone, a note meets the receiver's current controller state.
     assert_eq!(
         new_phrase.len(),
-        5,
-        "known setup and new-side phrase survive two-owner detach and rematch"
+        2,
+        "the new-side phrase survives two-owner detach and rematch"
     );
-    for (index, cc) in [64, 66, 69].into_iter().enumerate() {
-        assert_eq!(new_phrase[index], (0, Event::Midi { port: 0, data: [0xb1, cc, 0], flags: 0 }));
-    }
-    assert!(matches!(new_phrase[3].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 22, .. }));
-    assert!(matches!(new_phrase[4].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 22, .. }));
-    assert_eq!(new_phrase[4].0 - new_phrase[3].0, 20);
+    assert!(matches!(new_phrase[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 22, .. }));
+    assert!(matches!(new_phrase[1].1, Event::Note { kind: CLAP_EVENT_NOTE_OFF, id: 22, .. }));
+    assert_eq!(new_phrase[1].0 - new_phrase[0].0, 20);
     let records = capture.drain_canonical();
     let identities: std::collections::BTreeSet<_> = records
         .iter()

@@ -66,9 +66,6 @@ impl Source {
         if wave.wire.index == NONE {
             wave.wire = reference;
         }
-        if wave.prelude == 0 && wave::transaction(header.event) {
-            wave.prelude = header.serial;
-        }
         if let Some(tail) = previous {
             let mut prior = self.pending.at(usize::from(tail.index)).unwrap();
             let Role::Header { ref mut next_header, .. } = prior.channel.role else {
@@ -130,12 +127,7 @@ impl Source {
                 .pending
                 .at(usize::from(wave.first))
                 .is_none_or(|onset| onset.serial > pending.serial);
-            let neutral = matches!(pending.event, Event::Midi { data: [status, 64 | 66 | 69, value], .. } if status & 0xf0 == 0xb0 && value < 64);
-            if wave.setup.index != NONE
-                || wave.wire.serial != pending.serial
-                || !(before_onset
-                    || wave.shift.is_some() && (neutral || self.established_channel(channel)))
-            {
+            if wave.wire.serial != pending.serial || !before_onset {
                 return false;
             }
             if !self.charge(usize::from(pending.work_count)) {
@@ -326,7 +318,6 @@ impl Source {
             return;
         };
         let channel = usize::from(pending.event.channel_control().unwrap());
-        self.fold_channel_header(pending);
         if self.channels.waves[channel].wire.serial == pending.serial {
             self.channels.waves[channel].wire = self.pending_reference(next_header);
         }
