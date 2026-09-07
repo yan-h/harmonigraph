@@ -2131,9 +2131,7 @@ impl Hub {
         }
     }
 
-    /// The future scheduler supplies the complete cut. This stage provides only
-    /// persistent metadata/target ownership; calling this proves no frontier.
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
+    #[cfg(test)]
     pub(super) fn freeze_captures(
         &mut self,
         sample: i64,
@@ -2175,7 +2173,6 @@ impl Hub {
         self.capture_hold = false;
         Ok(id)
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     fn capture_targets<'a>(
         rows: &'a [Row; TUNERS],
         direct: &'a Window<Intent, INTENT_RING>,
@@ -2207,7 +2204,6 @@ impl Hub {
             }),
         }
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     pub(super) fn advance_captures(
         &mut self,
         units: usize,
@@ -2222,7 +2218,6 @@ impl Hub {
         );
         self.frozen_captures.advance(&targets, units)
     }
-    #[allow(dead_code)] // Persistent ownership API; scheduler integration follows.
     pub(super) fn commit_capture(&mut self) -> Result<(), harmonigraph_core::cohort::Error> {
         let targets = Self::capture_targets(
             &self.rows,

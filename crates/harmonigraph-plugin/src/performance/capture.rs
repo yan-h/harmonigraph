@@ -448,7 +448,6 @@ pub(crate) struct Key {
 pub(crate) struct Token {
     arena: Arc<CaptureArena>,
     pub key: Key,
-    #[allow(dead_code)] // Frozen metadata is consumed by the next scheduler stage.
     pub sample: i64,
     pub frozen: Option<FrozenInputId>,
     pub status: Option<CaptureStatus>,
@@ -650,7 +649,6 @@ impl Permissions {
 /// A checked view of one retained source row, scoped to a persistent freeze.
 /// Handles encode the stable ingress slot as well as the Work/inline domain.
 /// This is the O(1) input-serial witness, without another per-Pending index slab.
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 pub(super) struct View<'a> {
     pub ingress: &'a super::queue::Window<Intent, INTENT_RING>,
     pub permissions: &'a Permissions,
@@ -658,13 +656,10 @@ pub(super) struct View<'a> {
     pub epoch: u64,
     pub frozen: FrozenInputId,
 }
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 const INLINE: u16 = 32768;
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 fn handle(slot: usize, reference: u16) -> u32 {
     ((slot as u32) << 16) | u32::from(reference)
 }
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 impl View<'_> {
     fn token(&self, slot: usize) -> Option<&Token> {
         let Intent::Capture(token) = self.ingress.at_ref(slot)? else {
@@ -795,7 +790,6 @@ pub(super) fn print_test_memory_layout() {
         cohort::COHORT_EVENTS * size_of::<cohort::Event>()]);
 }
 
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 pub(super) struct Targets<'a> {
     pub rows: [Option<View<'a>>; TUNERS + 1],
 }
@@ -808,7 +802,6 @@ impl TargetAccess for Targets<'_> {
 /// Persistent metadata and traversal owner. The caller must establish complete
 /// membership/input/configuration frontiers before using this to schedule. This
 /// ownership stage supplies the pin/cursor boundary, not that scheduling proof.
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 pub(super) struct Frozen {
     scratch: Box<cohort::Scratch>,
     inputs: Box<[MaybeUninit<cohort::Event>]>,
@@ -835,7 +828,6 @@ impl Default for Frozen {
         }
     }
 }
-#[allow(dead_code)] // Checked consumer API awaits the musical scheduler.
 impl Frozen {
     pub fn len(&self) -> usize {
         self.len
