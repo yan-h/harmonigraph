@@ -31,7 +31,6 @@ impl Source {
             self.finish_work(position, NONE);
         }
         self.participating = value;
-        self.baseline_needed = true;
         true
     }
 

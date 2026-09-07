@@ -37,19 +37,6 @@ pub struct Stamp {
 }
 
 impl State {
-    pub fn replace(&mut self, frame: &SourceBaseline) -> bool {
-        if frame.validate().is_err() {
-            self.complete = false;
-            return false;
-        }
-        self.voices = [None; HELD_PER_SOURCE];
-        for (cell, voice) in self.voices.iter_mut().zip(frame.voices().iter().copied()) {
-            *cell = Some(voice);
-        }
-        self.channels = frame.channels;
-        self.complete = true;
-        true
-    }
     pub fn voices(&self) -> impl Iterator<Item = &VoiceBaseline> {
         self.voices.iter().flatten()
     }

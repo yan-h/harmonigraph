@@ -13,7 +13,7 @@ use crate::configuration::Owner;
 use harmonigraph_core::canonical::{ClockId, EventTiming};
 use harmonigraph_core::confirmed::{ConfirmedPitch, PitchProvenance};
 use harmonigraph_core::VoiceKey;
-use harmonigraph_record::{publication::PublishError, Recorder};
+use harmonigraph_record::Recorder;
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -63,7 +63,6 @@ struct Row {
     applied: u64,
     report: Option<(Coverage, u64)>,
     coverage: Option<Coverage>,
-    baseline: Option<Baseline>,
     member: bool,
     participating: bool,
     repair: bool,
@@ -100,7 +99,6 @@ impl Default for Row {
             applied: 0,
             report: None,
             coverage: None,
-            baseline: None,
             member: false,
             participating: true,
             repair: false,
@@ -253,7 +251,7 @@ impl Hub {
                 row.applied as i64,
                 row.output.len() as i64,
                 row.inputs.len() as i64,
-                row.baseline.as_ref().map_or(-1, |baseline| baseline.frame.output_cut as i64),
+                i64::from(row.repair),
                 row.state.count() as i64,
                 row.acknowledged_membership as i64,
                 row.input_membership as i64,
@@ -503,10 +501,7 @@ impl Hub {
                 || !row.source_detached.load(Ordering::Acquire)
                 || !row.hub_detached.load(Ordering::Acquire)
         }) || self.rows.iter().any(|row| {
-            row.output.len() != 0
-                || row.inputs.len() != 0
-                || row.baseline.is_some()
-                || row.state.count() != 0
+            row.output.len() != 0 || row.inputs.len() != 0 || row.state.count() != 0
         }) || offer.session.credits.load(Ordering::Acquire) != 0
         {
             self.trace.setup_wait = 7;
@@ -608,7 +603,6 @@ impl Hub {
                 && row.output.len() == 0
                 && row.state.count() == 0
                 && row.inputs.len() == 0
-                && row.baseline.is_none()
             {
                 row.lease = None;
                 row.last_disposition = None;
@@ -689,11 +683,17 @@ impl Hub {
                 };
                 self.service_revision = self.service_revision.wrapping_add(1);
                 match control {
-                    Control::Adopt { lease, epoch, coverage, output_cut, input_start_cut }
-                        if lease.session == offer.session.runtime
-                            && lease.incarnation
-                                == shared.expected_incarnation.load(Ordering::Acquire)
-                            && epoch == offer.session.epoch.load(Ordering::Acquire) =>
+                    Control::Adopt {
+                        lease,
+                        epoch,
+                        coverage,
+                        output_cut,
+                        input_start_cut,
+                        participating,
+                    } if lease.session == offer.session.runtime
+                        && lease.incarnation
+                            == shared.expected_incarnation.load(Ordering::Acquire)
+                        && epoch == offer.session.epoch.load(Ordering::Acquire) =>
                     {
                         if row.lease.is_none() {
                             row.lease = Some(lease);
@@ -706,6 +706,13 @@ impl Hub {
                             row.report = Some((coverage, output_cut));
                             self.sequencer.captured[index + 1] = input_start_cut;
                             shared.hub_detached.store(false, Ordering::Release);
+                            row.participating = participating;
+                            if self.sequencer.participation_serial[index + 1] == 0 {
+                                self.sequencer.participating[index + 1] = participating;
+                            }
+                            // The row joins holding nothing, and a take needs
+                            // to see that it exists before its first note.
+                            row.repair = true;
                         }
                     }
                     Control::Progress { incarnation, epoch, coverage, output_cut }
@@ -751,16 +758,6 @@ impl Hub {
                         row.detach = Some(cut)
                     }
                     _ => {}
-                }
-            }
-            if row.baseline.is_none() {
-                if let Some(baseline) = shared.baselines.take() {
-                    self.service_revision = self.service_revision.wrapping_add(1);
-                    if row.lease.is_some_and(|l| l.incarnation == baseline.incarnation)
-                        && row.epoch == baseline.epoch
-                    {
-                        row.baseline = Some(baseline);
-                    }
                 }
             }
             for _ in 0..256 {
@@ -889,35 +886,32 @@ impl Hub {
                     row.report = None;
                 }
             }
-            // Empty initial baseline may enroll without registry acknowledgement.
-            // Its complete coverage is nevertheless required, including silence.
-            if !row.member && row.terminal_cut.is_none() {
-                if let Some(baseline) = row.baseline.as_ref().filter(|b| b.frame.output_cut == 0) {
-                    let floor = row.joining.or(self.publication_through).unwrap_or(baseline.start);
-                    if baseline.start < floor {
-                        if let Some(ack) = shared.to_source.reserve() {
-                            // The old snapshot is complete but cannot authorize
-                            // historical enrollment behind a published frontier.
-                            // Reserve a future join boundary and ask for fresh
-                            // coverage; musical admission remains closed.
-                            ack.publish(Reply::Baseline {
-                                incarnation: baseline.incarnation,
-                                epoch: baseline.epoch,
-                                transaction: baseline.frame.id,
-                                cut: 0,
-                                membership: self.membership,
-                                start: floor,
-                            });
-                            row.baseline = None;
-                            row.joining = Some(floor);
-                            row.report = None;
-                            row.coverage = Some(Coverage { start: floor, through: floor });
-                        }
+            // A join request is the whole of enrollment now: the Tune reset
+            // at its pairing boundary, so there is no held-note snapshot to
+            // wait for. Real coverage is still required, silence included.
+            if !row.member && row.terminal_cut.is_none() && row.lease.is_some() {
+                let start = row.coverage.map_or(i64::MIN, |coverage| coverage.start);
+                let floor = row.joining.or(self.publication_through).unwrap_or(start);
+                if start < floor && row.joining != Some(floor) {
+                    if let Some(ack) = shared.to_source.reserve() {
+                        // This row cannot enroll behind a published frontier.
+                        // Name a future join boundary and ask for fresh
+                        // coverage; musical admission remains closed.
+                        ack.publish(Reply::Enrolled {
+                            incarnation: row.lease.unwrap().incarnation,
+                            epoch: row.epoch,
+                            membership: self.membership,
+                            start: floor,
+                        });
+                        row.joining = Some(floor);
+                        row.report = None;
+                        row.coverage = Some(Coverage { start: floor, through: floor });
                     }
                 }
             }
             if !row.member
-                && row.baseline.as_ref().is_some_and(|b| b.frame.output_cut == 0)
+                && row.lease.is_some()
+                && row.joining.is_none()
                 && row.coverage.is_some_and(|c| c.through > c.start)
                 && self.clock.valid
                 && offer.session.alive.load(Ordering::Acquire)
@@ -927,7 +921,6 @@ impl Hub {
             {
                 row.member = true;
                 self.membership = self.membership.saturating_add(1);
-                row.joining = None;
                 if !shared.withdrawn.load(Ordering::Acquire)
                     && shared.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE == 0
                     && offer.session.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE
@@ -939,6 +932,20 @@ impl Hub {
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
+                }
+            }
+            // The membership revision is what sequences a row's input against
+            // the right session shape, so every member is told each new one.
+            // A baseline round trip used to carry it; nothing else did.
+            if row.member && row.acknowledged_membership != self.membership {
+                if let Some(ack) = shared.to_source.reserve() {
+                    ack.publish(Reply::Enrolled {
+                        incarnation: row.lease.unwrap().incarnation,
+                        epoch: row.epoch,
+                        membership: self.membership,
+                        start: row.coverage.map_or(i64::MIN, |coverage| coverage.start),
+                    });
+                    row.acknowledged_membership = self.membership;
                 }
             }
             if shared.withdrawn.load(Ordering::Acquire) {
@@ -1036,15 +1043,11 @@ impl Hub {
             // A timestamp cannot order an unplaceable terminal. Consume only
             // a source FIFO head, after its earlier baseline/history; the gap
             // records the missing clock provenance independently of this merge.
-            if let Some(index) = self.rows.iter().position(|row| {
-                row.output.front().is_some_and(|delta| {
-                    !delta.mapped
-                        && row
-                            .baseline
-                            .as_ref()
-                            .is_none_or(|baseline| delta.sequence <= baseline.frame.output_cut)
-                })
-            }) {
+            if let Some(index) = self
+                .rows
+                .iter()
+                .position(|row| row.output.front().is_some_and(|delta| !delta.mapped))
+            {
                 let source = self.rows[index].lease.unwrap().slot;
                 let row = &mut self.rows[index];
                 let value = row.output.pop().unwrap();
@@ -1068,24 +1071,7 @@ impl Hub {
             let direct = owner.direct.pending();
             let mut next = direct.and_then(|d| d.timing).map(|t| (t.sample, 0usize));
             for index in 0..TUNERS {
-                if let Some(baseline) = self.rows[index]
-                    .baseline
-                    .as_ref()
-                    .filter(|b| self.rows[index].applied >= b.frame.output_cut)
-                {
-                    let sample = (baseline.frame.time * self.rate).round() as i64;
-                    if next.is_none_or(|old| (sample, TUNERS + 1 + index) < old) {
-                        next = Some((sample, TUNERS + 1 + index));
-                    }
-                }
                 if let Some(delta) = self.rows[index].output.front() {
-                    if self.rows[index]
-                        .baseline
-                        .as_ref()
-                        .is_some_and(|b| delta.sequence > b.frame.output_cut)
-                    {
-                        continue;
-                    }
                     if !delta.mapped {
                         continue;
                     }
@@ -1116,18 +1102,6 @@ impl Hub {
                     self.trace.published(delta);
                 }
                 owner.direct.published();
-            } else if index > TUNERS {
-                let row = index - TUNERS - 1;
-                self.publish_baselines(
-                    owner,
-                    recorder,
-                    observation,
-                    sample.saturating_add(1),
-                    Some(row),
-                );
-                if self.rows[row].baseline.is_some() {
-                    break;
-                }
             } else {
                 let index = index - 1;
                 let value = self.rows[index].output.pop().unwrap();
@@ -1220,9 +1194,6 @@ impl Hub {
                     self.publication_through.unwrap_or(completed)
                 });
             }
-            if let Some(baseline) = row.baseline.as_ref() {
-                completed = completed.min((baseline.frame.time * self.rate).round() as i64);
-            }
         }
         self.publication_through =
             Some(self.publication_through.map_or(completed, |old| old.max(completed)));
@@ -1236,7 +1207,6 @@ impl Hub {
                 row.lease.is_none()
                     || row.seal.or(row.producer_joined) == Some(row.applied)
                         && row.output.len() == 0
-                        && row.baseline.is_none()
             })
         {
             recorder.fail_configuration();
@@ -1247,7 +1217,7 @@ impl Hub {
                 row.repair = true;
             }
         }
-        self.publish_baselines(owner, recorder, observation, completed, None);
+        self.publish_snapshots(owner, recorder, observation, completed);
         // Source journals may release only through this actual audio-owned
         // retention cut. GUI/file progress and baseline ack are absent here.
         self.acknowledge(completed);
@@ -1324,131 +1294,56 @@ impl Hub {
         };
         let _ = confirmed.replace_source(lease.source, &rows[..count]);
     }
-    fn publish_baselines(
+    /// The row snapshot display and recording read after a gap: built from
+    /// what the Hub itself has applied, not from anything the Tune sends. The
+    /// Tune-to-Hub snapshot this replaced existed to resynchronize `row.state`
+    /// after a lost delta, and a lost delta is now a latched terminal fault.
+    fn publish_snapshots(
         &mut self,
         owner: &mut Owner,
         recorder: &mut Recorder,
         observation: f64,
         through: i64,
-        selected: Option<usize>,
     ) {
-        let sequenced = self.sequences_inputs();
         let clock = self.clock_id();
         let time_offset = self.presentation(0);
-        let Some(offer) = &self.offer else {
+        if self.offer.is_none() {
             return;
-        };
+        }
         for index in 0..TUNERS {
-            if selected.is_some_and(|only| only != index) {
-                continue;
-            }
             let row = &mut self.rows[index];
             let Some(lease) = row.lease else {
                 continue;
             };
-            let shared = &offer.session.rows[index];
-            if let Some(baseline) = row.baseline.as_ref() {
-                // Adopt and its first Progress can occupy different callbacks.
-                // Keep the initial snapshot until collection has enrolled the
-                // row; acknowledging it earlier loses the only join proof.
-                if baseline.frame.output_cut == 0 && !row.member && row.terminal_cut.is_none() {
-                    continue;
-                }
-                let sample = (baseline.frame.time * self.rate).round() as i64;
-                if row.applied == baseline.frame.output_cut && sample < through {
-                    let Some(ack) = shared.to_source.reserve() else {
-                        continue;
-                    };
-                    let transaction = baseline.frame.id;
-                    let start = baseline.start;
-                    let Some(id) = row.baseline_id.checked_add(1) else {
-                        continue;
-                    };
-                    let mut frame = baseline.frame;
-                    if sequenced {
-                        if row.baseline_id == 0
-                            && self.sequencer.participation_serial[index + 1] == 0
-                        {
-                            self.sequencer.participating[index + 1] = frame.participating;
-                        }
-                        // After enrollment only the ordered Original changes
-                        // eligibility. A baseline can arrive before that marker
-                        // or after a newer one; neither reverses its authority.
-                        frame.participating = self.sequencer.participating[index + 1];
-                    }
-                    frame.id = id;
-                    frame.translate(time_offset);
-                    let timing = EventTiming {
-                        clock,
-                        input: sample,
-                        planned: None,
-                        sample,
-                        sample_rate: self.rate,
-                    };
-                    let route = owner.recording_route(timing, frame.time).unwrap_or_else(|_| {
-                        recorder.fail_configuration();
-                        Default::default()
-                    });
-                    let result = recorder.publish_baseline(index + 1, &frame, observation, route);
-                    if result == Err(PublishError::BaselineBusy) {
-                        // This incoming historical cut is being settled, not
-                        // retained for retry. Declare that reporting loss at
-                        // its actual route before allowing subsequent output.
-                        recorder.publication_lost(frame.time, route);
-                    }
-                    row.repair |= result.is_err();
-                    row.state.replace(&frame);
-                    row.participating = frame.participating;
-                    row.baseline_id = row.baseline_id.max(frame.id);
-                    Self::confirm(row, &mut owner.confirmed);
-                    ack.publish(Reply::Baseline {
-                        incarnation: lease.incarnation,
-                        epoch: row.epoch,
-                        transaction,
-                        cut: frame.output_cut,
-                        membership: self.membership,
-                        start,
-                    });
-                    row.acknowledged_membership = self.membership;
-                    row.baseline = None;
-                }
-            }
-            if selected.is_none()
-                && !self.clock_loss_pending
-                && row.repair
-                && row.output.len() == 0
-                && row.baseline.is_none()
-                && recorder.publication_free() >= 2
+            if self.clock_loss_pending
+                || !row.repair
+                || row.output.len() != 0
+                || recorder.publication_free() < 2
             {
-                let Some(id) = row.baseline_id.checked_add(1) else {
-                    continue;
-                };
-                let sample = through.saturating_sub(1);
-                let time = sample as f64 / self.rate + time_offset;
-                let start =
-                    row.coverage.map_or(sample, |c| c.start) as f64 / self.rate + time_offset;
-                let Some(frame) = row.state.baseline(
-                    lease.source,
-                    id,
-                    row.applied,
-                    time,
-                    start.min(time),
-                    row.participating,
-                ) else {
-                    continue;
-                };
-                let timing = EventTiming {
-                    clock,
-                    input: sample,
-                    planned: None,
-                    sample,
-                    sample_rate: self.rate,
-                };
-                let route = owner.recording_route(timing, time).unwrap_or_default();
-                if recorder.publish_baseline(index + 1, &frame, observation, route).is_ok() {
-                    row.baseline_id = id;
-                    row.repair = false;
-                }
+                continue;
+            }
+            let Some(id) = row.baseline_id.checked_add(1) else {
+                continue;
+            };
+            let sample = through.saturating_sub(1);
+            let time = sample as f64 / self.rate + time_offset;
+            let start = row.coverage.map_or(sample, |c| c.start) as f64 / self.rate + time_offset;
+            let Some(frame) = row.state.baseline(
+                lease.source,
+                id,
+                row.applied,
+                time,
+                start.min(time),
+                row.participating,
+            ) else {
+                continue;
+            };
+            let timing =
+                EventTiming { clock, input: sample, planned: None, sample, sample_rate: self.rate };
+            let route = owner.recording_route(timing, time).unwrap_or_default();
+            if recorder.publish_baseline(index + 1, &frame, observation, route).is_ok() {
+                row.baseline_id = id;
+                row.repair = false;
             }
         }
     }
@@ -1469,8 +1364,7 @@ impl Hub {
             }
             let sealed = (row.seal == Some(row.applied)
                 && row.applied == row.received
-                && row.output.len() == 0
-                && row.baseline.is_none())
+                && row.output.len() == 0)
             .then_some(row.seal_generation);
             if row.last_ack != Some((row.received, through)) {
                 let reply = Reply::OutputRetained {
@@ -1504,7 +1398,6 @@ impl Hub {
                     && row.output.len() == 0
                     && row.state.count() == 0
                     && row.inputs.len() == 0
-                    && row.baseline.is_none()
             }) {
                 row.member = false;
                 if !session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
@@ -1526,7 +1419,7 @@ impl Hub {
                         .iter()
                         .map(|row| row.inputs.len() + row.output.len())
                         .sum::<usize>(),
-                self.rows.iter().filter(|row| row.baseline.is_some()).count(),
+                self.rows.iter().filter(|row| row.repair).count(),
                 self.rows.iter().filter(|row| row.seal.is_some()).count(),
             ],
             self.retired_publication
@@ -1555,10 +1448,6 @@ impl Hub {
                 row.output.get(row.output.len().saturating_sub(1)).filter(|d| d.mapped)
             {
                 through = through.max(last.actual.saturating_add(1));
-            }
-            if let Some(baseline) = &row.baseline {
-                let sample = (baseline.frame.time * self.rate).round() as i64;
-                through = through.max(sample.saturating_add(1));
             }
         }
         self.retired_through = Some(through);
@@ -1596,29 +1485,12 @@ impl Hub {
             return;
         };
         for (index, row) in self.rows.iter_mut().enumerate() {
-            if let Some(baseline) =
-                row.baseline.as_ref().filter(|b| b.frame.output_cut == 0 && row.received == 0)
-            {
-                let Some(ack) = offer.session.rows[index].to_source.reserve() else {
-                    continue;
-                };
-                ack.publish(Reply::Baseline {
-                    incarnation: baseline.incarnation,
-                    epoch: baseline.epoch,
-                    transaction: baseline.frame.id,
-                    cut: 0,
-                    membership: self.membership,
-                    start: baseline.start,
-                });
-                row.baseline = None;
-            }
             // A musical seal does not close input publication. The live
             // producer can still capture post-cut input before its enclosing
             // detach boundary; only Detach certifies that transfer has ended.
             if row.detach.is_some_and(|cut| row.seal == Some(cut) && row.applied == cut)
                 && row.output.len() == 0
                 && row.state.count() == 0
-                && row.baseline.is_none()
                 && row.inputs.len() == 0
                 && !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel)
             {
@@ -1633,7 +1505,6 @@ impl Hub {
         self.direct.settled()
             && self.rows.iter().all(|r| {
                 r.output.len() == 0
-                    && r.baseline.is_none()
                     && r.state.count() == 0
                     && r.inputs.len() == 0
                     && (r.lease.is_none() || r.seal == Some(r.applied))
@@ -1663,7 +1534,6 @@ impl Hub {
                 }
                 row.seal.or(row.producer_joined).is_some_and(|cut| row.applied == cut)
                     && row.output.len() == 0
-                    && row.baseline.is_none()
             })
     }
     pub fn retire_publication(

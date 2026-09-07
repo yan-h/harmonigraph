@@ -3,7 +3,6 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 
-use harmonigraph_core::canonical::SourceBaseline;
 use harmonigraph_core::SourceId;
 
 use super::{clock::Coverage, event::Event, slots::Slots};
@@ -236,13 +235,14 @@ pub enum Reply {
         request: Request,
         binding: Assignment,
     },
-    Baseline {
+    /// This Tune is enrolled in the session at revision `membership`, from
+    /// coverage `start` onward. A `start` beyond what the Tune adopted with
+    /// is a join floor: the Hub has already published past that point, so the
+    /// Tune rejoins from there instead. Carries no held-note snapshot — the
+    /// pairing boundary is a reset, so there is nothing sounding to hand over.
+    Enrolled {
         incarnation: u64,
         epoch: u64,
-        transaction: u64,
-        cut: u64,
-        // The producer already publishes the revision it owns. #616 consumes
-        // this acknowledgement when binding assignment/input cohorts.
         membership: u64,
         start: i64,
     },
@@ -322,12 +322,15 @@ pub enum Control {
         request: u16,
         original_on: bool,
     },
+    /// The join request. Everything the Hub needs to enroll this row: no
+    /// separate snapshot follows it, because the Tune reset at this boundary.
     Adopt {
         lease: Lease,
         epoch: u64,
         coverage: Coverage,
         output_cut: u64,
         input_start_cut: u64,
+        participating: bool,
     },
     Progress {
         incarnation: u64,
@@ -358,7 +361,6 @@ pub enum Control {
 
 /// Partition the existing pair: ordinary progress owns cell zero, while exact
 /// capture status and cancellation acknowledgements always have cell one.
-/// Attachment and baseline pairs retain their existing two-cell semantics.
 pub struct SourceSlots<T>(Slots<T>);
 impl<T> Default for SourceSlots<T> {
     fn default() -> Self {
@@ -391,14 +393,6 @@ impl<T: Copy> SourceSlots<T> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Baseline {
-    pub incarnation: u64,
-    pub epoch: u64,
-    pub frame: SourceBaseline,
-    pub start: i64,
-}
-
 pub struct SourceControl {
     pub expected_incarnation: AtomicU64,
     pub faults: AtomicU32,
@@ -408,7 +402,6 @@ pub struct SourceControl {
     pub emission_gate: AtomicU64,
     pub to_hub: SourceSlots<Control>,
     pub to_source: SourceSlots<Reply>,
-    pub baselines: Slots<Baseline>,
     /// This row's storage on its way from the registry's pairing boundary to
     /// the Hub. Cell zero only; the Hub keeps what it takes, so a row that is
     /// ever paired is built once, off audio, and reused if it pairs again.
@@ -426,7 +419,6 @@ impl Default for SourceControl {
             emission_gate: AtomicU64::new(2),
             to_hub: SourceSlots::default(),
             to_source: SourceSlots::default(),
-            baselines: Slots::default(),
             store: Slots::default(),
             store_held: AtomicBool::new(false),
         }
@@ -484,11 +476,8 @@ const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 96);
 const _: () = assert!(std::mem::size_of::<Intent>() <= 128);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 256);
 const _: () = assert!(std::mem::size_of::<Control>() <= 256);
-const _: () = assert!(std::mem::size_of::<Baseline>() <= 16384);
 // Hub windows and journals allocate Option payloads, not just the bare wire type.
 const _: () = assert!(std::mem::size_of::<Option<OutputDelta>>() <= 128);
 const _: () = assert!(std::mem::size_of::<Option<Intent>>() <= 128);
-const _: () = assert!(std::mem::size_of::<Option<Baseline>>() <= 16384);
 const _: () = assert!(std::mem::align_of::<Option<OutputDelta>>() <= 8);
 const _: () = assert!(std::mem::align_of::<Option<Intent>>() <= 8);
-const _: () = assert!(std::mem::align_of::<Option<Baseline>>() <= 8);

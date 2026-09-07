@@ -55,7 +55,6 @@ pub struct Snapshot {
     pub sequence: u64,
     pub acknowledged: u64,
     pub transfer_cut: u64,
-    pub baseline_cut: Option<u64>,
     pub seal: Option<u64>,
     pub complete_through: i64,
 }
@@ -147,29 +146,6 @@ struct Manifest {
     work: u16,
 }
 
-#[derive(Clone, Copy)]
-struct PendingBaseline {
-    id: u64,
-    cut: u64,
-    /// The original callback's actual coverage, independent of later output
-    /// held behind this snapshot. Its progress report must survive retirement.
-    coverage: Coverage,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum Adoption {
-    Pending,
-    Sent,
-    Joined,
-}
-
-impl Adoption {
-    fn sent(self) -> bool {
-        self != Self::Pending
-    }
-}
-
 pub struct Source {
     trace: Box<super::diagnostics::Counts>,
     #[cfg(test)]
@@ -217,11 +193,15 @@ pub struct Source {
     timing_failed: bool,
     generation: u64,
     epoch: u64,
-    baseline: Option<PendingBaseline>,
-    next_baseline: u64,
-    baseline_needed: bool,
-    baseline_acked: bool,
-    adoption: Adoption,
+    /// The join request is published; the Hub has not enrolled this row yet.
+    adopt_sent: bool,
+    /// Enrolled. Ordinary output may reach the Hub's session from here.
+    joined: bool,
+    /// The coverage start this row's join request carried, so a join floor
+    /// beyond it is recognized as a refusal and not as an enrollment.
+    adopt_start: i64,
+    /// This withdrawal's reset has already run. Cleared at the next adoption.
+    withdrawal_reset: bool,
     coverage: Option<Coverage>,
     last_progress: Option<(i64, u64)>,
     acknowledged: u64,
@@ -340,7 +320,6 @@ impl Source {
             sequence: self.sequence,
             acknowledged: self.acknowledged,
             transfer_cut: self.transfer_cut,
-            baseline_cut: self.baseline.map(|baseline| baseline.cut),
             seal: self.sealed.then_some(self.sealed_generation),
             complete_through: self.complete_through,
         }
@@ -401,11 +380,10 @@ impl Source {
             timing_failed: false,
             generation: 1,
             epoch: 0,
-            baseline: None,
-            next_baseline: 0,
-            baseline_needed: true,
-            baseline_acked: false,
-            adoption: Adoption::Pending,
+            adopt_sent: false,
+            joined: false,
+            adopt_start: i64::MIN,
+            withdrawal_reset: false,
             coverage: None,
             last_progress: None,
             acknowledged: 0,
@@ -466,7 +444,6 @@ impl Source {
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, max_frames);
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
-        self.baseline_needed = true;
     }
     pub fn reset_idle_clock(&mut self, epoch: u64) {
         assert!(self.settled());
@@ -485,7 +462,7 @@ impl Source {
         self.direct = Some(session);
         self.direct_generation = self.generation;
         self.old_pending = self.obligations;
-        self.baseline_acked = true;
+        self.joined = true;
     }
     fn session(&self) -> Option<&SessionControl> {
         self.offer.as_ref().map(|o| &*o.session).or(self.direct.as_deref())
@@ -569,7 +546,6 @@ impl Source {
             && self.permit.is_none()
             && self.emergency.iter().all(Option::is_none)
             && self.channel_reset == [0; 16]
-            && self.baseline.is_none()
             && self.manifest.len() == 0
             && self.capture_group.len() == 0
     }
@@ -586,19 +562,41 @@ impl Source {
             && self.manifest.len() == 0
             && self.emergency.iter().all(Option::is_none)
             && self.channel_reset == [0; 16]
-            && self.baseline.is_none()
     }
 
     /// Reserve the return/ack slot BEFORE moving an endpoint-bearing offer.
     /// Exactly one attach OR detach attempt occurs at an enclosing boundary.
+    ///
+    /// Both directions are a membership reset. Withdrawal cancels this Tune's
+    /// pending attacks and arms the termination of every voice it has already
+    /// forwarded, before its ownership of them is forgotten; adoption ends
+    /// anything still sounding from before the pairing, so the Hub starts with
+    /// nothing of this Tune's to be told about. That is what removed the
+    /// held-note snapshot the Tune used to hand over at adoption: after the
+    /// reset there is never one to send. Obsolete replies die with the lease
+    /// incarnation and session epoch they were minted under.
     fn attachment(&mut self) {
         if self.attachment_attempted {
             return;
         }
         self.attachment_attempted = true;
-        let Some(bridge) = self.shared.source.as_ref() else {
+        if self.shared.source.is_none() {
             return;
-        };
+        }
+        if self.offer.as_ref().is_some_and(|offer| {
+            offer.session.rows[usize::from(offer.lease.slot - 1)].withdrawn.load(Ordering::Acquire)
+        }) && !self.withdrawal_reset
+        {
+            // Once per withdrawal. `stop` is the established reset: it cancels
+            // every unsounded attack and arms the emergency lane for the
+            // voices this Tune has forwarded, which is also what lets the
+            // lease settle instead of waiting for input the new pairing will
+            // never deliver.
+            self.withdrawal_reset = true;
+            self.stop();
+        }
+        let mut adopted = false;
+        let bridge = self.shared.source.as_ref().unwrap();
         if let Some(current) = self.offer.as_ref() {
             let row = &current.session.rows[usize::from(current.lease.slot - 1)];
             if row.withdrawn.load(Ordering::Acquire) && self.lease_settled() {
@@ -625,7 +623,6 @@ impl Source {
                     self.transfer_cut = 0;
                     self.complete_through = i64::MIN;
                     self.sealed_ack = None;
-                    self.next_baseline = 0;
                     self.detaching = false;
                     self.sealed = false;
                     self.shared.request_main();
@@ -665,9 +662,11 @@ impl Source {
             self.epoch = offer.session.epoch.load(Ordering::Acquire);
             self.generation = offer.generation;
             self.old_pending = self.obligations;
-            self.baseline_needed = true;
-            self.baseline_acked = false;
-            self.adoption = Adoption::Pending;
+            self.adopt_sent = false;
+            self.joined = false;
+            self.adopt_start = i64::MIN;
+            self.withdrawal_reset = false;
+            adopted = true;
             self.committed_assignment = 0;
             self.coverage = None;
             self.clock.coverage = None;
@@ -689,6 +688,18 @@ impl Source {
             self.offer = Some(offer);
         }
         self.shared.request_main();
+        // A Tune that sounded before it had a Hub — or before this one —
+        // arrives holding voices the new session has no record of. End them
+        // here rather than importing them: the interruption is accepted, a
+        // silent divergence between what sounds and what the Hub believes is
+        // not.
+        if adopted
+            && (self.state.count() != 0
+                || self.state.pedals_held()
+                || self.owed_note_off != [NONE; 64])
+        {
+            self.arm_release_debt();
+        }
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
@@ -749,17 +760,16 @@ impl Source {
             self.faults = 0;
             self.timing_failed = false;
             self.shared.status.store(self.diagnostics(), Ordering::Release);
-            self.baseline_needed = true;
         }
         // Registry offers precede the Hub's first audio callback. Its initial
         // epoch is provisional until that callback publishes actual progress.
-        // Nothing from a Pending adoption may cross that clock boundary.
-        let initial_wait = !self.adoption.sent()
+        // Nothing from an unsent join request may cross that clock boundary.
+        let initial_wait = !self.adopt_sent
             && self
                 .offer
                 .as_ref()
                 .is_some_and(|offer| offer.session.hub_through.load(Ordering::Acquire) == i64::MIN);
-        if !self.adoption.sent() && !initial_wait {
+        if !self.adopt_sent && !initial_wait {
             if let Some(offer) = &self.offer {
                 if offer.session.alive.load(Ordering::Acquire)
                     && offer.session.closing.load(Ordering::Acquire) == 0
@@ -1113,7 +1123,6 @@ impl Source {
             if changes_clock {
                 self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
                 self.coverage = None;
-                self.baseline_needed = true;
             }
             if update.reset {
                 // Applying a valid calibration is not yet observed fresh
@@ -1337,7 +1346,6 @@ impl Source {
                 }
             }
         }
-        self.baseline_needed = true;
     }
 
     fn channel_has_release_debt(&self, channel: u8) -> bool {
@@ -1713,13 +1721,12 @@ impl Source {
 
     fn ordinary_stream_ready(&mut self) -> bool {
         // A newly adopted stream must reach its actual Hub join before controls
-        // create its first accepted output. Admission can precede snapshot ack
-        // when calibration places the snapshot ahead of the Hub's playhead;
-        // the pending baseline still fences transfer of later accepted history.
-        // Retain that fact through withdrawal so established controls remain
-        // responsive. A new offer resets it; fresh attacks/setup still claim
-        // current admission separately. Clock replacement also waits for the
-        // next validated callback.
+        // create its first accepted output. An opened emission gate is that
+        // join even before the enrollment reply lands. Retain the fact through
+        // withdrawal so established controls remain responsive. A new offer
+        // resets it; fresh attacks/setup still claim current admission
+        // separately. Clock replacement also waits for the next validated
+        // callback.
         if self.coverage.is_none() {
             return false;
         }
@@ -1730,12 +1737,10 @@ impl Source {
         {
             return false;
         }
-        if self.adoption == Adoption::Sent
-            && row.emission_gate.load(Ordering::Acquire) & GATE_FLAGS == OPEN
-        {
-            self.adoption = Adoption::Joined;
+        if self.adopt_sent && row.emission_gate.load(Ordering::Acquire) & GATE_FLAGS == OPEN {
+            self.joined = true;
         }
-        self.adoption == Adoption::Joined
+        self.joined
     }
 
     pub fn prepare(&mut self, group: api::Group) -> bool {
@@ -2187,8 +2192,7 @@ impl Source {
             && self.emergency_output.len() == 0
             && self.manifest.len() == 0
             && self.permit.is_none()
-            && self.baseline.is_none()
-            && self.baseline_acked
+            && self.joined
             && self.owed_note_off == [NONE; 64]
             && self.channel_reset == [0; 16]
         {
@@ -2422,31 +2426,27 @@ impl Source {
                 self.sealed_ack = Some(cut);
                 self.acknowledged = cut;
             }
-            Reply::Baseline { incarnation, epoch, transaction, cut, start, membership }
-                if incarnation == self.incarnation()
-                    && epoch == self.epoch
-                    && self.baseline.is_some_and(|baseline| {
-                        baseline.id == transaction && baseline.cut == cut
-                    }) =>
+            Reply::Enrolled { incarnation, epoch, membership, start }
+                if incarnation == self.incarnation() && epoch == self.epoch && self.adopt_sent =>
             {
-                let retry = cut == 0 && self.baseline.unwrap().coverage.start < start;
-                self.baseline = None;
-                // The Hub can acknowledge an obsolete empty snapshot solely
-                // to move its join floor. That reply does not admit this stream.
-                self.baseline_acked = !retry;
-                if !retry {
-                    self.adoption = Adoption::Joined;
-                    if self.membership != membership {
-                        self.input_reported = None;
-                    }
-                    self.membership = membership;
-                }
-                if retry {
+                // A floor beyond what the join request carried is a refusal:
+                // the Hub has already published past that point, so this row
+                // rejoins from there with a fresh request rather than being
+                // admitted behind the frontier.
+                if start > self.adopt_start {
+                    self.adopt_sent = false;
+                    self.joined = false;
+                    self.adopt_start = i64::MIN;
                     self.clock.coverage = None;
                     self.coverage = None;
                     self.last_progress = None;
                     self.input_reported = None;
-                    self.baseline_needed = true;
+                } else {
+                    self.joined = true;
+                    if self.membership != membership {
+                        self.input_reported = None;
+                    }
+                    self.membership = membership;
                 }
             }
             Reply::Disposition { incarnation, transaction, input_cut }
@@ -2608,11 +2608,7 @@ impl Source {
             self.setup_started as i64,
             self.trace.setup_wait,
             i64::from(self.output_clock_valid()),
-            match self.adoption {
-                Adoption::Pending => 0,
-                Adoption::Sent => 1,
-                Adoption::Joined => 2,
-            },
+            i64::from(self.adopt_sent) + i64::from(self.joined),
             row.map_or(-1, |row| row.emission_gate.load(Ordering::Acquire) as i64),
             row.map_or(0, |row| i64::from(row.withdrawn.load(Ordering::Acquire))),
             session.map_or(0, |s| s.closing.load(Ordering::Acquire) as i64),
@@ -2623,8 +2619,8 @@ impl Source {
             self.capture_group.len() as i64,
             self.journal.len() as i64,
             self.emergency_output.len() as i64,
-            self.baseline.map_or(-1, |b| b.cut as i64),
-            i64::from(self.baseline_acked),
+            self.adopt_start,
+            i64::from(self.joined),
             i64::from(self.output_settled()),
             i64::from(self.local_cancel_cut_settled()),
             i64::from(self.diagnostics()),
@@ -2657,8 +2653,7 @@ impl Source {
                 | (i64::from(self.permit.is_some()) << 5)
                 | (i64::from(self.manifest.len() != 0) << 6)
                 | (i64::from(self.emergency.iter().any(Option::is_some)) << 7)
-                | (i64::from(self.channel_reset != [0; 16]) << 8)
-                | (i64::from(self.baseline.is_some()) << 9),
+                | (i64::from(self.channel_reset != [0; 16]) << 8),
             self.capture_published as i64,
             self.trace.last_output_player,
             self.trace.last_output_correction,
@@ -2694,13 +2689,6 @@ impl Source {
                 (Some(a), None) | (None, Some(a)) => a,
                 (None, None) => break,
             };
-            // A complete current-state transaction is ordered between <=C and
-            // >C history. Keep later actual deltas in their original journal
-            // until the receiver has consumed that snapshot, not merely its
-            // control-slot address.
-            if self.baseline.is_some_and(|baseline| next.sequence > baseline.cut) {
-                break;
-            }
             let offer = self.offer.as_mut().unwrap();
             if offer.endpoints.outputs.push(next).is_err() {
                 break;
@@ -2850,7 +2838,7 @@ impl Source {
         }
     }
     fn transfer_captures(&mut self) {
-        if !self.adoption.sent() {
+        if !self.adopt_sent {
             return;
         }
         for _ in 0..512 {
@@ -2950,7 +2938,7 @@ impl Source {
             return true;
         }
         if self.offer.is_none()
-            || !self.adoption.sent()
+            || !self.adopt_sent
             || self.offer.as_ref().is_some_and(|offer| pending.generation > offer.generation)
         {
             self.finish_work(position, child);
@@ -3035,7 +3023,7 @@ impl Source {
         self.publish_seal();
         if self.producer_joined && !self.joined_published && self.transfer_cut == self.sequence {
             if let Some(offer) = &self.offer {
-                if self.adoption.sent()
+                if self.adopt_sent
                     && offer.session.rows[usize::from(offer.lease.slot - 1)]
                         .to_hub
                         .publish(Control::ProducerJoined {
@@ -3081,7 +3069,7 @@ impl Source {
             || self.cleanup_head != NONE
     }
     fn initial_enrollment_ready(&self) -> bool {
-        self.adoption.sent()
+        self.adopt_sent
             || self.offer.as_ref().is_none_or(|offer| {
                 // Recheck at publication: the Hub can finish its first callback
                 // between our begin and end. A newly ready epoch waits for begin.
@@ -3101,9 +3089,9 @@ impl Source {
         let Some(lease) = self.offer.as_ref().map(|offer| offer.lease) else {
             return;
         };
-        let Some(coverage) = self.coverage else {
+        if self.coverage.is_none() {
             return;
-        };
+        }
         self.publish_input_prefix();
         let (report, output_cut) = self.output_report().unwrap();
         let input_start_cut = self
@@ -3112,7 +3100,11 @@ impl Source {
             .map_or(self.next_event, |pending| pending.serial - 1);
         let offer = self.offer.as_mut().unwrap();
         let row = &offer.session.rows[usize::from(lease.slot - 1)];
-        if !self.adoption.sent()
+        // The join request is the whole of what the Hub is told at adoption:
+        // the reset above guarantees this Tune holds nothing for the new
+        // session to import.
+        if !self.adopt_sent
+            && !row.withdrawn.load(Ordering::Acquire)
             && row
                 .to_hub
                 .publish(Control::Adopt {
@@ -3121,41 +3113,12 @@ impl Source {
                     coverage: report,
                     output_cut,
                     input_start_cut,
+                    participating: self.participating && self.faults == 0,
                 })
                 .is_ok()
         {
-            self.adoption = Adoption::Sent;
-        }
-        if self.adoption.sent()
-            && self.baseline_needed
-            && self.baseline.is_none()
-            && !row.withdrawn.load(Ordering::Acquire)
-        {
-            if let Some(id) = self.next_baseline.checked_add(1) {
-                if let Some(frame) = self.state.baseline(
-                    offer.lease.source,
-                    id,
-                    self.sequence,
-                    coverage.through.saturating_sub(1) as f64 / self.rate,
-                    coverage.start as f64 / self.rate,
-                    self.participating && self.faults == 0,
-                ) {
-                    if row
-                        .baselines
-                        .publish(Baseline {
-                            incarnation: offer.lease.incarnation,
-                            epoch: self.epoch,
-                            frame,
-                            start: coverage.start,
-                        })
-                        .is_ok()
-                    {
-                        self.next_baseline = id;
-                        self.baseline = Some(PendingBaseline { id, cut: self.sequence, coverage });
-                        self.baseline_needed = false;
-                    }
-                }
-            }
+            self.adopt_sent = true;
+            self.adopt_start = report.start;
         }
         self.publish_output_progress();
     }
@@ -3193,7 +3156,7 @@ impl Source {
     }
 
     fn publish_output_progress(&mut self) {
-        if self.detaching || !self.adoption.sent() {
+        if self.detaching || !self.adopt_sent {
             return;
         }
         // Advertise completed coverage and its full accepted cut before
@@ -3228,9 +3191,7 @@ impl Source {
         }
     }
     fn output_report(&self) -> Option<(Coverage, u64)> {
-        self.baseline
-            .map(|baseline| (baseline.coverage, baseline.cut))
-            .or_else(|| self.coverage.map(|coverage| (coverage, self.sequence)))
+        self.coverage.map(|coverage| (coverage, self.sequence))
     }
 
     fn publish_seal(&mut self) {
@@ -3241,7 +3202,6 @@ impl Source {
             || self.state.count() != 0
             || self.channel_reset != [0; 16]
             || self.permit.is_some()
-            || self.baseline.is_some()
             || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
         {
             return;
@@ -3301,15 +3261,14 @@ impl Source {
     pub fn test_stream_status(&self) -> (Option<Lease>, bool, bool, Option<Coverage>) {
         (
             self.offer.as_ref().map(|offer| offer.lease),
-            self.adoption.sent(),
-            self.baseline_acked,
+            self.adopt_sent,
+            self.joined,
             self.coverage,
         )
     }
     pub fn test_rebase_output_prefix(&mut self, prefix: u64) -> Lease {
         assert_eq!(self.journal.len(), 0);
         assert_eq!(self.emergency_output.len(), 0);
-        assert!(self.baseline.is_none());
         assert_eq!(self.acknowledged, self.sequence);
         assert_eq!(self.transfer_cut, self.sequence);
         self.sequence = prefix;

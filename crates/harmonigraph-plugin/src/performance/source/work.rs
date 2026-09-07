@@ -407,7 +407,7 @@ impl Source {
         !self.pending.published(position)
             && self.session().is_some()
             && !self.producer_joined
-            && (self.direct.is_some() || self.adoption.sent() || serial > self.cancel_cut)
+            && (self.direct.is_some() || self.adopt_sent || serial > self.cancel_cut)
     }
 
     fn queue_ready_cleanup(&mut self, index: u16) {
