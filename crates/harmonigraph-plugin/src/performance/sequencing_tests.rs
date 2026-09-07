@@ -23,7 +23,7 @@ fn inspect_source<R>(device: &Device, f: impl FnOnce(&source::Source) -> R) -> R
 
 fn production_pair() -> (Device, Device) {
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -73,7 +73,7 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
 
 fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -83,13 +83,15 @@ fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
         source.configure_format(
             uuid,
             true,
-            Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+            Calibration { offset: if index == 1 { 64 } else { 0 } },
         );
         source.activate_format(44100.0, 512);
         source
     });
-    for raw in [0, 512, 1024] {
-        for source in &sources {
+    // Initial enrollment waits for the Hub's first real audio progress.
+    let mut setup = [0; 3];
+    for raw in [0, 512, 1024, 1536] {
+        for (index, source) in sources.iter().enumerate() {
             let input = if raw == 0 {
                 (0..2)
                     .flat_map(|channel| {
@@ -99,24 +101,31 @@ fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
             } else {
                 vec![]
             };
-            source.run_format(raw, input, None, None, 512);
+            setup[index] += source.run_format(raw, input, None, None, 512).values.len();
         }
         hub.run_format(raw, vec![], None, None, 512);
     }
-    for raw in [1536, 2048] {
+    assert_eq!(setup, [6; 3], "both channels' original neutral setup is accepted");
+    for raw in [2048, 2560] {
         for index in [1, 0, 2] {
             let input = match (raw, index) {
-                (1536, 1) => vec![note(2, 0, 64, 448, true)],
-                (1536, 0) => vec![note(1, 0, 60, 0, true)],
-                (2048, 0) => vec![note(4, 1, 66, 400, true), note(4, 1, 66, 420, false)],
+                (2048, 1) => vec![note(2, 0, 64, 448, true)],
+                (2048, 0) => vec![note(1, 0, 60, 0, true)],
+                (2560, 0) => vec![note(4, 1, 66, 400, true), note(4, 1, 66, 420, false)],
                 _ => vec![],
             };
             sources[index].run_format(raw, input, None, None, 512);
         }
         hub.run_format(raw, vec![], None, None, 512);
     }
+    assert!(
+        inspect_source(&sources[0], |source| {
+            source.state.voices().any(|voice| voice.host_note_id == 1)
+        }),
+        "A's original onset is already sounding before the pending successors"
+    );
     let late = sources[1].run_format(
-        2560,
+        3072,
         vec![note(5, 1, 71, 400, true), note(5, 1, 71, 420, false)],
         None,
         None,
@@ -126,10 +135,10 @@ fn production_recovery_with_two_pending_gestures() -> (Device, [Device; 3]) {
         .values
         .iter()
         .any(|(time, event)| *time == 0 && event.attack().is_some_and(|(id, ..)| id == 2)));
-    hub.run_format(2560, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
     assert!(inspect_hub(&hub, |hub| hub.test_recovery_identity()).0);
     for index in [0, 2] {
-        assert!(sources[index].run_format(2560, vec![], None, None, 512).values.is_empty());
+        assert!(sources[index].run_format(3072, vec![], None, None, 512).values.is_empty());
     }
     (hub, sources)
 }
@@ -183,7 +192,7 @@ fn production_received_divergence_recloses_already_resumed_successor() {
             })
         })
         .collect();
-    let mut raw = 2560;
+    let mut raw = 3072;
     let mut c_raw = raw;
     let mut hold_c = false;
     for _ in 0..160 {
@@ -275,7 +284,7 @@ fn production_received_divergence_recloses_already_resumed_successor() {
 fn production_stop_baseline_holds_recovery_until_known_release_applies() {
     let _scope = crate::test_scope::enter();
     let (hub, sources) = production_recovery_with_two_pending_gestures();
-    let mut raw = 2560;
+    let mut raw = 3072;
     let Input::Transport(playing) = transport(0, 120.0) else { unreachable!() };
     for _ in 0..160 {
         raw += 512;
@@ -384,7 +393,7 @@ fn production_stop_baseline_holds_recovery_until_known_release_applies() {
 fn production_late_output_automatically_redecides_bound_successor_and_keeps_held_pitch() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -393,12 +402,13 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
         source.configure_format(
             uuid,
             true,
-            Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+            Calibration { offset: if index == 1 { 64 } else { 0 } },
         );
         source.activate_format(44100.0, 512);
         source
     });
-    for raw in [0, 512, 1024] {
+    // Initial enrollment waits for the Hub's first real audio progress.
+    for raw in [0, 512, 1024, 1536] {
         for source in &sources {
             let inputs = if raw == 0 {
                 [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into()
@@ -409,16 +419,16 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
         }
         hub.run_format(raw, vec![], None, None, 512);
     }
-    // B's raw1984 maps to2048. In B,A,C,Hub order its raw2496 deadline
+    // B's raw2496 maps to2560. In B,A,C,Hub order its raw3008 deadline
     // is missed, while the three initial notes remain held for recovery.
     let mut actual: [Vec<(i64, Event)>; 3] = std::array::from_fn(|_| Vec::new());
-    for raw in [1536, 2048] {
+    for raw in [2048, 2560] {
         for index in [1, 0, 2] {
             let inputs = match (raw, index) {
-                (1536, 1) => vec![note(2, 0, 64, 448, true)],
-                (1536, 0) => vec![note(1, 0, 60, 0, true)],
-                (1536, 2) => vec![note(3, 0, 67, 0, true)],
-                (2048, 2) => vec![
+                (2048, 1) => vec![note(2, 0, 64, 448, true)],
+                (2048, 0) => vec![note(1, 0, 60, 0, true)],
+                (2048, 2) => vec![note(3, 0, 67, 0, true)],
+                (2560, 2) => vec![
                     note(4, 1, 69, 400, true),
                     expression(4, 0.125, 410),
                     note(4, 1, 69, 420, false),
@@ -436,19 +446,19 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
     let prior = inspect_hub(&hub, |hub| hub.test_plan_binding(2, request.life).unwrap());
     assert_eq!(prior.decision, 4, "the successor is bound before accepted divergence");
     for index in [1, 0] {
-        let sink = sources[index].run_format(2560, vec![], None, None, 512);
+        let sink = sources[index].run_format(3072, vec![], None, None, 512);
         actual[index]
-            .extend(sink.values.into_iter().map(|(time, event)| (2560 + i64::from(time), event)));
+            .extend(sink.values.into_iter().map(|(time, event)| (3072 + i64::from(time), event)));
     }
-    assert_eq!(actual[1][0].0, 2560, "B is exactly64 samples late");
+    assert_eq!(actual[1][0].0, 3072, "B is exactly64 samples late");
     assert_eq!(actual.iter().map(Vec::len).sum::<usize>(), 6);
-    hub.run_format(2560, vec![], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
     assert!(
         inspect_hub(&hub, |hub| hub.test_recovery_progress()).contains("active=true"),
         "accepted addressed lateness starts the production protocol without a test request"
     );
     assert!(
-        sources[2].run_format(2560, vec![], None, None, 512).values.is_empty(),
+        sources[2].run_format(3072, vec![], None, None, 512).values.is_empty(),
         "the bound successor cannot claim its old generation after known divergence"
     );
     let held: Vec<_> = sources
@@ -460,7 +470,7 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
         })
         .collect();
     let mut rebound = None;
-    let mut raw = 2560;
+    let mut raw = 3072;
     for iteration in 0..320 {
         raw += 512;
         for (index, source) in sources.iter().enumerate() {
@@ -509,12 +519,12 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
     assert!(actual[0][2].1.release());
     assert_eq!(
         actual[0][2].0,
-        3072 + 7 + 512,
+        3584 + 7 + 512,
         "an established release remains responsive while another Source's onset is fenced"
     );
     assert!(actual[0][2].0 < onset);
     println!(
-        "AUTOMATIC successor onset={onset}, original due=2960, decision={}, emission={}",
+        "AUTOMATIC successor onset={onset}, original due=3472, decision={}, emission={}",
         rebound.decision, rebound.emission
     );
     let settled = inspect_hub(&hub, |hub| hub.test_recovery_identity());
@@ -1439,7 +1449,7 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
     let mut hub_max = 0;
     let mut callback_sum = 0;
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2051,7 +2061,7 @@ fn production_crossed_status_query_and_disposition_free_each_others_reply_lane()
 fn production_three_sources_form_one_sequential_assignment_chain() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2125,7 +2135,7 @@ fn production_three_sources_form_one_sequential_assignment_chain() {
 fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2171,7 +2181,7 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 fn production_full_capture_window_consumes_following_completeness_without_eviction() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);
@@ -2236,17 +2246,18 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
             for output_order in orders {
                 for hub_first in [false, true] {
                     let uuid = SavedUuid::default();
-                    let calibration = Calibration { offset: 0, validated: true };
+                    let calibration = Calibration { offset: 0 };
                     let mut hub = Device::new(false);
                     hub.configure_format(uuid, true, calibration);
                     hub.activate_format(44100.0, 512);
                     let sources: [Device; 3] = std::array::from_fn(|_| {
                         let mut source = Device::new(true);
-                        source.configure_format(uuid, true, Calibration { offset, ..calibration });
+                        source.configure_format(uuid, true, Calibration { offset });
                         source.activate_format(44100.0, 512);
                         source
                     });
-                    for raw in [0, 512, 1024] {
+                    // Initial enrollment waits for the Hub's first real audio progress.
+                    for raw in [0, 512, 1024, 1536] {
                         for source in &sources {
                             source.run_format(raw, vec![], None, None, 512);
                         }
@@ -2255,7 +2266,7 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
                     for index in capture_order {
                         assert!(sources[index]
                             .run_format(
-                                1536,
+                                2048,
                                 vec![note(
                                     index as i32,
                                     0,
@@ -2270,13 +2281,13 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
                             .values
                             .is_empty());
                     }
-                    hub.run_format(1536, vec![], None, None, 512);
+                    hub.run_format(2048, vec![], None, None, 512);
                     if hub_first {
-                        hub.run_format(2048, vec![], None, None, 512);
+                        hub.run_format(2560, vec![], None, None, 512);
                     }
                     let late = !hub_first && i64::from(onset_offset) + offset >= 512;
                     for index in output_order {
-                        let output = sources[index].run_format(2048, vec![], None, None, 512);
+                        let output = sources[index].run_format(2560, vec![], None, None, 512);
                         if late {
                             assert!(output.values.is_empty());
                         } else {
@@ -2284,10 +2295,10 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
                         }
                     }
                     if !hub_first {
-                        hub.run_format(2048, vec![], None, None, 512);
+                        hub.run_format(2560, vec![], None, None, 512);
                     }
                     for index in output_order {
-                        let output = sources[index].run_format(2560, vec![], None, None, 512);
+                        let output = sources[index].run_format(3072, vec![], None, None, 512);
                         if late {
                             assert_assignment_output(&output, index, 0);
                         } else {
@@ -2300,18 +2311,18 @@ fn production_d512_boundaries_keep_canonical_pitch_across_callback_permutations(
                             if late { 512 - u64::from(onset_offset) } else { 0 }
                         );
                     }
-                    hub.run_format(2560, vec![], None, None, 512);
+                    hub.run_format(3072, vec![], None, None, 512);
                     for (index, source) in sources.iter().enumerate() {
                         source.run_format(
-                            3072,
+                            3584,
                             vec![note(index as i32, 0, 60 + index as i16 * 2, 0, false)],
                             None,
                             None,
                             512,
                         );
                     }
-                    hub.run_format(3072, vec![], None, None, 512);
-                    for raw in (3584..7680).step_by(512) {
+                    hub.run_format(3584, vec![], None, None, 512);
+                    for raw in (4096..8192).step_by(512) {
                         for source in &sources {
                             source.run_format(raw, vec![], None, None, 512);
                         }
@@ -2344,7 +2355,7 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
             for output_order in orders {
                 for hub_position in 0..4 {
                     let uuid = SavedUuid::default();
-                    let calibration = Calibration { offset: 0, validated: true };
+                    let calibration = Calibration { offset: 0 };
                     let mut hub = Device::new(false);
                     hub.configure_format(uuid, true, calibration);
                     hub.activate_format(44100.0, 512);
@@ -2353,12 +2364,13 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
                         source.configure_format(
                             uuid,
                             true,
-                            Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+                            Calibration { offset: if index == 1 { 64 } else { 0 } },
                         );
                         source.activate_format(44100.0, 512);
                         source
                     });
-                    for raw in [0, 512, 1024] {
+                    // Initial enrollment waits for the Hub's first real audio progress.
+                    for raw in [0, 512, 1024, 1536] {
                         for source in &sources {
                             source.run_format(raw, vec![], None, None, 512);
                         }
@@ -2366,39 +2378,9 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
                     }
                     // All three onsets name one mapped sample. At B448/511,
                     // A/C's original input belongs to their NEXT host callback.
-                    let onsets = [1536 + b_offset + 64, 1536 + b_offset, 1536 + b_offset + 64];
+                    let onsets = [2048 + b_offset + 64, 2048 + b_offset, 2048 + b_offset + 64];
                     for index in capture_order {
-                        let events = if onsets[index] < 2048 {
-                            vec![note(
-                                index as i32,
-                                0,
-                                60 + index as i16 * 2,
-                                (onsets[index] - 1536) as u32,
-                                true,
-                            )]
-                        } else {
-                            vec![]
-                        };
-                        assert!(sources[index]
-                            .run_format(1536, events, None, None, 512)
-                            .values
-                            .is_empty());
-                    }
-                    hub.run_format(1536, vec![], None, None, 512);
-                    let before_hub = &output_order[..hub_position.min(3)];
-                    let b_late = b_offset != 447
-                        && !(before_hub.contains(&0)
-                            && before_hub.contains(&2)
-                            && !before_hub.contains(&1));
-                    let mut actual = [None; 3];
-                    for (position, index) in
-                        output_order.into_iter().map(Some).chain(std::iter::once(None)).enumerate()
-                    {
-                        if position == hub_position {
-                            hub.run_format(2048, vec![], None, None, 512);
-                        }
-                        let Some(index) = index else { continue };
-                        let events = if onsets[index] >= 2048 {
+                        let events = if onsets[index] < 2560 {
                             vec![note(
                                 index as i32,
                                 0,
@@ -2409,24 +2391,54 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
                         } else {
                             vec![]
                         };
-                        let output = sources[index].run_format(2048, events, None, None, 512);
-                        if !output.values.is_empty() {
-                            let time = (onsets[index] + 512 - 2048) as u32;
-                            assert_assignment_output(&output, index, time);
-                            actual[index] = Some(2048 + i64::from(time));
-                        }
+                        assert!(sources[index]
+                            .run_format(2048, events, None, None, 512)
+                            .values
+                            .is_empty());
                     }
-                    hub.run_format(2560, vec![], None, None, 512);
-                    for index in output_order {
-                        let output = sources[index].run_format(2560, vec![], None, None, 512);
+                    hub.run_format(2048, vec![], None, None, 512);
+                    let before_hub = &output_order[..hub_position.min(3)];
+                    let b_late = b_offset != 447
+                        && !(before_hub.contains(&0)
+                            && before_hub.contains(&2)
+                            && !before_hub.contains(&1));
+                    let mut actual = [None; 3];
+                    for (position, index) in
+                        output_order.into_iter().map(Some).chain(std::iter::once(None)).enumerate()
+                    {
+                        if position == hub_position {
+                            hub.run_format(2560, vec![], None, None, 512);
+                        }
+                        let Some(index) = index else { continue };
+                        let events = if onsets[index] >= 2560 {
+                            vec![note(
+                                index as i32,
+                                0,
+                                60 + index as i16 * 2,
+                                (onsets[index] - 2560) as u32,
+                                true,
+                            )]
+                        } else {
+                            vec![]
+                        };
+                        let output = sources[index].run_format(2560, events, None, None, 512);
                         if !output.values.is_empty() {
-                            assert!(actual[index].is_none(), "no duplicate assignment output");
-                            let time = (onsets[index] + 512).max(2560) as u32 - 2560;
+                            let time = (onsets[index] + 512 - 2560) as u32;
                             assert_assignment_output(&output, index, time);
                             actual[index] = Some(2560 + i64::from(time));
                         }
+                    }
+                    hub.run_format(3072, vec![], None, None, 512);
+                    for index in output_order {
+                        let output = sources[index].run_format(3072, vec![], None, None, 512);
+                        if !output.values.is_empty() {
+                            assert!(actual[index].is_none(), "no duplicate assignment output");
+                            let time = (onsets[index] + 512).max(3072) as u32 - 3072;
+                            assert_assignment_output(&output, index, time);
+                            actual[index] = Some(3072 + i64::from(time));
+                        }
                         let expected =
-                            if index == 1 && b_late { 2560 } else { onsets[index] + 512 };
+                            if index == 1 && b_late { 3072 } else { onsets[index] + 512 };
                         assert_eq!(actual[index], Some(expected), "B{b_offset} capture={capture_order:?} output={output_order:?} Hub={hub_position}, source={index}");
                         assert_eq!(sources[index].latency(), 512);
                         assert_eq!(
@@ -2437,15 +2449,15 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
                     }
                     for (index, source) in sources.iter().enumerate() {
                         source.run_format(
-                            3072,
+                            3584,
                             vec![note(index as i32, 0, 60 + index as i16 * 2, 0, false)],
                             None,
                             None,
                             512,
                         );
                     }
-                    hub.run_format(3072, vec![], None, None, 512);
-                    for raw in (3584..7680).step_by(512) {
+                    hub.run_format(3584, vec![], None, None, 512);
+                    for raw in (4096..8192).step_by(512) {
                         for source in &sources {
                             source.run_format(raw, vec![], None, None, 512);
                         }
@@ -2461,7 +2473,7 @@ fn production_mixed_calibration_requires_every_sources_next_interval() {
 fn production_partial_onset_preserves_actual_pitch_debt_and_take_fault() {
     let _scope = crate::test_scope::enter();
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
     crate::configuration::inject_recorder(recorder);
     let mut hub = Device::new(false);
@@ -2758,7 +2770,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
     for b_offset in [447i64, 448, 511] {
         for favorable in [true, false] {
             let uuid = SavedUuid::default();
-            let calibration = Calibration { offset: 0, validated: true };
+            let calibration = Calibration { offset: 0 };
             let mut hub = Device::new(false);
             hub.configure_format(uuid, true, calibration);
             hub.activate_format(44100.0, 512);
@@ -2767,13 +2779,14 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                 source.configure_format(
                     uuid,
                     true,
-                    Calibration { offset: if index == 1 { 64 } else { 0 }, ..calibration },
+                    Calibration { offset: if index == 1 { 64 } else { 0 } },
                 );
                 source.activate_format(44100.0, 512);
                 source
             });
             let mut setup = [0; 3];
-            for raw in [0, 512, 1024] {
+            // Initial enrollment waits for the Hub's first real audio progress.
+            for raw in [0, 512, 1024, 1536] {
                 for (index, source) in sources.iter().enumerate() {
                     let input = if raw == 0 {
                         [64, 66, 69].into_iter().map(|cc| raw_midi([0xb0, cc, 0], 0)).collect()
@@ -2785,10 +2798,10 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                 hub.run_format(raw, vec![], None, None, 512);
             }
             assert_eq!(setup, [3; 3], "accepted neutral controller precondition");
-            let onsets = [1536 + b_offset + 64, 1536 + b_offset, 1536 + b_offset + 64];
+            let onsets = [2048 + b_offset + 64, 2048 + b_offset, 2048 + b_offset + 64];
             let mut actual: [Vec<(i64, Event)>; 3] = std::array::from_fn(|_| Vec::new());
             let mut extra = [0; 3];
-            for raw in (1536..7168).step_by(512) {
+            for raw in (2048..7680).step_by(512) {
                 // At the decisive callback, favorable is A,C,Hub,B; adverse is
                 // B,A,C,Hub. Events are sorted across all five notes and split
                 // at their actual enclosing boundaries, including +10/+20.
@@ -2836,7 +2849,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
             assert_eq!(actual.iter().map(Vec::len).sum::<usize>(), 60);
             // The real finite recovery reader outlives these short gestures.
             // Its32-callback inventory scan keeps Originals pinned until ACK.
-            for raw in (7168..7168 + 128 * 512).step_by(512) {
+            for raw in (7680..7680 + 128 * 512).step_by(512) {
                 for source in &sources {
                     assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
                     assert_eq!(source.source_snapshot().faults, 0);
@@ -2901,7 +2914,7 @@ fn production_terminal_nonmember_fault_preserves_the_healthy_frozen_cohort() {
             setup::Routing::Hub(value) => value.uuid,
             _ => unreachable!(),
         };
-        let calibration = Calibration { offset: 0, validated: true };
+        let calibration = Calibration { offset: 0 };
         source.run_format(
             1536,
             (0..64).map(|id| note(id, 0, id as i16, 0, true)).collect(),
@@ -3374,7 +3387,7 @@ fn production_destroyed_held_source_closes_pending_peer_without_fabricating_rele
     // The real destroyed producer cannot accept an Off. Its physical debt
     // intentionally retains an owner, isolated from unrelated registry tests.
     let uuid = SavedUuid::default();
-    let calibration = Calibration { offset: 0, validated: true };
+    let calibration = Calibration { offset: 0 };
     let mut hub = Device::new(false);
     hub.configure_format(uuid, true, calibration);
     hub.activate_format(44100.0, 512);

@@ -221,6 +221,13 @@ impl Registry {
     pub fn test_session(&self, uuid: SavedUuid) -> Arc<SessionControl> {
         self.hubs.iter().flatten().find(|h| h.uuid == uuid && !h.retired).unwrap().session.clone()
     }
+    #[cfg(all(test, not(feature = "tuning-probe")))]
+    pub fn test_initialize_hub_clock(&self, bridge: &Arc<HubBridge>) {
+        // Capacity/refusal fixtures also activate Hubs that have no session.
+        if let Some(hub) = self.hubs.iter().flatten().find(|h| Arc::ptr_eq(&h.bridge, bridge)) {
+            hub.session.hub_through.store(0, Ordering::Release);
+        }
+    }
     #[cfg(test)]
     pub fn test_counts(&self) -> (usize, usize, usize) {
         (

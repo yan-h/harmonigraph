@@ -468,7 +468,7 @@ impl Hub {
         self.merged = 0;
         self.sequencer.work = 0;
         self.plan_callback();
-        let offset = if self.direct.initial_direct() { 0 } else { self.clock.calibration.offset };
+        let offset = self.clock.calibration.offset;
         owner.recording.hub_offset = offset;
         self.publication_clock = owner.recording.clock;
         owner.direct.offset = offset;
@@ -478,7 +478,7 @@ impl Hub {
             }
         }
         let coverage = self.clock.begin(callback.steady_time, callback.frames);
-        if self.clock.calibration.validated && coverage.is_none()
+        if coverage.is_none()
             || self.offer.as_ref().is_some_and(|offer| {
                 offer.session.faults.load(Ordering::Acquire) & super::source::CLOCK_FAULT != 0
             })
@@ -509,21 +509,18 @@ impl Hub {
             self.configuration_exhausted();
             return;
         }
-        let local_reset =
-            self.direct.initial_direct() && update.reset && !update.routing.calibration().validated;
-        if !(local_reset || update.routing.calibration().matches(self.rate, self.max_frames))
+        if !update.routing.calibration().matches(self.rate, self.max_frames)
             || !self.direct.transition_settled()
             || owner.direct.pending().is_some()
         {
-            self.trace.setup_wait = if !(local_reset
-                || update.routing.calibration().matches(self.rate, self.max_frames))
-            {
-                3
-            } else if !self.direct.transition_settled() {
-                4
-            } else {
-                5
-            };
+            self.trace.setup_wait =
+                if !update.routing.calibration().matches(self.rate, self.max_frames) {
+                    3
+                } else if !self.direct.transition_settled() {
+                    4
+                } else {
+                    5
+                };
             return;
         }
         let Some(offer) = &self.offer else {
@@ -563,7 +560,7 @@ impl Hub {
             return;
         };
         let clock = ClockId { epoch, ..self.publication_clock };
-        let offset = if local_reset { 0 } else { update.routing.calibration().offset };
+        let offset = update.routing.calibration().offset;
         if !owner.recording.commit_clock(clock, offset) {
             self.trace.setup_wait = 10;
             return;

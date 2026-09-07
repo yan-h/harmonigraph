@@ -483,7 +483,7 @@ impl Hub {
         if self.test_aggregation {
             return false;
         }
-        !self.sequencer.retired && !self.direct.initial_direct()
+        !self.sequencer.retired
     }
 
     fn input_window(&self, source: usize) -> &Window<Intent, INTENT_RING> {

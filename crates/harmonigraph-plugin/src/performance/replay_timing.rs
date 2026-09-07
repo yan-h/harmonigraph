@@ -52,7 +52,7 @@ struct Episode {
 impl Episode {
     fn new(variant: &'static str) -> Self {
         let uuid = SavedUuid::default();
-        let calibration = Calibration { offset: 0, validated: true };
+        let calibration = Calibration { offset: 0 };
         let (mut hub, capture) = Device::recorded_aggregation_hub();
         hub.configure_format(uuid, true, calibration);
         hub.activate_format(44100.0, FRAMES);

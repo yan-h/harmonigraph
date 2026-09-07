@@ -14,15 +14,16 @@ The [measured topology and calibration restrictions](adaptive-tuning.md#session-
 Keep **Participating** on in each Tune editor.
 **Automatic: exactly one hub** pairs a unique compatible hub;
 choose the intended hub explicitly when needed and resolve missing/ambiguous status before playing.
-3. The Hub and Tune read sample rate and maximum buffer size automatically from host activation and display them read-only.
-In the Hub's **Session** menu and each Tune editor, set only the routing's signed sample offset.
-Use **I validated the signed offset for this routing** and **Apply / Reinitialize**, then check the displayed adopted clock/status.
-A zero offset alone does not establish calibration;
-revalidate after routing or delay-compensation changes.
+3. Hub and Tune start automatically with signed offset zero and read sample rate and maximum buffer size from host activation.
+No validation checkbox or first-use Apply is required.
+The Hub's **Session** menu and each Tune editor expose an advanced signed sample offset for a known routing delay;
+use **Apply / Reinitialize** after changing that offset.
+Automatic setup does not measure graph or delay-compensation latency.
+Actual host format, steady-time continuity and arithmetic checks still suspend playback when their clock evidence fails.
 After a host rate or buffer change, reload the plugin instances to start a fresh session with the new automatic format.
 Live reactivation still preserves old ownership and may remain pending at the existing settlement boundary, tracked in [issue #703](https://github.com/yan-h/harmonigraph/issues/703).
-Old saved rate and buffer keys are ignored and are no longer written;
-routing offsets and their validation flags retain their meaning.
+Old saved rate, buffer and manual validation keys are ignored and are no longer written;
+saved routing retains only its signed offset.
 4. In the Hub's **Tuning** pane, turn both **Auto** switches and **Learn** off, then press **Just** to release both temperament locks and set the independent Just axes.
 Use a zero C offset for comparison with the fixtures.
 The fresh locked 12-TET defaults intentionally yield zero adaptive correction, so they cannot demonstrate Just retuning.
@@ -36,12 +37,28 @@ Fresh Bitwig controller initialization is still unverified.
 The ordinary unknown-pedal second-phrase limitation in [#696](https://github.com/yan-h/harmonigraph/issues/696) remains;
 known-neutral fixtures and the settings above do not prove that the host initializes CC64/66/69.
 
-The first-use callback regression includes idle processing and an unsounded On/Off before the routing-validation Apply.
-Apply cancels that unpublished phrase locally;
-it must not later become a Hub plan after validation, because the Source has no remote cancellation or live request left to retire that plan.
-The next onset receives nonzero Just tuning and its real release, and a later Apply settles normally.
-This fixes that concrete startup sequence;
+The first-use callback regression starts three Tunes before the Hub, then resets the Hub before its first audio callback, matching the silent live instance's startup ordering.
+Registry offers initially carry a provisional epoch;
+a Tune now waits for the Hub's first published audio progress before sending its first adoption, baseline or input prefix and uses that established epoch.
+A Hub becoming ready during the Tune callback cannot turn this wait into a clock fault.
+Already published/adopted streams retain their existing epoch recovery rules.
+The regression runs both fresh defaults and real restores containing obsolete `validated: false` and zero/mismatched format keys, accepting fifteen Just-tuned notes and their releases without a setup click.
+Its first C/E/G On/Off gesture and actual neutral controller inputs arrive after Hub registration/reset but before its first audio callback;
+after enrollment, the original notes emerge with their release spacing preserved.
+These earliest inputs can miss D512 and enter the existing sliced lateness recovery;
+the fixture proves that recovery settles before its four later gestures.
+This fixes the measured initial enrollment failure;
 it does not claim every setup wait or live reactivation path is resolved.
+
+Configuration-consumer tests explicitly select the existing observation-only apparatus, preserving their intentional marker-retention and publication-loss scenarios.
+The older D0 aggregation apparatus supplies a simulated initialized Hub clock;
+it does not test first enrollment.
+Factory-default startup, ordinary musical output and DIRECT zero-delay/reactivation fixtures do not use those overrides.
+A separate raw-forwarding fixture includes 1,025 events at one sample, above the musical cohort limit of 1,024.
+With production sequencing that shape fills DIRECT ingress before its complete-sample proof can advance;
+physical forwarding completes but capture retirement stalls, recorded in [issue #707](https://github.com/yan-h/harmonigraph/issues/707).
+The raw-forwarding test therefore explicitly isolates observation behavior;
+no capacity increase or partial-cohort rule is included here.
 
 ## Production diagnostics
 
@@ -58,6 +75,8 @@ coverage lag, rounded to seconds for the change key, still exposes a stalled pee
 No editor, worker, new transport message or persisted field is involved, and diagnostics never mark setup dirty.
 
 Each Source reports consumed note On/Off counts, accepted note output counts and last actual pitch, received assignments/correction, adoption, retained work, and the actual setup wait.
+`last_output_player_mc` and `last_output_correction_mc` come from the same factual voice as `last_output_key` and `last_output_pitch_mc`;
+`last_correction_mc` instead describes the most recently received assignment and can belong to another note.
 Each Hub reports the last published Source/key/pitch together, resolved tuning axes/locks/Auto/Learn, transition/input/publication wait reasons and source slot, credits, and each row's membership, coverage and retention.
 `*_mc` values are microcents (1,000,000 per cent); sample frontiers use the shared mapped clock, `raw_end` uses the host clock, and the minimum signed integer denotes an absent frontier.
 Counters are cumulative per instance; a last note remains historical after its release.

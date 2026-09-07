@@ -27,143 +27,141 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
 }
 
 #[test]
-fn production_musical_host_format_is_automatic_for_first_use_and_stale_restore() {
+fn production_musical_setup_is_automatic_when_three_sources_precede_hub_audio() {
     let _scope = crate::test_scope::enter();
     for (restored, rate, frames) in [(false, 44100.0, 512u32), (true, 48000.0, 256)] {
-        let mut hub = Device::new(false);
-        let mut source = Device::new(true);
-        if restored {
-            // Real state-load path: obsolete zero/mismatched host values must
-            // neither invalidate the clock nor survive the next state save.
-            for device in [&hub, &source] {
-                let mut state = device.save();
-                let field = if device.tuner { setup::SOURCE_FIELD } else { setup::HUB_FIELD };
-                let mut routing: serde_json::Value =
-                    serde_json::from_str(&state.fields[field]).unwrap();
-                routing["calibration"]["sample_rate"] = serde_json::json!(0.0);
-                routing["calibration"]["max_frames"] = serde_json::json!(17);
-                routing["calibration"]["validated"] = serde_json::json!(true);
-                state.fields.insert(field.into(), routing.to_string());
-                assert!(device.load(&state));
-                let saved: serde_json::Value =
-                    serde_json::from_str(&device.save().fields[field]).unwrap();
-                assert!(saved["calibration"].get("sample_rate").is_none());
-                assert!(saved["calibration"].get("max_frames").is_none());
+        let restore = |device: &Device| {
+            if !restored {
+                return;
             }
-        }
-        configure(&hub, Tuning::just());
+            // Real state-load path: obsolete manual validation and host format
+            // fields neither disable playback nor survive the next save.
+            let mut state = device.save();
+            let field = if device.tuner { setup::SOURCE_FIELD } else { setup::HUB_FIELD };
+            let mut routing: serde_json::Value =
+                serde_json::from_str(&state.fields[field]).unwrap();
+            routing["calibration"]["sample_rate"] = serde_json::json!(0.0);
+            routing["calibration"]["max_frames"] = serde_json::json!(17);
+            routing["calibration"]["validated"] = serde_json::json!(false);
+            state.fields.insert(field.into(), routing.to_string());
+            assert!(device.load(&state));
+            let saved: serde_json::Value =
+                serde_json::from_str(&device.save().fields[field]).unwrap();
+            assert_eq!(saved["calibration"], serde_json::json!({"offset": 0}));
+        };
+        let mut sources: [Device; 3] = std::array::from_fn(|_| {
+            let mut source = Device::new(true);
+            restore(&source);
+            source.activate_format(rate, frames);
+            source
+        });
+        let mut output: [Vec<(u32, Event)>; 3] = std::array::from_fn(|_| Vec::new());
+        let mut startup: [Vec<(i64, Event)>; 3] = std::array::from_fn(|_| Vec::new());
         let mut raw = 0;
+        for _ in 0..3 {
+            for source in &mut sources {
+                source.run_format(raw, vec![], None, None, frames);
+            }
+            raw += i64::from(frames);
+        }
+        let mut hub = Device::new(false);
+        restore(&hub);
+        configure(&hub, Tuning::just());
         hub.activate_format(rate, frames);
-        source.activate_format(rate, frames);
-        if !restored {
-            // The editor opens after processing starts. These ordinary notes
-            // arrive before the first routing validation and remain unsounded.
-            for step in 0..8 {
+        // Bitwig can reset a restored Hub before its first audio callback.
+        // Registry offers still contain the provisional epoch at this point.
+        unsafe { (*hub.plugin).reset.unwrap()(hub.plugin) };
+        // Initial enrollment can miss D512; allow the existing sliced lateness
+        // recovery to settle before starting the four later gestures.
+        for step in 0..96 {
+            for (index, source) in sources.iter_mut().enumerate() {
                 source.main();
-                hub.main();
+                // Real input after Hub registration/reset but before its first
+                // audio callback must survive the initial enrollment wait.
+                let key = [60, 64, 67][index];
                 let input = match step {
-                    2 => vec![note(0, 0, 64, 0, true)],
-                    4 => vec![note(0, 0, 64, 0, false)],
+                    0 => {
+                        let mut input: Vec<_> =
+                            [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into();
+                        input.push(note(0, 0, key, 0, true));
+                        input
+                    }
+                    1 => vec![note(0, 0, key, 0, false)],
                     _ => vec![],
                 };
-                assert!(source.run_format(raw, input, None, None, frames).values.is_empty());
-                hub.run_format(raw, vec![], None, None, frames);
-                raw += i64::from(frames);
+                let sink = source.run_format(raw, input, None, None, frames);
+                startup[index].extend(
+                    sink.values.iter().map(|(time, event)| (raw + i64::from(*time), *event)),
+                );
+                output[index].extend(sink.values);
+                assert_eq!(source.source_snapshot().faults, 0);
             }
-            let before = source.source_snapshot();
-            assert_eq!((before.pending, before.lives, before.captures), (2, 1, 0));
-            // The ordinary UI action validates only the routing offset.
-            // No setup packet contains a user-entered rate or buffer size.
-            for device in [&hub, &source] {
-                let routing = match device.shared().value().routing {
-                    setup::Routing::Hub(mut value) => {
-                        value.calibration.validated = true;
-                        setup::Routing::Hub(value)
-                    }
-                    setup::Routing::Source(mut value) => {
-                        value.calibration.validated = true;
-                        setup::Routing::Source(value)
-                    }
-                };
-                device.shared().apply(routing, true).unwrap();
-            }
-        }
-        // Recovery enumerates 8192 lifetime slots in slices of 256,
-        // then exchanges its inventory and settlement acknowledgements.
-        for _ in 0..64 {
-            source.main();
             hub.main();
-            source.run_format(raw, vec![], None, None, frames);
             hub.run_format(raw, vec![], None, None, frames);
             raw += i64::from(frames);
         }
-        for device in [&hub, &source] {
+        for device in [&hub, &sources[0], &sources[1], &sources[2]] {
             let shared = device.shared();
             let adopted = shared.adopted().unwrap();
             assert_eq!((adopted.sample_rate, adopted.max_frames), (rate, frames));
-            assert!(
-                adopted.valid,
-                "tuner={} restore={restored}, {adopted:?}, source={} hub={}",
-                device.tuner,
-                inspect_source(&source, |s| s.test_reset_progress()),
-                inspect_hub(&hub, |h| h.direct.test_reset_progress())
+            assert!(adopted.valid, "restore={restored}: {adopted:?}");
+            assert_eq!(adopted.generation, shared.value().generation);
+        }
+        for events in &startup {
+            let onset = events.iter().find(|(_, event)| event.attack().is_some()).unwrap().0;
+            let release = events.iter().find(|(_, event)| event.release()).unwrap().0;
+            assert_eq!(release - onset, i64::from(frames), "the original startup gesture survives");
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|(_, event)| matches!(
+                        event,
+                        Event::Midi { data: [0xb0, 64 | 66 | 69, 0], .. }
+                    ))
+                    .count(),
+                3
             );
-            assert_eq!(adopted.generation, shared.value().generation);
         }
-        // Apply cancelled the unadopted phrase. It cannot mint a Hub plan
-        // whose recycled lifetime slot would pin the next ordinary onset.
-        assert!(inspect_hub(&hub, |h| h.test_plan_state(0, 0)).is_none());
-        let channel = 0;
-        let mut output = Vec::new();
-        for step in 0..8 {
-            let input = if step == 0 { vec![note(1, channel, 64, 0, true)] } else { vec![] };
-            output.extend(source.run_format(raw, input, None, None, frames).values);
-            hub.run_format(raw, vec![], None, None, frames);
-            raw += i64::from(frames);
+        for source in &sources {
+            let state = source.source_snapshot();
+            assert_eq!((state.held, state.pending, state.faults), (0, 0, 0), "{state:?}");
         }
-        assert_eq!(
-            output.iter().filter(|(_, event)| event.attack().is_some()).count(),
-            1,
-            "restore={restored}, source={} hub={} output={output:?}",
-            inspect_source(&source, |s| s.test_reset_progress()),
-            inspect_hub(&hub, |h| h.direct.test_reset_progress())
-        );
-        assert!(output.iter().any(|(_, event)| matches!(event, Event::Expression { kind: CLAP_NOTE_EXPRESSION_TUNING, value, .. } if *value != 0.0)), "accepted output must contain nonzero tuning");
-        let voice = inspect_source(&source, |source| *source.state.voices().next().unwrap());
-        assert_ne!(voice.pitch_microcents, 64 * 100_000_000, "Just E must actually be retuned");
-        assert!(voice.attack_node.is_some());
-        for step in 0..16 {
-            let input = if step == 0 { vec![note(1, channel, 64, 0, false)] } else { vec![] };
-            output.extend(source.run_format(raw, input, None, None, frames).values);
-            hub.run_format(raw, vec![], None, None, frames);
-            raw += i64::from(frames);
+        // Five ordinary C/E/G cohorts exercise fifteen real accepted notes,
+        // including nonzero Just corrections and their matching releases.
+        for id in 1..5 {
+            for step in 0..16 {
+                for (index, source) in sources.iter_mut().enumerate() {
+                    let key = [60, 64, 67][index];
+                    let input = match step {
+                        0 => {
+                            let mut input: Vec<_> =
+                                [64, 66, 69].map(|cc| raw_midi([0xb0, cc, 0], 0)).into();
+                            input.push(note(id, 0, key, 0, true));
+                            input
+                        }
+                        8 => vec![note(id, 0, key, 0, false)],
+                        _ => vec![],
+                    };
+                    output[index].extend(source.run_format(raw, input, None, None, frames).values);
+                }
+                hub.run_format(raw, vec![], None, None, frames);
+                raw += i64::from(frames);
+            }
         }
-        assert_eq!(
-            output
-                .iter()
-                .filter(|(_, event)| matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_OFF, .. }))
-                .count(),
-            1
-        );
-        let snapshot = source.source_snapshot();
-        assert_eq!((snapshot.held, snapshot.pending, snapshot.faults), (0, 0, 0));
-        // A later click must settle too; the reported failure left both UIs
-        // pending once new input met that orphaned plan.
-        for device in [&hub, &source] {
-            device.shared().apply(device.shared().value().routing, true).unwrap();
-        }
-        for _ in 0..16 {
-            source.main();
-            hub.main();
-            source.run_format(raw, vec![], None, None, frames);
-            hub.run_format(raw, vec![], None, None, frames);
-            raw += i64::from(frames);
-        }
-        for device in [&hub, &source] {
-            let shared = device.shared();
-            let adopted = shared.adopted().unwrap();
-            assert!(adopted.valid);
-            assert_eq!(adopted.generation, shared.value().generation);
+        for (index, source) in sources.iter().enumerate() {
+            assert_eq!(
+                output[index].iter().filter(|(_, e)| e.attack().is_some()).count(),
+                5,
+                "source={index} restore={restored}: {:?}",
+                source.source_snapshot()
+            );
+            assert_eq!(output[index].iter().filter(|(_, e)| e.release()).count(), 5);
+            if index != 0 {
+                assert!(output[index].iter().any(|(_, event)| matches!(event,
+                    Event::Expression { kind: CLAP_NOTE_EXPRESSION_TUNING, value, .. } if *value != 0.0)));
+            }
+            let snapshot = source.source_snapshot();
+            assert_eq!((snapshot.held, snapshot.pending, snapshot.faults), (0, 0, 0));
         }
     }
 }
@@ -177,7 +175,7 @@ struct Phrase {
 impl Phrase {
     fn new() -> Self {
         let uuid = SavedUuid::default();
-        let calibration = Calibration { offset: 0, validated: true };
+        let calibration = Calibration { offset: 0 };
         let mut hub = Device::new(false);
         hub.configure_format(uuid, true, calibration);
         hub.activate_format(44100.0, 512);
@@ -328,6 +326,12 @@ fn production_diagnostics_identify_three_sources_and_apply_history_wait() {
     for _ in 0..96 {
         phrase.idle();
     }
+    let source_values = phrase.sources[0].shared().diagnostics.source.read().unwrap();
+    assert_eq!(field(SOURCE_FIELDS, &source_values, "last_output_player_mc"), 50_000_000);
+    assert_eq!(
+        field(SOURCE_FIELDS, &source_values, "last_output_correction_mc"),
+        phrase.voice(0, 60, 0).frozen_offset_microcents
+    );
     let hub_values = shared.diagnostics.hub.as_ref().unwrap().read().unwrap();
     assert_eq!(field(HUB_FIELDS, &hub_values, "last_published_source"), identities[0]);
     assert_eq!(field(HUB_FIELDS, &hub_values, "last_published_key"), 60);

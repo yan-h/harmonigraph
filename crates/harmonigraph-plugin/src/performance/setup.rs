@@ -109,7 +109,7 @@ struct Adoption {
     offset: AtomicI64,
     rate: AtomicU64,
     frames: AtomicU32,
-    flags: AtomicU32,
+    valid: AtomicBool,
 }
 impl Adoption {
     // The serialized performance owner is the only writer. All fields use the
@@ -121,10 +121,7 @@ impl Adoption {
         self.offset.store(value.calibration.offset, Ordering::SeqCst);
         self.rate.store(value.sample_rate.to_bits(), Ordering::SeqCst);
         self.frames.store(value.max_frames, Ordering::SeqCst);
-        self.flags.store(
-            u32::from(value.calibration.validated) | (u32::from(value.valid) << 1),
-            Ordering::SeqCst,
-        );
+        self.valid.store(value.valid, Ordering::SeqCst);
         self.sequence.fetch_add(1, Ordering::SeqCst);
     }
     fn read(&self) -> Option<Adopted> {
@@ -136,13 +133,13 @@ impl Adoption {
         let offset = self.offset.load(Ordering::SeqCst);
         let sample_rate = f64::from_bits(self.rate.load(Ordering::SeqCst));
         let max_frames = self.frames.load(Ordering::SeqCst);
-        let flags = self.flags.load(Ordering::SeqCst);
+        let valid = self.valid.load(Ordering::SeqCst);
         (self.sequence.load(Ordering::SeqCst) == sequence).then_some(Adopted {
             generation,
-            calibration: Calibration { offset, validated: flags & 1 != 0 },
+            calibration: Calibration { offset },
             sample_rate,
             max_frames,
-            valid: flags & 2 != 0,
+            valid,
         })
     }
 }

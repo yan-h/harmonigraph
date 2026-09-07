@@ -177,7 +177,14 @@ impl Device {
         stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        Self { plugin, _host: host, stats, active: false }
+        let device = Self { plugin, _host: host, stats, active: false };
+        // These fixtures isolate configuration/recording consumers, including
+        // intentionally retained timeline markers. Musical sequencing has its
+        // own factory-default acceptance fixtures under performance/tests.
+        device.wrapper().test_with_plugin(|plugin| {
+            plugin.aggregation.as_mut().unwrap().test_aggregation = true;
+        });
+        device
     }
     fn wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph> {
         unsafe { &*((*self.plugin).plugin_data.cast()) }

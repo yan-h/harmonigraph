@@ -1061,11 +1061,7 @@ fn session_controls(
                     ui.add(egui::DragValue::new(&mut calibration.offset));
                 });
                 ui.label("Sample rate and buffer size follow the host automatically.");
-                ui.checkbox(
-                    &mut calibration.validated,
-                    "I validated the signed offset for this routing",
-                );
-                ui.label("Revalidate the offset after routing or delay compensation changes.");
+                ui.label("Offset defaults to zero; adjust only for a known routing delay.");
                 if ui.button("Apply / Reinitialize").clicked() {
                     let value = crate::performance::routing::HubSetup {
                         calibration: *calibration,
@@ -1089,9 +1085,6 @@ fn session_controls(
                         adopted.max_frames,
                         if adopted.valid { "valid" } else { "reinitialization required" },
                     ));
-                }
-                if !saved.calibration.validated {
-                    ui.label("Validate the routing offset to enable tuning from Tune.");
                 }
                 ui.label(if applied == accepted.generation {
                     "Setup adopted"
@@ -1186,7 +1179,6 @@ mod tests {
         let setup::Routing::Hub(applied) = shared.value().routing else { unreachable!() };
         assert_eq!(applied.uuid, restored.uuid);
         assert_ne!(applied.calibration.offset, restored.calibration.offset);
-        assert_eq!(applied.calibration.validated, restored.calibration.validated);
     }
 
     /// The floor this window is held to and the floor the pane layout dials to

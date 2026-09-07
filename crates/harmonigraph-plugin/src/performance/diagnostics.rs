@@ -56,6 +56,8 @@ pub(super) const SOURCE_FIELDS: &[&str] = &[
     "pending_gate",
     "output_settlement_wait",
     "status_query",
+    "last_output_player_mc",
+    "last_output_correction_mc",
 ];
 pub(super) const HUB_FIELDS: &[&str] = &[
     "session",
@@ -340,6 +342,8 @@ pub(super) struct Counts {
     pub output_off: u64,
     pub last_output_key: Option<u8>,
     pub last_output_pitch: i64,
+    pub last_output_player: i64,
+    pub last_output_correction: i64,
     pub assignments: u64,
     pub decision: u64,
     pub correction: i32,
@@ -385,7 +389,7 @@ impl Counts {
             self.input_off = self.input_off.saturating_add(1);
         }
     }
-    pub(super) fn output(&mut self, event: Event, pitch: Option<(u8, i64)>, source: u64) {
+    pub(super) fn output(&mut self, event: Event, pitch: Option<(u8, i64, f64, i64)>, source: u64) {
         if let Some((_, _, key, _)) = event.attack() {
             self.output_on = self.output_on.saturating_add(1);
             self.last_output_key = Some(key);
@@ -393,9 +397,11 @@ impl Counts {
         } else if event.release() {
             self.output_off = self.output_off.saturating_add(1);
         }
-        if let Some((key, pitch)) = pitch {
+        if let Some((key, pitch, player, correction)) = pitch {
             self.last_output_key = Some(key);
             self.last_output_pitch = pitch;
+            self.last_output_player = (player * 100_000_000.0).round() as i64;
+            self.last_output_correction = correction;
         }
     }
 }

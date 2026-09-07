@@ -12,9 +12,11 @@ fn inspect_hub<R>(device: &Device, f: impl FnOnce(&hub::Hub) -> R) -> R {
 }
 
 #[test]
-fn production_initial_direct_replays_known_channel_setup_after_bounded_output_delay() {
+fn observation_direct_replays_known_channel_setup_after_bounded_output_delay() {
     let _scope = crate::test_scope::enter();
-    let mut hub = Device::new(false);
+    // Isolate physical forwarding/prefix replay: this burst includes 1025 events at one sample and
+    // exceeds the musical cohort bound and is not a sequencing fixture.
+    let mut hub = Device::aggregation(false);
     hub.activate();
     let midi = |data| {
         Input::Midi(clap_event_midi {
@@ -78,7 +80,7 @@ fn production_initial_direct_replays_known_channel_setup_after_bounded_output_de
         (state.held, state.pending, state.captures, state.lives, state.journal),
         (0, 0, 0, 0, 0)
     );
-    assert!(!hub.shared().adopted().unwrap().calibration.validated);
+    assert!(hub.shared().adopted().unwrap().valid);
 }
 
 #[test]
@@ -127,7 +129,7 @@ fn production_initial_direct_survives_settled_host_reactivation_without_route_ca
         );
         assert_eq!(snapshot.faults, 0);
         let adopted = hub.shared().adopted().unwrap();
-        assert!(!adopted.valid && !adopted.calibration.validated);
+        assert!(adopted.valid);
         if pass == 0 {
             unsafe {
                 (*hub.plugin).stop_processing.unwrap()(hub.plugin);
@@ -208,10 +210,7 @@ fn production_initial_direct_accepts_exact_zero_delay_phrase_without_route_calib
     assert_eq!((snapshot.held, snapshot.pending, snapshot.captures, snapshot.lives), (0, 0, 0, 0));
     assert_eq!(snapshot.faults, 0);
     let adopted = hub.shared().adopted().unwrap();
-    assert!(
-        !adopted.valid && !adopted.calibration.validated,
-        "local evidence never advertises a validated route"
-    );
+    assert!(adopted.valid, "the host establishes the default clock automatically");
     let invalid = hub.run(256, vec![note(28, 0, 62, 0, true)], None);
     assert!(!invalid.values.iter().any(|(_, event)| event.attack().is_some()));
     assert_ne!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults) & source::CLOCK_FAULT, 0);
@@ -248,14 +247,14 @@ fn production_initial_direct_accepts_exact_zero_delay_phrase_without_route_calib
     hub.run(raw + 64, vec![], None);
     hub.run(raw + 128, vec![], None);
     assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().pending), 0);
-    assert!(!hub.shared().adopted().unwrap().valid);
+    assert!(hub.shared().adopted().unwrap().valid);
 }
 
 #[test]
 fn production_calibrated_direct_drains_more_than_one_capture_window_on_empty_callbacks() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
-    hub.configure_format(SavedUuid::default(), true, Calibration { offset: 0, validated: true });
+    hub.configure_format(SavedUuid::default(), true, Calibration { offset: 0 });
     hub.activate_format(48000.0, 512);
     let mut input = vec![note(31, 0, 60, 0, true)];
     input.extend((1..512).map(|sample| expression(31, 0.125, sample)));
@@ -390,7 +389,6 @@ fn production_calibrated_direct_requires_valid_reset_after_clock_failure() {
     hub.run(64, vec![], None);
     hub.run(128, vec![], None);
     assert!(hub.run(256, vec![note(2, 0, 62, 0, true)], None).values.is_empty());
-    assert!(!inspect_hub(&hub, |hub| hub.direct.initial_direct()));
     let valid = hub.shared().value().routing;
     for block in 5..13 {
         assert!(hub.run(block * 64, vec![note(3, 0, 64, 1, true)], None).values.is_empty());
@@ -410,7 +408,6 @@ fn production_calibrated_direct_requires_valid_reset_after_clock_failure() {
     }
     assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults), 0);
     assert!(hub.shared().adopted().unwrap().valid);
-    assert!(!inspect_hub(&hub, |hub| hub.direct.initial_direct()));
     assert_eq!(
         hub.run(raw, vec![note(4, 0, 65, 1, true), note(4, 0, 65, 3, false)], None).values.len(),
         2
@@ -438,10 +435,7 @@ fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_in
     capture.drain_canonical();
     hub.shared()
         .apply(
-            setup::Routing::Hub(HubSetup {
-                uuid,
-                calibration: Calibration { offset: 64, validated: true },
-            }),
+            setup::Routing::Hub(HubSetup { uuid, calibration: Calibration { offset: 64 } }),
             false,
         )
         .unwrap();

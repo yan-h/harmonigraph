@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Calibration {
     pub offset: i64,
-    pub validated: bool,
 }
 
 impl Calibration {
     pub fn matches(self, rate: f64, frames: u32) -> bool {
-        self.validated && rate.is_finite() && rate > 0.0 && frames != 0
+        rate.is_finite() && rate > 0.0 && frames != 0
     }
     pub fn map(self, raw: i64) -> Option<i64> {
         raw.checked_add(self.offset)
@@ -35,46 +34,6 @@ pub struct Clock {
     raw_through: Option<i64>,
 }
 
-/// Initial standalone DIRECT proves only its own continuous callback interval.
-/// This evidence is never published as external route calibration.
-pub(super) struct LocalClock {
-    coverage: Option<Coverage>,
-    valid: bool,
-}
-impl Default for LocalClock {
-    fn default() -> Self {
-        Self { coverage: None, valid: true }
-    }
-}
-impl LocalClock {
-    pub fn invalidate(&mut self) {
-        self.valid = false;
-    }
-    pub fn valid(&self) -> bool {
-        self.valid
-    }
-    pub fn begin(&mut self, raw: i64, frames: u32, rate: f64, max_frames: u32) -> Option<Coverage> {
-        let through = raw.checked_add(i64::from(frames));
-        if !self.valid
-            || !rate.is_finite()
-            || rate <= 0.0
-            || raw < 0
-            || frames == 0
-            || frames > max_frames
-            || self.coverage.is_some_and(|old| old.through != raw)
-            || through.is_none()
-        {
-            self.valid = false;
-            return None;
-        }
-        let coverage = Coverage {
-            start: self.coverage.map_or(raw, |old| old.start),
-            through: through.unwrap(),
-        };
-        self.coverage = Some(coverage);
-        Some(coverage)
-    }
-}
 impl Clock {
     pub fn new(calibration: Calibration, rate: f64, max_frames: u32) -> Self {
         Self {

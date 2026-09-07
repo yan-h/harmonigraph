@@ -427,8 +427,10 @@ Reloaded instances use the new host format automatically.
 Live reactivation preserves old ownership and still requires the existing settlement boundary;
 changing the host format is not permission to discard accepted output.
 Initial support permits fixed calibrated routing and reinitialization after changes that invalidate track-clock alignment.
-Changes to branch latency require offset revalidation before adaptive sequencing resumes;
-automatic calibration through arbitrary graph edits is not claimed.
+Setup starts automatically at signed offset zero, using the host's actual format and continuous steady time;
+there is no manual validation checkbox.
+If a branch has a known timing offset, set that advanced offset explicitly and apply it after routing-latency changes.
+Automatic measurement of graph or delay-compensation latency is not claimed.
 Known held voices retain their offsets while the session reestablishes a valid baseline.
 If downstream held state is unknown, require an explicit voice reset and confirmed termination before rejoining.
 Continuous callbacks remain a supported-configuration requirement;

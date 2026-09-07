@@ -1,7 +1,7 @@
 //! Serialized ordinary performance owner. Storage is allocated before activation;
 //! only actual host completions establish output facts or settle reservations.
 use super::{
-    clock::{Calibration, Clock, Coverage, LocalClock},
+    clock::{Calibration, Clock, Coverage},
     event::Event,
     protocol::*,
     queue::Queue,
@@ -203,7 +203,6 @@ pub struct Source {
     attempt: u64,
     permit: Option<Permit>,
     pub clock: Clock,
-    local_clock: Option<LocalClock>,
     rate: f64,
     max_frames: u32,
     callback: Option<api::Callback>,
@@ -388,7 +387,6 @@ impl Source {
             attempt: 0,
             permit: None,
             clock: Clock::new(Calibration::default(), 0.0, 0),
-            local_clock: None,
             rate: 0.0,
             max_frames: 0,
             callback: None,
@@ -460,20 +458,12 @@ impl Source {
             self.clock.sample_rate = rate;
             self.clock.max_frames = max_frames;
             self.clock.valid = false;
-            if let Some(local) = &mut self.local_clock {
-                // Keep the never-calibrated authority marker, but no old
-                // callback validity. Only a settled Reset can start it again.
-                local.invalidate();
-            }
             self.shared.publish_clock(&self.clock);
             self.stop();
             return;
         }
         self.apply_setup();
         self.clock = Clock::new(self.shared.value().routing.calibration(), rate, max_frames);
-        if self.shared.source.is_none() && !self.clock.calibration.validated {
-            self.local_clock = Some(LocalClock::default());
-        }
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
         self.baseline_needed = true;
@@ -482,9 +472,6 @@ impl Source {
         assert!(self.settled());
         self.epoch = epoch;
         self.clock = Clock::new(self.clock.calibration, self.rate, self.max_frames);
-        if self.local_clock.is_some() {
-            self.local_clock = Some(LocalClock::default());
-        }
         self.shared.publish_clock(&self.clock);
         self.coverage = None;
         self.complete_through = i64::MIN;
@@ -519,11 +506,8 @@ impl Source {
             })
         })
     }
-    pub(super) fn initial_direct(&self) -> bool {
-        self.local_clock.is_some()
-    }
     fn output_clock_valid(&self) -> bool {
-        self.clock.valid || self.local_clock.as_ref().is_some_and(LocalClock::valid)
+        self.clock.valid
     }
     pub(super) fn completed_input(&self) -> Option<(Coverage, u64)> {
         if !self.input_complete {
@@ -746,15 +730,11 @@ impl Source {
             self.fault(INPUT_FAULT);
         }
         let valid = self.clock.valid;
-        let mut coverage = self.clock.begin(callback.steady_time, callback.frames);
-        if let Some(local) = &mut self.local_clock {
-            coverage =
-                local.begin(callback.steady_time, callback.frames, self.rate, self.max_frames);
-        }
+        let coverage = self.clock.begin(callback.steady_time, callback.frames);
         if self.clock.valid != valid {
             self.shared.publish_clock(&self.clock);
         }
-        if (self.clock.calibration.validated || self.local_clock.is_some()) && coverage.is_none() {
+        if coverage.is_none() {
             self.fault(CLOCK_FAULT);
             if let Some(session) = self.session() {
                 session.faults.fetch_or(CLOCK_FAULT, Ordering::AcqRel);
@@ -779,7 +759,29 @@ impl Source {
             self.shared.status.store(self.diagnostics(), Ordering::Release);
             self.baseline_needed = true;
         }
-        if self.session().is_some_and(|s| s.epoch.load(Ordering::Acquire) != self.epoch) {
+        // Registry offers precede the Hub's first audio callback. Its initial
+        // epoch is provisional until that callback publishes actual progress.
+        // Nothing from a Pending adoption may cross that clock boundary.
+        let initial_wait = !self.adoption.sent()
+            && self
+                .offer
+                .as_ref()
+                .is_some_and(|offer| offer.session.hub_through.load(Ordering::Acquire) == i64::MIN);
+        if !self.adoption.sent() && !initial_wait {
+            if let Some(offer) = &self.offer {
+                if offer.session.alive.load(Ordering::Acquire)
+                    && offer.session.closing.load(Ordering::Acquire) == 0
+                    && !offer.session.rows[usize::from(offer.lease.slot - 1)]
+                        .withdrawn
+                        .load(Ordering::Acquire)
+                {
+                    self.epoch = offer.session.epoch.load(Ordering::Acquire);
+                }
+            }
+        }
+        if !initial_wait
+            && self.session().is_some_and(|s| s.epoch.load(Ordering::Acquire) != self.epoch)
+        {
             self.fault(CLOCK_FAULT);
         }
         self.cancel_slice();
@@ -1109,7 +1111,6 @@ impl Source {
                 break;
             }
             if changes_clock {
-                self.local_clock = None;
                 self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
                 self.coverage = None;
                 self.baseline_needed = true;
@@ -1149,10 +1150,7 @@ impl Source {
 
     pub fn commit_clock_setup(&mut self, update: setup::Update, epoch: u64) {
         assert!(self.direct.is_some() && self.transition_settled());
-        let local_reset =
-            self.initial_direct() && update.reset && !update.routing.calibration().validated;
         self.clock = Clock::new(update.routing.calibration(), self.rate, self.max_frames);
-        self.local_clock = local_reset.then(LocalClock::default);
         self.coverage = None;
         self.epoch = epoch;
         self.complete_through = i64::MIN;
@@ -2094,9 +2092,8 @@ impl Source {
         player: f64,
     ) -> OutputDelta {
         self.sequence += 1;
-        let local = self.local_clock.as_ref().is_some_and(LocalClock::valid);
-        let offset = if local { 0 } else { self.clock.calibration.offset };
-        let mapped = (self.clock.valid || local)
+        let offset = self.clock.calibration.offset;
+        let mapped = self.clock.valid
             && input.checked_add(offset).is_some()
             && actual.checked_add(offset).is_some();
         let mapped_input = if mapped { input.checked_add(offset).unwrap() } else { input };
@@ -2173,7 +2170,14 @@ impl Source {
                 }
             }
         }
-        let pitch = self.state.voice(lifetime).map(|voice| (voice.note, voice.pitch_microcents));
+        let pitch = self.state.voice(lifetime).map(|voice| {
+            (
+                voice.note,
+                voice.pitch_microcents,
+                voice.player_tuning,
+                voice.frozen_offset_microcents,
+            )
+        });
         self.trace.output(event, pitch, self.source_id().0);
         delta
     }
@@ -2808,6 +2812,8 @@ impl Source {
                 | (i64::from(self.channel_reset != [0; 16]) << 8)
                 | (i64::from(self.baseline.is_some()) << 9),
             i64::from(self.status_query.is_some()),
+            self.trace.last_output_player,
+            self.trace.last_output_correction,
         ]);
     }
     fn transfer(&mut self) {
@@ -2865,7 +2871,7 @@ impl Source {
         }
         let position = self.capture_cursor?;
         let lease = self.capture_lease()?;
-        let offset = if self.initial_direct() { 0 } else { self.clock.calibration.offset };
+        let offset = self.clock.calibration.offset;
         let Some(token) = self.pending.offer(position, lease, self.epoch, offset) else {
             self.fault(CLOCK_FAULT);
             return None;
@@ -3115,8 +3121,22 @@ impl Source {
             || self.cleanup_head != NONE
             || !self.recovery.settled()
     }
+    fn initial_enrollment_ready(&self) -> bool {
+        self.adoption.sent()
+            || self.offer.as_ref().is_none_or(|offer| {
+                // Recheck at publication: the Hub can finish its first callback
+                // between our begin and end. A newly ready epoch waits for begin.
+                offer.session.hub_through.load(Ordering::Acquire) != i64::MIN
+                    && offer.session.epoch.load(Ordering::Acquire) == self.epoch
+                    && offer.session.alive.load(Ordering::Acquire)
+                    && offer.session.closing.load(Ordering::Acquire) == 0
+                    && !offer.session.rows[usize::from(offer.lease.slot - 1)]
+                        .withdrawn
+                        .load(Ordering::Acquire)
+            })
+    }
     fn publish_control(&mut self) {
-        if self.sealed {
+        if self.sealed || !self.initial_enrollment_ready() {
             return;
         }
         let Some(lease) = self.offer.as_ref().map(|offer| offer.lease) else {
@@ -3147,7 +3167,10 @@ impl Source {
         {
             self.adoption = Adoption::Sent;
         }
-        if self.baseline_needed && self.baseline.is_none() && !row.withdrawn.load(Ordering::Acquire)
+        if self.adoption.sent()
+            && self.baseline_needed
+            && self.baseline.is_none()
+            && !row.withdrawn.load(Ordering::Acquire)
         {
             if let Some(id) = self.next_baseline.checked_add(1) {
                 if let Some(frame) = self.state.baseline(
@@ -3178,7 +3201,7 @@ impl Source {
         self.publish_output_progress();
     }
     fn publish_input_prefix(&mut self) {
-        if !self.input_complete {
+        if !self.input_complete || !self.initial_enrollment_ready() {
             return;
         }
         let Some(coverage) = self.coverage else { return };

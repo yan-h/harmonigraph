@@ -28,7 +28,6 @@ struct Widgets {
     pairing: Retained<NSPopUpButton>,
     offset: Retained<NSTextField>,
     status: Retained<NSTextField>,
-    validated: Retained<NSButton>,
     choices: RefCell<Vec<SavedUuid>>,
     available: RefCell<Vec<SavedUuid>>,
     accepted_generation: Cell<Option<u64>>,
@@ -84,8 +83,7 @@ impl Actions {
             w.status.setStringValue(&NSString::from_str("Enter a signed sample offset."));
             return;
         };
-        value.calibration =
-            super::clock::Calibration { offset, validated: w.validated.state() != 0 };
+        value.calibration = super::clock::Calibration { offset };
         let selection = w.pairing.indexOfSelectedItem();
         value.selected = if selection <= 0 {
             None
@@ -127,9 +125,9 @@ impl Actions {
                 adopted.sample_rate,
                 adopted.max_frames,
                 if adopted.valid {
-                    "Routing offset validated"
+                    "Host clock ready"
                 } else {
-                    "Validate routing offset / reinitialize to enable tuning"
+                    "Host clock unavailable; reinitialize after resolving the clock failure"
                 }
             )));
         } else {
@@ -145,7 +143,6 @@ impl Actions {
         let selected = if restored {
             let calibration = source.calibration;
             w.offset.setStringValue(&NSString::from_str(&calibration.offset.to_string()));
-            w.validated.setState(if calibration.validated { 1 } else { 0 });
             source.selected
         } else {
             let index = w.pairing.indexOfSelectedItem();
@@ -231,17 +228,7 @@ impl Editor for NativeEditor {
             field
         };
         let offset = field(value.offset.to_string(), 220.0);
-        let validated = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("I validated the signed offset for this routing"),
-                None,
-                None,
-                mtm,
-            )
-        };
-        validated.setState(if value.validated { 1 } else { 0 });
-        validated.setFrame(rect(16.0, 264.0, 485.0, 26.0));
-        view.addSubview(&validated);
+        label("Offset defaults to zero; adjust only for a known routing delay.", 264.0);
         for (title, action, x, width) in [
             ("Apply / Reinitialize", sel!(apply:), 16.0, 200.0),
             ("Reset voices", sel!(reset:), 236.0, 150.0),
@@ -274,7 +261,6 @@ impl Editor for NativeEditor {
                 pairing,
                 offset,
                 status,
-                validated,
                 choices: RefCell::new(Vec::new()),
                 available: RefCell::new(Vec::new()),
                 accepted_generation: Cell::new(None),
