@@ -2526,16 +2526,6 @@ fn measured_ordinary_storage_and_actual_factory_allocation_increments() {
     super::capture::print_test_memory_layout();
     use super::{protocol as wire, slots::Slots};
     use std::mem::size_of;
-    println!(
-        "LEDGER inventory [record,chunk,single_slot,read_guard,write_guard] {:?}",
-        [
-            size_of::<wire::RequestInventory>(),
-            size_of::<wire::InventoryChunk>(),
-            size_of::<Slots<wire::InventoryChunk, 1>>(),
-            size_of::<super::slots::ReadGuard<wire::InventoryChunk, 1>>(),
-            size_of::<super::slots::OwnedReservation<wire::InventoryChunk, 1>>()
-        ]
-    );
     println!("LEDGER protocol [intent,reply,output,control,baseline,source_control,session_control,hub_bank] {:?}",
         [size_of::<wire::Intent>(), size_of::<wire::Reply>(), size_of::<wire::OutputDelta>(),
          size_of::<wire::Control>(), size_of::<wire::Baseline>(), size_of::<wire::SourceControl>(),

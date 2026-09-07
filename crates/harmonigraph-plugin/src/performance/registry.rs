@@ -502,10 +502,6 @@ pub fn retire_hub(owner: Box<super::hub::Hub>) {
 
 #[cfg(test)]
 static TEST_SERVICE_ROUNDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-pub fn test_service_rounds() -> usize {
-    TEST_SERVICE_ROUNDS.load(Ordering::Relaxed)
-}
 
 pub fn service_retired() {
     #[cfg(test)]

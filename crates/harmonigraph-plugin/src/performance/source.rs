@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub(super) mod channel;
-mod recovery;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
 mod stop;
@@ -236,7 +235,6 @@ pub struct Source {
     manifest: Queue<Manifest, 64>,
     status_query: Option<super::capture::Key>,
     committed_assignment: u64,
-    recovery: recovery::Recovery,
     input_complete: bool,
     input_reported: Option<i64>,
     old_pending: usize,
@@ -420,7 +418,6 @@ impl Source {
             manifest: Queue::default(),
             status_query: None,
             committed_assignment: 0,
-            recovery: recovery::Recovery::default(),
             input_complete: false,
             input_reported: None,
             old_pending: 0,
@@ -573,14 +570,12 @@ impl Source {
             && self.baseline.is_none()
             && self.manifest.len() == 0
             && self.status_query.is_none()
-            && self.recovery.settled()
     }
     fn lease_settled(&self) -> bool {
         self.old_pending == 0
             && self.captures_outstanding == 0
             && self.output_settled()
             && self.status_query.is_none()
-            && self.recovery.settled()
     }
     fn output_settled(&self) -> bool {
         self.held() == 0
@@ -675,7 +670,6 @@ impl Source {
             self.baseline_acked = false;
             self.adoption = Adoption::Pending;
             self.committed_assignment = 0;
-            self.recovery = recovery::Recovery::default();
             self.coverage = None;
             self.clock.coverage = None;
             self.last_progress = None;
@@ -699,7 +693,6 @@ impl Source {
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
-        self.recovery.begin();
         self.intent_pushed = 0;
         self.callback = Some(callback);
         self.stops.emergency_start = 0;
@@ -744,7 +737,6 @@ impl Source {
         if self.reset_armed
             && callback.input_status == api::InputStatus::Complete
             && coverage.is_some()
-            && self.recovery.settled()
             && self.output_settled()
             && self.local_cancel_cut_settled()
             && self.session().is_none_or(|session| {
@@ -1102,7 +1094,6 @@ impl Source {
             }
             if update.reset
                 && (!update.routing.calibration().matches(self.rate, self.max_frames)
-                    || !self.recovery.settled()
                     || !self.output_settled()
                     || !self.local_cancel_cut_settled())
             {
@@ -1114,8 +1105,6 @@ impl Source {
                 self.trace.setup_wait =
                     if !update.routing.calibration().matches(self.rate, self.max_frames) {
                         5
-                    } else if !self.recovery.settled() {
-                        6
                     } else if !self.output_settled() {
                         7
                     } else {
@@ -1608,11 +1597,6 @@ impl Source {
             return false;
         };
         due = due.max(start);
-        if !established {
-            if let Some(boundary) = self.recovery.boundary {
-                due = due.max(boundary);
-            }
-        }
         if due >= end || self.next_stop_sample().is_some_and(|stop| due >= stop) {
             return false;
         }
@@ -1696,8 +1680,6 @@ impl Source {
             || self.lives.at(life).is_some_and(|life| {
                 life.assignment.decision != 0
                     && life.assignment.decision <= self.committed_assignment
-                    && !self.recovery.inhibits(life.assignment)
-                    && !self.recovery.rejects(life.assignment)
             })
     }
 
@@ -2228,7 +2210,6 @@ impl Source {
                 && l.refs == 0
                 && !l.ready_queued
                 && !l.assignment_held
-                && !self.recovery.holds_life(l.serial)
         }) {
             self.lives.remove(index);
             self.free_lives.push(index);
@@ -2430,7 +2411,6 @@ impl Source {
             offer.session.rows[usize::from(offer.lease.slot - 1)].to_source.take_repair_if(
                 |reply| match reply {
                     Reply::CaptureStatusQuery(_) => self.status_query.is_none(),
-                    Reply::Fence(fence) => self.recovery.can_observe(fence),
                     _ => true,
                 },
             )
@@ -2464,9 +2444,6 @@ impl Source {
     /// The pending owner stores only a key. Taking it frees the query cell even
     /// when a crossed disposition owns the response cell; its ACK can now pass.
     fn publish_capture_status(&mut self) {
-        if self.recovery.needs_ack() {
-            return;
-        }
         let Some(key) = self.status_query else { return };
         let Some(offer) = &self.offer else { return };
         let session = offer.session.clone();
@@ -2513,13 +2490,6 @@ impl Source {
     }
     fn reply(&mut self, reply: Reply) {
         match reply {
-            Reply::Fence(fence) => self.observe_fence(fence),
-            Reply::RecoveryComplete { fence, generation, boundary } => {
-                self.complete_recovery(fence, generation, boundary)
-            }
-            Reply::InventoryComplete { fence, input_cut, total, chunks } => {
-                self.acknowledge_inventory(fence, input_cut, total, chunks)
-            }
             Reply::CohortCommitted { lease, epoch, through }
                 if self.capture_lease() == Some(lease) && self.epoch == epoch =>
             {
@@ -2546,7 +2516,6 @@ impl Source {
                 if self.capture_lease() == Some(key.lease)
                     && self.epoch == key.epoch
                     && self.pending.owns_publication(key, key.lease, self.epoch)
-                    && !self.recovery.rejects(binding)
                     && binding.decision != 0 =>
             {
                 if let Some(original) = self.pending.at(usize::from(key.position)).filter(|p| {
@@ -2710,9 +2679,6 @@ impl Source {
         #[cfg(test)]
         self.shared.before_transfer.reach();
         self.compact();
-        self.publish_revoke_ack();
-        self.publish_inventory();
-        self.cleanup_recovery();
         self.shared.status.store(self.diagnostics(), Ordering::Release);
         self.shared
             .extra_delay
@@ -2789,7 +2755,6 @@ impl Source {
             self.emergency_output.len() as i64,
             self.baseline.map_or(-1, |b| b.cut as i64),
             i64::from(self.baseline_acked),
-            self.recovery.diagnostic_state(),
             i64::from(self.output_settled()),
             i64::from(self.local_cancel_cut_settled()),
             i64::from(self.diagnostics()),
@@ -3083,18 +3048,12 @@ impl Source {
         )
     }
     pub fn retired_pump(&mut self) -> bool {
-        self.recovery.begin();
         self.intent_pushed = 0;
         self.visits = 0;
         self.receive();
         self.cancel_slice();
         self.drain_ready_work();
         self.compact();
-        if self.producer_joined {
-            self.publish_revoke_ack();
-            self.publish_inventory();
-        }
-        self.cleanup_recovery();
         if !self.detaching {
             self.transfer();
         }
@@ -3145,7 +3104,6 @@ impl Source {
         self.journal.front().is_some_and(|d| d.sequence <= self.acknowledged)
             || self.stopping
             || self.cleanup_head != NONE
-            || !self.recovery.settled()
     }
     fn initial_enrollment_ready(&self) -> bool {
         self.adoption.sent()
@@ -3441,9 +3399,6 @@ pub(super) struct CaptureSnapshot {
 }
 #[cfg(test)]
 impl Source {
-    pub(super) fn test_assignment(&self, life: u16) -> Option<Assignment> {
-        self.lives.at(life).map(|life| life.assignment)
-    }
     pub(super) fn test_capture(&self, serial: u64) -> Option<CaptureSnapshot> {
         let mut position = self.pending.front_position();
         while let Some(index) = position {
@@ -3473,11 +3428,11 @@ impl Source {
         self.cancel_slice();
     }
     pub(super) fn test_reset_progress(&self) -> String {
-        format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} recovery={} lease={} old={} captures={} query={:?} sealed={}", self.reset_armed,
+        format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} lease={} old={} captures={} query={:?} sealed={}", self.reset_armed,
             self.setup_pending.each_ref().map(|v| v.as_ref().map(|v| v.value)), self.generation,
             self.shared.applied.load(Ordering::Acquire), self.setup_started,
             self.offer.as_ref().map(|o| (o.generation, o.lease)), self.detaching,
-            self.output_settled(), self.recovery.settled(), self.lease_settled(), self.old_pending, self.captures_outstanding, self.status_query, self.sealed)
+            self.output_settled(), self.lease_settled(), self.old_pending, self.captures_outstanding, self.status_query, self.sealed)
     }
     pub(super) fn test_reset_armed(&self) -> bool {
         self.reset_armed

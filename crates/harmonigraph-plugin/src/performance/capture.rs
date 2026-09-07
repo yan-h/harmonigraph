@@ -168,9 +168,6 @@ pub(super) struct PendingStore {
     len: usize,
 }
 impl PendingStore {
-    pub fn arena_identity(&self) -> usize {
-        Arc::as_ptr(&self.arena) as usize
-    }
     pub const BACKING_CELL_BYTES: usize = std::mem::size_of::<PendingSlot>();
     pub fn len(&self) -> usize {
         self.len
@@ -722,18 +719,6 @@ impl View<'_> {
         original.event.attack()?;
         Some((original.life, *token.birth(original.life)?))
     }
-    /// The caller froze this copied status and applied its output cut before
-    /// replay. TargetAccess itself always exposes the immutable complete chain.
-    pub fn effect_done(&self, address: u32, ordinal: u16) -> Option<bool> {
-        let token = self.token((address >> 16) as usize)?;
-        let status = token.status?;
-        Some(if (address as u16) < INLINE {
-            ordinal < u16::from(token.original().work_count)
-                && status.work_done & (1u64 << ordinal) != 0
-        } else {
-            status.inline_done
-        })
-    }
 }
 impl TargetAccess for View<'_> {
     fn get(&self, source: u8, address: u32) -> Option<cohort::TargetLink> {
@@ -888,15 +873,6 @@ impl Frozen {
             std::slice::from_raw_parts(self.inputs.as_ptr().cast::<cohort::Event>(), self.len)
         };
         cohort::Cohort::resume(self.id, self.sample, inputs, targets, &mut self.scratch)?.commit()
-    }
-    /// Caller has settled old external decisions and preserved all bindings.
-    /// Keep capture permissions and the reserved checked generation intact.
-    pub fn abandon(&mut self) {
-        self.scratch.discard();
-        self.active = false;
-        self.started = false;
-        self.complete = false;
-        self.spent = 0;
     }
     pub fn end(&mut self, joined: bool) {
         assert!(!self.active || self.complete || joined, "offered phase still owned");

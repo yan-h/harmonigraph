@@ -493,9 +493,6 @@ impl Source {
 
     fn capture_retained(&self, position: usize) -> bool {
         let serial = self.pending.at(position).unwrap().serial;
-        if self.recovery.holds(serial) {
-            return true;
-        }
         // READY has never minted a token. After producer join and local
         // cancellation it has no possible reader, even if sample mapping made
         // publication impossible. A Tune cancellation before initial adoption

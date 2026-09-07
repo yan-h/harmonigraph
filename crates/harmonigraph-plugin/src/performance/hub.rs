@@ -205,7 +205,6 @@ impl Hub {
     }
     fn publish_diagnostics(&self, callback: api::Callback, owner: &Owner) {
         self.direct.publish_diagnostics(callback);
-        let recovery = self.sequencer.diagnostic_recovery();
         let config = owner.timeline.reducer().resolved();
         self.shared.diagnostics.hub.as_ref().unwrap().publish([
             self.offer.as_ref().map_or(0, |offer| offer.session.runtime) as i64,
@@ -214,8 +213,6 @@ impl Hub {
             self.trace.setup_wait,
             i64::from(self.clock.valid),
             i64::from(self.invalidated),
-            recovery.0,
-            recovery.1,
             self.sequencer.decision as i64,
             self.publication_through.unwrap_or(i64::MIN),
             callback.steady_time.saturating_add(i64::from(callback.frames)),
@@ -596,7 +593,6 @@ impl Hub {
     }
     fn collect(&mut self) {
         let sequencing = self.sequences_inputs();
-        let mut divergence: Option<u64> = None;
         let Some(offer) = &mut self.offer else {
             return;
         };
@@ -676,9 +672,6 @@ impl Hub {
                     self.input_work += 1;
                     self.service_revision = self.service_revision.wrapping_add(1);
                     match control {
-                        Control::RevokeAck { fence, input_cut, output_cut, settled_attempt } => {
-                            self.sequencer.revoke_ack(index, fence, input_cut, output_cut, settled_attempt);
-                        }
                         Control::CaptureStatus { key, status } => {
                             if let Some(position) = row.status_query.filter(|position|
                                 matches!(row.ingress.at_ref(*position), Some(Intent::Capture(token)) if token.key == key)) {
@@ -697,7 +690,7 @@ impl Hub {
                                 && row.epoch == epoch && transaction != 0 => {
                             ack.unwrap().publish(Reply::Disposition { incarnation, transaction, input_cut });
                             row.last_disposition = Some(row.last_disposition.map_or(transaction, |old| old.max(transaction)));
-                            if original_on && (sequencing || self.sequencer.retired || self.sequencer.recovering())
+                            if original_on && (sequencing || self.sequencer.retired)
                                 && !self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime) {
                                 shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
                             }
@@ -869,7 +862,6 @@ impl Hub {
                 let units = row.ingress.at_ref(position).map_or(1, |intent| match intent {
                     Intent::Capture(token)
                         if !(self.capture_hold
-                            || self.sequencer.recovering()
                             || row.status_query == Some(position)
                             || self.frozen_captures.active
                                 && token.frozen == Some(self.frozen_captures.id))
@@ -902,7 +894,7 @@ impl Hub {
                 row.ingress_cursor =
                     if row.ingress_left == 0 { None } else { row.ingress.next_position(position) };
                 if let Some(Intent::Capture(token)) = row.ingress.at_mut(position) {
-                    let terminal = row.terminal_cut.is_some() && !self.sequencer.recovering();
+                    let terminal = row.terminal_cut.is_some();
                     if terminal {
                         self.sequencer.consume_terminal_original(index, token, &row.captures);
                         token.frozen = None;
@@ -917,7 +909,7 @@ impl Hub {
                     // Contiguous settlement is a cheap sufficient proof; exact
                     // copied status also progresses when an older A holds that
                     // prefix while younger B has independently completed.
-                    if !self.sequencer.recovering() && token.key.serial <= row.input_settled.0 {
+                    if token.key.serial <= row.input_settled.0 {
                         token.retain_status(CaptureStatus {
                             output_cut: row.input_settled.1,
                             work_done: token.all_work(),
@@ -927,7 +919,6 @@ impl Hub {
                     let completed =
                         (token.frozen.is_some() || terminal) && token.completed(row.received);
                     if sequencing
-                        && !self.sequencer.recovering()
                         && !token.completed(u64::MAX)
                         && row.status_query.is_none()
                     {
@@ -937,7 +928,6 @@ impl Hub {
                         }
                     }
                     if self.capture_hold
-                        || self.sequencer.recovering()
                         || frozen_reader
                         || (sequencing && !completed)
                         || (!sequencing && token.frozen.is_some())
@@ -1086,13 +1076,6 @@ impl Hub {
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("checked owned output window"));
                 row.received = delta.sequence;
-                if sequencing {
-                    if let Some(from) =
-                        self.sequencer.received_divergence(index, row.lease.unwrap(), delta)
-                    {
-                        divergence = Some(divergence.map_or(from, |old| old.min(from)));
-                    }
-                }
             }
             if let Some((coverage, cut)) = row.report {
                 // Sequence-complete accepted output is monotonically timed by
@@ -1167,7 +1150,6 @@ impl Hub {
                 self.membership = self.membership.saturating_add(1);
                 row.joining = None;
                 if !shared.withdrawn.load(Ordering::Acquire)
-                    && !self.sequencer.recovering()
                     && shared.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE == 0
                     && offer.session.faults.load(Ordering::Acquire) & !super::source::TIMING_FAILURE
                         == 0
@@ -1185,9 +1167,6 @@ impl Hub {
             }
         }
         self.rotation = (self.rotation + 1) % TUNERS;
-        if let Some(from) = divergence {
-            self.output_diverged(from);
-        }
     }
 
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder, observation: f64) {
@@ -1821,9 +1800,7 @@ impl Hub {
         self.input_work = 0;
         self.merged = 0;
         self.collect();
-        if !self.sequencer.recovering() {
-            self.service_plans();
-        }
+        self.service_plans();
         self.collect_direct_captures();
         // Drain retained payloads without waiting for the final cut to fit in
         // this bounded window. publish still clamps to actual source coverage;
@@ -1842,9 +1819,6 @@ impl Hub {
         }
         self.retired_through = Some(through);
         if let Some((mut owner, mut recorder, observation)) = self.retired_publication.take() {
-            if self.sequencer.recovering() {
-                self.service_recovery(&mut owner);
-            }
             if !owner.recording.retirement_finished {
                 if let (Some(through), Some(end)) =
                     (self.retired_through.as_mut(), owner.direct.pending_end())
@@ -1910,10 +1884,7 @@ impl Hub {
         }
     }
     pub fn retired_settled(&self) -> bool {
-        if self.sequencer.recovering()
-            || self.direct_ingress.len() != 0
-            || !self.direct_captures.empty()
-        {
+        if self.direct_ingress.len() != 0 || !self.direct_captures.empty() {
             return false;
         }
         self.direct.settled()
@@ -2041,7 +2012,7 @@ impl Hub {
 
 impl Hub {
     fn collect_direct_captures(&mut self) {
-        let terminal = self.sequencer.terminal_session && !self.sequencer.recovering();
+        let terminal = self.sequencer.terminal_session;
         let sequencing = self.sequences_inputs() && !terminal;
         let Some(lease) = self.direct.capture_lease() else {
             return;
@@ -2082,7 +2053,6 @@ impl Hub {
             let units = match self.direct_ingress.at_ref(position) {
                 Some(Intent::Capture(token))
                     if !self.capture_hold
-                        && !self.sequencer.recovering()
                         && ((sequencing
                             && token.frozen.is_some()
                             && !(self.frozen_captures.active
@@ -2115,7 +2085,6 @@ impl Hub {
             let frozen_reader =
                 self.frozen_captures.active && token.frozen == Some(self.frozen_captures.id);
             if self.capture_hold
-                || self.sequencer.recovering()
                 || frozen_reader
                 || (sequencing && token.frozen.is_none())
                 || (!sequencing && token.frozen.is_some())
@@ -2256,9 +2225,6 @@ impl Hub {
 impl Hub {
     pub fn test_pause_captures(&mut self) {
         self.capture_hold = true;
-    }
-    pub fn test_resume_capture_collection(&mut self) {
-        self.capture_hold = false;
     }
     pub fn test_hold_captures(&mut self, sample: i64) {
         self.capture_hold = true;

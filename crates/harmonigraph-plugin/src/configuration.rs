@@ -260,18 +260,6 @@ impl Owner {
         self.timeline.begin_cohort(raw)
     }
 
-    pub fn abandon_input_cohort(
-        &mut self,
-        clock: harmonigraph_core::canonical::ClockId,
-        sample: i64,
-    ) -> Result<(), TimelineError> {
-        if clock != self.recording.clock {
-            return Err(TimelineError::InvalidFrontier);
-        }
-        let raw =
-            sample.checked_sub(self.recording.hub_offset).ok_or(TimelineError::InvalidFrontier)?;
-        self.timeline.abandon_cohort(raw)
-    }
 
     /// Called only after record() has registered this subblock's segments.
     /// Seeding is a separate consumer of historical configuration, so it must

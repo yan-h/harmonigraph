@@ -332,9 +332,7 @@ impl Source {
             return false;
         }
         let callback = self.callback.unwrap();
-        let actual = start
-            .max(callback.steady_time + i64::from(output.cursor()))
-            .max(self.recovery.boundary.unwrap_or(i64::MIN));
+        let actual = start.max(callback.steady_time + i64::from(output.cursor()));
         let Some(proposed) = actual
             .checked_sub(pending.input)
             .map(|shift| shift.max(self.wave_shift).max(self.delay()))

@@ -106,53 +106,6 @@ pub struct Lease {
     pub slot: u8,
 }
 
-/// Hub-owned immutable emission fence. Generation is the packed OPEN word;
-/// closing preserves its BUSY bit until the Source durably completes the group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fence {
-    pub lease: Lease,
-    pub epoch: u64,
-    pub transaction: u64,
-    pub generation: u64,
-    pub from_decision: u64,
-    pub terminal: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RequestOutcome {
-    Retained,
-    Accepted,
-    Partial,
-    Canceled,
-}
-
-/// Reconciliation identity and outcome. Original input timing remains owned by
-/// Source Life/Capture and accepted OutputDelta, not this inventory projection.
-#[derive(Clone, Copy, Debug)]
-pub struct RequestInventory {
-    pub lifetime: u64,
-    pub on_serial: u64,
-    pub decision: u64,
-    pub configuration: harmonigraph_core::configuration::ResolvedConfig,
-    pub life: u16,
-    pub outcome: RequestOutcome,
-}
-
-/// One owned 64-entry window, independent of Capture ingress. Common identity
-/// stays in the header; records confer no remote CaptureArena read permission.
-pub struct InventoryChunk {
-    pub fence: Fence,
-    pub arena: usize,
-    pub input_cut: u64,
-    pub lifetime_cut: u64,
-    pub output_cut: u64,
-    pub sequence: u32,
-    pub total: u32,
-    pub first: u32,
-    pub count: u8,
-    pub records: [Option<RequestInventory>; 64],
-}
-
 #[derive(Debug)]
 pub enum Intent {
     Capture(super::capture::Token),
@@ -177,18 +130,6 @@ pub enum Intent {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Reply {
-    InventoryComplete {
-        fence: Fence,
-        input_cut: u64,
-        total: u32,
-        chunks: u32,
-    },
-    Fence(Fence),
-    RecoveryComplete {
-        fence: Fence,
-        generation: u64,
-        boundary: i64,
-    },
     CohortCommitted {
         lease: Lease,
         epoch: u64,
@@ -299,12 +240,6 @@ pub struct OutputDelta {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
-    RevokeAck {
-        fence: Fence,
-        input_cut: u64,
-        output_cut: u64,
-        settled_attempt: u64,
-    },
     CaptureStatus {
         key: super::capture::Key,
         status: Option<CaptureStatus>,
@@ -415,7 +350,6 @@ pub struct SourceControl {
     pub to_hub: SourceSlots<Control>,
     pub to_source: SourceSlots<Reply>,
     pub baselines: Slots<Baseline>,
-    pub inventory: Arc<Slots<InventoryChunk, 1>>,
 }
 impl Default for SourceControl {
     fn default() -> Self {
@@ -429,7 +363,6 @@ impl Default for SourceControl {
             to_hub: SourceSlots::default(),
             to_source: SourceSlots::default(),
             baselines: Slots::default(),
-            inventory: Arc::new(Slots::default()),
         }
     }
 }
