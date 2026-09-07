@@ -88,7 +88,9 @@ SG4A's independent Opus/medium review of `a024cb86` returned no findings.
 
 ## SG2: actual offline slice endpoints
 
-The offline frame loop still feeds one frame of lookahead audio, `[now - audio_start, now + step - audio_start)`.
+The offline frame loop feeds audio from the previous frame clock through the current frame clock, `[previous - audio_start, now - audio_start)`.
+The first frame supplies an empty slice;
+subsequent frames consume contiguous audio without looking beyond the picture clock.
 `Audio::slice_seconds` now returns the actual clamped exclusive end-frame index with its borrowed samples.
 The caller dates a nonempty batch at `audio_start + (end_frame - 1) / sample_rate`.
 The analyzer's intentional half-window lag is unchanged.
@@ -98,26 +100,41 @@ The per-frame preparation function is shared by the render loop and its determin
 The live analyzer clock and whole-song precompute are unchanged.
 
 `scrolling_audio_uses_the_supplied_sample_grid` uses 62,271 stereo frames at 48 kHz, including an anti-phase impulse at sample 38,400 and a matching replayed MIDI onset.
-It exercises 30/60/120 and 30000/1001 fps, zero/nonzero audio origins, a late start at sample 20,031, and a start before the audio origin.
+It exercises 1/4/30/60/120 and 30000/1001 fps, zero/nonzero audio origins, a late start at sample 20,031, and a start before the audio origin.
 Its oracle enumerates source sample-hop endpoints after FFT warm-up, independently of slice metadata and the analyzer anchor.
-All 16 combinations satisfy the timestamp oracle, preserve identical spectrum bytes across frame rates, and place the transient peak midpoint within one sample plus an analysis hop of the actual replayed MIDI onset.
+All 24 combinations satisfy the timestamp oracle, preserve identical spectrum bytes across frame rates, and place the transient peak midpoint within one sample plus an analysis hop of the actual replayed MIDI onset.
 Every clamped final batch is asserted to emit at least one column, so the tail cannot pass without exercising timestamping.
+Every frame asserts that all columns are dated at or before the picture clock, and the first frame asserts empty history.
+As a negative control, the lookahead implementation failed this fixture at 1 fps with 104 columns on the first frame instead of zero.
 `rendering_sliced_audio_twice_is_byte_identical` also compares actual GPU exports at fractional fps with trimmed audio, and verifies that omitting the audio changes the picture.
+
+### Low frame rates and retained history
+
+Dating lookahead correctly would let future columns advance the live retention floor before the picture clock.
+For example, at 1 fps and 48 kHz with an 8,192-sample FFT, frame time 20 seconds, a 16.384-second span, and 1,024 target columns, the source equations give newest time 20.914646 and a retained origin of 4.416 seconds.
+The picture needs history back to 3.616 seconds:
+0.8 seconds, or 4.88% of the visible span, would be lost.
+This is a calculation from the actual retention equations, not a GPU timing measurement.
+Ending slices at the frame clock removes the future columns that cause this loss, using the alternate convention explicitly permitted by SG2. The 1/4 fps cases exercise that convention through the actual render caller;
+no wider cache key or retention budget is needed.
 
 ### Intended picture change
 
 Scrolling columns move later by almost one video frame:
 at 48 kHz, 33.3125/16.6458/8.3125 ms for 30/60/120 fps.
 The existing goldens run at 10 fps, so their correction is 99.979 ms. [Inspected comparisons](sg2-timestamps.png) show expected, actual, and 8× difference panels.
+The comparisons are against the pre-SG2 checkpoint.
+Ending input at the frame clock also changes the newest spectrum edge and its spectral shadows;
+the first frame no longer draws ahead-of-clock audio.
 Heatmap features move relative to the unchanged MIDI/playhead geometry;
 the half-window analysis lag is not corrected a second time.
 
 | Scrolling golden | Mean channel difference / 255 | Maximum / 255 |
 |---|---|---|
-| Short pane | 2.324 | 106 |
-| Tall pane | 3.260 | 138 |
-| Zoomed in | 4.595 | 154 |
-| Mixed spectral shadows | 2.191 | 127 |
+| Short pane | 2.343 | 106 |
+| Tall pane | 3.288 | 138 |
+| Zoomed in | 4.607 | 154 |
+| Mixed spectral shadows | 2.337 | 127 |
 
 The whole-song golden stayed byte-identical before any blessing.
 All other offline tests passed before the four expected golden updates (50 passed, 9 ignored).

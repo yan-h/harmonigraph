@@ -242,8 +242,9 @@ pub fn render(
 }
 
 /// Advance one export frame through the same replay/audio path the renderer
-/// draws. Keep the existing one-frame audio lookahead and the analyzer's
-/// half-window lag; only the supplied slice's newest sample dates the batch.
+/// draws. Feed through the frame clock and preserve the analyzer's half-window
+/// lag. Future columns would advance live retention past the picture's far edge
+/// at low frame rates; the first frame therefore feeds an empty slice.
 fn prepare_frame(
     replay: &mut Replay,
     state: &mut SharedState,
@@ -256,8 +257,9 @@ fn prepare_frame(
     let now = settings.start + frame as f64 * step;
     replay.advance_to(state, now);
     if let Some(audio) = audio {
+        let from = settings.start + frame.saturating_sub(1) as f64 * step;
         let (chunk, end) =
-            audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
+            audio.slice_seconds(from - settings.audio_start, now - settings.audio_start);
         if !chunk.is_empty() {
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
             let config = state.spectrum_config;
@@ -355,11 +357,11 @@ mod tests {
             [(0.0, 0.0, 0usize), (7.125, 0.0, 0), (7.125, 0.41731, 20_031), (7.125, -0.00713, 0)]
         {
             let mut previous_bins: Option<Vec<Vec<u8>>> = None;
-            for fps in [30.0, 60.0, 120.0, 30_000.0 / 1001.0] {
+            for fps in [1.0, 4.0, 30.0, 60.0, 120.0, 30_000.0 / 1001.0] {
                 let settings = Settings {
                     fps,
                     start: origin + offset,
-                    end: origin + 1.4,
+                    end: origin + 3.5,
                     audio_start: origin,
                     ..settings()
                 };
@@ -374,16 +376,28 @@ mod tests {
                     let before = state.spectrum.history().len();
                     let now =
                         prepare_frame(&mut replay, &mut state, Some(&audio), &settings, frame);
-                    if now < audio_end && now + 1.0 / fps > audio_end {
+                    let from = settings.start + frame.saturating_sub(1) as f64 / fps;
+                    if from < audio_end && now > audio_end {
                         partial_tail = true;
                         assert!(
                             state.spectrum.history().len() > before,
                             "partial tail must emit a column: {fps}, {offset}"
                         );
                     }
-                    if now >= audio_end {
+                    if from >= audio_end {
                         assert_eq!(state.spectrum.history().len(), before, "empty tail added data");
                     }
+                    if frame == 0 {
+                        assert_eq!(
+                            state.spectrum.history().len(),
+                            0,
+                            "no pre-roll on the first frame"
+                        );
+                    }
+                    assert!(
+                        state.spectrum.history().iter().all(|c| c.time <= now),
+                        "future columns would evict visible history at {fps} fps"
+                    );
                 }
                 assert!(partial_tail);
                 // Enumerate source sample indices, independent of slicing and
