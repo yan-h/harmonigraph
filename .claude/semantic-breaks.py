@@ -2,9 +2,9 @@
 """Lay out markdown prose one clause per line, and check that it stays that way.
 
 `--check` is the CI mode: it reports lines that break mid-clause and exits 1.
-`--write` rewrites the files. Both operate on the tracked `.md` files this repo
-owns; `vendor/` is excluded so a local fork keeps diffing cleanly against
-upstream.
+`--write` repairs those breaks, leaving accepted lines alone. Both operate on
+the tracked `.md` files this repo owns; `vendor/` is excluded so a local fork
+keeps diffing cleanly against upstream.
 
 A line break inside a paragraph renders as a space, so where the breaks fall
 changes no rendered output. What it changes is the diff: an edit touches the
@@ -42,7 +42,7 @@ STRUCTURAL = re.compile(
     r"""^(
       \s*(\#{1,6})\s        # heading
     | \s*[-*+]\s            # bullet
-    | \s*\d+\.\s            # ordered item
+    | \s*\d+[.)]\s          # ordered item
     | \s*>                  # block quote
     | \s*\|                 # table row
     | \s*<                  # html block
@@ -52,6 +52,7 @@ STRUCTURAL = re.compile(
     )""",
     re.X,
 )
+FENCE = re.compile(r"^(`{3,}|~{3,})")
 
 
 def _spans_to_protect(text: str) -> list[tuple[int, int]]:
@@ -93,49 +94,32 @@ def split_clauses(text: str) -> list[str]:
     return [p.strip() for p in pieces if p.strip()]
 
 
+def _indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
 def reflow(lines: list[str]) -> list[str]:
-    """Rewrite prose paragraphs one clause per line; copy structure through."""
+    """Repair only reported breaks, retaining indentation and valid boundaries."""
+    # Share the checker's structural decisions: a passing file is a no-op,
+    # including comma breaks and optional clause splits the checker accepts.
+    bad = {n for n, _ in offenders("", lines)}
     out: list[str] = []
-    fence: str | None = None
-    para: list[str] = []
     i = 0
-
-    # YAML frontmatter is data, not prose.
-    if lines and lines[0].strip() == "---":
-        for j in range(1, len(lines)):
-            if lines[j].strip() == "---":
-                out.extend(lines[: j + 1])
-                i = j + 1
-                break
-
-    def flush() -> None:
-        if not para:
-            return
-        # A trailing double space is a hard break and is load-bearing; leave the
-        # whole paragraph alone rather than guess where it wanted to break.
-        if any(p.endswith("  ") for p in para[:-1]):
-            out.extend(para)
-        else:
-            out.extend(split_clauses(" ".join(p.strip() for p in para)))
-        para.clear()
-
     while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            flush()
-            marker = stripped[:3]
-            fence = None if fence == marker else marker
-            out.append(line)
-        elif fence is not None:
-            out.append(line)
-        elif not stripped or STRUCTURAL.match(line):
-            flush()
-            out.append(line)
+        start = i
+        while i + 1 in bad:
+            i += 1
+        if start == i:
+            out.append(lines[i])
         else:
-            para.append(line)
+            # The checker never crosses an indentation change. Preserve that
+            # prefix on every new clause so list continuations stay in place.
+            indent = _indent(lines[start])
+            clauses = split_clauses(" ".join(p.strip() for p in lines[start : i + 1]))
+            # The last line may end in an explicit Markdown hard break.
+            clauses[-1] += lines[i][len(lines[i].rstrip()) :]
+            out.extend(indent + clause for clause in clauses)
         i += 1
-    flush()
     return out
 
 
@@ -150,15 +134,21 @@ def offenders(path: str, lines: list[str]) -> list[tuple[int, str]]:
             if n > 1 and stripped == "---":
                 in_front = False
             continue
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker
+        if fence is not None:
+            if stripped.startswith(fence) and not stripped.strip(fence[0]):
+                fence = None
             continue
-        if fence is not None or not stripped or STRUCTURAL.match(line):
+        marker = FENCE.match(stripped)
+        if marker:
+            fence = marker[0]
+            continue
+        if not stripped or STRUCTURAL.match(line):
             continue
         nxt = lines[n] if n < len(lines) else ""
-        if not nxt.strip() or STRUCTURAL.match(nxt):
+        if not nxt.strip() or STRUCTURAL.match(nxt) or FENCE.match(nxt.strip()):
             continue  # last line of a paragraph may end anywhere
+        if _indent(line) != _indent(nxt):
+            continue  # preserve list depth and lazy continuation boundaries
         if line.endswith("  "):
             continue  # explicit hard break
         if not re.search(r"[.!?;:—,]$", stripped):

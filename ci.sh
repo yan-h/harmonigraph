@@ -78,6 +78,7 @@ run cargo fmt --all --check
 # A break inside a paragraph renders as a space, so none of this changes a
 # rendered byte. `--write` fixes every failure this reports.
 run .claude/semantic-breaks.py --check
+run python3 -B .claude/tests/semantic-breaks.py
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
