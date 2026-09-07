@@ -313,11 +313,7 @@ fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
 fn the_zoomed_out_view_on_the_distance_row() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         center_threes: 1,
-        shadow: one_shadow(
-            harmonigraph_scene::ShadowStyle::default().width,
-            1.0,
-            harmonigraph_scene::ShadowKernel::Distance,
-        ),
+        shadow: one_shadow(fresh_shadow(), 1.0, harmonigraph_scene::ShadowKernel::Distance),
         ..Default::default()
     };
     lattice(&view, Camera::default())
@@ -335,10 +331,12 @@ fn a_sheet_behind_a_node() -> Scene {
     lattice(&view, near_camera())
 }
 
-/// How far the Shadow bar opens on a fresh blob — for the frames that are
-/// about something else and want the bar where the picture has it.
+/// How far the lattice geometry's Shadow bar opens on a fresh blob — for the
+/// frames that are about something else and want the bar where the picture
+/// has it. The geometry group's, because these frames are of nodes: a bare
+/// `ShadowStyle::default()` is a fixture, not what the fresh view draws.
 fn fresh_shadow() -> f32 {
-    harmonigraph_scene::ShadowStyle::default().width
+    harmonigraph_scene::ShadowSettings::default().lattice_geometry.width
 }
 
 /// Where the name goldens stand, and closer than the claim tests' own

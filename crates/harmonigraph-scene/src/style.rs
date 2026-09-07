@@ -801,6 +801,10 @@ pub struct ShadowStyle {
 }
 
 impl Default for ShadowStyle {
+    /// The style a bare `ShadowStyle` opens on: a fixture, or the renderer's
+    /// fallback for a caster handed no style. Not what a fresh VIEW draws —
+    /// its four groups are [`ShadowSettings::default`], and each of them
+    /// differs from this.
     fn default() -> ShadowStyle {
         ShadowStyle {
             // Distance keeps a caster's form at this broad shadow width, where
@@ -813,7 +817,7 @@ impl Default for ShadowStyle {
             // the shared field back to the ground.
             depth: 0.477_784_4,
             // The plain exponential the standoff has always decayed on, so a
-            // fresh view is the picture from before the bar existed to the
+            // bare style is the picture from before the bar existed to the
             // last bit (`pow` is skipped outright at 1, see
             // `standoff_coverage`).
             falloff: 1.0,
@@ -860,7 +864,7 @@ impl ShadowStyle {
 /// want independent shadows, and the width that preserves a ring need not be
 /// the width that keeps a letterform or resting marker legible.
 ///
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowSettings {
     /// The lattice's node geometry: audio rings, octave bands and marks.
@@ -871,6 +875,52 @@ pub struct ShadowSettings {
     pub spectral_geometry: ShadowStyle,
     /// The spectral pane's note names and axis labels, and the spiral's names.
     pub spectral_text: ShadowStyle,
+}
+
+impl Default for ShadowSettings {
+    /// The four groups a fresh view opens on, and the fallback for any one of
+    /// them missing from a blob (the container-level `serde(default)` above).
+    ///
+    /// Four styles rather than one, captured from the DAW on 2026-09-07: the
+    /// picture as dialled, group by group. Every group is a distance shadow
+    /// (see [`ShadowStyle::default`]); what differs is how far each kind of
+    /// ink casts, how dark, and how the decay is bent.
+    fn default() -> ShadowSettings {
+        ShadowSettings {
+            // As wide as the bar goes at about a third of the depth, falling
+            // early: a node's rings and marks stand in a broad, shallow
+            // shadow.
+            lattice_geometry: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 1.0,
+                depth: 0.365_238_1,
+                falloff: 0.776_523_8,
+            },
+            // Tight and a little deeper, a hair under the plain exponential:
+            // a letterform or a resting marker keeps a crisp edge.
+            lattice_text: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.210_714_28,
+                depth: 0.585_238_1,
+                falloff: 0.984_738_1,
+            },
+            // Full depth under the roll's ribbons and the spiral's dots, wide
+            // enough to lift them off the heatmap.
+            spectral_geometry: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.739_761_9,
+                depth: 1.0,
+                falloff: 0.693_238_14,
+            },
+            // Full depth under the spectral pane's names and axis labels too.
+            spectral_text: ShadowStyle {
+                kernel: ShadowKernel::Distance,
+                width: 0.642_857_13,
+                depth: 1.0,
+                falloff: 0.797_345_2,
+            },
+        }
+    }
 }
 
 impl ShadowSettings {

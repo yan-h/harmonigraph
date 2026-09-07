@@ -854,7 +854,9 @@ impl Default for SpectrumConfig {
             low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
-            roll_fraction: 0.55,
+            // Most of the pane to the roll, as captured from the DAW on
+            // 2026-09-07; the analyzer's own display keeps the rest.
+            roll_fraction: 0.704_143_05,
             // Three minutes, which is a whole piece rather than a glimpse of
             // the hands: the roll and the heatmap are read for the SHAPE of
             // what has been played, and a dozen seconds only ever shows the

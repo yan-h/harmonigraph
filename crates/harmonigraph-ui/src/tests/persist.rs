@@ -1499,21 +1499,23 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
         let loaded: harmonigraph_scene::ShadowSettings =
             ron::from_str(&format!("({})", kept.join(",")))
                 .unwrap_or_else(|e| panic!("dropping {missing} sank the endpoint: {e}"));
+        // A missing group comes back at the FRESH endpoint's value for that
+        // group, not at a bare `ShadowStyle::default()`: the container-level
+        // `serde(default)` fills from `ShadowSettings::default()`, whose four
+        // groups differ.
+        let fresh = harmonigraph_scene::ShadowSettings::default();
         for (name, group) in [
             ("lattice_geometry", loaded.lattice_geometry),
             ("lattice_text", loaded.lattice_text),
             ("spectral_geometry", loaded.spectral_geometry),
             ("spectral_text", loaded.spectral_text),
         ] {
-            let want = if name == missing {
-                harmonigraph_scene::ShadowStyle::default()
-            } else {
-                match name {
-                    "lattice_geometry" => endpoint.lattice_geometry,
-                    "lattice_text" => endpoint.lattice_text,
-                    "spectral_geometry" => endpoint.spectral_geometry,
-                    _ => endpoint.spectral_text,
-                }
+            let source = if name == missing { &fresh } else { &endpoint };
+            let want = match name {
+                "lattice_geometry" => source.lattice_geometry,
+                "lattice_text" => source.lattice_text,
+                "spectral_geometry" => source.spectral_geometry,
+                _ => source.spectral_text,
             };
             assert_eq!(group, want, "dropping {missing} changed {name}");
         }
