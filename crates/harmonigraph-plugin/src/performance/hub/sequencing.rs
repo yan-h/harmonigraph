@@ -248,9 +248,15 @@ impl Sequencer {
         let index = source * LIFETIMES + usize::from(request);
         let identity = Request { lease, epoch, serial, request, lifetime };
         if let Some(plan) = self.plan_mut(index) {
-            if plan.request == identity {
-                plan.terminal = true;
+            if plan.request != identity {
+                return true;
             }
+            plan.terminal = true;
+            // An authoritative cancellation ends the note as surely as a
+            // release does. Marking the plan alone would leave the voice this
+            // onset prospectively inserted scoring every later note, because
+            // a canceled attack never produces the output that would clear it.
+            self.forget_voice(identity.lease.slot, lifetime);
             true
         } else {
             // A cancellation can overtake the onset's own copied record. Hold
@@ -1011,12 +1017,34 @@ impl Sequencer {
     /// table it replaced paid a keyed directory hint plus, on a miss, a
     /// 256-cell fallback against the same per-callback budget the merge loop
     /// spends on output.
+    /// A note the Hub no longer believes is sounding leaves no policy context
+    /// behind it. The ordinary path is the addressed Terminal record in
+    /// `apply`; this is for the endings that never become one.
+    fn forget_voice(&mut self, source: u8, lifetime: u64) {
+        if let Some(cell) = self.context.iter_mut().find(|cell| {
+            cell.is_some_and(|voice| voice.source == source && voice.lifetime == lifetime)
+        }) {
+            *cell = None;
+        }
+    }
+
     pub(super) fn accepted_output(
         &mut self,
         source: u8,
+        value: OutputDelta,
         voice: Option<&harmonigraph_core::canonical::VoiceBaseline>,
     ) {
         let Some(voice) = voice.filter(|voice| voice.lifetime != 0) else {
+            // An accepted termination the Hub's factual row has already applied
+            // away. A Stop or a membership withdrawal ends its forwarded voices
+            // through emergency releases, which reach the Hub as output and
+            // never as an addressed Terminal record, so this is the only place
+            // that can take them out of the policy's context.
+            if value.lifetime != 0
+                && (value.event.release() || value.outcome.channel_terminal().is_some())
+            {
+                self.forget_voice(source, value.lifetime);
+            }
             return;
         };
         let fact = Voice::factual(source, voice);

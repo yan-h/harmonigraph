@@ -892,7 +892,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
 }
 
 #[test]
-fn production_musical_configuration_and_stop_recovery_clear_history() {
+fn production_musical_a_configuration_edit_clears_history_and_a_transport_stop_does_not() {
     let _scope = crate::test_scope::enter();
     for stop in [false, true] {
         let mut phrase = Phrase::new();
@@ -904,8 +904,10 @@ fn production_musical_configuration_and_stop_recovery_clear_history() {
         phrase.idle();
         let held = phrase.voice(0, 50, 0);
         if stop {
-            // Releasing this held D at Stop changes actual output and reaches
-            // recovery. A silent Stop in the same epoch need not clear history.
+            // Stop terminates this held D downstream. It is not one of the
+            // Hub's history boundaries -- those are a configuration revision,
+            // a participation toggle, a re-pairing and a clock reset -- so the
+            // prospective spelling of a key survives it.
             phrase.step(std::array::from_fn(|_| vec![transport(0, 120.0)]), [0, 1, 2]);
             phrase.step(
                 std::array::from_fn(|_| {
@@ -939,10 +941,16 @@ fn production_musical_configuration_and_stop_recovery_clear_history() {
         }
         phrase.step([vec![], vec![], vec![note(4, 0, 52, 0, true)]], [0, 1, 2]);
         phrase.idle();
+        // Measured with a probe on `assign_new_note`: the configuration edit
+        // hands the policy `history=None` and E is re-derived against the
+        // sounding D, while the Stop hands it `Some(0,1,0)` and E is recalled.
+        // Both branches read (4,0,0) until the Hub stopped leaving a Stop's
+        // released voice in its context: the duplicate D outweighed the recall.
+        let node = if stop { LatticePos::new(0, 1, 0) } else { LatticePos::new(4, 0, 0) };
         assert_eq!(
             phrase.voice(2, 52, 0).attack_node,
-            Some(LatticePos::new(4, 0, 0)),
-            "boundary stop={stop} removes release-surviving E history"
+            Some(node),
+            "stop={stop}: only a configuration revision clears released E history"
         );
         phrase.release_all();
     }

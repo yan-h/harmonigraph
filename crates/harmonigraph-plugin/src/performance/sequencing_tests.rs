@@ -897,14 +897,21 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
         Input::Transport(value)
     };
     let (hub, source) = production_pair();
-    // Note 1 is assigned and forwarded downstream; note 2 is still waiting for
-    // its assignment when the transport stops.
+    // Three notes, each ending by a different route: note 1 is assigned and
+    // forwarded downstream, note 3 is assigned but one callback short of
+    // sounding, and note 2 is still waiting for its assignment.
     source.run_format(1536, vec![transport(0, 120.0), note(1, 0, 60, 0, true)], None, None, 512);
     hub.run_format(1536, vec![], None, None, 512);
-    let sounding = source.run_format(2048, vec![note(2, 0, 64, 0, true)], None, None, 512);
+    let sounding = source.run_format(2048, vec![note(3, 0, 67, 0, true)], None, None, 512);
     assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
-    assert_eq!(source.source_snapshot().local_pending, 1, "note 2 has no assignment yet");
-    let stop = source.run_format(2560, vec![stopped()], None, None, 512);
+    hub.run_format(2048, vec![], None, None, 512);
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![(1, 1), (1, 2)],
+        "note 3 is assigned before the Stop, and note 2 has not been played yet"
+    );
+    let stop = source.run_format(2560, vec![note(2, 0, 64, 0, true), stopped()], None, None, 512);
+    assert_eq!(source.source_snapshot().local_pending, 2, "neither note 2 nor note 3 sounded");
     assert!(
         stop.values.iter().any(|(time, event)| *time == 0
             && matches!(event, Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, .. })),
@@ -918,18 +925,26 @@ fn production_stop_cancels_the_pending_attack_and_releases_the_forwarded_voice()
         )));
     }
     assert!(!stop.values.iter().any(|(_, event)| event.attack().is_some()));
-    // The Hub answers note 2 after the Stop. Its assignment arriving must not
-    // resurrect a canceled attack.
-    hub.run_format(2048, vec![], None, None, 512);
-    assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
-    for raw in [3584, 4096, 4608] {
+    // The Hub answers note 2 only after the Stop. Neither that assignment nor
+    // note 3's, which arrived before it, may resurrect a canceled attack.
+    for raw in [3072, 3584, 4096, 4608] {
         assert!(source.run_format(raw, vec![], None, None, 512).values.is_empty());
-        hub.run_format(raw - 1024, vec![], None, None, 512);
+        hub.run_format(raw - 512, vec![], None, None, 512);
     }
     let settled = source.source_snapshot();
     assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
-    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_none());
-    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 2)).is_none());
+    for lifetime in 1..=3 {
+        assert!(inspect_hub(&hub, |hub| hub.test_voice(0, lifetime)).is_none());
+    }
+    // The factual row is not the whole of it: the emergency release reaches the
+    // Hub as accepted output rather than as an addressed Terminal record, and
+    // the cancellation only marks a plan, so both notes can survive in the
+    // table the policy actually scores against.
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context()),
+        vec![],
+        "neither the released voice nor the canceled attack stays in tuning context"
+    );
 }
 
 #[test]

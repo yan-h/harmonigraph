@@ -1103,7 +1103,7 @@ impl Hub {
                 row.applied = value.sequence;
                 Self::confirm(row, &mut owner.confirmed);
                 let accepted = row.state.voice(value.lifetime).copied();
-                self.sequencer.accepted_output(source, accepted.as_ref());
+                self.sequencer.accepted_output(source, value, accepted.as_ref());
                 self.merged += 1;
                 continue;
             }
@@ -1214,7 +1214,7 @@ impl Hub {
                 }
                 Self::confirm(row, &mut owner.confirmed);
                 let accepted = row.state.voice(value.lifetime).copied();
-                self.sequencer.accepted_output(slot, accepted.as_ref());
+                self.sequencer.accepted_output(slot, value, accepted.as_ref());
             }
         }
         let mut completed = through;
