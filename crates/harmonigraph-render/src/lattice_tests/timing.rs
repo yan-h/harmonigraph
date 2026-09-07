@@ -17,7 +17,7 @@
 //! ```
 
 use super::fixtures::*;
-use super::golden::the_live_view;
+use super::golden::{the_live_view, the_live_view_on_the_distance_row};
 use crate::*;
 
 /// Wide enough that the names are about the size the lattice typesets them.
@@ -27,7 +27,9 @@ const FRAMES: usize = 120;
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_costs_this_much() {
-    time_a_frame_of_names(the_live_view(), "the live view");
+    // Keep the existing single-kernel workload on Distance independently of
+    // which kernel the Gaussian golden fixture selects.
+    time_a_frame_of_names(the_live_view_on_the_distance_row(), "the live view (Distance)");
 }
 
 /// The same view with the Shadow at the top of its bar.
@@ -38,7 +40,7 @@ fn a_frame_of_names_costs_this_much() {
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
-    let mut scene = the_live_view();
+    let mut scene = the_live_view_on_the_distance_row();
     for style in scene.shadow.groups_mut() {
         style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
     }

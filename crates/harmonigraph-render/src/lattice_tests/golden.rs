@@ -247,18 +247,15 @@ fn a_chord_at_a_wide_reach() -> Scene {
     lattice(&view, near_camera())
 }
 
-/// The lattice as Yan's DAW draws it.
+/// The captured live view, explicitly drawn with Gaussian shadows.
 ///
 /// Read out of a live Bitwig project with `./read-plugin-state.py` (the
-/// `capture-daw-state` skill) on 2026-08-28. Of everything that capture holds,
-/// three fields differ from the fresh view: a Shadow a fifth wider, the Shadow
-/// depth at the top of its bar rather than 0.85, and the window centred one
-/// fifth along.
+/// `capture-daw-state` skill) on 2026-08-28. It fixes the captured Shadow width,
+/// full depth and window centred one fifth along. The kernel is explicit so
+/// a change to the fresh view cannot collapse the two golden families.
 ///
-/// That is the whole of the difference and it earns the frame, because the
-/// freeze list and the shadow rework are both judged at these settings and
-/// nowhere else — a picture change invisible at the fresh Shadow and obvious at
-/// a wider one at full depth is a change that ships.
+/// Full shadow depth makes changes to reach and profile visible even when a
+/// shallower fresh view would hide them.
 ///
 /// The capture's TUNING, zoom and pan are deliberately not taken. The tuning
 /// would empty the frame (see [`lattice`]); zoom and pan are navigation state,
@@ -269,6 +266,7 @@ pub(super) fn the_live_view() -> Scene {
     // The capture's two Shadow numbers, on both groups: it was taken before the
     // groups existed, so one width and one depth is what it says.
     for style in view.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Gaussian;
         style.width = 0.196_915_06;
         style.depth = 1.0;
     }
@@ -283,12 +281,24 @@ pub(super) fn the_live_view() -> Scene {
 /// is actually looking at. A diff here on a later PR is the distance row moving
 /// — which is what a freeze PR is for — and the Gaussian frames beside it stay
 /// still, that being the contract this family arrived under.
-fn the_live_view_on_the_distance_row() -> Scene {
+pub(super) fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();
     for style in scene.shadow.groups_mut() {
         style.kernel = harmonigraph_scene::ShadowKernel::Distance;
     }
     scene
+}
+
+#[test]
+fn the_live_view_goldens_exercise_both_shadow_kernels() {
+    for (scene, kernel) in [
+        (the_live_view(), harmonigraph_scene::ShadowKernel::Gaussian),
+        (the_live_view_on_the_distance_row(), harmonigraph_scene::ShadowKernel::Distance),
+    ] {
+        for style in scene.shadow.groups() {
+            assert_eq!(style.kernel, kernel);
+        }
+    }
 }
 
 /// The live view's DISTANCE row at the top of the Shadow bar.
