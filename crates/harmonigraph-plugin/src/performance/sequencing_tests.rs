@@ -728,12 +728,14 @@ fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
     assert!(source.run_format(3072, vec![], None, None, 512).values.is_empty());
     hub.run_format(2560, vec![], None, None, 512);
     // The note's own release carries the same extra shift, so the sounding
-    // duration is the played duration. A shared channel control sent in the
-    // same callback keeps the ordinary input+D schedule instead.
+    // duration is the played duration. Two unrelated events sit behind it in
+    // the same callback and neither inherits its lateness: a shared channel
+    // control, which leaves through `schedule_channels`, and a raw MIDI clock,
+    // which has no channel and only `schedule_pending` can carry.
     assert!(source
         .run_format(
             3584,
-            vec![note(7, 0, 60, 0, false), raw_midi([0xb0, 11, 90], 0)],
+            vec![note(7, 0, 60, 0, false), raw_midi([0xb0, 11, 90], 0), raw_midi([0xf8, 0, 0], 1)],
             None,
             None,
             512
@@ -742,9 +744,16 @@ fn production_late_onset_keeps_its_duration_and_shifts_only_its_own_release() {
         .is_empty());
     hub.run_format(3072, vec![], None, None, 512);
     let control = source.run_format(4096, vec![], None, None, 512);
-    assert_eq!(control.values.len(), 1, "the shared control is not held to the note's shift");
-    assert_eq!(control.values[0].0, 0);
-    assert!(matches!(control.values[0].1, Event::Midi { data: [0xb0, 11, 90], .. }));
+    assert_eq!(control.values.len(), 2, "neither is held to the note's shift: {:?}", control.values);
+    assert!(control
+        .values
+        .iter()
+        .any(|(time, event)| *time == 0
+            && matches!(event, Event::Midi { data: [0xb0, 11, 90], .. })));
+    assert!(control
+        .values
+        .iter()
+        .any(|(time, event)| *time == 1 && matches!(event, Event::Midi { data: [0xf8, 0, 0], .. })));
     hub.run_format(3584, vec![], None, None, 512);
     let release = source.run_format(4608, vec![], None, None, 512);
     assert_eq!(release.values.len(), 1, "{:?}", release.values);
@@ -1036,6 +1045,47 @@ fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() 
     hub.run_format(1536, vec![], None, None, 512);
     let attack = source.run_format(2560, vec![], None, None, 512);
     assert!(attack.values[0].1.attack().is_some());
+}
+
+#[test]
+fn production_a_broadcast_release_waiting_on_one_target_still_lets_the_clock_through() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Note 1 sounds. Note 2 is captured a callback later and left unanswered,
+    // so it is still unsounded when one release addresses them both.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    assert!(source.run_format(2048, vec![note(2, 0, 64, 0, true)], None, None, 512).values[0]
+        .1
+        .attack()
+        .is_some());
+    // A release addressed to every note on the channel owns a child per target
+    // and no life of its own, so the refusal that holds it belongs to one child
+    // and not to the envelope.
+    assert!(source
+        .run_format(2560, vec![note(-1, 0, -1, 0, false), ], None, None, 512)
+        .values
+        .is_empty());
+    // Note 1's share leaves here. Note 2's is still owed, and a raw MIDI clock
+    // captured now falls behind an envelope that can only refuse from here on.
+    let first = source.run_format(3072, vec![raw_midi([0xf8, 0, 0], 1)], None, None, 512);
+    assert_eq!(first.values.len(), 1, "{:?}", first.values);
+    assert!(matches!(
+        first.values[0],
+        (0, Event::Note { kind: CLAP_EVENT_NOTE_OFF, key: 60, .. })
+    ));
+    let clock = source.run_format(3584, vec![], None, None, 512);
+    assert_eq!(clock.values.len(), 1, "the clock does not inherit note 2's wait: {:?}", clock.values);
+    assert_eq!(clock.values[0].0, 1, "at its own input+D");
+    assert!(matches!(clock.values[0].1, Event::Midi { data: [0xf8, 0, 0], .. }));
+    // Note 2's share of that release is still owed, and settles once the Hub
+    // answers it.
+    for raw in [4096, 4608, 5120, 5632, 6144, 6656] {
+        hub.run_format(raw - 2048, vec![], None, None, 512);
+        source.run_format(raw, vec![], None, None, 512);
+    }
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "{settled:?}");
 }
 
 #[test]

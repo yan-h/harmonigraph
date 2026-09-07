@@ -237,6 +237,11 @@ pub struct Source {
     /// This callback's normal output allowance is spent, so no later staging
     /// attempt in it can succeed and the walk stops rather than scanning on.
     stage_full: bool,
+    /// The refusal `stage_work` just returned was one note's own wait, not the
+    /// track's: rule one's two waits, and an established note whose shifted
+    /// release is due in a later callback. Set per `stage_pending` call and
+    /// read only by `schedule_pending`.
+    note_wait: bool,
     capture_cursor: Option<usize>,
     /// Copies of the input event at `capture_group_position`, waiting for room
     /// in the intent ring. They are self-contained, so nothing remote depends
@@ -417,6 +422,7 @@ impl Source {
             draining_finished: false,
             pending_cursor: None,
             stage_full: false,
+            note_wait: false,
             capture_cursor: None,
             capture_group: Queue::default(),
             capture_group_position: 0,
@@ -1448,17 +1454,20 @@ impl Source {
             if pending.cleanup_queued || pending.staged {
                 continue;
             }
+            self.note_wait = false;
             if !self.stage_pending(position, start, end, output) {
                 blocked = true;
-                // Rule one: an attack with no assignment yet, and an event
-                // addressed to a note that has not sounded, wait with that
-                // note and with nothing else. The walk steps over both rather
-                // than stopping the track behind them, so an unaddressed raw
-                // MIDI event and a later onset on the same channel each keep
-                // their own input+D schedule. Any other refusal is this
-                // callback's spent output allowance or one life's own ordered
-                // queue, and stops the walk exactly as it always did.
-                if !self.stage_full && self.waits_for_its_note(pending) {
+                // A refusal that belongs to one note holds that note and
+                // nothing else, so the walk steps over it: rule one's two
+                // waits, and an established note whose own shift puts its
+                // release in a later callback than the events queued behind
+                // it. An unaddressed raw MIDI event and a later onset on the
+                // same channel each keep their own input+D schedule past all
+                // three. Any other refusal is this callback's spent output
+                // allowance, a transport boundary or a track-wide fence, and
+                // stops the walk exactly as it always did. `stage_work` is
+                // what knows which it was, and says so in `note_wait`.
+                if !self.stage_full && self.note_wait {
                     continue;
                 }
                 break;
@@ -1467,16 +1476,6 @@ impl Source {
                 self.pending_cursor = next;
             }
         }
-    }
-
-    /// The two late-playback rules name exactly these two waits: an attack
-    /// without its assignment, and an event addressed to a note that has not
-    /// sounded. Neither holds anything but the note it belongs to.
-    fn waits_for_its_note(&self, pending: Pending) -> bool {
-        if pending.event.attack().is_some() {
-            return !self.assignment_ready(pending.life);
-        }
-        pending.life != NONE && self.lives.at(pending.life).is_some_and(|life| !life.sounded)
     }
 
     fn charge(&mut self, count: usize) -> bool {
@@ -1597,10 +1596,12 @@ impl Source {
             if pending.input.checked_add(self.delay()).is_some_and(|deadline| deadline < end) {
                 self.timing_failure(pending.life);
             }
+            self.note_wait = true;
             return false;
         }
         let established = life.is_some_and(|life| life.sounded);
         if life.is_some() && !established && pending.event.attack().is_none() {
+            self.note_wait = true;
             return false;
         }
         if pending.event.attack().is_none()
@@ -1619,6 +1620,11 @@ impl Source {
         };
         due = due.max(start);
         if due >= end || self.next_stop_sample().is_some_and(|stop| due >= stop) {
+            // Only an established note can be due AFTER something queued behind
+            // it: its release rides its own onset lateness while everything
+            // else is input+D, which is monotonic in input order. A stop
+            // boundary blocks the whole track and is not this note's wait.
+            self.note_wait |= established && due >= end;
             return false;
         }
         let callback = self.callback.unwrap();
