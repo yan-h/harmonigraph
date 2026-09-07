@@ -20,6 +20,18 @@ use std::sync::Arc;
 
 mod sequencing;
 
+/// One paired row's plan ledger. Allocated by the registry on the main thread
+/// at pairing and moved — never allocated, never freed — on audio. A Hub with
+/// no paired Tune holds none of these, which is the whole point: the ledger
+/// used to be one 16 x LIFETIMES block built in `Hub::new` for every
+/// Harmonigraph instance, Tunes or not.
+pub struct PlanRow(Box<[Option<sequencing::Plan>]>);
+impl Default for PlanRow {
+    fn default() -> Self {
+        Self(vec![None; LIFETIMES].into_boxed_slice())
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ChannelWitness {
     sequence: u64,
@@ -562,6 +574,12 @@ impl Hub {
         for step in 0..TUNERS {
             let index = (self.rotation + step) % TUNERS;
             let shared = &offer.session.rows[index];
+            // A move, not an allocation: the registry built this row's plan
+            // ledger on the main thread when it handed out the lease.
+            if let Some(ledger) = shared.plans.take_at(0) {
+                self.sequencer.install_plan_row(index, ledger);
+                shared.plans_held.store(true, Ordering::Release);
+            }
             let row = &mut self.rows[index];
             if row.lease.is_some_and(|lease| {
                 lease.incarnation == shared.expected_incarnation.load(Ordering::Acquire)

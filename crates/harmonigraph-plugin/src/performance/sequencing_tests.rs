@@ -710,6 +710,36 @@ fn production_missing_assignment_retains_one_late_onset_and_fixed_latency() {
 }
 
 #[test]
+fn an_unpaired_hub_holds_no_plan_ledger_and_pairing_allocates_one_row() {
+    let _scope = crate::test_scope::enter();
+    let uuid = SavedUuid::default();
+    let calibration = Calibration { offset: 0 };
+    let mut hub = Device::new(false);
+    hub.configure_format(uuid, true, calibration);
+    hub.activate_format(44100.0, 512);
+    for raw in [0, 512] {
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_plan_ledger_bytes()),
+        0,
+        "a Harmonigraph with no paired Tune allocates nothing for tuning"
+    );
+    let mut source = Device::new(true);
+    source.configure_format(uuid, true, calibration);
+    source.activate_format(44100.0, 512);
+    for raw in [1024, 1536] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_plan_ledger_bytes()),
+        hub::Hub::test_plan_row_bytes(),
+        "pairing one Tune allocates exactly that Tune's row"
+    );
+}
+
+#[test]
 fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();

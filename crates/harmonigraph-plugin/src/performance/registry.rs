@@ -407,6 +407,15 @@ impl Registry {
                 slot: (slot + 1) as u8,
             };
             let row = &hub.session.rows[slot];
+            // Pairing is this row's allocation boundary, and it is on the main
+            // thread. A Hub that never pairs a Tune never builds a ledger; one
+            // that does gets exactly the rows it pairs, moved in, never
+            // allocated or freed on audio.
+            if !row.plans_held.load(Ordering::Acquire) {
+                if let Some(cell) = row.plans.reserve_at(0) {
+                    cell.publish(super::hub::PlanRow::default());
+                }
+            }
             row.expected_incarnation.store(incarnation, Ordering::Release);
             row.withdrawn.store(false, Ordering::Release);
             row.faults.store(0, Ordering::Release);

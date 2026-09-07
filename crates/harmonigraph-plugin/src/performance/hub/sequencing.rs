@@ -7,7 +7,7 @@ mod actual_lookup_tests;
 mod history;
 
 #[derive(Clone, Copy)]
-struct Plan {
+pub(super) struct Plan {
     request: Request,
     binding: Assignment,
     /// Expected input-to-output translation for this exact decision. Replayed
@@ -105,7 +105,12 @@ pub(super) struct Sequencer {
     committing: bool,
     pub finalized: Option<i64>,
     pub copied: Option<i64>,
-    plans: Box<[Option<Plan>]>,
+    /// One LIFETIMES-long ledger per PAIRED row, and nothing at all for a row
+    /// that has never been paired. The registry allocates a row's ledger on
+    /// the main thread when it hands out that row's lease; the Hub only ever
+    /// moves the box in. Plan indices stay flat — `row * LIFETIMES + request` —
+    /// so the intrusive list still links freely across rows.
+    plans: [Option<super::PlanRow>; TUNERS],
     plan_head: u32,
     plan_tail: u32,
     plan_cursor: u32,
@@ -147,7 +152,7 @@ impl Default for Sequencer {
             copied: None,
             // DIRECT has no plan row. Birth indices are already separately
             // reserved at Source; they are never authority without the key.
-            plans: vec![None; TUNERS * LIFETIMES].into_boxed_slice(),
+            plans: std::array::from_fn(|_| None),
             plan_head: NO_PLAN,
             plan_tail: NO_PLAN,
             plan_cursor: NO_PLAN,
@@ -212,37 +217,57 @@ impl Sequencer {
         // Absent identities invalidate old hints without scanning the 34816
         // address directory. No physical debt may reach this committed cut.
     }
+    pub(super) fn install_plan_row(&mut self, row: usize, ledger: super::PlanRow) {
+        self.plans[row] = Some(ledger);
+    }
+    #[cfg(test)]
+    fn plan_ledger_bytes(&self) -> usize {
+        self.plans.iter().flatten().map(|row| std::mem::size_of_val(&*row.0)).sum()
+    }
+    fn plan(&self, index: usize) -> Option<Plan> {
+        self.plans[index / LIFETIMES].as_ref()?.0[index % LIFETIMES]
+    }
+    fn plan_mut(&mut self, index: usize) -> Option<&mut Plan> {
+        self.plans[index / LIFETIMES].as_mut()?.0[index % LIFETIMES].as_mut()
+    }
+    /// None only for a row with no ledger, which is a row that was never
+    /// paired. Every plan index reaching this comes from a leased row.
+    fn plan_cell(&mut self, index: usize) -> Option<&mut Option<Plan>> {
+        Some(&mut self.plans[index / LIFETIMES].as_mut()?.0[index % LIFETIMES])
+    }
     /// False when the slot is already live: overwriting it would strand the
     /// old plan's links in the intrusive list and overcount `plan_count`, so
-    /// the caller latches a fault and abandons the insert instead.
+    /// the caller latches a fault and abandons the insert instead. Also false
+    /// for a row whose ledger the pairing boundary has not delivered.
     #[must_use]
     fn insert_plan(&mut self, index: usize, mut plan: Plan) -> bool {
-        if self.plans[index].is_some() {
-            return false;
+        match self.plan_cell(index) {
+            Some(cell) if cell.is_none() => {}
+            _ => return false,
         }
         plan.previous = self.plan_tail;
         plan.next = NO_PLAN;
         if self.plan_tail == NO_PLAN {
             self.plan_head = index as u32;
         } else {
-            self.plans[self.plan_tail as usize].as_mut().unwrap().next = index as u32;
+            self.plan_mut(self.plan_tail as usize).unwrap().next = index as u32;
         }
         self.plan_tail = index as u32;
         self.plan_count += 1;
-        self.plans[index] = Some(plan);
+        *self.plan_cell(index).unwrap() = Some(plan);
         true
     }
     fn remove_plan(&mut self, index: usize) {
-        let plan = self.plans[index].take().unwrap();
+        let plan = self.plan_cell(index).unwrap().take().unwrap();
         if plan.previous == NO_PLAN {
             self.plan_head = plan.next;
         } else {
-            self.plans[plan.previous as usize].as_mut().unwrap().next = plan.next;
+            self.plan_mut(plan.previous as usize).unwrap().next = plan.next;
         }
         if plan.next == NO_PLAN {
             self.plan_tail = plan.previous;
         } else {
-            self.plans[plan.next as usize].as_mut().unwrap().previous = plan.previous;
+            self.plan_mut(plan.next as usize).unwrap().previous = plan.previous;
         }
         self.plan_count -= 1;
     }
@@ -263,7 +288,7 @@ impl Sequencer {
         }
         let index = source * LIFETIMES + usize::from(request);
         let identity = Request { lease, epoch, serial, request, lifetime };
-        if let Some(plan) = self.plans[index].as_mut() {
+        if let Some(plan) = self.plan_mut(index) {
             if plan.request == identity {
                 plan.terminal = true;
             }
@@ -334,11 +359,12 @@ impl Sequencer {
             ]
         );
         println!(
-            "LEDGER sequencer [owner,plan_option,plan_backing,voice_option,voice_backing] {:?}",
+            "LEDGER sequencer [owner,plan_option,paired_row_backing,plan_backing,voice_option,voice_backing] {:?}",
             [
                 std::mem::size_of::<Self>(),
                 std::mem::size_of::<Option<Plan>>(),
-                std::mem::size_of_val(&*self.plans),
+                Hub::test_plan_row_bytes(),
+                self.plan_ledger_bytes(),
                 std::mem::size_of::<Option<Voice>>(),
                 std::mem::size_of_val(&*self.context)
             ]
@@ -347,6 +373,16 @@ impl Sequencer {
 }
 
 impl Hub {
+    /// What one paired row's ledger costs, so a fixture can say which rows are
+    /// allocated rather than repeating a byte count that would drift.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_row_bytes() -> usize {
+        std::mem::size_of::<Option<Plan>>() * LIFETIMES
+    }
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_ledger_bytes(&self) -> usize {
+        self.sequencer.plan_ledger_bytes()
+    }
     #[cfg(test)]
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
         self.sequencer.policy_counts
@@ -688,7 +724,7 @@ impl Hub {
             Request { lease: record.lease, epoch: record.epoch, serial: record.serial,
                 request: record.request, lifetime: record.lifetime };
         let prior = (source != 0)
-            .then(|| self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(record.request)])
+            .then(|| self.sequencer.plan((source - 1) * LIFETIMES + usize::from(record.request)))
             .flatten();
         if let Some(prior) = prior {
             if prior.request != request {
@@ -698,13 +734,13 @@ impl Hub {
                 // Its cancellation arrived before its own record. Binding the
                 // plan here is what lets `service_plans` retire it, and keeps
                 // ordinary sequencing from assigning it as a fresh onset.
-                let plan = self.sequencer.plans
-                    [(source - 1) * LIFETIMES + usize::from(record.request)]
-                    .as_mut()
+                let config = self.sequencer.config;
+                let plan = self
+                    .sequencer
+                    .plan_mut((source - 1) * LIFETIMES + usize::from(record.request))
                     .unwrap();
                 if !plan.bound {
-                    plan.binding.configuration =
-                        self.sequencer.config.unwrap_or(plan.binding.configuration);
+                    plan.binding.configuration = config.unwrap_or(plan.binding.configuration);
                 }
                 plan.bound = true;
                 return true;
@@ -784,7 +820,7 @@ impl Hub {
                 selection,
                 initial_player: player,
             };
-            if let Some(plan) = self.sequencer.plans[index].as_mut() {
+            if let Some(plan) = self.sequencer.plan_mut(index) {
                 plan.request = request;
                 plan.binding = binding;
                 plan.sent = false;
@@ -814,7 +850,7 @@ impl Hub {
             self.sequencer.cohort_recipients |= 1 << (source - 1);
             let reply = Reply::Assignment { request, binding };
             if self.offer.as_mut().unwrap().bank.rows[source - 1].replies.push(reply).is_ok() {
-                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.plan_mut(index).unwrap().sent = true;
                 self.sequencer.cohort_unsent -= 1;
             }
         }
@@ -891,7 +927,7 @@ impl Hub {
         if usize::from(request) >= LIFETIMES {
             return None;
         }
-        let plan = self.sequencer.plans[source * LIFETIMES + usize::from(request)].as_mut()?;
+        let plan = self.sequencer.plan_mut(source * LIFETIMES + usize::from(request))?;
         if self.rows[source].lease != Some(plan.request.lease)
             || !plan.bound
             || output.epoch != plan.request.epoch
@@ -904,13 +940,17 @@ impl Hub {
             plan.terminal = true;
         }
         let planned = output.input.checked_add(plan.shift)?;
+        let mut accepted_shift = None;
         if output.event.attack().is_some() {
             plan.accepted = true;
             plan.shift = output.actual.checked_sub(output.input)?;
-            self.sequencer.extra_delay =
-                self.sequencer.extra_delay.max(plan.shift.saturating_sub(DELAY).max(0) as u64);
+            accepted_shift = Some(plan.shift);
         }
         let binding = plan.binding;
+        if let Some(shift) = accepted_shift {
+            self.sequencer.extra_delay =
+                self.sequencer.extra_delay.max(shift.saturating_sub(DELAY).max(0) as u64);
+        }
         Some((binding, planned))
     }
 
@@ -921,7 +961,7 @@ impl Hub {
         }
         while self.sequencer.plan_work < 256 && self.sequencer.plan_left != 0 {
             let index = self.sequencer.plan_cursor as usize;
-            let plan = self.sequencer.plans[index].unwrap();
+            let plan = self.sequencer.plan(index).unwrap();
             self.sequencer.plan_cursor = plan.next;
             self.sequencer.plan_left -= 1;
             self.sequencer.plan_work += 1;
@@ -944,7 +984,7 @@ impl Hub {
                     continue;
                 };
                 self.sequencer.cohort_unsent = remaining;
-                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.plan_mut(index).unwrap().sent = true;
             }
             // A canceled onset still has to pass the input cursor, so normal
             // sequencing cannot resurrect it. A terminated or retired row will
@@ -993,7 +1033,7 @@ impl Hub {
             if plan.terminal {
                 self.sequencer.remove_plan(index);
             } else {
-                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.plan_mut(index).unwrap().sent = true;
             }
         }
     }

@@ -409,6 +409,11 @@ pub struct SourceControl {
     pub to_hub: SourceSlots<Control>,
     pub to_source: SourceSlots<Reply>,
     pub baselines: Slots<Baseline>,
+    /// This row's plan ledger on its way from the registry's pairing boundary
+    /// to the Hub. Cell zero only; the Hub keeps what it takes, so the ledger
+    /// is allocated once per row that is ever paired and never on audio.
+    pub plans: Slots<super::hub::PlanRow>,
+    pub plans_held: AtomicBool,
 }
 impl Default for SourceControl {
     fn default() -> Self {
@@ -422,6 +427,8 @@ impl Default for SourceControl {
             to_hub: SourceSlots::default(),
             to_source: SourceSlots::default(),
             baselines: Slots::default(),
+            plans: Slots::default(),
+            plans_held: AtomicBool::new(false),
         }
     }
 }
