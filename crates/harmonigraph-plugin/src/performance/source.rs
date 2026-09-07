@@ -2970,6 +2970,15 @@ impl Source {
     pub fn retired_pump(&mut self) -> bool {
         self.intent_pushed = 0;
         self.visits = 0;
+        // A Source with no session at all has no reader for its accepted
+        // output: the facts are already in its own State, and no Hub exists to
+        // send `OutputRetained`. Retiring the journal locally is what lets
+        // destruction settle; without it the registry entry and the whole
+        // Source leak for the life of the process. See #718 for the other half
+        // of that gap, which is an unpaired Source still live.
+        if self.session().is_none() && self.acknowledged < self.sequence {
+            self.acknowledge(self.sequence, self.complete_through);
+        }
         self.receive();
         self.cancel_slice();
         self.drain_ready_work();

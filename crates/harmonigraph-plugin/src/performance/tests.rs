@@ -3160,21 +3160,19 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
             port_index: 0,
             data: [0xb0, 1, (block % 128) as u8],
         });
-        assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+        // A shared channel control is addressed to no one note, so it keeps
+        // its own schedule past the unadmitted attacks on its channel. Its
+        // effect on each of them stays owned as that control's Work child.
+        assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
     }
+    // Expressions addressed to a note that has not sounded wait with it, so
+    // they fill the remaining event slots without consuming a reference and
+    // without emitting.
     let mut remaining = 7617;
     let mut block = 512;
     while remaining != 0 {
         let count = remaining.min(1024);
-        let events = (0..count)
-            .map(|_| {
-                Input::Midi(clap_event_midi {
-                    header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                    port_index: 0,
-                    data: [0xf8, 0, 0],
-                })
-            })
-            .collect();
+        let events = (0..count).map(|_| expression(1, 0.25, 0)).collect();
         assert!(source.run(block * 64, events, None).values.is_empty());
         remaining -= count;
         block += 1;
@@ -3208,7 +3206,7 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
             port_index: 0,
             data: [0xb0, 1, (block % 128) as u8],
         });
-        assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+        assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
     }
     let before = source.source_snapshot();
     assert_eq!(
@@ -3220,7 +3218,14 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
         port_index: 0,
         data: [0xb0, 7, 23],
     });
-    assert!(source.run(513 * 64, vec![cc], None).values.is_empty());
+    // The shared controls emitted rather than waiting behind the unadmitted
+    // attacks, so this channel now has accepted controller state; the fault's
+    // emergency cleanup is that neutral reset, not new input.
+    let refused = source.run(513 * 64, vec![cc], None).values;
+    assert_eq!(refused.len(), 3);
+    assert!(refused.iter().all(|(_, event)| {
+        matches!(event, Event::Midi { data, .. } if data[0] == 0xb0 && matches!(data[1], 64 | 66 | 69))
+    }));
     let after = source.source_snapshot();
     assert_eq!((after.pending, after.references, after.input_cut), (576, 32768, 576));
     assert_ne!(after.faults & source::REFERENCE_FAULT, 0);
@@ -3483,27 +3488,28 @@ fn all_sixteen_retired_sources_dispose_full_event_reference_and_intent_owners_wi
                 port_index: 0,
                 data: [0xb0, 1, (block % 128) as u8],
             });
-            assert!(source.run(block * 64, vec![cc], None).values.is_empty());
+            // A shared channel control is not addressed to any one note, so it
+            // keeps its own schedule past the blocked attacks on its channel —
+            // and so does everything queued behind it.
+            assert_eq!(source.run(block * 64, vec![cc], None).values.len(), 1);
         }
-        let mut remaining = 8192 - source.source_snapshot().pending;
+        // Fill the rest of the owned event storage with releases that match no
+        // held note, so nothing here creates output: the Hub is not running,
+        // and an accepted-output journal that filled first would fault before
+        // the event storage did. What retains these envelopes is that their
+        // copies cannot leave — once the intent ring is full nothing more is
+        // published and every later capture stays owned.
         let mut block = 515;
-        while remaining != 0 {
-            let count = remaining.min(1024);
-            let events = (0..count)
-                .map(|_| {
-                    Input::Midi(clap_event_midi {
-                        header: header::<clap_event_midi>(CLAP_EVENT_MIDI, 0),
-                        port_index: 0,
-                        data: [0xf8, 0, 0],
-                    })
-                })
-                .collect();
-            assert!(source.run(block * 64, events, None).values.is_empty());
+        while source.source_snapshot().pending < 8192 {
+            let count = (8192 - source.source_snapshot().pending).min(1024);
+            let events =
+                (0..count).map(|index| note(9000 + index as i32, 0, 60, 0, false)).collect();
+            source.run(block * 64, events, None);
             block += 1;
-            remaining -= count;
+            assert!(block < 4096, "fixture must actually fill the owned event storage");
         }
         for _ in 0..1024 {
-            assert!(source.run(block * 64, vec![], None).values.is_empty());
+            source.run(block * 64, vec![], None);
             block += 1;
         }
         let snapshot = source.source_snapshot();

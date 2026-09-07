@@ -123,11 +123,13 @@ impl Source {
         };
         let wave = &self.channels.waves[channel];
         if matches!(pending.channel.role, Role::Header { .. }) {
-            let before_onset = self
-                .pending
-                .at(usize::from(wave.first))
-                .is_none_or(|onset| onset.serial > pending.serial);
-            if wave.wire.serial != pending.serial || !before_onset {
+            // A shared channel control keeps its own input+D schedule. It is
+            // not addressed to any one note, so a pending onset on this channel
+            // does not hold it: the control emits, and its effect on a note
+            // that has not sounded yet waits with that note as its own Work
+            // child and emits after it. Controls still keep their order among
+            // themselves, which is a real same-source dependency.
+            if wave.wire.serial != pending.serial {
                 return false;
             }
             if !self.charge(usize::from(pending.work_count)) {
@@ -136,6 +138,8 @@ impl Source {
             let mut child = pending.work_head;
             while child != NONE {
                 let cell = self.work.at(child);
+                // An addressed effect on a note that HAS sounded waits behind
+                // that note's own earlier pending events — rule one, per note.
                 if cell.phase & work::DONE == 0
                     && self.lives.at(cell.life).is_some_and(|life| {
                         life.sounded && life.terminal.is_none() && life.ready_head != child
