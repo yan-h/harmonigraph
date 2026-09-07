@@ -28,7 +28,6 @@ pub struct HubOffer {
     pub bank: Box<HubBank>,
 }
 pub struct SourceBridge {
-    pub arena: OnceLock<Arc<super::capture::CaptureArena>>,
     pub offers: Slots<SourceOffer>,
     pub returns: Slots<SourceReturn>,
     pub generation: AtomicU64,
@@ -37,7 +36,6 @@ pub struct SourceBridge {
 impl Default for SourceBridge {
     fn default() -> Self {
         Self {
-            arena: OnceLock::new(),
             offers: Slots::default(),
             returns: Slots::default(),
             generation: AtomicU64::new(1),
@@ -46,7 +44,6 @@ impl Default for SourceBridge {
     }
 }
 pub struct HubBridge {
-    pub arena: OnceLock<Arc<super::capture::CaptureArena>>,
     pub offers: Slots<HubOffer>,
     pub returns: Slots<u64>,
     pub retired_pending: AtomicBool,
@@ -55,7 +52,6 @@ pub struct HubBridge {
 impl Default for HubBridge {
     fn default() -> Self {
         Self {
-            arena: OnceLock::new(),
             offers: Slots::default(),
             returns: Slots::default(),
             retired_pending: AtomicBool::new(false),

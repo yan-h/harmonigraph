@@ -20,7 +20,6 @@
 //! (`harmonigraph_core::tuning::microcents`, `harmonigraph_core::coords::positions_within`).
 
 pub mod canonical;
-pub mod cohort;
 pub mod configuration;
 pub mod confirmed;
 pub mod coords;

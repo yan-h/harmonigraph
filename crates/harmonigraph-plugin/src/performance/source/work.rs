@@ -1,8 +1,12 @@
 //! Internal lifetime work has its own capacity. One original input owns one
 //! Pending slot, regardless of how many captured targets it addresses.
+//!
+//! This storage is Tune-local and plain. Nothing outside the owning Source
+//! reads a cell, so there is no packed immutable region and no free-list
+//! ownership protocol left to defend.
 use super::NONE;
 
-pub(in crate::performance) const CAPACITY: usize = 32768;
+pub(in crate::performance) const CAPACITY: usize = 8192;
 pub(super) const TARGET: u8 = 0;
 pub(super) const CHOKE: u8 = 1;
 pub(super) const NOTE_OFF: u8 = 2;
@@ -36,155 +40,64 @@ pub(super) struct Cell {
     pub phase: u8,
 }
 pub(in crate::performance) struct Work {
-    arena: std::sync::Arc<crate::performance::capture::CaptureArena>,
-    phases: Box<[u8]>,
-    free: u16,
-    len: usize,
+    cells: Box<[Option<Cell>]>,
+    free: Vec<u16>,
     pub high_water: usize,
 }
-
-/// The immutable region uses fourteen bytes: full serial plus 44 capture bits.
-/// ready_next is a separately addressed Source-only field. Never write a whole
-/// Packed or its immutable bytes after publication, including for phase changes.
-#[repr(C)]
-pub(crate) struct Packed {
-    serial: std::cell::UnsafeCell<u64>,
-    capture: std::cell::UnsafeCell<[u8; 6]>,
-    ready_next: std::cell::UnsafeCell<u16>,
-}
-const FREE: u64 = 1 << 44;
-impl Packed {
-    fn free(next: u16) -> Self {
+impl Default for Work {
+    fn default() -> Self {
         Self {
-            serial: std::cell::UnsafeCell::new(0),
-            capture: std::cell::UnsafeCell::new(Self::pack(FREE | (u64::from(next) << 26))),
-            ready_next: std::cell::UnsafeCell::new(NONE),
-        }
-    }
-    fn pack(bits: u64) -> [u8; 6] {
-        bits.to_le_bytes()[..6].try_into().unwrap()
-    }
-    fn bits(&self) -> u64 {
-        // SAFETY: Source-only builder/free access or pinned immutable Hub read.
-        let bytes = unsafe { *self.capture.get() };
-        u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0])
-    }
-    pub(in crate::performance) fn original(&self) -> (u64, u16, u16, u16, u8) {
-        let bits = self.bits();
-        assert_eq!(bits & FREE, 0);
-        // SAFETY: caller owns the Source handle or checked capture permission.
-        (
-            unsafe { *self.serial.get() },
-            (bits & 8191) as u16,
-            ((bits >> 13) & 8191) as u16,
-            (bits >> 26) as u16,
-            ((bits >> 42) & 3) as u8,
-        )
-    }
-    fn initialize(&self, cell: Cell) {
-        assert!(cell.life < 8192 && cell.parent < 8192 && cell.operation < 4);
-        let bits = u64::from(cell.life)
-            | (u64::from(cell.parent) << 13)
-            | (u64::from(cell.next) << 26)
-            | (u64::from(cell.operation) << 42);
-        // SAFETY: free list ownership, before any capture token exists.
-        unsafe {
-            *self.serial.get() = cell.serial;
-            *self.capture.get() = Self::pack(bits);
-            *self.ready_next.get() = cell.ready_next;
-        }
-    }
-}
-pub(in crate::performance) fn backing() -> Box<[Packed]> {
-    (0..CAPACITY)
-        .map(|index| Packed::free(if index + 1 == CAPACITY { NONE } else { (index + 1) as u16 }))
-        .collect()
-}
-impl Work {
-    pub(in crate::performance) fn new(
-        arena: std::sync::Arc<crate::performance::capture::CaptureArena>,
-    ) -> Self {
-        Self {
-            arena,
-            phases: vec![0; CAPACITY / 4].into_boxed_slice(),
-            free: 0,
-            len: 0,
+            cells: (0..CAPACITY).map(|_| None).collect(),
+            free: (0..CAPACITY as u16).rev().collect(),
             high_water: 0,
         }
     }
+}
+impl Work {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
-        self.len
+        CAPACITY - self.free.len()
     }
     pub(super) fn free(&self) -> usize {
-        CAPACITY - self.len
+        self.free.len()
     }
     pub(super) fn at(&self, index: u16) -> Cell {
-        let slot = &self.arena.work[index as usize];
-        let (serial, life, parent, next, operation) = slot.original();
-        let code = (self.phases[index as usize / 4] >> (2 * (index as usize % 4))) & 3;
-        Cell {
-            serial,
-            life,
-            parent,
-            next,
-            operation,
-            // SAFETY: this Work handle uniquely owns readiness and phases.
-            ready_next: unsafe { *slot.ready_next.get() },
-            phase: [0, DISPOSITION, DONE, DONE | UNLINKED][code as usize],
-        }
+        self.cells[index as usize].expect("live work reference")
     }
     pub(super) fn set(&mut self, index: u16, cell: Cell) {
-        let slot = &self.arena.work[index as usize];
-        let old = slot.original();
-        assert_eq!(old, (cell.serial, cell.life, cell.parent, cell.next, cell.operation));
-        let code = match cell.phase {
-            0 => 0,
-            DISPOSITION => 1,
-            DONE => 2,
-            5 => 3,
-            _ => panic!("invalid Source Work phase"),
-        };
-        let shift = 2 * (index as usize % 4);
-        let byte = &mut self.phases[index as usize / 4];
-        *byte = (*byte & !(3 << shift)) | (code << shift);
-        // SAFETY: this write addresses only the Source-owned link, not capture.
-        unsafe {
-            *slot.ready_next.get() = cell.ready_next;
-        }
+        let old = self.cells[index as usize].expect("live work reference");
+        assert_eq!(
+            (old.serial, old.life, old.parent, old.next, old.operation),
+            (cell.serial, cell.life, cell.parent, cell.next, cell.operation)
+        );
+        assert!(matches!(cell.phase, 0 | DISPOSITION | DONE | 5), "invalid Source Work phase");
+        self.cells[index as usize] = Some(cell);
     }
     pub(super) fn link_building(&mut self, index: u16, next: u16) {
-        let slot = &self.arena.work[index as usize];
-        let bits = slot.bits();
-        // SAFETY: used only while building the same not-yet-sealed parent group.
-        unsafe {
-            *slot.capture.get() = Packed::pack((bits & !(0xffff << 26)) | (u64::from(next) << 26));
-        }
+        self.cells[index as usize].as_mut().expect("building work reference").next = next;
     }
     pub(super) fn push(&mut self, cell: Cell) -> u16 {
-        assert_ne!(self.free, NONE, "whole reference group reserved at capture");
-        let index = self.free;
-        self.free = (self.arena.work[index as usize].bits() >> 26) as u16;
-        self.arena.work[index as usize].initialize(cell);
-        self.set(index, cell);
-        self.len += 1;
-        self.high_water = self.high_water.max(self.len);
+        assert!(cell.operation < 4);
+        let index = self.free.pop().expect("whole reference group reserved at capture");
+        self.cells[index as usize] = Some(cell);
+        self.high_water = self.high_water.max(CAPACITY - self.free.len());
         index
     }
     pub(super) fn remove(&mut self, index: u16) {
-        let slot = &self.arena.work[index as usize];
-        assert_eq!(slot.bits() & FREE, 0);
-        // SAFETY: parent cleanup requires BOTH local and exact remote retirement.
-        unsafe {
-            *slot.capture.get() = Packed::pack(FREE | (u64::from(self.free) << 26));
-        }
-        self.free = index;
-        self.len -= 1;
+        assert!(self.cells[index as usize].take().is_some());
+        self.free.push(index);
+    }
+    #[cfg(test)]
+    pub(super) fn test_layout(&self) -> [usize; 3] {
+        [
+            std::mem::size_of::<Option<Cell>>(),
+            CAPACITY,
+            std::mem::size_of_val(&*self.cells) + self.free.capacity() * 2,
+        ]
     }
 }
-const _: () = assert!(std::mem::size_of::<Packed>() == 16);
-const _: () = assert!(std::mem::align_of::<Packed>() <= 8);
-const _: () = assert!(PENDING_EVENTS <= 8192 && LIFETIMES <= 8192);
+const _: () = assert!(std::mem::size_of::<Option<Cell>>() <= 32);
+const _: () = assert!(PENDING_EVENTS <= INLINE as usize && LIFETIMES <= CAPACITY);
 
 use super::*;
 impl Source {
@@ -483,29 +396,26 @@ impl Source {
         self.draining_finished = false;
     }
 
+    /// Retain only an input whose copy has not reached the Hub yet: destroying
+    /// it here would lose an input the Hub is owed. Once the copy is sent
+    /// nothing remote refers to this envelope, so there is no retirement to
+    /// wait for. After producer join, or for a cancellation that precedes the
+    /// first adoption, no copy was sent and none will be — do not publish that
+    /// completed Original later as a fresh onset with no cancellation.
     fn capture_retained(&self, position: usize) -> bool {
         let serial = self.pending.at(position).unwrap().serial;
-        // READY has never minted a token. After producer join and local
-        // cancellation it has no possible reader, even if sample mapping made
-        // publication impossible. A Tune cancellation before initial adoption
-        // is also local-only: transfer_captures cannot have published it, and
-        // dispose_work did not owe a remote disposition. Do not publish that
-        // completed Original later as a fresh onset with no cancellation.
-        // OFFERED also covers a failed Source push;
-        // its unique token still requires exact retirement before reclamation.
-        self.pending.remote_pending(position)
-            || self.pending.unpublished(position)
-                && self.session().is_some()
-                && !self.producer_joined
-                && (self.direct.is_some() || self.adoption.sent() || serial > self.cancel_cut)
+        !self.pending.published(position)
+            && self.session().is_some()
+            && !self.producer_joined
+            && (self.direct.is_some() || self.adoption.sent() || serial > self.cancel_cut)
     }
 
     fn queue_ready_cleanup(&mut self, index: u16) {
         let life = self.lives.local_mut(index).unwrap();
-        if life.flags & READY_QUEUED != 0 {
+        if life.ready_queued {
             return;
         }
-        life.flags |= READY_QUEUED;
+        life.ready_queued = true;
         if self.work_cleanup_tail == NONE {
             self.work_cleanup_head = index;
         } else {
@@ -537,7 +447,7 @@ impl Source {
                     self.work_cleanup_tail = NONE;
                 }
                 let value = self.lives.local_mut(index).unwrap();
-                value.flags &= !READY_QUEUED;
+                value.ready_queued = false;
                 value.cleanup_next = NONE;
                 self.recycle(index);
                 continue;

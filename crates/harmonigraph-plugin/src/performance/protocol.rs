@@ -14,8 +14,20 @@ pub const INTENT_RING: usize = 1024;
 pub const REPLY_RING: usize = 1024;
 pub const OUTPUT_RING: usize = 2048;
 pub const OUTCOME_JOURNAL: usize = 4096;
-pub const PENDING_EVENTS: usize = 8192;
-pub const LIFETIMES: usize = 8192;
+/// Sized for the stated workload — sixteen tracks, 100+ simultaneous notes —
+/// rather than deduced. A source holds at most `HELD_PER_SOURCE` sounding
+/// notes; the rest of each depth is headroom for input that has arrived and
+/// not yet settled. Exhaustion stays an explicit bounded failure at every one
+/// of these: it latches a fault, it is not made unreachable by the size.
+pub const PENDING_EVENTS: usize = 512;
+pub const LIFETIMES: usize = 512;
+/// Copied records the Hub stages per source between arrival and sequencing.
+/// One input can address every held note, so this is deeper than the number
+/// of inputs a callback can carry.
+pub const CAPTURES_PER_SOURCE: usize = 512;
+/// Copied records the ordering pass may hold for one sample across all
+/// sources. Beyond it the pass latches rather than dropping an input.
+pub const BATCH_EVENTS: usize = 2048;
 pub const DELAY: i64 = 512;
 
 /// Four bytes retain all three outcomes without conflating an Off birth with
@@ -106,11 +118,88 @@ pub struct Lease {
     pub slot: u8,
 }
 
-#[derive(Debug)]
+/// One copied, self-contained input record. Everything the Hub needs to order
+/// and assign this input is here; nothing points back into Tune storage.
+///
+/// The Tune emits one record per addressed target, so a wildcard release or a
+/// channel termination becomes one record per held note rather than one record
+/// carrying a 64-wide fan-out. That keeps the cell fixed-size and bounds the
+/// traffic by the notes actually sounding.
+#[derive(Clone, Copy, Debug)]
+pub struct Capture {
+    pub lease: Lease,
+    /// Reset generation. A reply minted under a different epoch is obsolete.
+    pub epoch: u64,
+    /// The original input's own sequence at its source. Several records share
+    /// one serial when that one input addressed several notes.
+    pub serial: u64,
+    /// Input sample already mapped into the Hub's timebase.
+    pub sample: i64,
+    pub kind: CaptureKind,
+    /// Request slot of the addressed note, or `NO_REQUEST`.
+    pub request: u16,
+    /// Birth serial of the addressed note, or zero when none is addressed.
+    pub lifetime: u64,
+    pub channel: u8,
+    pub key: u8,
+    /// This onset asks for an adaptive assignment.
+    pub adaptive: bool,
+}
+pub const NO_REQUEST: u16 = u16::MAX;
+
+impl Capture {
+    pub fn onset(self) -> bool {
+        matches!(self.kind, CaptureKind::Onset)
+    }
+    /// Merge order inside one sample: every release and controller from every
+    /// source applies before any onset, and onsets then run in the musical
+    /// key/channel/source tie-break. Ties inside each half fall back to the
+    /// original per-source input order, which copying preserves.
+    pub fn order(self) -> (bool, u8, u8, u8, u64) {
+        if self.onset() {
+            (true, self.key, self.channel, self.lease.slot, self.serial)
+        } else {
+            (false, 0, 0, self.lease.slot, self.serial)
+        }
+    }
+}
+
+/// What one copied record does to the Hub's musical state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CaptureKind {
+    Onset,
+    /// Ends the addressed note: its own release, a same-key replacement's
+    /// choke, or one held note's share of a channel termination.
+    Terminal,
+    /// Per-note pitch expression addressed to one note.
+    Tuning { value_bits: u64 },
+    /// A shared channel controller, carrying its channel in the record. It
+    /// addresses no note of its own; the notes a termination ends arrive as
+    /// their own Terminal records.
+    Channel,
+    Participation(bool),
+    /// Note-addressed expression and everything else the Hub keeps only as
+    /// chronological context.
+    Other,
+}
+
+/// Exactly the identity a reply needs to reach one request and to be refused
+/// after a reset, a re-pairing or a request-slot reuse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub lease: Lease,
+    pub epoch: u64,
+    /// The onset's own input serial.
+    pub serial: u64,
+    /// The Tune's request slot.
+    pub request: u16,
+    /// The addressed note's birth serial.
+    pub lifetime: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum Intent {
-    Capture(super::capture::Token),
-    /// Hub-local phase of the same retained ingress slot, never Source output.
-    CaptureRetirement(super::capture::Retirement),
+    Capture(Capture),
     Coverage {
         incarnation: u64,
         epoch: u64,
@@ -135,7 +224,6 @@ pub enum Reply {
         epoch: u64,
         through: u64,
     },
-    CaptureStatusQuery(super::capture::Key),
     PlanRetired {
         incarnation: u64,
         epoch: u64,
@@ -144,13 +232,9 @@ pub enum Reply {
         decision: u64,
     },
     Assignment {
-        key: super::capture::Key,
-        life: u16,
-        lifetime: u64,
+        request: Request,
         binding: Assignment,
     },
-    /// All immutable reads and remote references ended for exactly this capture.
-    CaptureRetired(super::capture::Key),
     Baseline {
         incarnation: u64,
         epoch: u64,
@@ -180,17 +264,6 @@ pub enum Reply {
     },
 }
 
-/// Original-consumer identity is meaningful only under the receiver's retained
-/// lease/epoch/capture permissions and monotonic output cut. Synthetic output
-/// has no original consumer, including injected tuning and channel setup replay.
-#[derive(Clone, Copy, Debug)]
-pub struct OutputOrigin {
-    pub parent: u16,
-}
-impl OutputOrigin {
-    pub const NONE: Self = Self { parent: u16::MAX };
-}
-
 /// Explicit compact discriminator avoids paying a second aligned enum tag in
 /// every 128-byte output cell. 0/1 are physical wire facts;120/123 are logical
 /// terminals whose separately accepted raw controller owns wire_sequence.
@@ -198,16 +271,15 @@ impl OutputOrigin {
 pub struct Outcome {
     wire_sequence: u64,
     pub request: u16,
-    pub origin: OutputOrigin,
     tag: u8,
 }
 impl Outcome {
-    pub fn wire(request: u16, origin: OutputOrigin, partial: bool) -> Self {
-        Self { wire_sequence: 0, request, origin, tag: u8::from(partial) }
+    pub fn wire(request: u16, partial: bool) -> Self {
+        Self { wire_sequence: 0, request, tag: u8::from(partial) }
     }
-    pub fn channel(wire_sequence: u64, controller: u8, request: u16, origin: OutputOrigin) -> Self {
+    pub fn channel(wire_sequence: u64, controller: u8, request: u16) -> Self {
         assert!(matches!(controller, 120 | 123));
-        Self { wire_sequence, request, origin, tag: controller }
+        Self { wire_sequence, request, tag: controller }
     }
     pub fn is_wire(self) -> bool {
         self.tag <= 1
@@ -240,10 +312,6 @@ pub struct OutputDelta {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Control {
-    CaptureStatus {
-        key: super::capture::Key,
-        status: Option<CaptureStatus>,
-    },
     Disposition {
         incarnation: u64,
         epoch: u64,
@@ -285,16 +353,6 @@ pub enum Control {
         epoch: u64,
         cut: u64,
     },
-}
-
-/// Copied only by the Source owner, after every indicated original effect has
-/// durably recorded its actual output or received its exact no-wire settlement.
-/// The cut bounds those effects; later unrelated output cannot move this proof.
-#[derive(Clone, Copy, Debug)]
-pub struct CaptureStatus {
-    pub output_cut: u64,
-    pub work_done: u64,
-    pub inline_done: bool,
 }
 
 /// Partition the existing pair: ordinary progress owns cell zero, while exact
@@ -413,6 +471,8 @@ pub fn bank() -> (Box<HubBank>, [Option<SourceEndpoints>; TUNERS]) {
 }
 
 const _: () = assert!(std::mem::size_of::<OutputDelta>() <= 128);
+const _: () = assert!(std::mem::size_of::<Capture>() <= 96);
+const _: () = assert!(std::mem::size_of::<Option<Capture>>() <= 96);
 const _: () = assert!(std::mem::size_of::<Intent>() <= 128);
 const _: () = assert!(std::mem::size_of::<Reply>() <= 256);
 const _: () = assert!(std::mem::size_of::<Control>() <= 256);

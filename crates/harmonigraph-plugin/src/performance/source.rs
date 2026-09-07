@@ -27,11 +27,9 @@ mod wave;
 pub(super) mod work;
 
 pub(super) const NONE: u16 = u16::MAX;
-pub(super) const READY_QUEUED: u8 = 1;
-pub(super) const ASSIGNMENT_HELD: u8 = 2;
-pub(super) const TIMING_REPORTED: u8 = 4;
-pub(super) const PARTIAL_ON: u8 = 8;
-pub(super) const SHIFT_VALID: u8 = 16;
+/// Records one input event can address: at most every held note plus the
+/// controller or onset itself. Copies are emitted one per addressed target.
+pub(super) const CAPTURE_GROUP: usize = 68;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -124,6 +122,8 @@ pub(super) struct Life {
     pub(super) ready_tail: u16,
     pub(super) cleanup_next: u16,
     pub(super) ready_queued: bool,
+    /// This request has already been counted once against the deadline gauge.
+    pub(super) timing_reported: bool,
 }
 #[derive(Clone, Copy)]
 struct Permit {
@@ -235,7 +235,6 @@ pub struct Source {
     stops: stop::Stops,
     setup_pending: [Option<super::slots::Retained<setup::Update>>; 2],
     manifest: Queue<Manifest, 64>,
-    status_query: Option<super::capture::Key>,
     committed_assignment: u64,
     input_complete: bool,
     input_reported: Option<i64>,
@@ -256,8 +255,11 @@ pub struct Source {
     draining_finished: bool,
     pending_cursor: Option<usize>,
     capture_cursor: Option<usize>,
-    capture_offer: Option<super::capture::Token>,
-    captures_outstanding: usize,
+    /// Copies of the input event at `capture_group_position`, waiting for room
+    /// in the intent ring. They are self-contained, so nothing remote depends
+    /// on the envelope they came from.
+    capture_group: Queue<Capture, CAPTURE_GROUP>,
+    capture_group_position: usize,
     settlement_cursor: Option<usize>,
     settled_input: u64,
     settlement_sent: u64,
@@ -272,10 +274,10 @@ impl Source {
 
     fn timing_failure(&mut self, life: u16) {
         let request = self.lives.local_mut(life).expect("retained timing request");
-        if request.flags & TIMING_REPORTED != 0 {
+        if request.timing_reported {
             return;
         }
-        request.flags |= TIMING_REPORTED;
+        request.timing_reported = true;
         self.timing_failed = true;
         // Diagnostic publication is independent of the emergency fault path:
         // this original request remains eligible for one valid late assignment.
@@ -301,7 +303,7 @@ impl Source {
     #[cfg(test)]
     pub fn test_snapshot(&self) -> Snapshot {
         Snapshot {
-            captures: self.captures_outstanding,
+            captures: self.capture_group.len(),
             unmapped_reports: (0..self.journal.len())
                 .filter(|index| !self.journal.get(*index).unwrap().mapped)
                 .count()
@@ -351,7 +353,7 @@ impl Source {
         ]
     }
     pub fn new(shared: Arc<setup::Shared>) -> Box<Self> {
-        let (pending, lives, work) = super::capture::storage(&shared);
+        let (pending, lives, work) = super::capture::storage();
         Box::new(Self {
             trace: Box::default(),
             #[cfg(test)]
@@ -414,7 +416,6 @@ impl Source {
             stops: stop::Stops::default(),
             setup_pending: [None, None],
             manifest: Queue::default(),
-            status_query: None,
             committed_assignment: 0,
             input_complete: false,
             input_reported: None,
@@ -435,8 +436,8 @@ impl Source {
             draining_finished: false,
             pending_cursor: None,
             capture_cursor: None,
-            capture_offer: None,
-            captures_outstanding: 0,
+            capture_group: Queue::default(),
+            capture_group_position: 0,
             settlement_cursor: None,
             settled_input: 0,
             settlement_sent: 0,
@@ -566,13 +567,10 @@ impl Source {
             && self.channel_reset == [0; 16]
             && self.baseline.is_none()
             && self.manifest.len() == 0
-            && self.status_query.is_none()
+            && self.capture_group.len() == 0
     }
     fn lease_settled(&self) -> bool {
-        self.old_pending == 0
-            && self.captures_outstanding == 0
-            && self.output_settled()
-            && self.status_query.is_none()
+        self.old_pending == 0 && self.capture_group.len() == 0 && self.output_settled()
     }
     fn output_settled(&self) -> bool {
         self.held() == 0
@@ -915,6 +913,7 @@ impl Source {
                     ready_tail: NONE,
                     cleanup_next: NONE,
                     ready_queued: false,
+                    timing_reported: false,
                 },
             );
             index
@@ -1895,10 +1894,9 @@ impl Source {
             let partial = completion.group.initial_tuning().is_some()
                 && completion.accepted & 2 == 0;
             delta.outcome =
-                Outcome::wire(pending.life, OutputOrigin { parent: position as u16 }, partial);
+                Outcome::wire(pending.life, partial);
             if partial {
                 self.state.partial(delta.lifetime);
-                self.lives.local_mut(pending.life).unwrap().flags |= PARTIAL_ON;
             }
             self.journal.push(delta).unwrap_or_else(|_| unreachable!("prepared journal credit"));
             if let Some(tuning) = completion.group.initial_tuning() {
@@ -1917,7 +1915,7 @@ impl Source {
                     self.fault(OUTPUT_FAULT);
                 }
             }
-            self.record_channel_terminals(position as u16, pending, delta.sequence, actual);
+            self.record_channel_terminals(pending, delta.sequence, actual);
             let waiter = match parent.channel.role {
                 channel::Role::Header { first_waiter, .. } => first_waiter,
                 _ => NONE,
@@ -2039,7 +2037,7 @@ impl Source {
             mapped,
             discontinuity_generation: if mapped { 0 } else { self.generation },
             event,
-            outcome: Outcome::wire(life, OutputOrigin::NONE, false),
+            outcome: Outcome::wire(life, false),
         };
         let clock =
             ClockId { runtime_session: self.session().map_or(0, |s| s.runtime), epoch: self.epoch };
@@ -2071,9 +2069,7 @@ impl Source {
             if event.attack().is_some() {
                 value.sounded = true;
                 let shift = actual.checked_sub(input);
-                value.shift = shift.unwrap_or_default();
-                value.flags =
-                    (value.flags & !SHIFT_VALID) | (u8::from(shift.is_some()) * SHIFT_VALID);
+                value.shift = shift;
                 self.late_shift = self.late_shift.max(shift.unwrap_or_default());
             }
             if event.release() {
@@ -2298,12 +2294,7 @@ impl Source {
 
     fn receive(&mut self) {
         let reply = self.offer.as_ref().and_then(|offer| {
-            offer.session.rows[usize::from(offer.lease.slot - 1)].to_source.take_repair_if(
-                |reply| match reply {
-                    Reply::CaptureStatusQuery(_) => self.status_query.is_none(),
-                    _ => true,
-                },
-            )
+            offer.session.rows[usize::from(offer.lease.slot - 1)].to_source.take_repair_if(|_| true)
         });
         if let Some(reply) = reply {
             self.service_revision = self.service_revision.wrapping_add(1);
@@ -2329,54 +2320,6 @@ impl Source {
             self.reply(reply);
         }
         self.retire_acknowledged();
-        self.publish_capture_status();
-    }
-    /// The pending owner stores only a key. Taking it frees the query cell even
-    /// when a crossed disposition owns the response cell; its ACK can now pass.
-    fn publish_capture_status(&mut self) {
-        let Some(key) = self.status_query else { return };
-        let Some(offer) = &self.offer else { return };
-        let session = offer.session.clone();
-        let row = &session.rows[usize::from(offer.lease.slot - 1)];
-        let Some(reply) = row.to_hub.reserve_repair() else { return };
-        let Some(status) = self.copy_capture_status(key) else { return };
-        reply.publish(Control::CaptureStatus { key, status });
-        self.status_query = None;
-        self.service_revision = self.service_revision.wrapping_add(1);
-    }
-    /// Outer None means this callback's work grant is spent; inner None is an
-    /// invalid permission. DIRECT uses the same Source-owned snapshot operation.
-    pub(super) fn copy_capture_status(
-        &mut self,
-        key: super::capture::Key,
-    ) -> Option<Option<CaptureStatus>> {
-        let valid = self
-            .capture_lease()
-            .is_some_and(|lease| self.pending.owns_publication(key, lease, self.epoch));
-        Some(if valid {
-            let parent = self.pending.at(usize::from(key.position)).unwrap();
-            if !self.charge(1 + usize::from(parent.work_count)) {
-                return None;
-            }
-            let mut work_done = 0;
-            let mut next = parent.work_head;
-            for bit in 0..parent.work_count {
-                let work = self.work.at(next);
-                assert_eq!(work.parent, key.position);
-                if work.phase & work::DONE != 0 {
-                    work_done |= 1 << bit;
-                }
-                next = work.next;
-            }
-            assert_eq!(next, NONE);
-            Some(CaptureStatus {
-                output_cut: self.sequence,
-                work_done,
-                inline_done: parent.inline_done && !parent.staged,
-            })
-        } else {
-            None
-        })
     }
     fn reply(&mut self, reply: Reply) {
         match reply {
@@ -2384,9 +2327,6 @@ impl Source {
                 if self.capture_lease() == Some(lease) && self.epoch == epoch =>
             {
                 self.committed_assignment = self.committed_assignment.max(through);
-            }
-            Reply::CaptureStatusQuery(key) if self.status_query.is_none() => {
-                self.status_query = Some(key);
             }
             Reply::PlanRetired { incarnation, epoch, life, lifetime, decision }
                 if incarnation == self.incarnation()
@@ -2398,43 +2338,39 @@ impl Source {
                         && request.assignment.decision == decision
                         && request.assignment_held
                 }) {
-                    self.lives.local_mut(life).unwrap().flags &= !ASSIGNMENT_HELD;
+                    self.lives.local_mut(life).unwrap().assignment_held = false;
                     self.recycle(life);
                 }
             }
-            Reply::Assignment { key, life, lifetime, binding }
-                if self.capture_lease() == Some(key.lease)
-                    && self.epoch == key.epoch
-                    && self.pending.owns_publication(key, key.lease, self.epoch)
-                    && binding.decision != 0 =>
+            // A copied reply carries the whole identity it needs: the lease and
+            // epoch reject an obsolete reset generation, and the request slot,
+            // its birth serial and the onset's own input serial together reject
+            // a slot that has since been reused.
+            Reply::Assignment { request, binding }
+                if self.capture_lease() == Some(request.lease)
+                    && self.epoch == request.epoch
+                    && binding.decision != 0
+                    && usize::from(request.request) < LIFETIMES =>
             {
-                if let Some(original) = self.pending.at(usize::from(key.position)).filter(|p| {
-                    p.serial == key.serial
-                        && p.life == life
-                        && p.event.attack().is_some()
-                        && !p.staged
+                let life = request.request;
+                if self.lives.at(life).is_some_and(|held| {
+                    held.serial == request.lifetime
+                        && held.on_serial == request.serial
+                        && !held.sounded
+                        && !held.canceled
+                        // Reserved means its onset already passed preparation
+                        // with the values it will emit; a later assignment
+                        // must not disagree with the wire event.
+                        && !held.reserved
+                        && request.serial > self.cancel_cut
+                        && held.assignment.decision < binding.decision
                 }) {
-                    if self.lives.at(life).is_some_and(|request| {
-                        request.serial == lifetime
-                            && !request.sounded
-                            && !request.canceled
-                            && original.serial > self.cancel_cut
-                            && request.assignment.decision < binding.decision
-                    }) {
-                        self.lives.local_mut(life).unwrap().assignment = binding;
-                        self.lives.local_mut(life).unwrap().flags |= ASSIGNMENT_HELD;
-                        self.trace.assignments = self.trace.assignments.saturating_add(1);
-                        self.trace.decision = binding.decision;
-                        self.trace.correction = binding.correction;
-                    }
-                }
-            }
-            Reply::CaptureRetired(key) => {
-                if let Some(lease) = self.capture_lease() {
-                    if let Some(position) = self.pending.retire(key, lease, self.epoch) {
-                        self.captures_outstanding -= 1;
-                        self.remove_finished(position);
-                    }
+                    let held = self.lives.local_mut(life).unwrap();
+                    held.assignment = binding;
+                    held.assignment_held = true;
+                    self.trace.assignments = self.trace.assignments.saturating_add(1);
+                    self.trace.decision = binding.decision;
+                    self.trace.correction = binding.correction;
                 }
             }
             Reply::OutputRetained { incarnation, epoch, cut, complete_through }
@@ -2638,7 +2574,7 @@ impl Source {
             self.held() as i64,
             self.pending.len() as i64,
             self.old_pending as i64,
-            self.captures_outstanding as i64,
+            self.capture_group.len() as i64,
             self.journal.len() as i64,
             self.emergency_output.len() as i64,
             self.baseline.map_or(-1, |b| b.cut as i64),
@@ -2677,7 +2613,7 @@ impl Source {
                 | (i64::from(self.emergency.iter().any(Option::is_some)) << 7)
                 | (i64::from(self.channel_reset != [0; 16]) << 8)
                 | (i64::from(self.baseline.is_some()) << 9),
-            i64::from(self.status_query.is_some()),
+            self.capture_published as i64,
             self.trace.last_output_player,
             self.trace.last_output_correction,
         ]);
@@ -2731,26 +2667,138 @@ impl Source {
             self.transfer_cut = next.sequence;
         }
     }
-    fn next_capture(&mut self) -> Option<super::capture::Token> {
-        if let Some(token) = self.capture_offer.take() {
-            return Some(token);
-        }
-        let position = self.capture_cursor?;
-        let lease = self.capture_lease()?;
-        // Post-reset input belongs to the next lease. Publishing it into the
-        // closing session pins captures that cannot be sequenced or detached.
-        if self.session().is_some_and(|session| session.closing.load(Ordering::Acquire) != 0)
-            && self.pending.at(position)?.generation > self.lease_generation()?
-        {
-            return None;
-        }
-        let offset = self.clock.calibration.offset;
-        let Some(token) = self.pending.offer(position, lease, self.epoch, offset) else {
-            self.fault(CLOCK_FAULT);
-            return None;
+    /// Copy one input event into as many self-contained records as it
+    /// addresses targets, so the Hub never sees a fan-out and never reads a
+    /// byte this Tune still owns. Fills `capture_group`; the caller drains it.
+    fn build_capture_group(&mut self, position: usize) -> bool {
+        let lease = match self.capture_lease() {
+            Some(lease) => lease,
+            None => return false,
         };
-        self.captures_outstanding += 1;
-        Some(token)
+        let pending = match self.pending.at(position) {
+            Some(pending) if self.pending.sealed(position) => pending,
+            _ => return false,
+        };
+        // Post-reset input belongs to the next lease. Copying it into the
+        // closing session sends records that cannot be sequenced or detached.
+        if self.session().is_some_and(|session| session.closing.load(Ordering::Acquire) != 0)
+            && self.lease_generation().is_none_or(|lease| pending.generation > lease)
+        {
+            return false;
+        }
+        let Some(sample) = pending.input.checked_add(self.clock.calibration.offset) else {
+            self.fault(CLOCK_FAULT);
+            return false;
+        };
+        let base = Capture {
+            lease,
+            epoch: self.epoch,
+            serial: pending.serial,
+            sample,
+            kind: CaptureKind::Other,
+            request: NO_REQUEST,
+            lifetime: 0,
+            channel: 0,
+            key: 0,
+            adaptive: false,
+        };
+        let addressed = |base: Capture, kind: CaptureKind, index: u16, life: Life| Capture {
+            kind,
+            request: index,
+            lifetime: life.serial,
+            channel: life.channel,
+            key: life.key,
+            adaptive: life.adaptive,
+            ..base
+        };
+        // A same-key predecessor and every note a channel termination ends
+        // become their own Terminal records. They share this input's serial,
+        // and the ordering pass applies every terminal before any onset, so a
+        // replacement cannot be scored against the note it just displaced.
+        let terminals = pending.event.attack().is_some()
+            || pending.event.channel_termination().is_some()
+            || pending.event.release();
+        let per_target = if terminals {
+            Some(CaptureKind::Terminal)
+        } else if matches!(pending.event, Event::Expression { kind: 2, value, .. } if value.is_finite())
+        {
+            let Event::Expression { value, .. } = pending.event else { unreachable!() };
+            Some(CaptureKind::Tuning { value_bits: value.to_bits() })
+        } else {
+            None
+        };
+        let mut overflow = false;
+        if let Some(kind) = per_target {
+            if pending.life != NONE && pending.event.attack().is_none() {
+                if let Some(life) = self.lives.at(pending.life) {
+                    overflow |=
+                        self.capture_group.push(addressed(base, kind, pending.life, life)).is_err();
+                }
+            }
+            let mut child = pending.work_head;
+            while child != NONE {
+                let cell = self.work.at(child);
+                if let Some(life) =
+                    self.lives.at(cell.life).filter(|life| life.serial == cell.serial)
+                {
+                    overflow |=
+                        self.capture_group.push(addressed(base, kind, cell.life, life)).is_err();
+                }
+                child = cell.next;
+            }
+        }
+        let own = match pending.event {
+            Event::Participation(value) => Some(CaptureKind::Participation(value)),
+            event if event.attack().is_some() => Some(CaptureKind::Onset),
+            event if event.channel_control().is_some() => Some(CaptureKind::Channel),
+            // Everything else already left as addressed records. An input that
+            // addressed none still owes the Hub one record so the input cut
+            // can pass it.
+            _ if self.capture_group.len() != 0 => None,
+            _ => Some(CaptureKind::Other),
+        };
+        if let Some(kind) = own {
+            let record = match (kind, self.lives.at(pending.life)) {
+                (CaptureKind::Onset, life) => {
+                    addressed(base, kind, pending.life, life.expect("onset request"))
+                }
+                (CaptureKind::Channel, _) => {
+                    Capture { kind, channel: pending.event.channel().unwrap_or_default(), ..base }
+                }
+                (_, Some(life)) => addressed(base, kind, pending.life, life),
+                (_, None) => Capture { kind, ..base },
+            };
+            overflow |= self.capture_group.push(record).is_err();
+        }
+        if overflow {
+            // More addressed targets than one input event can hold. Bounded
+            // failure: latch rather than send the Hub a partial group.
+            self.fault(REFERENCE_FAULT);
+            self.capture_group.clear();
+            return false;
+        }
+        true
+    }
+    /// Drain order within one input event is the order the group was built in,
+    /// and the Hub's merge keeps that order for records sharing a serial.
+    fn next_capture(&mut self) -> Option<Capture> {
+        loop {
+            if let Some(record) = self.capture_group.pop() {
+                if self.capture_group.len() == 0 {
+                    let position = self.capture_group_position;
+                    self.pending.publish(position);
+                    self.capture_published = record.serial;
+                    self.capture_cursor = self.pending.next_position(position);
+                    self.service_revision = self.service_revision.wrapping_add(1);
+                }
+                return Some(record);
+            }
+            let position = self.capture_cursor?;
+            if !self.build_capture_group(position) {
+                return None;
+            }
+            self.capture_group_position = position;
+        }
     }
     fn transfer_captures(&mut self) {
         if !self.adoption.sent() {
@@ -2760,23 +2808,14 @@ impl Source {
             if self.intent_pushed == 512 {
                 break;
             }
-            let Some(token) = self.next_capture() else {
+            if self.offer.as_ref().is_none_or(|offer| offer.endpoints.intents.slots() == 0) {
+                break;
+            }
+            let Some(record) = self.next_capture() else {
                 break;
             };
-            let position = token.key.position as usize;
-            let serial = token.key.serial;
-            match self.push_intent(Intent::Capture(token)) {
-                Ok(()) => {
-                    self.capture_published = serial;
-                    self.capture_cursor = self.pending.next_position(position);
-                    self.service_revision = self.service_revision.wrapping_add(1);
-                }
-                Err(Intent::Capture(token)) => {
-                    self.capture_offer = Some(token);
-                    break;
-                }
-                Err(_) => unreachable!(),
-            }
+            self.push_intent(Intent::Capture(record))
+                .unwrap_or_else(|_| unreachable!("checked intent ring capacity"));
         }
     }
     fn transfer_input_settlement(&mut self) {
@@ -2812,7 +2851,7 @@ impl Source {
                     .at(position)
                     .is_some_and(|pending| pending.serial <= self.settled_input)
             })
-            || self.capture_offer.is_some()
+            || self.capture_group.len() != 0
         {
             return;
         }
@@ -2828,21 +2867,11 @@ impl Source {
             self.settlement_sent = self.settled_input;
         }
     }
-    pub(super) fn take_direct_capture(&mut self) -> Option<super::capture::Token> {
+    /// The Hub's own MIDI reaches its row by the same copied records, minus
+    /// the ring: the Hub owns both sides of this handoff.
+    pub(super) fn take_direct_capture(&mut self) -> Option<Capture> {
         assert!(self.direct.is_some());
-        let token = self.next_capture()?;
-        self.capture_published = token.key.serial;
-        self.capture_cursor = self.pending.next_position(token.key.position as usize);
-        self.service_revision = self.service_revision.wrapping_add(1);
-        Some(token)
-    }
-    pub(super) fn direct_capture_units(&self) -> Option<usize> {
-        let position = self.capture_cursor?;
-        Some(1 + usize::from(self.pending.at(position)?.work_count))
-    }
-    pub(super) fn retire_direct_capture(&mut self, retirement: super::capture::Retirement) {
-        assert!(self.direct.is_some());
-        self.reply(Reply::CaptureRetired(retirement.key));
+        self.next_capture()
     }
     fn last_sent_sequence(&self) -> u64 {
         self.transfer_cut
@@ -3316,11 +3345,11 @@ impl Source {
         self.cancel_slice();
     }
     pub(super) fn test_reset_progress(&self) -> String {
-        format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} lease={} old={} captures={} query={:?} sealed={}", self.reset_armed,
+        format!("armed={} pending={:?} generation={} applied={} setup={} offer={:?} detaching={} settled={} lease={} old={} captures={} published={} sealed={}", self.reset_armed,
             self.setup_pending.each_ref().map(|v| v.as_ref().map(|v| v.value)), self.generation,
             self.shared.applied.load(Ordering::Acquire), self.setup_started,
             self.offer.as_ref().map(|o| (o.generation, o.lease)), self.detaching,
-            self.output_settled(), self.lease_settled(), self.old_pending, self.captures_outstanding, self.status_query, self.sealed)
+            self.output_settled(), self.lease_settled(), self.old_pending, self.capture_group.len(), self.capture_published, self.sealed)
     }
     pub(super) fn test_reset_armed(&self) -> bool {
         self.reset_armed

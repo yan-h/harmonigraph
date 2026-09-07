@@ -1,6 +1,5 @@
 //! The Hub's owned original-input cursor, separate from actual-output progress.
 use super::*;
-use harmonigraph_core::cohort::{self, EventPhase, TargetAccess};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::{policy, LatticePos, PitchClass};
 #[cfg(test)]
@@ -9,8 +8,7 @@ mod history;
 
 #[derive(Clone, Copy)]
 struct Plan {
-    key: super::super::capture::Key,
-    lifetime: u64,
+    request: Request,
     binding: Assignment,
     /// Expected input-to-output translation for this exact decision. Replayed
     /// plans start at their acknowledged boundary; accepted onsets freeze it.
@@ -96,12 +94,10 @@ pub(super) struct Sequencer {
     pub retired: bool,
     pub terminal_session: bool,
     pub terminal_sources: u16,
-    pub heads: [Option<usize>; TUNERS + 1],
     pub captured: [u64; TUNERS + 1],
     membership: Option<Membership>,
     config: Option<ResolvedConfig>,
     binding_sample: i64,
-    assembling: usize,
     pub(super) decision: u64,
     cohort_floor: u64,
     cohort_unsent: usize,
@@ -138,12 +134,10 @@ impl Default for Sequencer {
             retired: false,
             terminal_session: false,
             terminal_sources: 0,
-            heads: [None; TUNERS + 1],
             captured: [0; TUNERS + 1],
             membership: None,
             config: None,
             binding_sample: 0,
-            assembling: 0,
             decision: 0,
             cohort_floor: 0,
             cohort_unsent: 0,
@@ -252,27 +246,6 @@ impl Sequencer {
         }
         self.plan_count -= 1;
     }
-    pub(super) fn consume_terminal_original(
-        &mut self,
-        source: usize,
-        token: &super::super::capture::Token,
-        permissions: &super::super::capture::Permissions,
-    ) {
-        let Some((life, lifetime)) = permissions.original_on(token) else { return };
-        if let Some(plan) = self.plans[source * LIFETIMES + usize::from(life)].as_mut() {
-            if plan.terminal
-                && plan.lifetime == lifetime
-                && plan.key.lease == token.key.lease
-                && plan.key.epoch == token.key.epoch
-                && plan.key.serial == token.key.serial
-                && (plan.key.arena == 0 || plan.key.arena == token.key.arena)
-            {
-                plan.key = token.key;
-                plan.bound = true;
-            }
-        }
-    }
-
     /// False only when plan accounting is already broken; a rejected argument
     /// is a normal no-op, not a fault.
     #[must_use]
@@ -289,30 +262,20 @@ impl Sequencer {
             return true;
         }
         let index = source * LIFETIMES + usize::from(request);
+        let identity = Request { lease, epoch, serial, request, lifetime };
         if let Some(plan) = self.plans[index].as_mut() {
-            if plan.key.lease == lease
-                && plan.key.epoch == epoch
-                && plan.key.serial == serial
-                && plan.lifetime == lifetime
-            {
+            if plan.request == identity {
                 plan.terminal = true;
             }
             true
         } else {
-            // A copied Retained inventory record may predate this cancellation.
-            // Keep its exact original-On identity until the complete fixed
-            // inventory passes; no capture permission is claimed by this key.
+            // A cancellation can overtake the onset's own copied record. Hold
+            // its exact identity until that record passes the input cursor, so
+            // ordinary sequencing cannot resurrect it as a fresh onset.
             self.insert_plan(
                 index,
                 Plan {
-                    key: super::super::capture::Key {
-                        lease,
-                        epoch,
-                        serial,
-                        arena: 0,
-                        position: u16::MAX,
-                    },
-                    lifetime,
+                    request: identity,
                     binding: Assignment::default(),
                     shift: DELAY,
                     sent: false,
@@ -430,11 +393,11 @@ impl Hub {
         !self.sequencer.retired
     }
 
-    fn input_window(&self, source: usize) -> &Window<Intent, INTENT_RING> {
+    fn inputs(&mut self, source: usize) -> &mut Queue<Capture, CAPTURES_PER_SOURCE> {
         if source == 0 {
-            &self.direct_ingress
+            &mut self.direct_inputs
         } else {
-            &self.rows[source - 1].ingress
+            &mut self.rows[source - 1].inputs
         }
     }
 
@@ -501,26 +464,17 @@ impl Hub {
         Some(snapshot)
     }
 
+    /// The merge front: the earliest sample any source still owes. Records
+    /// within a source are already in input order, so this is one look at
+    /// seventeen queue fronts.
     fn next_input_sample(&mut self) -> Option<i64> {
         let mut sample = None;
         for source in 0..=TUNERS {
             if source != 0 && self.rows[source - 1].terminal_cut.is_some() {
                 continue;
             }
-            while let Some(index) = self.sequencer.heads[source] {
-                if self.input_work == 4096 {
-                    return None;
-                }
-                self.input_work += 1;
-                let window = self.input_window(source);
-                if let Some(Intent::Capture(token)) = window.at_ref(index) {
-                    if token.frozen.is_none() {
-                        sample =
-                            Some(sample.map_or(token.sample, |old: i64| old.min(token.sample)));
-                        break;
-                    }
-                }
-                self.sequencer.heads[source] = window.next_position(index);
+            if let Some(record) = self.inputs(source).front() {
+                sample = Some(sample.map_or(record.sample, |old: i64| old.min(record.sample)));
             }
         }
         sample
@@ -598,7 +552,7 @@ impl Hub {
             self.service_plans();
             return;
         }
-        if !self.sequences_inputs() || !self.clock.valid || self.invalidated || self.capture_hold {
+        if !self.sequences_inputs() || !self.clock.valid || self.invalidated {
             return;
         }
         if self.sequencer.committing {
@@ -609,138 +563,93 @@ impl Hub {
             return;
         }
         while self.sequencer.work < 1024 && self.input_work < 4096 {
-            if !self.frozen_captures.active {
-                let Some(membership) = self.input_snapshot(owner) else { return };
-                let sample = self.next_input_sample();
-                if self.input_work == 4096 {
-                    return;
-                }
-                let boundary =
-                    sample.map_or(membership.through, |sample| sample.max(membership.floor));
-                let finalized = boundary.min(membership.through);
-                if owner.finalize_input(membership.clock, finalized, finalized, recorder).is_err() {
-                    return;
-                }
-                self.sequencer.finalized = Some(finalized);
-                self.sequencer.copied = Some(finalized);
-                let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
-                let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
-                    return;
-                };
-                if self.frozen_captures.begin(sample, 0).is_err() {
-                    self.configuration_exhausted();
-                    return;
-                }
-                self.sequencer.membership = Some(membership);
-                self.sequencer.binding_sample = boundary;
-                self.sequencer.history.configuration(config.revision, self.sequencer.decision);
-                self.sequencer.config = Some(config);
-                self.sequencer.assembling = 0;
-                self.sequencer.cohort_floor = self.sequencer.decision;
-                self.sequencer.cohort_unsent = 0;
-                self.sequencer.cohort_recipients = 0;
-            }
-            if !self.assemble_inputs() {
+            let Some(membership) = self.input_snapshot(owner) else { return };
+            let sample = self.next_input_sample();
+            let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
+            let finalized = boundary.min(membership.through);
+            if owner.finalize_input(membership.clock, finalized, finalized, recorder).is_err() {
                 return;
             }
-            // Graph work and event applications each retain their cursor. The
-            // one shared structural grant is never refreshed by a subblock.
-            let units = 4096 - self.input_work;
-            let progress = self.advance_captures(units);
-            self.input_work += self.frozen_captures.spent;
-            match progress {
-                Ok(cohort::Progress::Pending) => return,
-                Ok(cohort::Progress::Complete { .. }) => {
-                    self.frozen_captures.end(false);
-                    self.sequencer.committing = true;
-                    if !self.publish_cohort() {
-                        return;
-                    }
-                }
-                Ok(cohort::Progress::Event(selected)) => {
-                    if !self.assign_selected(selected) {
-                        return;
-                    }
-                    if let cohort::Kind::Participation(_) =
-                        self.frozen_captures.event(selected.event_index).unwrap().kind
-                    {
-                        let source = usize::from(
-                            self.frozen_captures.event(selected.event_index).unwrap().id.source,
-                        );
-                        if source != 0 {
-                            Self::confirm(&self.rows[source - 1], &mut owner.confirmed);
-                        }
-                    }
-                    self.commit_capture().expect("same retained offered phase");
-                    self.sequencer.work += 1;
-                }
-                Err(_) => {
-                    self.configuration_exhausted();
-                    return;
-                }
+            self.sequencer.finalized = Some(finalized);
+            self.sequencer.copied = Some(finalized);
+            let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
+            let Ok(config) = owner.bind_input_cohort(membership.clock, boundary) else {
+                return;
+            };
+            self.batch.begin(sample);
+            self.sequencer.membership = Some(membership);
+            self.sequencer.binding_sample = boundary;
+            self.sequencer.history.configuration(config.revision, self.sequencer.decision);
+            self.sequencer.config = Some(config);
+            self.sequencer.cohort_floor = self.sequencer.decision;
+            self.sequencer.cohort_unsent = 0;
+            self.sequencer.cohort_recipients = 0;
+            // One sample, start to finish, inside this callback: assemble the
+            // copies, sort them once, then apply them in that order. A step
+            // that fails has already latched the shared reset, so the batch is
+            // abandoned rather than resumed.
+            if !self.assemble_inputs() || !self.apply_batch(owner) {
+                self.batch.end();
+                return;
+            }
+            self.batch.end();
+            self.sequencer.committing = true;
+            if !self.publish_cohort() {
+                return;
             }
         }
     }
 
+    /// Take every copied record standing at this sample, from every source,
+    /// and put the batch in merge order.
     fn assemble_inputs(&mut self) -> bool {
-        while self.sequencer.assembling <= TUNERS {
-            let source = self.sequencer.assembling;
-            let Some(position) = self.sequencer.heads[source] else {
-                self.sequencer.assembling += 1;
-                continue;
-            };
-            if self.input_work == 4096 {
+        let sample = self.batch.sample;
+        for source in 0..=TUNERS {
+            loop {
+                if self.input_work == 4096 {
+                    return false;
+                }
+                match self.inputs(source).front() {
+                    Some(record) if record.sample == sample => {}
+                    _ => break,
+                }
+                let record = self.inputs(source).pop().unwrap();
+                self.input_work += 1;
+                if !self.batch.push(record) {
+                    // More same-sample records than one pass can hold.
+                    self.configuration_exhausted();
+                    return false;
+                }
+            }
+        }
+        self.batch.order();
+        true
+    }
+
+    /// Apply the ordered batch: every release and controller from every source
+    /// first, then the onsets. Assignment order inside the second half is the
+    /// key/channel/source tie-break the musical decision has always used.
+    fn apply_batch(&mut self, owner: &mut Owner) -> bool {
+        while let Some(record) = self.batch.next() {
+            if !self.apply(record) {
                 return false;
             }
-            self.input_work += 1;
-            let window = self.input_window(source);
-            let Some(Intent::Capture(token)) = window.at_ref(position) else {
-                self.sequencer.heads[source] = window.next_position(position);
-                continue;
-            };
-            if token.sample != self.frozen_captures.sample {
-                self.sequencer.assembling += 1;
-                continue;
+            if matches!(record.kind, CaptureKind::Participation(_)) && record.lease.slot != 0 {
+                Self::confirm(&self.rows[usize::from(record.lease.slot) - 1], &mut owner.confirmed);
             }
-            if self.frozen_captures.len() == cohort::COHORT_EVENTS {
-                self.configuration_exhausted();
-                return false;
-            }
-            let id = self.frozen_captures.id;
-            let (window, permissions, lease, epoch) = if source == 0 {
-                (
-                    &mut self.direct_ingress,
-                    &self.direct_captures,
-                    self.direct.capture_lease().unwrap(),
-                    self.publication_clock.epoch,
-                )
-            } else {
-                let row = &mut self.rows[source - 1];
-                (&mut row.ingress, &row.captures, row.lease.unwrap(), row.epoch)
-            };
-            let Some(Intent::Capture(token)) = window.at_mut(position) else { unreachable!() };
-            token.frozen = Some(id);
-            let view = super::super::capture::View {
-                ingress: window,
-                permissions,
-                lease,
-                epoch,
-                frozen: id,
-            };
-            self.frozen_captures.push(view.metadata(position).expect("installed immutable input"));
-            self.sequencer.heads[source] = window.next_position(position);
+            self.sequencer.work += 1;
         }
         true
     }
 
-    fn assign_selected(&mut self, selected: cohort::Selected) -> bool {
-        let event = self.frozen_captures.event(selected.event_index).unwrap();
-        if let cohort::Kind::Participation(value) = event.kind {
-            let source = usize::from(event.id.source);
-            // Replay may revisit the already committed marker. A later marker
-            // or baseline cannot turn its old Original into a new transition.
-            if event.id.sequence > self.sequencer.participation_serial[source] {
-                self.sequencer.participation_serial[source] = event.id.sequence;
+    /// Apply one copied record. This is the whole of what a record does to the
+    /// Hub's musical state; the ordering pass has already put them in the order
+    /// that makes it correct.
+    fn apply(&mut self, record: Capture) -> bool {
+        let source = usize::from(record.lease.slot);
+        if let CaptureKind::Participation(value) = record.kind {
+            if record.serial > self.sequencer.participation_serial[source] {
+                self.sequencer.participation_serial[source] = record.serial;
                 self.sequencer.participating[source] = value;
                 if !value {
                     self.sequencer.history.clear(source, self.sequencer.decision);
@@ -752,201 +661,178 @@ impl Hub {
             }
             return true;
         }
-        let targets = Self::capture_targets(
-            &self.rows,
-            &self.direct_ingress,
-            &self.direct_captures,
-            self.direct.capture_lease(),
-            self.publication_clock.epoch,
-            self.frozen_captures.id,
-        );
-        let span = if selected.phase == EventPhase::ReplacedRelease {
-            event.replaced
-        } else {
-            event.targets
-        };
-        let mut next = span.first;
-        if event.kind == cohort::Kind::Onset && selected.phase == EventPhase::Original {
-            let target = targets.get(event.id.source, next).unwrap().target;
-            let source = event.id.source as usize;
-            let view = targets.rows[source].as_ref().unwrap();
-            let position = (next >> 16) as usize;
-            let (key, _) = view.original(position).unwrap();
-            let (life, birth) = view.onset(position).unwrap();
-            let prior = (source != 0)
-                .then(|| self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)])
-                .flatten();
-            if let Some(prior) = prior {
-                if prior.lifetime != birth.serial
-                    || prior.key.lease != key.lease
-                    || prior.key.epoch != key.epoch
-                    || prior.key.arena != 0 && prior.key.arena != key.arena
-                    || prior.key.serial != key.serial
-                    || prior.key.position != u16::MAX && prior.key != key
-                {
-                    return false;
+        if !record.onset() {
+            let voice = self.sequencer.context.iter_mut().find(|cell| {
+                cell.is_some_and(|voice| {
+                    voice.source == record.lease.slot && voice.lifetime == record.lifetime
+                })
+            });
+            match (record.kind, voice) {
+                (CaptureKind::Terminal, Some(cell)) => *cell = None,
+                (CaptureKind::Tuning { value_bits }, Some(cell)) => {
+                    cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
                 }
-                if prior.terminal {
-                    let plan = self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(life)]
-                        .as_mut()
-                        .unwrap();
-                    plan.key = key;
-                    if !plan.bound {
-                        plan.binding.configuration =
-                            self.sequencer.config.unwrap_or(plan.binding.configuration);
+                // A pitch expression that arrives at its own note's sample has
+                // no voice to reach yet: it is the value that note starts from.
+                (CaptureKind::Tuning { value_bits }, None) => {
+                    if !self.batch.stash_tuning(record.lease.slot, record.lifetime, value_bits) {
+                        self.configuration_exhausted();
+                        return false;
                     }
-                    plan.bound = true;
-                    return true;
                 }
-                if prior.bound {
-                    return false;
+                _ => {}
+            }
+            return true;
+        }
+        let request =
+            Request { lease: record.lease, epoch: record.epoch, serial: record.serial,
+                request: record.request, lifetime: record.lifetime };
+        let prior = (source != 0)
+            .then(|| self.sequencer.plans[(source - 1) * LIFETIMES + usize::from(record.request)])
+            .flatten();
+        if let Some(prior) = prior {
+            if prior.request != request {
+                return false;
+            }
+            if prior.terminal {
+                // Its cancellation arrived before its own record. Binding the
+                // plan here is what lets `service_plans` retire it, and keeps
+                // ordinary sequencing from assigning it as a fresh onset.
+                let plan = self.sequencer.plans
+                    [(source - 1) * LIFETIMES + usize::from(record.request)]
+                    .as_mut()
+                    .unwrap();
+                if !plan.bound {
+                    plan.binding.configuration =
+                        self.sequencer.config.unwrap_or(plan.binding.configuration);
+                }
+                plan.bound = true;
+                return true;
+            }
+            if prior.bound {
+                return false;
+            }
+        }
+        let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
+        let configuration = prior
+            .filter(|plan| plan.bound)
+            .map(|plan| plan.binding.configuration)
+            .or(self.sequencer.config)
+            .expect("owned original cohort configuration");
+        let (correction, selection) = if source != 0 && record.adaptive {
+            let mut count = 0;
+            for voice in self.sequencer.context.iter().flatten() {
+                if self.sequencer.participating[usize::from(voice.source)] {
+                    self.sequencer.policy_context[count] = policy::ContextPitch {
+                        pitch: PitchClass::from_microcents(voice.pitch),
+                        node: voice.node,
+                    };
+                    count += 1;
                 }
             }
-            let Some(decision) = self.sequencer.decision.checked_add(1) else { return false };
-            let configuration = prior
-                .filter(|plan| plan.bound)
-                .map(|plan| plan.binding.configuration)
-                .or(self.sequencer.config)
-                .expect("owned original cohort configuration");
-            let (correction, selection) = if source != 0 && birth.adaptive {
-                let mut count = 0;
-                for voice in self.sequencer.context.iter().flatten() {
-                    if self.sequencer.participating[usize::from(voice.source)] {
-                        self.sequencer.policy_context[count] = policy::ContextPitch {
-                            pitch: PitchClass::from_microcents(voice.pitch),
-                            node: voice.node,
-                        };
-                        count += 1;
-                    }
-                }
-                #[cfg(test)]
-                {
-                    self.sequencer.policy_counts[0] += 1;
-                    self.sequencer.policy_counts[1] += count;
-                    self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
-                }
-                let history = self.sequencer.history.previous(
-                    key.lease,
-                    birth.channel,
-                    birth.key,
-                    configuration.revision,
-                );
-                let Ok(selection) = policy::assign_new_note(
-                    configuration.into(),
-                    &self.sequencer.policy_context[..count],
-                    history,
-                    policy::OrderedOnset { key: birth.key },
-                    &mut self.sequencer.policy,
-                ) else {
-                    self.configuration_exhausted();
-                    return false;
-                };
-                let node = match selection.assignment {
-                    policy::Assignment::Selected { node, .. } => Selection::Node([
-                        i8::try_from(node.threes).expect("bounded canonical threes"),
-                        i8::try_from(node.fives).expect("bounded canonical fives"),
-                        i8::try_from(node.sevens).expect("bounded canonical sevens"),
-                    ]),
-                    policy::Assignment::NoCandidate => Selection::NoCandidate,
-                };
-                (selection.assignment.correction_microcents(), node)
-            } else {
-                (0, Selection::Unretuned)
-            };
-            let player =
-                selected.initial_tuning.map_or(0.0, |initial| f64::from_bits(initial.value_bits));
-            let Some(slot) = self.sequencer.context.iter().position(Option::is_none) else {
+            #[cfg(test)]
+            {
+                self.sequencer.policy_counts[0] += 1;
+                self.sequencer.policy_counts[1] += count;
+                self.sequencer.policy_counts[2] = self.sequencer.policy_counts[2].max(count);
+            }
+            let history = self.sequencer.history.previous(
+                record.lease,
+                record.channel,
+                record.key,
+                configuration.revision,
+            );
+            let Ok(selection) = policy::assign_new_note(
+                configuration.into(),
+                &self.sequencer.policy_context[..count],
+                history,
+                policy::OrderedOnset { key: record.key },
+                &mut self.sequencer.policy,
+            ) else {
                 self.configuration_exhausted();
                 return false;
             };
-            if source != 0 {
-                let index = (source - 1) * LIFETIMES + usize::from(life);
-                let emission = self.offer.as_ref().unwrap().session.rows[source - 1]
-                    .emission_gate
-                    .load(Ordering::Acquire)
-                    & !super::super::source::GATE_FLAGS;
-                let binding = Assignment {
-                    configuration,
-                    decision,
-                    emission,
-                    correction,
-                    selection,
-                    initial_player: player,
-                };
-                let shift = DELAY;
-                if let Some(plan) = self.sequencer.plans[index].as_mut() {
-                    plan.key = key;
-                    plan.binding = binding;
-                    plan.sent = false;
-                    plan.bound = true;
-                    plan.shift = shift;
-                } else if !self.sequencer.insert_plan(
-                    index,
-                    Plan {
-                        key,
-                        lifetime: birth.serial,
-                        binding,
-                        shift,
-                        sent: false,
-                        terminal: false,
-                        accepted: false,
-                        bound: true,
-                        next: NO_PLAN,
-                        previous: NO_PLAN,
-                    },
-                ) {
-                    self.configuration_exhausted();
-                    return false;
-                }
-                if birth.adaptive && self.sequencer.participating[source] {
-                    self.sequencer.history.commit(key.lease, birth.channel, birth.key, binding);
-                }
-                self.sequencer.cohort_unsent += 1;
-                self.sequencer.cohort_recipients |= 1 << (source - 1);
-                let reply = Reply::Assignment { key, life, lifetime: birth.serial, binding };
-                if self.offer.as_mut().unwrap().bank.rows[source - 1].replies.push(reply).is_ok() {
-                    self.sequencer.plans[index].as_mut().unwrap().sent = true;
-                    self.sequencer.cohort_unsent -= 1;
-                }
-            }
-            self.sequencer.context[slot] = Some(Voice {
-                source: event.id.source,
-                lifetime: target.lifetime,
-                correction: i64::from(correction),
-                player,
-                key: target.key,
-                channel: target.channel,
-                pitch: i64::from(target.key) * 100_000_000
-                    + i64::from(correction)
-                    + (player * 100_000_000.0).round() as i64,
-                node: selection.node(),
-                configuration_revision: configuration.revision,
-                decision,
-            });
-            self.sequencer.decision = decision;
+            let node = match selection.assignment {
+                policy::Assignment::Selected { node, .. } => Selection::Node([
+                    i8::try_from(node.threes).expect("bounded canonical threes"),
+                    i8::try_from(node.fives).expect("bounded canonical fives"),
+                    i8::try_from(node.sevens).expect("bounded canonical sevens"),
+                ]),
+                policy::Assignment::NoCandidate => Selection::NoCandidate,
+            };
+            (selection.assignment.correction_microcents(), node)
         } else {
-            for _ in 0..span.len {
-                let link = targets.get(event.id.source, next).unwrap();
-                next = link.next;
-                if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| {
-                    cell.is_some_and(|voice| {
-                        voice.source == event.id.source && voice.lifetime == link.target.lifetime
-                    })
-                }) {
-                    match (selected.phase, event.kind) {
-                        (EventPhase::ReplacedRelease, _)
-                        | (
-                            _,
-                            cohort::Kind::Terminal | cohort::Kind::Channel { terminal: true, .. },
-                        ) => *cell = None,
-                        (_, cohort::Kind::Tuning { value_bits }) => {
-                            cell.as_mut().unwrap().tune(f64::from_bits(value_bits))
-                        }
-                        _ => {}
-                    }
-                }
+            (0, Selection::Unretuned)
+        };
+        let player =
+            self.batch.initial_tuning(record.lease.slot, record.lifetime).unwrap_or(0.0);
+        let Some(slot) = self.sequencer.context.iter().position(Option::is_none) else {
+            self.configuration_exhausted();
+            return false;
+        };
+        if source != 0 {
+            let index = (source - 1) * LIFETIMES + usize::from(record.request);
+            let emission = self.offer.as_ref().unwrap().session.rows[source - 1]
+                .emission_gate
+                .load(Ordering::Acquire)
+                & !super::super::source::GATE_FLAGS;
+            let binding = Assignment {
+                configuration,
+                decision,
+                emission,
+                correction,
+                selection,
+                initial_player: player,
+            };
+            if let Some(plan) = self.sequencer.plans[index].as_mut() {
+                plan.request = request;
+                plan.binding = binding;
+                plan.sent = false;
+                plan.bound = true;
+                plan.shift = DELAY;
+            } else if !self.sequencer.insert_plan(
+                index,
+                Plan {
+                    request,
+                    binding,
+                    shift: DELAY,
+                    sent: false,
+                    terminal: false,
+                    accepted: false,
+                    bound: true,
+                    next: NO_PLAN,
+                    previous: NO_PLAN,
+                },
+            ) {
+                self.configuration_exhausted();
+                return false;
+            }
+            if record.adaptive && self.sequencer.participating[source] {
+                self.sequencer.history.commit(record.lease, record.channel, record.key, binding);
+            }
+            self.sequencer.cohort_unsent += 1;
+            self.sequencer.cohort_recipients |= 1 << (source - 1);
+            let reply = Reply::Assignment { request, binding };
+            if self.offer.as_mut().unwrap().bank.rows[source - 1].replies.push(reply).is_ok() {
+                self.sequencer.plans[index].as_mut().unwrap().sent = true;
+                self.sequencer.cohort_unsent -= 1;
             }
         }
+        self.sequencer.context[slot] = Some(Voice {
+            source: record.lease.slot,
+            lifetime: record.lifetime,
+            correction: i64::from(correction),
+            player,
+            key: record.key,
+            channel: record.channel,
+            pitch: i64::from(record.key) * 100_000_000
+                + i64::from(correction)
+                + (player * 100_000_000.0).round() as i64,
+            node: selection.node(),
+            configuration_revision: configuration.revision,
+            decision,
+        });
+        self.sequencer.decision = decision;
         true
     }
 
@@ -1006,10 +892,10 @@ impl Hub {
             return None;
         }
         let plan = self.sequencer.plans[source * LIFETIMES + usize::from(request)].as_mut()?;
-        if self.rows[source].lease != Some(plan.key.lease)
+        if self.rows[source].lease != Some(plan.request.lease)
             || !plan.bound
-            || output.epoch != plan.key.epoch
-            || output.lifetime != plan.lifetime
+            || output.epoch != plan.request.epoch
+            || output.lifetime != plan.request.lifetime
             || output.decision != plan.binding.decision
         {
             return None;
@@ -1060,10 +946,15 @@ impl Hub {
                 self.sequencer.cohort_unsent = remaining;
                 self.sequencer.plans[index].as_mut().unwrap().sent = true;
             }
-            // A canceled unbound Original still has to pass the input cursor.
-            // Keep its exact identity until then so normal sequencing cannot
-            // resurrect it after an earlier inventory frame was acknowledged.
-            if plan.terminal && !self.sequencer.retired && !plan.bound {
+            // A canceled onset still has to pass the input cursor, so normal
+            // sequencing cannot resurrect it. A terminated or retired row will
+            // never deliver that record — its stream is settled where it
+            // stopped and its emission gate is closed — so retire it there.
+            if plan.terminal
+                && !plan.bound
+                && !self.sequencer.retired
+                && self.rows[source].terminal_cut.is_none()
+            {
                 continue;
             }
             if !plan.terminal && !plan.bound {
@@ -1071,19 +962,14 @@ impl Hub {
             }
             let reply = if plan.terminal {
                 Reply::PlanRetired {
-                    incarnation: plan.key.lease.incarnation,
-                    epoch: plan.key.epoch,
+                    incarnation: plan.request.lease.incarnation,
+                    epoch: plan.request.epoch,
                     life,
-                    lifetime: plan.lifetime,
+                    lifetime: plan.request.lifetime,
                     decision: plan.binding.decision,
                 }
             } else if !plan.sent && !self.sequencer.retired {
-                Reply::Assignment {
-                    key: plan.key,
-                    life,
-                    lifetime: plan.lifetime,
-                    binding: plan.binding,
-                }
+                Reply::Assignment { request: plan.request, binding: plan.binding }
             } else {
                 continue;
             };
