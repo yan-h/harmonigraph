@@ -3,7 +3,7 @@ use super::*;
 use harmonigraph_core::cohort::{self, EventPhase, TargetAccess};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::{policy, LatticePos, PitchClass};
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 mod actual_lookup_tests;
 mod history;
 mod recovery;
@@ -133,7 +133,7 @@ pub(super) struct Sequencer {
     pub(super) participation_serial: [u64; TUNERS + 1],
     pub work: usize,
     pub extra_delay: u64,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     policy_counts: [usize; 3],
     recovery: recovery::Recovery,
 }
@@ -185,7 +185,7 @@ impl Default for Sequencer {
             participation_serial: [0; TUNERS + 1],
             work: 0,
             extra_delay: 0,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             policy_counts: [0; 3],
             recovery: recovery::Recovery::default(),
         }
@@ -387,7 +387,7 @@ const _: () = assert!(
 );
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Sequencer {
     pub(super) fn print_test_memory_layout(&self) {
         println!("LEDGER musical [history_cell,confirmed,prospective] {:?}; policy [scratch,context] {:?}", self.history.layout(), [std::mem::size_of_val(&*self.policy), std::mem::size_of_val(&*self.policy_context)]);
@@ -422,11 +422,11 @@ impl Sequencer {
 }
 
 impl Hub {
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
         self.sequencer.policy_counts
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_actual_voice(
         &self,
         source: u8,
@@ -437,20 +437,20 @@ impl Hub {
                 .map(|voice| (index, voice.correction, voice.player))
         })
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_service_terminal_plans(&mut self) {
         self.plan_callback();
         self.service_plans();
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_terminal_scope(&self) -> (bool, u16) {
         (self.sequencer.terminal_session, self.sequencer.terminal_sources)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_request_recovery(&mut self, from: u64) {
         self.request_recovery(from);
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_plan_binding(
         &self,
         source: usize,
@@ -458,7 +458,7 @@ impl Hub {
     ) -> Option<Assignment> {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)].map(|plan| plan.binding)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_plan_state(
         &self,
         source: usize,
@@ -467,7 +467,7 @@ impl Hub {
         self.sequencer.plans[source * LIFETIMES + usize::from(life)]
             .map(|plan| (plan.terminal, plan.bound, self.sequencer.recovering()))
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(in crate::performance) fn test_cohort_delivery(&self) -> (u64, usize, u16, bool, usize) {
         (
             self.sequencer.decision,
@@ -479,7 +479,7 @@ impl Hub {
     }
 
     pub(super) fn sequences_inputs(&self) -> bool {
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         if self.test_aggregation {
             return false;
         }
@@ -828,7 +828,7 @@ impl Hub {
                         count += 1;
                     }
                 }
-                #[cfg(all(test, not(feature = "tuning-probe")))]
+                #[cfg(test)]
                 {
                     self.sequencer.policy_counts[0] += 1;
                     self.sequencer.policy_counts[1] += count;

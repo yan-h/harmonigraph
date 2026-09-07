@@ -312,7 +312,7 @@ impl PendingStore {
         self.len -= 1;
         Some(value)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_layout(&self) -> [usize; 5] {
         [
             std::mem::size_of::<Pending>(),
@@ -417,7 +417,7 @@ impl Lives {
             *slot.local.get() = None;
         }
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_layout(&self) -> [usize; 3] {
         [std::mem::size_of::<LifeSlot>(), LIFETIMES, std::mem::size_of_val(&*self.arena.lives)]
     }
@@ -784,7 +784,7 @@ impl TargetAccess for View<'_> {
 
 const _: () = assert!(super::queue::Window::<Intent, INTENT_RING>::CELL_BYTES <= 128);
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 pub(super) fn print_test_memory_layout() {
     use std::mem::size_of;
     println!("LEDGER capture [arena,arc_allocation,pending,life,work,phase_bytes,permissions_owner,permission_bytes,frozen_owner,scratch,event,events_backing] {:?}",

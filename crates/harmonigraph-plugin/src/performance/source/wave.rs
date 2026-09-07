@@ -496,7 +496,7 @@ impl Source {
     }
 
     pub(super) fn prepare_wave_setup(&mut self, group: api::Group) -> bool {
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         super::super::tests::close_setup_lease(true);
         let channel = group.token.0[1] as usize;
         let Some(wave) = self.channels.waves.get(channel) else {

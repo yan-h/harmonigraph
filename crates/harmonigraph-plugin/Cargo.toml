@@ -11,10 +11,6 @@ homepage = "https://github.com/yan-h/harmonigraph"
 # cdylib for the plugin bundle, lib so tests/other tools can link it.
 crate-type = ["cdylib", "lib"]
 
-[features]
-# Disposable host experiment for #615, absent from ordinary builds.
-tuning-probe = ["dep:clap-sys", "dep:libc"]
-
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-ui = { workspace = true }
@@ -34,8 +30,6 @@ rtrb = { workspace = true }
 crossbeam = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
-clap-sys = { version = "0.5.0", optional = true }
-libc = { version = "0.2", optional = true }
 serde_json = { version = "1" }
 getrandom = "0.3"
 

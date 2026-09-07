@@ -86,7 +86,7 @@ impl History {
         };
     }
 
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn layout(&self) -> [usize; 3] {
         [
             std::mem::size_of::<Entry>(),

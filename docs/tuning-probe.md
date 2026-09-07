@@ -1,5 +1,8 @@
 # #615 Bitwig timing apparatus
 
+> The apparatus this describes was removed in the adaptive-tuning stage 0 deletions;
+> the document is retained as the measurement record.
+
 Status:
 [Bitwig measurements support a constrained configuration](tuning-probe-bitwig.md):
 fixed 128/512/1,024-sample buffers at 44.1 kHz, calibrated fixed routing and continuous callbacks, with D = 2,048 samples.

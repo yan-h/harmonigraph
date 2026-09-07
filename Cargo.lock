@@ -1422,7 +1422,6 @@ dependencies = [
  "harmonigraph-render",
  "harmonigraph-take",
  "harmonigraph-ui",
- "libc",
  "nice-assert-no-alloc",
  "nice-plug",
  "objc2 0.6.4",

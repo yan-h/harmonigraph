@@ -124,16 +124,16 @@ impl Row {
 }
 pub struct Hub {
     trace: Box<super::diagnostics::Counts>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_aggregation: bool,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_request: Option<i64>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     test_capture_id: Option<harmonigraph_core::cohort::FrozenInputId>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_result:
         Option<Result<harmonigraph_core::cohort::Progress, harmonigraph_core::cohort::Error>>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_capture_commit: bool,
     #[cfg(test)]
     pub window_report_seen: bool,
@@ -376,15 +376,15 @@ impl Hub {
         let direct = Source::new(shared.clone());
         Box::new(Self {
             trace: Box::default(),
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_aggregation: false,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_request: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_id: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_result: None,
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_capture_commit: false,
             #[cfg(test)]
             window_report_seen: false,
@@ -491,7 +491,7 @@ impl Hub {
         }
         self.collect();
         self.observe_terminal_faults();
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         self.test_capture_tick();
     }
 
@@ -1988,7 +1988,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_row_receiver(&self, slot: usize, channel: usize) -> (Option<u8>, usize, u64, u64) {
         let row = &self.rows[slot];
@@ -2247,7 +2247,7 @@ impl Hub {
         );
         self.frozen_captures.commit(&targets)
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub(super) fn release_captures(&mut self, joined: bool) {
         self.test_capture_id = None;
         if !self.frozen_captures.active && !self.capture_hold {
@@ -2269,7 +2269,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_pause_captures(&mut self) {
         self.capture_hold = true;
@@ -2354,7 +2354,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_capture_phases(&self, source: usize) -> (usize, usize) {
         let window =
@@ -2405,7 +2405,7 @@ impl Hub {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Hub {
     pub fn test_frozen_id(&self) -> harmonigraph_core::cohort::FrozenInputId {
         self.frozen_captures.id

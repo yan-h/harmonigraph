@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 pub(super) mod channel;
 mod recovery;
-#[cfg(all(test, debug_assertions, not(feature = "tuning-probe")))]
+#[cfg(all(test, debug_assertions))]
 mod replay_tests;
 mod stop;
 mod wave;
@@ -174,7 +174,7 @@ impl Adoption {
 
 pub struct Source {
     trace: Box<super::diagnostics::Counts>,
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub test_aggregation: bool,
     pub shared: Arc<setup::Shared>,
     pub offer: Option<SourceOffer>,
@@ -288,7 +288,7 @@ impl Source {
     }
 
     fn delay(&self) -> i64 {
-        #[cfg(all(test, not(feature = "tuning-probe")))]
+        #[cfg(test)]
         if self.test_aggregation {
             return 0;
         }
@@ -344,7 +344,7 @@ impl Source {
             complete_through: self.complete_through,
         }
     }
-    #[cfg(all(test, not(feature = "tuning-probe")))]
+    #[cfg(test)]
     pub fn test_cell_sizes() -> [usize; 5] {
         [
             std::mem::size_of::<Pending>(),
@@ -358,7 +358,7 @@ impl Source {
         let (pending, lives, work) = super::capture::storage(&shared);
         Box::new(Self {
             trace: Box::default(),
-            #[cfg(all(test, not(feature = "tuning-probe")))]
+            #[cfg(test)]
             test_aggregation: false,
             shared,
             offer: None,
@@ -3363,7 +3363,7 @@ const _: () = assert!(std::mem::size_of::<Option<Release>>() <= 256);
 // The ledger charges this measured owner including test-support padding.
 const _: () = assert!(std::mem::size_of::<Source>() <= 31288 + 64 * 8);
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Source {
     pub fn test_stream_status(&self) -> (Option<Lease>, bool, bool, Option<Coverage>) {
         (
@@ -3427,7 +3427,7 @@ impl Source {
     }
 }
 
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CaptureSnapshot {
     pub adaptive: bool,
@@ -3439,7 +3439,7 @@ pub(super) struct CaptureSnapshot {
     pub local_done: bool,
     pub remote_pending: bool,
 }
-#[cfg(all(test, not(feature = "tuning-probe")))]
+#[cfg(test)]
 impl Source {
     pub(super) fn test_assignment(&self, life: u16) -> Option<Assignment> {
         self.lives.at(life).map(|life| life.assignment)
