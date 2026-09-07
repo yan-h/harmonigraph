@@ -18,6 +18,18 @@ use egui_wgpu::{
 
 pub use egui_wgpu::{WgpuConfiguration, WgpuSetup};
 
+/// Keeps one editor's device alive between windows. Surfaces, egui renderers
+/// and their texture namespaces remain window-owned. Use a new context when
+/// changing device options; a reopened window inherits the original device.
+#[derive(Clone, Default)]
+pub struct SharedGpuContext(Arc<std::sync::Mutex<Option<egui_wgpu::WgpuSetupExisting>>>);
+
+impl std::fmt::Debug for SharedGpuContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedGpuContext")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GraphicsConfig {
     /// Controls whether to apply dithering to minimize banding artifacts.
@@ -34,6 +46,9 @@ pub struct GraphicsConfig {
 
     /// Additional options for the wgpu renderer.
     pub renderer_options: RendererOptions,
+
+    /// Optional device lifetime shared by successive windows of one editor.
+    pub shared_context: Option<SharedGpuContext>,
 }
 
 impl Default for GraphicsConfig {
@@ -42,6 +57,7 @@ impl Default for GraphicsConfig {
             dithering: true,
             wgpu_options: Default::default(),
             renderer_options: Default::default(),
+            shared_context: None,
         }
     }
 }
@@ -234,11 +250,20 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: &Window, config: GraphicsConfig) -> Result<Self, WgpuError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    pub fn new(window: &Window, mut config: GraphicsConfig) -> Result<Self, WgpuError> {
+        let existing = config.shared_context.as_ref().and_then(|context| {
+            context.0.lock().expect("GPU context lock poisoned").clone()
+        });
+        let instance = existing.as_ref().map_or_else(
+            || pollster::block_on(config.wgpu_options.wgpu_setup.new_instance()),
+            |existing| existing.instance.clone(),
+        );
 
         let target = baseview_window_to_surface_target(window);
         let surface = unsafe { instance.create_surface_unsafe(target) }.unwrap();
+        if let Some(existing) = existing.filter(|gpu| gpu.adapter.is_surface_supported(&surface)) {
+            config.wgpu_options.wgpu_setup = WgpuSetup::Existing(existing);
+        }
 
         #[cfg(target_os = "macos")]
         let layer_present = layer_present::LayerPresent::new(&surface);
@@ -251,6 +276,19 @@ impl Renderer {
             Some(&surface),
             config.renderer_options,
         ))?);
+
+        // Native device IDs are scoped to an instance. Callbacks retaining
+        // device resources across windows need both halves of identity.
+        state.renderer.write().callback_resources.insert(instance.clone());
+        if let Some(context) = &config.shared_context {
+            *context.0.lock().expect("GPU context lock poisoned") =
+                Some(egui_wgpu::WgpuSetupExisting {
+                    instance,
+                    adapter: state.adapter.clone(),
+                    device: state.device.clone(),
+                    queue: state.queue.clone(),
+                });
+        }
 
         let gpu_timer = EguiGpuTimer::new(&state.device, &state.queue);
 

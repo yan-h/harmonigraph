@@ -6,7 +6,7 @@ pub use opengl::renderer::{GraphicsConfig, Renderer};
 #[cfg(feature = "wgpu")]
 mod wgpu;
 #[cfg(feature = "wgpu")]
-pub use wgpu::renderer::{GraphicsConfig, Renderer, WgpuSetup};
+pub use wgpu::renderer::{GraphicsConfig, Renderer, SharedGpuContext, WgpuSetup};
 
 /// The font atlas needs room for one frame's glyphs, not every texel the GPU
 /// can address. egui makes its atlas this wide from its first allocation and

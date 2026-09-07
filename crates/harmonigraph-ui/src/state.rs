@@ -150,6 +150,9 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
+    /// Device-bound compiled pipelines outlive windows, while their pane
+    /// buffers and textures remain in each window's callback resources.
+    pub(crate) lattice_pipelines: std::sync::Arc<harmonigraph_render::LatticePipelineCache>,
     /// The ground the lattice pane paints its rect with, which it also hands
     /// the scene (see [`harmonigraph_scene::Scene::background`]). Defaults to
     /// the skin's well, the recessed grey every picture pane paints — right for
@@ -694,6 +697,7 @@ impl SharedState {
             drawn_this_frame: None,
             console: Console::default(),
             target_format,
+            lattice_pipelines: Default::default(),
             background: harmonigraph_scene::skin::well_color(),
             learn_active: false,
             last_learned_classes: None,

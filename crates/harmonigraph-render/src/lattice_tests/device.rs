@@ -18,6 +18,89 @@ fn pipelines_build_against_a_headless_device() {
     let _resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
+/// Use the real prepare/paint path, populate its pane and atlas, then destroy
+/// the window's resource map. The retained cache must reuse compiled objects
+/// without keeping either the old pixels or a pane's temporal state alive.
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn reopening_reuses_pipelines_with_fresh_window_resources() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else {
+        return;
+    };
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    (shooter.device, shooter.queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    shooter.resources.insert(instance.clone());
+    let cache = std::sync::Arc::new(LatticePipelineCache::default());
+    let scene = parity_scene();
+    let first = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+        cb.pipeline_cache = Some(cache.clone());
+    });
+    let window = shooter.resources.get_mut::<LatticeResources>().unwrap();
+    assert!(!window.panes.is_empty(), "the first window must actually draw");
+    let pipeline = window.scenes[0].nodes.clone();
+    let atlas = FontAtlas {
+        image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
+        key: 99,
+    };
+    window.atlas.upload(&shooter.device, &shooter.queue, &atlas);
+    window.marks.upload(&shooter.device, &shooter.queue, &atlas);
+    window.sdf_key = 99;
+    shooter.resources = CallbackResources::default();
+
+    let started = std::time::Instant::now();
+    let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
+    eprintln!("cached lattice reopen: {:?}", started.elapsed());
+    assert_eq!(reopened.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
+    assert!(reopened.panes.is_empty());
+    assert!(reopened.atlas.view().is_none() && reopened.marks.view().is_none());
+    assert_eq!(reopened.sdf_key, 0);
+    drop(reopened);
+
+    shooter.resources.insert(instance.clone());
+    // Keep the SAME pane ID: a reopened egui context starts its ID space over.
+    let second = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+        cb.pipeline_cache = Some(cache.clone());
+    });
+    assert_eq!(differing_pixels(&first, &second), 0, "reopening changed the picture");
+    assert_eq!(shooter.resources.get::<LatticeResources>().unwrap().scenes[0].nodes, pipeline);
+}
+
+#[cfg(not(feature = "hot-reload"))]
+#[test]
+fn pipeline_cache_rebuilds_for_another_device_or_format() {
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        eprintln!("no GPU adapter available; skipping");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let cache = LatticePipelineCache::default();
+    let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    assert_ne!(rgba.composite_pipeline, bgra.composite_pipeline);
+    assert_eq!(bgra.target_format, wgpu::TextureFormat::Bgra8Unorm);
+    let (other, other_queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let replaced =
+        cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+    assert_ne!(bgra.scenes[0].nodes, replaced.scenes[0].nodes);
+
+    // Separate instances can mint equal device IDs. Test that case explicitly.
+    let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    let other_instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(other_instance.request_adapter(&Default::default())).unwrap();
+    let (other, other_queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
+    let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+    let retained = cache.template.lock().unwrap();
+    let (owner_instance, owner, _) = retained.as_ref().unwrap();
+    assert_eq!(owner_instance, &other_instance);
+    assert_eq!(owner, &other);
+}
+
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
 /// returns `Some` and the readback cycle is live. Without the feature the
 /// timer is `None` and any test about it would pass vacuously — hence a

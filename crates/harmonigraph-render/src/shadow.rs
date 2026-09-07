@@ -862,6 +862,7 @@ pub(crate) fn storage_list<T: bytemuck::Pod>(
 /// One module and one constructor because they share a cell quad off the same
 /// box stream and differ only in which axis they read. No blend anywhere here:
 /// each writes its cell's texels outright.
+#[derive(Clone)]
 pub(crate) struct CellPipelines {
     pub(crate) blur_x: wgpu::RenderPipeline,
     pub(crate) blur_y: wgpu::RenderPipeline,

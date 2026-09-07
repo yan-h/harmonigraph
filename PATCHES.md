@@ -225,10 +225,19 @@ a full texture delta and the GPU texture temporarily multiplied that cost into r
 The cap is still eight times the largest glyph Harmonigraph allows, and puts a 64 MiB ceiling on egui's CPU image before its 80% rebuild clears historical sizes.
 At the fresh Name size, a full-range zoom reaches 32 MiB on its first sweep and stays there through every return trip;
 the largest valid Name size reaches the 64 MiB ceiling once and reuses it too.
+- **Patch 15** (`src/renderer/wgpu/renderer.rs`, re-exports): let an editor keep a `SharedGpuContext` across window lifetimes.
+Only the instance, adapter, device and queue survive;
+each open still creates a surface and an egui renderer with a fresh texture namespace.
+The original adapter is checked against the new surface before reuse.
+Harmonigraph pairs this with its own cache of immutable lattice pipelines, keyed on instance, device identity and output format, so a closed editor does not depend on the driver's compiler cache still being warm when it reopens.
+Measured on Metal:
+constructing the lattice resources took 2.58 s cold and 49 ms warm;
+reusing their compiled handles took 1.4 µs in the headless reopen test.
+The first open of a newly loaded instance still compiles, and hot-reload builds retain their existing rebuild behavior.
 - **Upgrade**: download the new crates.io tarball into
 `vendor/egui-baseview`, re-apply the two conversions, the texture-delta forced render, the occlusion/skipped-present patch, the staged-upload flush, the repaint-deadline fix, the frame-timer plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers, the upload split with its per-frame-reconfigure fix, the `layer_present` module with its hooks and objc2 deps —
 both the resize half and the occlusion hide/unhide —
-the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit.
+the kept pointer position, and the font-texture publication into `CallbackResources`, then the font-atlas limit and shared GPU context.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
 helper on any HiDPI display.
 PR to the RustAudio repo.
