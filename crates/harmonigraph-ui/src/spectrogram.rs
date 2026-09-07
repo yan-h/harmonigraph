@@ -4,7 +4,7 @@
 //! The grid travels as DATA rather than as a picture — `capacity` slots of one
 //! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
 //! palette change normally moves only uniforms. A larger retention can also
-//! recover a clipped gap (see [`GpuGrid::hit`]). What a frame owes the
+//! recover a clipped gap (see [`GpuGrid::hit`](crate::spectrogram::GpuGrid::hit)). What a frame owes the
 //! GPU is the run of slabs it draws and the few whose bytes have moved since
 //! the last one; the read that turns those bytes into pixels lives in
 //! [`harmonigraph_render`]'s shader.
