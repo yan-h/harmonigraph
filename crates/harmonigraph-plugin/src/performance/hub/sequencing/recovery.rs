@@ -675,7 +675,9 @@ impl Hub {
             // This placeholder is an original-On identity only. No parent
             // position can satisfy a CaptureArena view; a later permitted
             // On Capture must attach its original key after matching Birth.
-            self.sequencer.insert_plan(
+            // A rejected insert means the slot is already live; the caller
+            // latches the exhaustion fault on `false`.
+            return self.sequencer.insert_plan(
                 index,
                 Plan {
                     key: super::super::super::capture::Key {

@@ -698,7 +698,9 @@ impl Hub {
                             ack.unwrap().publish(Reply::Disposition { incarnation, transaction, input_cut });
                             row.last_disposition = Some(row.last_disposition.map_or(transaction, |old| old.max(transaction)));
                             if original_on && (sequencing || self.sequencer.retired || self.sequencer.recovering()) {
-                                self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime);
+                                if !self.sequencer.cancel(index, row.lease.unwrap(), epoch, input_cut, request, lifetime) {
+                                    shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
+                                }
                             }
                         }
                         _ => {}
