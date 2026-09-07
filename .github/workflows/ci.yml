@@ -20,9 +20,22 @@ env:
 
 jobs:
   full-ci:
-    name: Full CI
+    # The check reads as "workspace" and "isolated"; the `Full CI` name stays on
+    # the summary job below, which is the one to look at on a PR.
+    name: ${{ matrix.group }}
     runs-on: macos-latest
     timeout-minutes: 20
+    strategy:
+      # Both groups always report. A failure in one says nothing about the
+      # other, and cancelling the survivor would hide half the answer behind a
+      # second push.
+      fail-fast: false
+      matrix:
+        # ci.sh owns this list; .claude/tests/ci-groups.sh fails when the two
+        # copies stop agreeing, because a group missing here runs NOWHERE and
+        # the PR still goes green. Read the rationale for the count — and for
+        # why it is not larger — next to CI_GROUPS in ci.sh.
+        group: [workspace, isolated]
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -38,8 +51,41 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
+          # Both groups want the same ~/.cargo, so one key serves them instead
+          # of the per-job default, which would mint an archive per group.
+          shared-key: full-ci
+          # Saving only from main stops the matrix from doubling THIS archive's
+          # write rate into a cache already at GitHub's 10 GB per-repo cap
+          # (10.8 GB over 4601 entries as this landed), where every entry past
+          # the cap evicts another by LRU. A branch still RESTORES main's
+          # archive through the restore key and re-fetches only what its own
+          # lockfile moved.
+          #
+          # It does NOT fix the cap, and nothing here should be read as if it
+          # did: `save-if` reaches only rust-cache's ~/.cargo archive, while
+          # SCCACHE_GHA_ENABLED above writes compilation artifacts into the
+          # same 10 GB budget on every run including branches, ungated, and
+          # that is the larger share by volume — 4601 entries, nearly all of
+          # them sccache's. The matrix adds a second concurrent writer there
+          # that this key cannot gate. Pruning that is its own job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Keep every full gate in ci.sh so local on-demand and remote runs cannot
-      # silently diverge.
+      # silently diverge: this passes a group, never a gate list.
       - name: Run full CI
-        run: ./ci.sh
+        run: ./ci.sh ${{ matrix.group }}
+
+  # One check to read, and the name a human already looks for, so that splitting
+  # the work in two did not turn "did CI pass?" into a question about a matrix.
+  # It runs on Linux deliberately — the macOS concurrency cap is the budget the
+  # split is spending, and a summary step needs none of it.
+  full-ci-summary:
+    name: Full CI
+    runs-on: ubuntu-latest
+    needs: full-ci
+    if: always()
+    steps:
+      - name: Did every group pass?
+        run: |
+          echo "gate groups: ${{ needs.full-ci.result }}"
+          [ "${{ needs.full-ci.result }}" = "success" ]
