@@ -1,12 +1,12 @@
-//! Exercise auxiliary descriptor bounds through the VST3 COM interface.
+//! Exercise auxiliary descriptor bounds and arrangements through the VST3 COM interface.
 use nice_plug::prelude::*;
 use nice_plug::wrapper::vst3::{Wrapper, vst3};
 use std::{ptr, sync::Arc};
 use vst3::Steinberg::Vst::{
     AudioBusBuffers, AudioBusBuffers__type0, IAudioProcessor, IAudioProcessorTrait, IComponent,
-    IComponentTrait, ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
+    IComponentTrait, ProcessData, ProcessModes_, ProcessSetup, SpeakerArr, SymbolicSampleSizes_,
 };
-use vst3::Steinberg::{IPluginBaseTrait, kResultOk};
+use vst3::Steinberg::{IPluginBaseTrait, kResultFalse, kResultOk};
 use vst3::{ComPtr, ComWrapper};
 
 #[derive(Default, Params)]
@@ -184,4 +184,92 @@ fn omitted_auxiliary_outputs_are_not_written() {
 fn auxiliary_inputs_can_outnumber_outputs() {
     let device = Device::new::<false>();
     device.check_block(64, 3, 1, 0.875);
+}
+
+#[derive(Default)]
+struct ArrangementFixture<const MAIN: bool, const AUX_CHANNELS: u32>;
+
+impl<const MAIN: bool, const AUX_CHANNELS: u32> Plugin for ArrangementFixture<MAIN, AUX_CHANNELS> {
+    const NAME: &'static str = "VST3 arrangement fixture";
+    const VENDOR: &'static str = "fixture";
+    const URL: &'static str = "";
+    const EMAIL: &'static str = "";
+    const VERSION: &'static str = "1";
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
+        main_input_channels: if MAIN { Some(new_nonzero_u32(2)) } else { None },
+        main_output_channels: if MAIN { Some(new_nonzero_u32(2)) } else { None },
+        aux_input_ports: &[new_nonzero_u32(AUX_CHANNELS)],
+        aux_output_ports: &[new_nonzero_u32(AUX_CHANNELS)],
+        ..AudioIOLayout::const_default()
+    }];
+    type SysExMessage = ();
+    type BackgroundTask = ();
+
+    fn params(&self) -> Arc<dyn Params> {
+        Arc::new(Parameters::default())
+    }
+
+    fn process(
+        &mut self,
+        _: &mut Buffer,
+        _: &mut AuxiliaryBuffers,
+        _: &mut impl ProcessContext<Self>,
+    ) -> ProcessStatus {
+        ProcessStatus::Normal
+    }
+}
+
+impl<const MAIN: bool, const AUX_CHANNELS: u32> Vst3Plugin
+    for ArrangementFixture<MAIN, AUX_CHANNELS>
+{
+    const VST3_CLASS_ID: [u8; 16] = *b"ArrangeFixture__";
+    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[Vst3SubCategory::Fx];
+}
+
+fn arrangements<const MAIN: bool, const AUX_CHANNELS: u32>() -> ComPtr<IAudioProcessor> {
+    ComWrapper::new(Wrapper::<ArrangementFixture<MAIN, AUX_CHANNELS>>::new())
+        .to_com_ptr::<IAudioProcessor>()
+        .unwrap()
+}
+
+#[test]
+fn auxiliary_arrangements_follow_the_main_buses() {
+    let processor = arrangements::<true, 1>();
+    let mut inputs = [SpeakerArr::kStereo, SpeakerArr::kMono];
+    let mut outputs = inputs;
+    assert_eq!(
+        unsafe { processor.setBusArrangements(inputs.as_mut_ptr(), 2, outputs.as_mut_ptr(), 2) },
+        kResultOk,
+    );
+}
+
+#[test]
+fn incompatible_auxiliary_arrangements_are_rejected() {
+    let processor = arrangements::<true, 2>();
+    for (input_aux, output_aux) in
+        [(SpeakerArr::kMono, SpeakerArr::kStereo), (SpeakerArr::kStereo, SpeakerArr::kMono)]
+    {
+        let mut inputs = [SpeakerArr::kStereo, input_aux];
+        let mut outputs = [SpeakerArr::kStereo, output_aux];
+        assert_eq!(
+            unsafe {
+                processor.setBusArrangements(inputs.as_mut_ptr(), 2, outputs.as_mut_ptr(), 2)
+            },
+            kResultFalse,
+            "input auxiliary={input_aux}, output auxiliary={output_aux}",
+        );
+    }
+}
+
+#[test]
+fn auxiliary_only_arrangements_start_at_zero() {
+    let processor = arrangements::<false, 1>();
+    // The second descriptor is valid backing storage but outside the declared
+    // bus count. Reading it rejects the matching layout without invoking UB.
+    let mut inputs = [SpeakerArr::kMono, SpeakerArr::kStereo];
+    let mut outputs = inputs;
+    assert_eq!(
+        unsafe { processor.setBusArrangements(inputs.as_mut_ptr(), 1, outputs.as_mut_ptr(), 1) },
+        kResultOk,
+    );
 }
