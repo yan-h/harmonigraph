@@ -166,6 +166,128 @@ fn production_musical_setup_is_automatic_when_three_sources_precede_hub_audio() 
     }
 }
 
+#[test]
+fn production_tune_overrides_incoming_pitch_but_preserves_other_expression() {
+    let _scope = crate::test_scope::enter();
+    let mut expected = None;
+    for incoming in [0.0, -0.12446594] {
+        let mut phrase = Phrase::new();
+        for (source, key) in [60, 64, 67].into_iter().enumerate() {
+            let mut input: [Vec<Input>; 3] = std::array::from_fn(|_| vec![]);
+            input[source] = vec![note(1, 0, key, 0, true), expression(1, incoming, 0)];
+            phrase.step(input, [0, 1, 2]);
+            for _ in 0..8 {
+                phrase.idle();
+            }
+        }
+        let pitches = std::array::from_fn::<_, 3, _>(|index| {
+            let voice = phrase.voice(index, [60, 64, 67][index], 0);
+            assert_eq!(voice.player_tuning, 0.0);
+            (voice.pitch_microcents, voice.attack_node)
+        });
+        if let Some(expected) = expected {
+            assert_eq!(pitches, expected, "upstream tuning must not alter adaptive choices");
+        } else {
+            expected = Some(pitches);
+        }
+        let Input::Expression(mut pressure) = expression(1, 0.7, 2) else { unreachable!() };
+        pressure.expression_id = 6;
+        let mut accepted = phrase.step(
+            [
+                vec![],
+                vec![
+                    expression(1, 0.5, 0),
+                    raw_midi([0xe0, 127, 127], 1),
+                    Input::Expression(pressure),
+                ],
+                vec![],
+            ],
+            [0, 1, 2],
+        )[1]
+        .clone();
+        for _ in 0..8 {
+            accepted.extend(phrase.idle()[1].iter().copied());
+        }
+        assert_eq!(phrase.voice(1, 64, 0).pitch_microcents, pitches[1].0);
+        assert!(accepted
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Expression { kind: 6, value: 0.7, .. })));
+        assert!(accepted
+            .iter()
+            .any(|(_, event)| matches!(event, Event::Midi { data: [0xe0, 0, 64], .. })));
+        phrase.release_all();
+    }
+}
+
+#[test]
+fn production_hub_reinitialize_settles_while_new_notes_arrive() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    phrase.step([vec![], vec![note(1, 0, 60, 0, true)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    assert_eq!(phrase.sources[1].source_snapshot().held, 1);
+    let shared = phrase.hub.shared();
+    shared.apply(shared.value().routing, true).unwrap();
+    let mut output: [Vec<(u32, Event)>; 3] = std::array::from_fn(|_| Vec::new());
+    for step in 0..160 {
+        for source in &phrase.sources {
+            source.main();
+        }
+        phrase.hub.main();
+        let input = match step {
+            2 => vec![note(2, 0, 64, 0, true)],
+            3 => vec![expression(2, 0.125, 0)],
+            4 => vec![note(1, 0, 60, 0, false), note(2, 0, 64, 1, false)],
+            _ => vec![],
+        };
+        for (all, next) in output.iter_mut().zip(phrase.step([vec![], input, vec![]], [0, 1, 2])) {
+            all.extend(next);
+        }
+    }
+    assert_eq!(
+        shared.adopted().unwrap().generation,
+        shared.value().generation,
+        "{}; {}",
+        inspect_hub(&phrase.hub, |hub| hub.direct.test_reset_progress()),
+        inspect_source(&phrase.sources[1], |source| source.test_reset_progress())
+    );
+    for source in &phrase.sources {
+        let snapshot = source.source_snapshot();
+        assert_eq!(
+            (snapshot.held, snapshot.pending, snapshot.captures, snapshot.faults),
+            (0, 0, 0, 0)
+        );
+    }
+    assert!(output[1]
+        .iter()
+        .any(|(_, event)| event.release() && matches!(event, Event::Note { id: 1, .. })));
+    assert_eq!(
+        output[1]
+            .iter()
+            .filter(
+                |(_, event)| event.attack().is_some() && matches!(event, Event::Note { id: 2, .. })
+            )
+            .count(),
+        1
+    );
+    assert_eq!(
+        output[1]
+            .iter()
+            .filter(|(_, event)| event.release() && matches!(event, Event::Note { id: 2, .. }))
+            .count(),
+        1
+    );
+    // A fresh phrase must sound after the reset, without another setup click.
+    phrase.step([vec![], vec![note(3, 0, 67, 0, true)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    assert_eq!(phrase.voice(1, 67, 0).note, 67);
+    phrase.release_all();
+}
+
 struct Phrase {
     hub: Device,
     sources: [Device; 3],
@@ -327,7 +449,7 @@ fn production_diagnostics_identify_three_sources_and_apply_history_wait() {
         phrase.idle();
     }
     let source_values = phrase.sources[0].shared().diagnostics.source.read().unwrap();
-    assert_eq!(field(SOURCE_FIELDS, &source_values, "last_output_player_mc"), 50_000_000);
+    assert_eq!(field(SOURCE_FIELDS, &source_values, "last_output_player_mc"), 0);
     assert_eq!(
         field(SOURCE_FIELDS, &source_values, "last_output_correction_mc"),
         phrase.voice(0, 60, 0).frozen_offset_microcents
@@ -496,7 +618,7 @@ fn production_musical_released_history_is_source_channel_specific_and_off_clears
 }
 
 #[test]
-fn production_musical_no_candidate_preserves_player_expression() {
+fn production_musical_no_candidate_uses_unbent_midi_pitch() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     configure(
@@ -511,11 +633,11 @@ fn production_musical_no_candidate_preserves_player_expression() {
     assert_eq!(voice.attack_node, None);
     assert_ne!(voice.decision, 0, "NoCandidate is a completed assignment");
     assert_eq!(voice.frozen_offset_microcents, 0);
-    assert_eq!(voice.player_tuning, 0.375);
-    assert_eq!(voice.pitch_microcents, 6_337_500_000);
+    assert_eq!(voice.player_tuning, 0.0);
+    assert_eq!(voice.pitch_microcents, 6_300_000_000);
     assert!(output[0]
         .iter()
-        .any(|(_, event)| matches!(event, Event::Expression { value: 0.375, .. })));
+        .any(|(_, event)| matches!(event, Event::Expression { value: 0.0, .. })));
     phrase.release_all();
 }
 
@@ -536,14 +658,15 @@ fn production_musical_off_preserves_sounding_pitch_but_excludes_future_scoring()
     phrase.idle();
     let bent = phrase.voice(0, 50, 0);
     assert_eq!(bent.frozen_offset_microcents, held.frozen_offset_microcents);
-    assert_eq!(bent.pitch_microcents, held.pitch_microcents + 25_000_000);
+    assert_eq!(bent.pitch_microcents, held.pitch_microcents);
     assert_eq!(phrase.voice(1, 52, 0).attack_node, Some(LatticePos::new(0, 1, 0)));
     assert_eq!(phrase.sources[0].source_snapshot().held, 1);
     phrase.release_all();
 }
 
 #[test]
-fn production_musical_normal_phrase_keeps_bends_old_configuration_and_take_metadata() {
+fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_and_take_metadata()
+{
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -583,10 +706,7 @@ fn production_musical_normal_phrase_keeps_bends_old_configuration_and_take_metad
             assert_eq!(old.frozen_offset_microcents, now.frozen_offset_microcents);
             assert_eq!(old.attack_node, now.attack_node);
             assert_eq!(old.assignment, now.assignment);
-            assert_eq!(
-                now.pitch_microcents,
-                old.pitch_microcents + if old.host_note_id == 0 { 700_000_000 } else { 0 }
-            );
+            assert_eq!(now.pitch_microcents, old.pitch_microcents);
         }
     }
     let wrapper = unsafe {

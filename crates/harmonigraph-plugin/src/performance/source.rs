@@ -819,9 +819,22 @@ impl Source {
             self.transport_playing = playing;
             return api::Consumption::Consumed;
         }
-        let Some(event) = Event::from_input(input.value) else {
+        let Some(mut event) = Event::from_input(input.value) else {
             return api::Consumption::Consumed;
         };
+        if self.delay() != 0 {
+            // The musical Tune owns pitch. Normalize before capture so both
+            // prospective scoring and factual output see the same pitch;
+            // DIRECT observation still forwards its original input.
+            match &mut event {
+                Event::Expression { kind: 2, value, .. } => *value = 0.0,
+                Event::Midi { data, .. } if data[0] & 0xf0 == 0xe0 => {
+                    data[1] = 0;
+                    data[2] = 64;
+                }
+                _ => {}
+            }
+        }
         // A terminal latch rejects new performance. Essential original releases
         // can still discharge an existing physical lifetime.
         if self.faults != 0 && !event.release() {
@@ -2871,6 +2884,13 @@ impl Source {
         }
         let position = self.capture_cursor?;
         let lease = self.capture_lease()?;
+        // Post-reset input belongs to the next lease. Publishing it into the
+        // closing session pins captures that cannot be sequenced or detached.
+        if self.session().is_some_and(|session| session.closing.load(Ordering::Acquire) != 0)
+            && self.pending.at(position)?.generation > self.lease_generation()?
+        {
+            return None;
+        }
         let offset = self.clock.calibration.offset;
         let Some(token) = self.pending.offer(position, lease, self.epoch, offset) else {
             self.fault(CLOCK_FAULT);
@@ -2931,8 +2951,14 @@ impl Source {
             }
             self.settlement_cursor = self.pending.next_position(position);
         }
+        // New-session input can wait at the capture cursor while the old
+        // session still needs this finite completed prefix to release readers.
         if self.settled_input == self.settlement_sent
-            || self.capture_cursor.is_some()
+            || self.capture_cursor.is_some_and(|position| {
+                self.pending
+                    .at(position)
+                    .is_some_and(|pending| pending.serial <= self.settled_input)
+            })
             || self.capture_offer.is_some()
         {
             return;

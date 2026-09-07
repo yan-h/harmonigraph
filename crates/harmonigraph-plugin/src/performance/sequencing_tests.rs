@@ -513,7 +513,7 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
         panic!("player expression")
     };
     assert_eq!((gesture[1].0, gesture[2].0, gesture[3].0), (onset, onset + 10, onset + 20));
-    assert_eq!(expressed, tuning + 0.125);
+    assert_eq!(expressed, tuning, "incoming bend cannot change Tune's assigned pitch");
     assert!(gesture[3].1.release());
     assert_eq!(actual[0].len(), 3);
     assert!(actual[0][2].1.release());
@@ -645,7 +645,7 @@ fn production_late_output_automatically_redecides_bound_successor_and_keeps_held
     );
     let Event::Expression { value: initial, .. } = fresh[1].1 else { panic!("initial tuning") };
     let Event::Expression { value: player, .. } = fresh[2].1 else { panic!("player expression") };
-    assert_eq!(player, initial + 0.25);
+    assert_eq!(player, initial, "incoming bend cannot change Tune's assigned pitch");
     assert!(fresh[3].1.release());
     assert!(
         !stopped_output.iter().any(|(_, event)| event.attack().is_some_and(|(id, ..)| id == 5)),
@@ -1976,8 +1976,8 @@ fn production_native_gui_off_classifies_birth_without_host_echo_or_retry_reappli
     };
     assert_eq!(
         tuning(69),
-        [-0.11731262, 0.13268738],
-        "the held correction survives Off/rejoin and player expression"
+        [-0.11731262, -0.11731262],
+        "the held pitch survives Off/rejoin and ignores incoming bends"
     );
     assert_eq!(tuning(70).len(), 1);
     assert_ne!(tuning(70)[0], 0.0, "the pre-Off pending request finishes tuned");
@@ -2885,7 +2885,7 @@ fn production_fifteen_note_mixed_offsets_preserve_gestures_without_terminal_late
                     let Event::Expression { value: expressed, .. } = events[2].1 else {
                         panic!("player expression")
                     };
-                    assert_eq!((events[2].0, expressed), (onset + 10, initial + 0.125));
+                    assert_eq!((events[2].0, expressed), (onset + 10, initial));
                     assert!(events[3].1.release());
                     assert_eq!(events[3].0, onset + 20);
                 }

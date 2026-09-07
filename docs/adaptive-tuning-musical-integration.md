@@ -50,6 +50,12 @@ the fixture proves that recovery settles before its four later gestures.
 This fixes the measured initial enrollment failure;
 it does not claim every setup wait or live reactivation path is resolved.
 
+Hub Apply / Reinitialize also keeps post-reset input on its next pairing generation until the old lease detaches.
+Previously those inputs were captured by the closing Hub session, which could neither sequence them nor release their capture ownership.
+The completed old input prefix can now settle even while later input waits for its new lease.
+The regression starts with a sounding note, applies the Hub reset and sends another note and expression during the transition;
+it verifies the old physical termination, exactly one new onset and release, completed adoption, no retained capture or fault, and a subsequent sounding phrase.
+
 Configuration-consumer tests explicitly select the existing observation-only apparatus, preserving their intentional marker-retention and publication-loss scenarios.
 The older D0 aggregation apparatus supplies a simulated initialized Hub clock;
 it does not test first enrollment.
@@ -61,6 +67,13 @@ The raw-forwarding test therefore explicitly isolates observation behavior;
 no capacity increase or partial-cohort rule is included here.
 
 ## Production diagnostics
+
+Tune owns the emitted pitch completely.
+Incoming CLAP tuning expressions are neutralized before musical sequencing, including same-sample onset tuning and later bends;
+incoming MIDI pitch bend is replaced by its center value.
+Velocity, pressure and other non-pitch expression retain their normal behavior.
+This is the requested pitch-override behavior, not an optional preserve-bends mode.
+The Hub's DIRECT observation path still reports the input it actually forwards.
 
 The production plugin emits `HG-TUNING` summaries through the existing Info-level plugin logger, including when editors are closed.
 Its default sink is stderr, which Bitwig includes in its engine log (`~/Library/Logs/Bitwig/engine.log` in the measured host); an existing `NICE_LOG` override still applies.
@@ -101,10 +114,11 @@ It also checks that a later pitch expression updates the Hub's published identit
 `ConfigReducer` binds `policy::CONFIG` version 1 with the complete resolved configuration.
 The existing sequencer calls `assign_new_note` once for each selected adaptive onset;
 unaccepted suffixes can be evaluated again during existing late-delivery recovery.
-Each call sees all eligible factual voices and scheduled predecessors, using their current exact pitch including player expression.
+Each call sees all eligible factual voices and scheduled predecessors, using their current exact emitted pitch.
+Tune neutralizes incoming pitch expression before this boundary, while DIRECT observation retains its actual input pitch.
 Attack nodes are optional provenance, never substitutes for that pitch.
 The chosen correction, node or completed NoCandidate, configuration, initial player expression and decision travel in the existing addressed Assignment/Plan/Life path.
-Held assignments retain their configuration and correction through later configuration edits and bends.
+Held assignments retain their configuration and correction through later configuration edits and ignored incoming bends.
 
 The Hub owns separate confirmed and prospective history tables indexed by Source slot, channel and key, with incarnation, musical revision and decision identity.
 Prospective history updates after successful selection preflight and before the next onset.
@@ -137,7 +151,7 @@ Fresh resolved configurations now identify policy version 1 instead of the artif
 
 ## Executed functional evidence
 
-The six exported-CLAP musical fixtures use the real Hub and Tune classes, configuration commands without opening the editor, normal accepted output and callback allocation/deallocation guards.
+The exported-CLAP musical fixtures use the real Hub and Tune classes, configuration commands without opening the editor, normal accepted output and callback allocation/deallocation guards.
 They explicitly initialize accepted neutral CC64/66/69 on their used channels;
 this is not evidence about fresh Bitwig initialization.
 
@@ -146,9 +160,11 @@ Each successor includes the previous assignment, and accepted Source/Hub pitch a
 - An established E at 5/4 survives release and a tolerance edit when repeated against D.
 The corresponding fresh Source or channel selects `(4,0,0)`, and Off clears the original preference.
 - Supported independent axes 720/360/960 cents produce NoCandidate for MIDI 63.
-Its nonzero decision, zero adaptive correction and +0.375-semitone player expression survive actual output.
-- Off retains a sounding D's correction, bend and physical release while excluding it from a simultaneous foreign E's score.
-- A normal 15-note phrase across three Sources retains a bent C and old configurations.
+Its nonzero decision and zero adaptive correction survive actual output;
+incoming pitch expression is ignored even for NoCandidate, leaving the MIDI key pitch.
+- Off retains a sounding D's correction and physical release while excluding it from a simultaneous foreign E's score.
+Incoming bends do not move that voice.
+- A normal 15-note phrase across three Sources ignores incoming bends and retains old configurations.
 After changing the fifth axis to 690 cents, the next F-sharp selects `(2,1,0)` with correction −33,686,279 microcents.
 The explicit counterfactual using stale attack pitches selects `(-2,-1,0)` and +33,686,279, so this fixture distinguishes actual-pitch context from node-derived context.
 The normal display stream, actual written take and read/replayed take agree with Source facts for all 16 voices, without a voiced repair baseline supplying the metadata.

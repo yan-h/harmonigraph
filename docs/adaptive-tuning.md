@@ -101,7 +101,7 @@ The tuning model is **fixed-delay central sequencing with sequential assignment 
 - the hub waits for complete input intervals in buffered state, orders their events and assigns new notes sequentially;
 - each new assignment takes the preceding assignments into account, including simultaneous notes from other tracks;
 - tuners normally emit every performance event at its mapped input time plus one common fixed delay D;
-- the adaptive correction remains fixed from actual onset through release and composes with later player expression;
+- the adaptive correction remains fixed from actual onset through release and overrides incoming pitch expression;
 - if an assignment is unavailable at its deadline, its note remains pending and the session reports a timing failure;
 - a valid late assignment permits a late attack, never a correction to an already-sounding note.
 
@@ -307,7 +307,7 @@ it remains usable by its still-pending attack.
 ## Bounded storage and ownership
 
 The hub is the only writer of sequential policy state and history.
-Tuners own their pending performance events, actual local held voices, incoming player expression and frozen offsets.
+Tuners own their pending performance events, actual local held voices and frozen offsets.
 The protocol distinguishes intents, assignments, emission outcomes, source progress and recovery controls.
 Tuner reads of region-bound global snapshots are no longer on the assignment path.
 Any snapshots used for status or downstream views describe their confirmed frontier and do not replace the request/reply protocol.
@@ -389,8 +389,12 @@ Sustain-aware context remains separate from the late-event scheduling rules.
 The first and only output backend is CLAP per-note tuning expression, and the tuner companion is exported only as CLAP initially.
 At note-on the tuner emits a `CLAP_NOTE_EXPRESSION_TUNING` value for the same voice and sample position as the note.
 CLAP note expressions state the current value rather than adding a delta.
-The tuner therefore retains the player's current tuning expression per voice and emits `player expression + frozen adaptive offset` at note-on and after every later player-expression change.
-It never forwards a later player value unmodified because that would erase the adaptive offset.
+Tune owns the pitch completely, as explicitly requested for ordinary use.
+It neutralizes incoming CLAP pitch expressions before scoring and emits only the frozen adaptive offset at onset and after later incoming pitch changes.
+Incoming MIDI pitch bend is replaced by its center value;
+velocity, pressure and other non-pitch controls retain their normal behavior.
+This overrides intentional bends as well as upstream microtuning, without a preserve-bends option.
+The Hub's DIRECT observation path still forwards and reports its actual input.
 The framework already carries this boundary:
 nice-plug emits a PolyTuning output event as `CLAP_NOTE_EXPRESSION_TUNING` with the note id preserved, so the tuner emits the same event kind the hub already receives.
 
@@ -496,7 +500,7 @@ The single participation control does not remove the need for internal transitio
 
 | Transition or state | New or pending notes | Already-held voices and session state |
 |---|---|---|
-| Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and composing player expression with each frozen offset |
+| Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and preserving each frozen offset despite incoming bends |
 | Participating to Off | Newly received notes intentionally use zero correction; pending adaptive requests finish tuned under the normal/late timing contract | Withdraw this source from future context/display; preserve existing offsets until release |
 | Assignment deadline missed | Retain the attack for its valid assignment and report a timing failure; no unretuned or dropped-note fallback | Preserve frozen offsets; handle related queued events under the specified late-event schedule |
 | Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks while required storage fits | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
@@ -506,8 +510,8 @@ The single participation control does not remove the need for internal transitio
 | Source unregister or slot reuse | Old requests and replies cannot address the replacement | Invalidate the old incarnation and release only its context/display voices |
 | Explicit voice reset or host-guaranteed note termination | Cancel obsolete pending lifetimes under the reset contract, reject their replies and start fresh | Clear offsets only after downstream voices are terminated or the host guarantees they are gone |
 
-A later player-expression event is still emitted as `player value + frozen offset` while Off or disconnected.
-Otherwise that event would erase the held voice's correction.
+A later pitch-expression event repeats only the frozen offset while Off or disconnected.
+Incoming bends cannot erase or alter the held voice's correction.
 The local table also tracks notes deliberately started with zero correction while Off so rejoining restores the actual held set.
 No note is assigned zero correction merely because a participating request missed its deadline.
 Transient policy history is cleared on participation withdrawal, configuration revision change, session/epoch change and lifecycle-loss recovery;
@@ -567,17 +571,17 @@ It never reads `ViewConfig` reach, camera centers, drawn windows or display tole
 The initial bounds and fixed scoring constants are named policy constants selected and documented in #621 before implementation;
 they require no new user control or persisted field.
 Candidates lie within 50 cents of the key's equal-tempered class, measured circularly with exact pitch arithmetic, and comma-equivalent nodes are deduplicated after respelling.
-An empty candidate set returns an explicit no-candidate result that the initial musical policy defines as zero adaptive offset, retaining player expression and clearing this key's assignment history.
+An empty candidate set returns an explicit no-candidate result that the initial musical policy defines as zero adaptive offset, ignoring incoming pitch expression and clearing this key's assignment history.
 This is a completed policy result, not a missing assignment or deadline fallback.
 
 Every voice carries its current emitted pitch separately from optional attack-time node metadata and the configuration revision that selected it.
-The emitted pitch is always updated when player expression changes;
-the attack node is never silently treated as the current pitch.
+DIRECT observation updates its emitted pitch when incoming expression changes, while Tune keeps its chosen pitch;
+neither path silently treats the attack node as current pitch authority.
 For scoring under the current configuration, reuse a node only if it remains in the musical domain and still exactly represents the emitted pitch.
 Otherwise project that pitch to the nearest node in the musical domain within the policy's fixed 50-cent context radius, with the policy tie-break.
 A voice with no such node remains in display/take/state but contributes no lattice-distance term.
 This projection is an explicit policy approximation and never replaces the authoritative stored pitch.
-It handles zero-offset voices, expression bends and voices held across configuration changes by the same rule.
+It handles zero-offset voices, observed DIRECT expression bends and voices held across configuration changes by the same rule.
 
 The score combines summed L1 lattice distance after respelling, an explicitly weighted hysteresis distance and the origin preference when no usable context remains.
 Use an integer/rational score with named weights so identical inputs produce identical results across platforms.
@@ -589,7 +593,7 @@ Preserve host lifecycle ordering for same-key replacements and the original per-
 Canonical policy evaluation does not authorize moving an off, choke or expression across its addressed voice.
 
 The emitted adaptive offset is the chosen node's pitch class minus the key's equal-tempered class, folded to the nearest octave.
-The 50-cent candidate restriction bounds this correction relative to the input key, not the sum with player expression.
+The 50-cent candidate restriction bounds this correction relative to the input key.
 Hysteresis encourages continuity but is not an anti-drift guarantee;
 #621 records the observed ii–V–I behavior and the bound the implementation actually enforces.
 The policy stays pure in `harmonigraph-core` and remains the part to iterate by ear.
