@@ -111,6 +111,7 @@ pub(super) fn parity_scene() -> Scene {
             // is sized against is settled on this node's own, for the same
             // reason.
             glow: harmonigraph_scene::GlowStep {
+                incarnation: 0,
                 level: 1.0,
                 row: i,
                 mix: 1.0,
@@ -204,6 +205,7 @@ pub(super) fn parity_scene() -> Scene {
         glow_accumulation: 0.0,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
+        glow_timing: None,
     }
 }
 
@@ -460,6 +462,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // Lit and settled on the strip's first row: one node, nothing carried,
         // and the light sized against whichever ends this fixture is wearing.
         glow: harmonigraph_scene::GlowStep {
+            incarnation: 0,
             level: 1.0,
             row: 0,
             mix: 1.0,

@@ -39,6 +39,8 @@ use std::collections::HashMap;
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use harmonigraph_scene::Scene;
 
+mod ink_history;
+
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
 pub mod startup;
 
@@ -815,6 +817,9 @@ pub fn lattice_paint_callback(
 struct LatticeCallback {
     pipeline_cache: Option<std::sync::Arc<LatticePipelineCache>>,
     instances: Vec<GpuInstance>,
+    /// Row owners in exactly the shipped instance order, after sorting and culling.
+    glow_owners: Vec<u64>,
+    glow_timing: Option<harmonigraph_scene::GlowTiming>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -1224,6 +1229,8 @@ impl LatticeCallback {
             scene.pluses.first().map_or(0.0, |p| (p.radius * points_per_world).max(0.0));
 
         let mut instances = Vec::with_capacity(order.len());
+        let mut glow_owners =
+            Vec::with_capacity(if scene.glow_timing.is_some() { order.len() } else { 0 });
         let mut pluses = Vec::with_capacity(scene.pluses.len());
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
@@ -1267,6 +1274,9 @@ impl LatticeCallback {
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance));
                 instances.push(instance);
+                if scene.glow_timing.is_some() {
+                    glow_owners.push(scene.nodes[i].glow.incarnation);
+                }
             }
             // The name, immediately after the node it names — so what covers a
             // name is exactly what covers its node.
@@ -1288,6 +1298,8 @@ impl LatticeCallback {
         LatticeCallback {
             pipeline_cache: None,
             instances,
+            glow_owners,
+            glow_timing: scene.glow_timing,
             glyphs,
             casters,
             node_cells,
@@ -1958,6 +1970,8 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
+    /// Reused upload staging for coefficients resolved against encoded GPU history.
+    ink_instances: Vec<GpuInstance>,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
@@ -2030,7 +2044,7 @@ struct PaneBuffers {
 impl PaneBuffers {
     /// Called under the same drawable-geometry guard as target maintenance.
     /// Glow-off discards history; otherwise only a capacity change replaces it.
-    /// `GlowFade::step` supplies mix = 1 on capacity changes, reseeding from
+    /// A fresh strip resolves every carried row to mix = 1, reseeding from
     /// current ink. That deliberately does not preserve an inkless release on
     /// growth. Viewport size, render scale and bloom never key this history.
     fn ensure_ink_history(
@@ -2149,6 +2163,7 @@ struct GlowTarget {
 /// half-float attachments. That is what the light costs in memory to stop
 /// costing a whole reading of the node per lit fragment.
 struct InkStrip {
+    history: ink_history::InkHistory,
     /// The raw reading, in a PAIR that ping-pongs: the frame writes one and
     /// reads the other, which is what lets a row hold an average of this
     /// frame's ink and the ink that same row already had (`fs_ink_strip`).
@@ -2587,9 +2602,8 @@ impl InkStrip {
     /// of which reads the row it just wrote.
     ///
     /// A strip built here holds NOTHING, which is why the frame that builds one
-    /// seeds rather than mixing: the clock that hands out rows asks for a
-    /// height and knows when its answer changed (`panes::glow_fade` in
-    /// harmonigraph-ui), and says so by handing every node a mix of 1.
+    /// seeds rather than mixing: its new history has no initialized rows,
+    /// whatever the last CPU layout pass supplied as its coefficient.
     fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, rows: u32) -> Self {
         #[cfg(test)]
         lattice_tests::INK_STRIP_CREATIONS.with(|count| count.set(count.get() + 1));
@@ -2636,6 +2650,7 @@ impl InkStrip {
             blurred_view,
             rows,
             parity: 0,
+            history: ink_history::InkHistory::new(rows),
         }
     }
 
@@ -3661,6 +3676,7 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
+                ink_instances: Vec::new(),
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",
@@ -4172,7 +4188,25 @@ impl CallbackTrait for LatticeCallback {
         }
         pane.instance_count = self.instances.len() as u32;
         if !self.instances.is_empty() {
-            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+            // Only an encoded ink pass consumes its clock and row ownership.
+            // Layout callbacks discarded by egui never reach this point.
+            let encodes_ink = pane.offscreen.as_ref().is_some_and(|o| o.glow.is_some());
+            let instances = if encodes_ink {
+                let strip = pane.ink_history.as_mut().expect("glow target has pane history");
+                strip.parity ^= 1;
+                if let Some(timing) = self.glow_timing {
+                    pane.ink_instances.clear();
+                    pane.ink_instances.extend_from_slice(&self.instances);
+                    strip.history.encode(timing, &mut pane.ink_instances, &self.glow_owners);
+                    &pane.ink_instances
+                } else {
+                    strip.history.clear();
+                    &self.instances
+                }
+            } else {
+                &self.instances
+            };
+            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(instances));
         }
 
         // This frame's lit nodes, into a buffer that may be larger than they
@@ -4367,13 +4401,6 @@ impl CallbackTrait for LatticeCallback {
         // The scene pass: draw into the pane's offscreen target, on the
         // encoder egui-wgpu executes before its own render pass. paint()
         // then just composites the finished texture.
-        // Mutable, for the one thing a pane carries from one frame to the next:
-        // which of the ink strip's two raw textures this frame writes (see
-        // [`InkStrip`]).
-        let pane = resources.panes.get_mut(&self.pane_id).expect("created by pane_buffers above");
-        if let Some(strip) = pane.ink_history.as_mut() {
-            strip.parity ^= 1;
-        }
         let pane = resources.panes.get(&self.pane_id).expect("created by pane_buffers above");
         let draws = pane.instance_count > 0 || pane.plus_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
