@@ -307,14 +307,11 @@ impl Source {
             if self.capture_retained(position) {
                 return;
             }
-        } else {
-            if let Some(channel) = parent.event.channel_control().map(usize::from) {
-                if self.channels.head[channel]
-                    .is_some_and(|head| usize::from(head.index) != position)
-                    && (parent.channel.accepted || parent.serial > self.cancel_cut)
-                {
-                    return;
-                }
+        } else if let Some(channel) = parent.event.channel_control().map(usize::from) {
+            if self.channels.head[channel].is_some_and(|head| usize::from(head.index) != position)
+                && (parent.channel.accepted || parent.serial > self.cancel_cut)
+            {
+                return;
             }
         }
         parent.cleanup_queued = true;

@@ -1497,7 +1497,7 @@ impl Source {
             return true;
         };
         if parent.event == Event::Stop {
-            return matches!(parent.channel.role, channel::Role::ReachedStop { .. });
+            return matches!(parent.channel.role, channel::Role::ReachedStop);
         }
         if matches!(parent.channel.role, channel::Role::Header { .. }) {
             let channel = usize::from(parent.event.channel_control().unwrap());
@@ -1962,7 +1962,6 @@ impl Source {
                 channel::Role::Header { first_waiter, .. } => first_waiter,
                 _ => NONE,
             };
-            if pending.event.attack().is_some() {}
             if self.pending_cursor == Some(position) {
                 self.pending_cursor = self.pending.next_position(position);
             }

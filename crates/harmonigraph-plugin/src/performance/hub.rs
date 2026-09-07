@@ -580,7 +580,7 @@ impl Hub {
         let Some(offer) = &mut self.offer else {
             return;
         };
-        let Some(bank) = offer.bank.as_mut().map(|bank| &mut **bank) else {
+        let Some(bank) = offer.bank.as_deref_mut() else {
             return;
         };
         let session = &offer.session;
@@ -1390,7 +1390,7 @@ impl Hub {
         let Some(offer) = &mut self.offer else {
             return;
         };
-        let Some(bank) = offer.bank.as_mut().map(|bank| &mut **bank) else {
+        let Some(bank) = offer.bank.as_deref_mut() else {
             return;
         };
         let session = &offer.session;

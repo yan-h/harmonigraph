@@ -842,7 +842,7 @@ impl Hub {
                 epoch: self.rows[source].epoch,
                 through: self.sequencer.decision,
             };
-            if !self.row_replies(source).is_some_and(|row| row.replies.push(reply).is_ok()) {
+            if self.row_replies(source).is_none_or(|row| row.replies.push(reply).is_err()) {
                 continue;
             }
             self.sequencer.cohort_recipients &= !bit;
@@ -962,7 +962,7 @@ impl Hub {
                 self.configuration_exhausted();
                 continue;
             }
-            if !self.row_replies(source).is_some_and(|row| row.replies.push(reply).is_ok()) {
+            if self.row_replies(source).is_none_or(|row| row.replies.push(reply).is_err()) {
                 continue;
             }
             if owes_cohort {
