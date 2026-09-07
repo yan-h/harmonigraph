@@ -813,6 +813,47 @@ fn an_unpaired_hub_allocates_nothing_for_tuning_and_pairing_allocates_one_row() 
 }
 
 #[test]
+fn production_same_key_retrigger_chokes_its_predecessor_at_the_moment_of_emission() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    // Rule two: a replacement onset on the same channel and key force-releases
+    // the note it displaces, at the moment the replacement is emitted -- not
+    // at its input, and not left to the receiving instrument.
+    source.run_format(1536, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    let sounding = source.run_format(2048, vec![note(2, 0, 60, 0, true)], None, None, 512);
+    assert!(matches!(sounding.values[0].1, Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 1, .. }));
+    hub.run_format(2048, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_some());
+    let retrigger = source.run_format(2560, vec![], None, None, 512);
+    assert_eq!(retrigger.values.len(), 3, "{:?}", retrigger.values);
+    assert!(retrigger.values.iter().all(|(time, _)| *time == 0));
+    assert!(
+        matches!(
+            retrigger.values[0].1,
+            Event::Note { kind: CLAP_EVENT_NOTE_CHOKE, id: 1, key: 60, channel: 0, .. }
+        ),
+        "the predecessor's choke precedes its replacement: {:?}",
+        retrigger.values
+    );
+    assert!(matches!(
+        retrigger.values[1].1,
+        Event::Note { kind: CLAP_EVENT_NOTE_ON, id: 2, key: 60, channel: 0, .. }
+    ));
+    hub.run_format(2560, vec![], None, None, 512);
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 1)).is_none(), "the displaced note ended");
+    assert!(inspect_hub(&hub, |hub| hub.test_voice(0, 2)).is_some());
+    source.run_format(3072, vec![note(2, 0, 60, 0, false)], None, None, 512);
+    hub.run_format(3072, vec![], None, None, 512);
+    assert!(source.run_format(3584, vec![], None, None, 512).values[0].1.release());
+    hub.run_format(3584, vec![], None, None, 512);
+    source.run_format(4096, vec![], None, None, 512);
+    hub.run_format(4096, vec![], None, None, 512);
+    let settled = source.source_snapshot();
+    assert_eq!((settled.held, settled.lives, settled.faults), (0, 0, 0), "one key, both lives");
+}
+
+#[test]
 fn production_unaddressed_control_behind_a_late_attack_keeps_its_own_schedule() {
     let _scope = crate::test_scope::enter();
     let (hub, source) = production_pair();
