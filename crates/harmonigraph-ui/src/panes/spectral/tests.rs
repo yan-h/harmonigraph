@@ -7,7 +7,7 @@ use super::settings::*;
 use super::*;
 use crate::tests::probe::{events_into, fresh, painted_full, painted_into, press, themed};
 use crate::{SpectralOrientation, SpectrumConfig};
-use harmonigraph_core::{NoteEvent, NoteEventKind};
+use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
 /// rect starts at zero shows up.
@@ -1722,7 +1722,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
         let out = painted_pane(WIDE, &mut state, 0.1);
         let callbacks: Vec<usize> = out
@@ -1826,7 +1826,7 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
+            state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         }
         // The take laid out statically, the way the offline renderer sets it
         // up. No columns: the heatmap is not what this is about, and the roll
@@ -1891,9 +1891,10 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         // counted is whether the flag is DRAWN rather than how far its note
         // has eased in.
         state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         if tuning_offset != 0.0 {
             state.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
                 time: 0.0,
                 channel: 0,
                 note: 60,
@@ -1958,8 +1959,9 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
         // Bent onto that node's own pitch exactly, which is what a retuned
         // keyboard or an MPE part does and the only way to sound one.
         let cents = state.tuning.pitch_class(far).to_cents();
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         state.tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
             time: 0.0,
             channel: 0,
             note: 60,
@@ -2350,7 +2352,7 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
 fn whole_song_mode_rules_no_frequencies() {
     let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
+    state.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
     state.whole_song = Some(crate::WholeSong {
         start: 0.0,
         span: 2.0,
@@ -2501,8 +2503,8 @@ fn paint(
         state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &spectrum_bins);
     }
 
-    let on = |time, note| NoteEvent::on(time, 0, note, 0.7);
-    let off = |time, note| NoteEvent::off(time, 0, note);
+    let on = |time, note| NoteEvent::on(time, SourceId::DIRECT, 0, note, 0.7);
+    let off = |time, note| NoteEvent::off(time, SourceId::DIRECT, 0, note);
     // Long past the window; inside it; bent across it; off the top of
     // the pitch range; and one still held at `now`.
     state.tracker.handle_event(on(0.0, 60));
@@ -2511,6 +2513,7 @@ fn paint(
     state.tracker.handle_event(off(96.0, 62));
     state.tracker.handle_event(on(96.0, 64));
     state.tracker.handle_event(NoteEvent {
+        source: SourceId::DIRECT,
         time: 97.0,
         channel: 0,
         note: 64,
@@ -2569,7 +2572,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             state.spectrum_config.roll_lead_fade = lead;
             state.view.bloom_strength = 1.2;
             // Held at `now`, so its leading end sits exactly on the line.
-            state.tracker.handle_event(NoteEvent::on(99.0, 0, 60, 0.8));
+            state.tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 60, 0.8));
 
             let a = axes(WIDE, orientation);
             let split = spectrum_share(&state.spectrum_config);

@@ -14,6 +14,7 @@ use super::section;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, SharedState};
+use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::tuning;
 
 /// The param bar for the axis a comma derives — the one whose tuning is not
@@ -88,8 +89,7 @@ fn tempered_bar(
     // whether or not the magnet took the value — and it is the identity's own
     // tolerance, since the value being edited IS the derived axis.
     if response.changed() && (value - derived).abs() > tuning::TEMPER_TOLERANCE {
-        *state.view.temper_mut(comma) = false;
-        params.set(key, value);
+        crate::tuning_edit(state, params, ConfigEdit::unlock(comma, tuning::microcents(value)));
     }
     if response.drag_stopped() {
         params.end_set(key);
@@ -106,6 +106,9 @@ fn tempered_bar(
 /// draw — reading the frame's snapshot instead would leave every derived
 /// readout a frame behind for the whole gesture.
 fn live_tuning(state: &SharedState, params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
+    if let Some(owned) = params.configuration() {
+        return owned.resolved.tuning;
+    }
     let mut tuning = crate::params::tuning_from_params(params);
     for comma in tuning::Comma::ALL {
         if state.view.tempers(comma) {
@@ -171,7 +174,7 @@ fn comma_deriving(key: ParamKey, view: &harmonigraph_scene::ViewConfig) -> Optio
 ///
 /// Toggle switches, not buttons, for the same reason Learn is one: these are
 /// persistent modes and must not read like the presets above them.
-fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     // A table, because the rows answer the same two questions in the same
     // order and a reader compares DOWN the columns: which temperament, and is
     // it engaging by itself. The comma each one tempers out is in the hover
@@ -219,35 +222,38 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                 // the ratio: it is the thing a reader came to this section for,
                 // and the switch beside it says only which temperament drops it.
                 let auto_on = state.view.temper_auto(comma);
-                crate::widgets::toggle_switch(
-                    ui,
-                    state.view.temper_mut(comma),
-                    comma.temperament(),
-                )
-                .on_hover_text(format!(
-                    "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
+                let mut on = state.view.tempers(comma);
+                let temper = crate::widgets::toggle_switch(ui, &mut on, comma.temperament())
+                    .on_hover_text(format!(
+                        "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
                          respelled to match{}",
-                    comma.ratio(),
-                    comma.comma_name(),
-                    comma.size_cents(),
-                    comma.temperament(),
-                    comma.derived_axis_name(),
-                    comma.derived_from(),
-                    if auto_on {
-                        ". Auto engages it too, and switching it off here holds until the \
+                        comma.ratio(),
+                        comma.comma_name(),
+                        comma.size_cents(),
+                        comma.temperament(),
+                        comma.derived_axis_name(),
+                        comma.derived_from(),
+                        if auto_on {
+                            ". Auto engages it too, and switching it off here holds until the \
                              tuning changes"
-                    } else {
-                        ""
-                    },
-                ));
+                        } else {
+                            ""
+                        },
+                    ));
+                if temper.changed() {
+                    let mut edit = ConfigEdit::default();
+                    edit.tempered[comma.index()] = Some(on);
+                    crate::tuning_edit(state, params, edit);
+                }
                 // Auto-detect. Switching it ON re-opens the question on the tuning
                 // already loaded — without clearing the verdict it would engage
                 // nothing until the tuning next moved, since `begin_frame` records
                 // every tuning it sees whether the detect is running or not.
                 // Switching it off leaves the mode where it is, with the switch
                 // beside it still live.
-                let auto = crate::widgets::toggle_switch(ui, state.view.temper_auto_mut(comma), "")
-                    .on_hover_text(format!(
+                let mut auto_on = state.view.temper_auto(comma);
+                let auto =
+                    crate::widgets::toggle_switch(ui, &mut auto_on, "").on_hover_text(format!(
                         "Engage {} by itself whenever the {} lands within {}¢ of {} — from a \
                          preset, a learned chord, or a drag of any bar",
                         comma.temperament(),
@@ -255,8 +261,10 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                         tuning::TEMPER_TOLERANCE,
                         comma.derived_from(),
                     ));
-                if auto.changed() && state.view.temper_auto(comma) {
-                    state.temper_judged[comma.index()] = None;
+                if auto.changed() {
+                    let mut edit = ConfigEdit::default();
+                    edit.auto[comma.index()] = Some(auto_on);
+                    crate::tuning_edit(state, params, edit);
                 }
                 ui.end_row();
             }
@@ -296,15 +304,21 @@ pub(super) fn tuning_pane(
             )
             .clicked()
         {
-            params.set(ParamKey::Three, tuning::THREE_JUST);
-            params.set(ParamKey::Five, tuning::FIVE_JUST);
-            params.set(ParamKey::Seven, tuning::SEVEN_JUST);
-            // Just intonation keeps every comma there is, so it is none of
-            // these temperaments: drop the locks instead of silently
-            // overriding the just tuning we just set.
-            for comma in tuning::Comma::ALL {
-                *state.view.temper_mut(comma) = false;
-            }
+            crate::tuning_edit(
+                state,
+                params,
+                ConfigEdit {
+                    axes: [
+                        None,
+                        Some(tuning::microcents(tuning::THREE_JUST)),
+                        Some(tuning::microcents(tuning::FIVE_JUST)),
+                        Some(tuning::microcents(tuning::SEVEN_JUST)),
+                        None,
+                    ],
+                    tempered: [Some(false); 2],
+                    ..Default::default()
+                },
+            );
         }
         if ui
             .button("12-TET")
@@ -314,19 +328,33 @@ pub(super) fn tuning_pane(
             )
             .clicked()
         {
-            params.set(ParamKey::Three, tuning::THREE_12TET);
-            params.set(ParamKey::Five, tuning::FIVE_12TET);
-            params.set(ParamKey::Seven, tuning::SEVEN_12TET);
-            // 12-TET tempers out both commas (400 = 4·700 − 2400,
-            // 1000 = 2·700 + 2·400 − 1200), so the modes are consistent
-            // either way; each auto-detect engages its own from the tuning on
-            // the next frame, and with a detect off that lock is left as the
-            // user has it.
+            crate::tuning_edit(
+                state,
+                params,
+                ConfigEdit {
+                    axes: [
+                        None,
+                        Some(tuning::microcents(tuning::THREE_12TET)),
+                        Some(tuning::microcents(tuning::FIVE_12TET)),
+                        Some(tuning::microcents(tuning::SEVEN_12TET)),
+                        None,
+                    ],
+                    ..Default::default()
+                },
+            );
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
-        let learn = crate::widgets::toggle_switch(ui, &mut state.learn_active, "Learn")
+        let mut learn_active = state.learn_active;
+        let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
             .on_hover_text("While active, continuously set the tuning from the held notes");
+        if learn.changed() {
+            crate::tuning_edit(
+                state,
+                params,
+                ConfigEdit { learning: Some(learn_active), ..Default::default() },
+            );
+        }
         if state.learn_active {
             // Pulsing armed ring so the engaged mode can't be missed.
             ui.painter().rect_stroke(
@@ -342,7 +370,19 @@ pub(super) fn tuning_pane(
     // above (what IS this tuning), but the answer is a set of identities
     // rather than three numbers, so it gets its own heading.
     section(ui, "Temperaments");
-    comma_controls(ui, state);
+    comma_controls(ui, state, params);
+    if state.configuration_status & 3 != 0 {
+        ui.colored_label(
+            theme::armed(),
+            "Learning unavailable: configuration or held state is incomplete. Reset to recover.",
+        );
+    } else if state.configuration_status & 4 != 0 {
+        ui.weak("Tuning applied; host notification was rejected");
+    } else if state.configuration_status & 8 != 0 {
+        ui.weak("Tuning change refused: pending command storage is full");
+    } else if state.configuration_pending {
+        ui.weak("Tuning change pending audio adoption");
+    }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node

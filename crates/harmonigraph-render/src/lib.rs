@@ -39,6 +39,9 @@ use std::collections::HashMap;
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use harmonigraph_scene::Scene;
 
+/// Progress for interactive editor initialization; offline rendering remains synchronous.
+pub mod startup;
+
 /// The piano roll's own callback — a different picture with the same
 /// problem, solved the same way. It shares this crate's wgpu version, buffer
 /// helpers and [`BloomChain`]; the lattice's offscreen target
@@ -1732,6 +1735,8 @@ pub struct LatticePipelineCache {
     #[cfg(not(feature = "hot-reload"))]
     // wgpu compares native devices by ID, and those IDs restart per instance.
     template: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, LatticeResources)>>,
+    #[cfg(not(feature = "hot-reload"))]
+    startup: std::sync::Mutex<startup::Initialization>,
 }
 
 impl LatticePipelineCache {
@@ -3235,6 +3240,16 @@ fn create_post_pipeline(
 
 impl LatticeResources {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+        Self::new_with_progress(device, queue, target_format, |_| {})
+    }
+
+    fn new_with_progress(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+        progress: impl Fn(startup::Stage),
+    ) -> Self {
+        progress(startup::Stage::Shapes);
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -3308,6 +3323,7 @@ impl LatticeResources {
             }],
         });
         let glow_node_layout = glow_node_layout(device);
+        progress(startup::Stage::Lighting);
         let glow_gather_pipeline = create_glow_gather_pipeline(
             device,
             &lattice_shader,
@@ -3323,6 +3339,7 @@ impl LatticeResources {
             label: Some("lattice_composite_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), uniform_entry(3)],
         });
+        progress(startup::Stage::Bloom);
         let composite_pipeline = create_post_pipeline(
             device,
             &blit_shader,
@@ -3362,6 +3379,7 @@ impl LatticeResources {
         // Compiled once for the three pipelines below, as `shader_src` is for
         // the lattice's.
         let glyph_shader = text::glyph_shader(device, &text_source());
+        progress(startup::Stage::Lattice);
         let scenes = create_scene_pipelines(
             device,
             &lattice_shader,
@@ -3375,12 +3393,15 @@ impl LatticeResources {
             },
             &glyph_layout,
         );
+        progress(startup::Stage::Labels);
         let (
             glyph_coverage_cell_pipeline,
             glyph_distance_cell_pipeline,
             glyph_distance_pad_pipeline,
         ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
+        progress(startup::Stage::Shadows);
         let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
+        progress(startup::Stage::Interface);
 
         // The stand-in light: one transparent texel. It is the format the real
         // target is in so that one bind group layout serves both, and ONE texel

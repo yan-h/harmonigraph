@@ -142,7 +142,7 @@ fn marks(
     match voice.state {
         // `live` is already filtered by those same flags (see held_extremes).
         harmonigraph_core::VoiceState::Held => {
-            let key = (voice.channel, voice.note);
+            let key = voice.key();
             let wears =
                 |end: Option<HeldEnd>| end.filter(|end| end.key == key).map(|end| end.since);
             (wears(live.0), wears(live.1))

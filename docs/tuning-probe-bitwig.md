@@ -3,7 +3,9 @@
 **Verdict:
 viable with narrower constraints.** In the measured Bitwig graph, complete source intervals, central assignment and accepted delayed output fit a fixed D of 2,048 samples (46.440 ms).
 This establishes a usable host configuration for #615, not a portable CLAP clock guarantee or a finished tuning feature.
-The production transport-stop and late-stream contract remains unresolved in [#632](https://github.com/yan-h/harmonigraph/issues/632) and must be settled before #616 implements it.
+The production transport-stop and late-stream behavior was subsequently accepted in [PR #633](https://github.com/yan-h/harmonigraph/pull/633), with concrete mechanics in the [stage 2 engineering contracts](adaptive-tuning-contracts.md).
+[#632](https://github.com/yan-h/harmonigraph/issues/632) remains open for implementation/verification;
+those later decisions do not add host measurements to this record.
 The apparatus is in [PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
 
 At this setting, live notes passing through the tuner gain 2,048 samples (46.440 ms) of input-to-instrument delay, in addition to the rest of the monitoring path.
@@ -303,6 +305,8 @@ the hub correctly waited for their next intervals, then the second following B c
 Accepted physical output still occurred at input plus 2,048 samples.
 Across all 15 trial-24 attacks, eleven replies took one following source callback and four took two.
 The archived project preserves this tempo separately from the normal 120-BPM audio-capture fixture.
+The [stage 2 D512 boundary analysis](adaptive-tuning-contracts.md#the-512-sample-calibrated-boundary-risk) applies this scheduling shape to the accepted smaller candidate and specifies the production fixture it still needs.
+That counterexample is arithmetic, not another measured trial or a changed D.
 
 ## Framework defect exposed by offline export
 

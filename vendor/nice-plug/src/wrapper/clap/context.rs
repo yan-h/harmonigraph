@@ -123,7 +123,9 @@ impl<P: ClapPlugin> ProcessContext<P> for WrapperProcessContext<'_, P> {
     }
 
     fn send_event(&mut self, event: PluginNoteEvent<P>) {
-        self.output_events_guard.push_back(event);
+        if P::CLAP_PERFORMANCE {
+            self.wrapper.legacy_send_misuse.store(true, std::sync::atomic::Ordering::Release);
+        } else { self.output_events_guard.push_back(event); }
     }
 
     fn set_latency_samples(&self, samples: u32) {
@@ -178,10 +180,9 @@ impl<P: ClapPlugin> GuiContext for WrapperGuiContext<P> {
         match self.wrapper.param_ptr_to_hash.get(&param) {
             Some(hash) => {
                 // We queue the parameter change event here, and it will be sent to the host either
-                // at the end of the current processing cycle or after requesting an explicit flush
-                // (when the plugin isn't processing audio). The parameter's actual value will only
-                // be changed when the output event is written to prevent changing parameter values
-                // in the middle of processing audio.
+                // at a processing/flush boundary. The owned performance path admits it
+                // at the next enclosing input capture and applies it in input order;
+                // host notification retries never mutate the parameter again.
                 let clap_plain_value =
                     normalized as f64 * unsafe { param.step_count().unwrap_or(1) as f64 };
                 let success = self

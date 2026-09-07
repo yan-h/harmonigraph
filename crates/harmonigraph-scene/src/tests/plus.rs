@@ -7,7 +7,7 @@
 
 use super::harness::*;
 use crate::*;
-use harmonigraph_core::{LatticePos, NoteEvent, NoteTracker, Tuning};
+use harmonigraph_core::{LatticePos, NoteEvent, NoteTracker, SourceId, Tuning};
 
 /// A 7x7 window one sevens step deep, so off-sheet positions are in the mix
 /// and can be shown to carry no marker.
@@ -37,7 +37,13 @@ fn played_and_forgotten() -> NoteTracker {
         (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
         (1.0, harmonigraph_core::NoteEventKind::Off),
     ] {
-        tracker.handle_event(NoteEvent { time, channel: 0, note: 60, kind });
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time,
+            channel: 0,
+            note: 60,
+            kind,
+        });
     }
     tracker.prune(3.0, &harmonigraph_core::Envelope::default());
     tracker
@@ -303,8 +309,9 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     let view = ViewConfig { note_names: NoteNames::Played, ..plus_view() };
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent {
+        source: SourceId::DIRECT,
         time: 4.0,
         channel: 0,
         note: 60,
@@ -364,8 +371,9 @@ fn a_sounding_note_leaves_its_marker_standing_with_the_names_off() {
     let view = ViewConfig { show_labels: false, ..plus_view() };
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent {
+        source: SourceId::DIRECT,
         time: 4.0,
         channel: 0,
         note: 60,
@@ -571,7 +579,7 @@ fn a_marker_that_survives_a_chord_is_painted_exactly_as_it_was() {
     let tuning = Tuning { tolerance: harmonigraph_core::tuning::microcents(5.0), ..Tuning::just() };
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
     let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..plus_view() };
     let silent = pluses_of(&view);
@@ -698,7 +706,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // 12-TET default: a sevens step is 1000¢, so (0,0,2) is MIDI 68's pitch
     // class. The home node is C.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 68, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     assert!(
         scene.nodes.iter().any(|n| !n.on_home && n.activation > 0.0),
@@ -805,8 +813,9 @@ fn a_markers_shadow_fades_in_with_its_cross() {
     assert!(view.show_labels, "the fixture needs names, which are what claim a cross");
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent {
+        source: SourceId::DIRECT,
         time: 4.0,
         channel: 0,
         note: 60,

@@ -5,8 +5,8 @@ description: How review, squashing, and agent definitions work in this repo. Use
 
 # Review happens at the merge boundary, not on the branch
 
-GitHub Actions runs `ci.sh` unchanged as the automatic full gate for pull requests and pushes to `main`.
-It checks formatting, workspace clippy and tests, the plugin package check, harmonigraph-render's own tests, both vendored crates, rustdoc links, the `harmonigraph-core` dependency guard, worktree-reclaim safety, and the registered-worktree bundle swap —
+GitHub Actions runs `ci.sh` as the automatic full gate for pull requests and pushes to `main`, one job per gate group (`./ci.sh <group>`), reported as a single `Full CI` check.
+It checks formatting, markdown clause breaks, workspace clippy and tests, the plugin package check, harmonigraph-render's own tests, the three vendored crates, rustdoc links, the `harmonigraph-core` dependency guard, the security-audit trigger split, the CI group split, worktree-reclaim safety, and the registered-worktree bundle swap —
 not judgement.
 `ci.sh`'s own header is the list to copy when this one looks stale.
 The tracked pre-push hook checks formatting only, keeping compilation off the local push path.

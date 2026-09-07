@@ -518,14 +518,14 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
+    use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
     use harmonigraph_scene::{derive_scene, Camera, FrameParams, ViewConfig};
 
     const SIZE: [u32; 2] = [256, 256];
 
     let mut tracker = NoteTracker::new();
     for note in [60u8, 64, 67] {
-        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
     // A small window so the nodes draw big enough to measure.
     let base =
