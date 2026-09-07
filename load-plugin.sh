@@ -156,6 +156,78 @@ print_table() {
   echo
 }
 
+# One process-table snapshot, including the audio engine for in-process hosting.
+# comm (not argv) avoids matching a shell merely discussing BitwigPluginHost.
+bitwig_processes() {
+  LC_ALL=C ps "$@" -o pid=,lstart=,comm= 2>/dev/null | awk '
+    { name = $NF; sub(/^.*\//, "", name) }
+    name ~ /^Bitwig(PluginHost|AudioEngine)(-|$)/ {
+      printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, name
+    }'
+}
+
+diagnose_hosts() {
+  local before="$STAGE/processes.before" after="$STAGE/processes.after"
+  local mappings="$STAGE/mappings" pids query_ok=1
+  bitwig_processes -ax > "$before" || return 1
+  [[ -s "$before" ]] || return 0  # Bitwig closed: no extra output or lsof query.
+  pids="$(awk 'BEGIN { FS="\t" } { printf "%s%s", sep, $1; sep="," }' "$before")" || return 1
+  # One batch, mapped text only, no DNS/service lookup or blocking path stats.
+  # Do NOT select by filename: that selects the NEW inode and misses old maps.
+  # macOS lsof retains the old device/inode after rename, even when n still
+  # names the installed path. Missing/failed lsof remains informational.
+  lsof -nP -b -a -p "$pids" -d txt -FpfDin > "$mappings" 2>/dev/null || query_ok=0
+  # Recheck PID + start + command after lsof, rather than assigning a start
+  # time to a PID that exited and was reused between the two OS queries.
+  bitwig_processes -p "$pids" > "$after" || true
+  awk -v before="$before" -v after="$after" -v maps="$mappings" -v query_ok="$query_ok" '
+    BEGIN { FS="\t" }
+    FILENAME == before { start[$1]=$2; host[$1]=$3; next }
+    FILENAME == after { confirmed[$1]=($2 == start[$1] && $3 == host[$1]); next }
+    FILENAME != maps { ext[++count]=$1; old[count]=$2; current[count]=$3; path[count]=$4; next }
+    function report(state, detail,    key, when) {
+      key=pid SUBSEP state SUBSEP detail
+      if (printed[key]++) return
+      when=confirmed[pid] ? "started " start[pid] : "start unavailable or changed"
+      printf "  PID %s (%s): %s — %s\n", pid, when, state, detail
+      reports++
+    }
+    function flush(    id, j, state, detail) {
+      if (!(pid in host) || fd != "txt") return
+      seen[pid]=1
+      id=device ":" inode
+      for (j=1; j<=count; j++) {
+        state=""; detail=""
+        if (device != "" && inode != "" && id == current[j]) {
+          state="observed current image"; detail=ext[j] " installed executable identity"
+        } else if (device != "" && inode != "" && id == old[j]) {
+          state="observed old image"; detail=ext[j] " replaced executable remains mapped until this host exits"
+        } else if (name == path[j]) {
+          state="uncertain"; detail=ext[j] " pathname matches, but the replaced/installed identity is not confirmed"
+        }
+        if (state == "") continue
+        if (!confirmed[pid]) {
+          state="uncertain"; detail=ext[j] " mapping observed, but process identity could not be rechecked"
+        }
+        report(state, detail)
+      }
+    }
+    /^p/ { flush(); pid=substr($0,2); fd=""; next }
+    /^f/ { flush(); fd=substr($0,2); device=inode=name=""; next }
+    /^D/ { device=tolower(substr($0,2)); next }
+    /^i/ { inode=substr($0,2); next }
+    /^n/ { name=substr($0,2); sub(/ \(deleted\)$/, "", name); next }
+    END {
+      flush()
+      for (pid in host) {
+        if (!seen[pid]) report("uncertain", "no readable mapped-file records; host may be inaccessible or have exited")
+      }
+      if (!reports) print "  No Harmonigraph image observed in the queried Bitwig hosts."
+      if (!query_ok) print "  Process mapping query unavailable or incomplete; installation succeeded."
+      print "  Snapshot only: unseen mappings and the next load are not verified."
+    }' "$before" "$after" "$STAGE/images" "$mappings"
+}
+
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
   local dylib
@@ -167,7 +239,7 @@ load_build() {  # $1 = worktree index
   # Somewhere for the signature to be produced that the host is not looking at.
   STAGE="$(mktemp -d)"
 
-  local updated=0 ext bundle staged live_bin
+  local updated=0 ext bundle staged live_bin old_id current_id diagnostic_path
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
     if [[ ! -d "$bundle" ]]; then
@@ -190,6 +262,12 @@ load_build() {  # $1 = worktree index
     # Preserve the signed executable's mode; mktemp starts with mode 0600.
     PENDING_BIN="$(mktemp "$bundle/Contents/MacOS/.$NAME.XXXXXX")"
     cp -p "$staged/Contents/MacOS/$NAME" "$PENDING_BIN"
+    # Match lsof D/i fields as strings (large inode numbers exceed awk integer
+    # precision). Capture the new sibling before rename, not a later pathname
+    # stat that could belong to a concurrent install. Diagnostic failures never
+    # change whether an otherwise successful installation succeeds.
+    old_id="$(stat -f '0x%Xd:%i' "$live_bin" 2>/dev/null)" || old_id=""
+    current_id="$(stat -f '0x%Xd:%i' "$PENDING_BIN" 2>/dev/null)" || current_id=""
     mv -f "$PENDING_BIN" "$live_bin"
     PENDING_BIN=""
     # The seal names the bundle's other files; the executable seals itself, so
@@ -211,6 +289,9 @@ load_build() {  # $1 = worktree index
       touch -m "$plist"
     done
     codesign --verify --verbose=1 "$bundle"
+    diagnostic_path="$(cd "$bundle/Contents/MacOS" && pwd -P)/$NAME" || diagnostic_path=""
+    printf '%s\t%s\t%s\t%s\n' "$ext" "$old_id" "$current_id" "$diagnostic_path" \
+      >> "$STAGE/images" || true
     echo "Loaded + signed: $bundle"
     updated=$(( updated + 1 ))
   done
@@ -294,6 +375,7 @@ load_build() {  # $1 = worktree index
   # The measured by-Vendor topology can keep them alive across device toggles.
   echo "(Existing plugin-host processes keep the previous build until they exit;"
   echo " a device deactivate/reactivate or rescan alone may not restart them.)"
+  diagnose_hosts || echo "NOTE: Bitwig process diagnostic unavailable; installation succeeded." >&2
 }
 
 # Echo the index of the worktree containing directory $1, or nothing.
