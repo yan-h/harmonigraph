@@ -1,7 +1,7 @@
 //! One owned host-input allocation shared by both opt-ins.
 use super::*;
 use crate::wrapper::clap::configuration::*;
-use crate::wrapper::clap::performance::{Consumption, InputStatus};
+use crate::wrapper::clap::performance::InputStatus;
 
 pub(super) struct Runtime {
     pub storage: InputStorage,
@@ -232,11 +232,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         let mut guard = self.owned_input.lock();
         let input = guard.as_mut().unwrap();
         let mut plugin = self.plugin.lock();
-        for _ in input.performed..input.configured {
+        while input.performed < input.configured {
             let event = input.storage.get(input.performed).unwrap();
-            if plugin.clap_performance_input(event) == Consumption::Pending {
-                break;
-            }
+            plugin.clap_performance_input(event);
             input.performed += 1;
         }
         if input.performed == input.storage.len() {

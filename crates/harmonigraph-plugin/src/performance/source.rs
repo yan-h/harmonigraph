@@ -779,20 +779,21 @@ impl Source {
         self.cancel_slice();
     }
 
-    pub fn input(&mut self, input: OwnedInput) -> api::Consumption {
+    /// Delivered once and owned from here. The wrapper retains nothing for a
+    /// later callback, so every refusal below is a latched fault rather than a
+    /// request to be offered this value again.
+    pub fn input(&mut self, input: OwnedInput) {
         if let InputValue::Parameter { value, modulation: false, .. } = input.value {
             // Tune has exactly one parameter; its original retained value is the
             // authority even if the generic parameter atomic has run ahead.
             if self.shared.source.is_some() {
                 let Some(sample) = input.sample else {
                     self.fault(INPUT_FAULT);
-                    return api::Consumption::Consumed;
+                    return;
                 };
-                if !self.capture_participation(value >= 0.5, Some(sample)) {
-                    return api::Consumption::Pending;
-                }
+                self.capture_participation(value >= 0.5, Some(sample));
             }
-            return api::Consumption::Consumed;
+            return;
         }
         if let InputValue::Transport(transport) = input.value {
             // The wrapper retains enclosing transport in the same input pool.
@@ -802,17 +803,15 @@ impl Source {
             if self.transport_playing && !playing {
                 let Some(sample) = input.sample else {
                     self.fault(INPUT_FAULT);
-                    return api::Consumption::Consumed;
+                    return;
                 };
-                if self.capture_stop(sample) == api::Consumption::Pending {
-                    return api::Consumption::Pending;
-                }
+                self.capture_stop(sample);
             }
             self.transport_playing = playing;
-            return api::Consumption::Consumed;
+            return;
         }
         let Some(mut event) = Event::from_input(input.value) else {
-            return api::Consumption::Consumed;
+            return;
         };
         if self.delay() != 0 {
             // The musical Tune owns pitch. Normalize before capture so both
@@ -831,12 +830,12 @@ impl Source {
         // can still discharge an existing physical lifetime.
         if self.faults != 0 && !event.release() {
             self.trace.input(event);
-            return api::Consumption::Consumed;
+            return;
         }
         let Some(raw) = input.sample else {
             self.trace.input(event);
             self.fault(INPUT_FAULT);
-            return api::Consumption::Consumed;
+            return;
         };
         let mut targets = [NONE; 64];
         let mut count = 0;
@@ -857,19 +856,19 @@ impl Source {
             }
         }
         // Reserve the original envelope AND all derived references before any
-        // input binding, lifetime pin, or input-cut mutation. Exhaustion leaves
-        // the original value owned by the wrapper's retained input cursor.
+        // input binding, lifetime pin, or input-cut mutation. Exhaustion is an
+        // explicit bounded failure now that nothing retains the value for a
+        // later callback: the latch is the whole report. Ingestion spends no
+        // visit budget — its own storage is what bounds it, and the budget
+        // belongs to the staging walkers.
         if self.pending.free() == 0 || self.next_event == u64::MAX {
             self.fault(STORAGE_FAULT);
-            return api::Consumption::Pending;
+            return;
         }
         let references = if addressed && count <= 1 { 0 } else { count };
         if self.work.free() < references {
             self.fault(REFERENCE_FAULT);
-            return api::Consumption::Pending;
-        }
-        if !self.charge(references) {
-            return api::Consumption::Pending;
+            return;
         }
         let active_slot = if let Some((_, channel, key, _)) = attack {
             let slot = self.active.iter().position(|index| {
@@ -881,7 +880,7 @@ impl Source {
             });
             if slot.is_none() || self.free_lives.is_empty() || self.next_lifetime == u64::MAX {
                 self.fault(STORAGE_FAULT);
-                return api::Consumption::Pending;
+                return;
             }
             slot
         } else {
@@ -969,7 +968,6 @@ impl Source {
         self.pending.seal(position);
         self.remove_finished(position);
         self.trace.input(event);
-        api::Consumption::Consumed
     }
 
     fn enqueue_cell(&mut self, event: Event, life: u16, input: i64, addressed: bool) -> usize {

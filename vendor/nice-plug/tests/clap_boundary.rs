@@ -1,6 +1,6 @@
 //! Real exported factory, declared stereo main and auxiliary input, exact raw
 //! hooks and scripted host acceptance. Runs independently of the tuning probe.
-use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency};
+use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency};
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::{
     audio_buffer::clap_audio_buffer, events::*, host::clap_host, plugin::clap_plugin, process::*,
@@ -47,7 +47,6 @@ struct Control {
     value_entered: AtomicBool,
     value_resume: AtomicBool,
     observed: Mutex<Observed>,
-    pending: AtomicBool,
     closed: AtomicBool,
     busy: AtomicBool,
     fence_on_push: AtomicBool,
@@ -92,7 +91,7 @@ impl Default for Control {
             value_entered: AtomicBool::new(false),
             value_resume: AtomicBool::new(false),
             observed: Mutex::new(Observed {
-                inputs: Vec::with_capacity(5000),
+                inputs: Vec::with_capacity(8000),
                 configuration: Vec::with_capacity(5000),
                 blocks: Vec::with_capacity(5000),
                 completions: Vec::with_capacity(3000),
@@ -102,7 +101,6 @@ impl Default for Control {
                 applies: Vec::with_capacity(5000),
                 ..Default::default()
             }),
-            pending: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             fence_on_push: AtomicBool::new(false),
@@ -265,12 +263,8 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
             }
         }
     }
-    fn clap_performance_input(&mut self, input: OwnedInput) -> perf::Consumption {
-        if self.control.pending.load(Ordering::Acquire) {
-            return perf::Consumption::Pending;
-        }
+    fn clap_performance_input(&mut self, input: OwnedInput) {
         self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.push(input);
-        perf::Consumption::Consumed
     }
     fn clap_performance_process(
         &mut self,
@@ -837,15 +831,15 @@ fn native_gui_waits_behind_full_input_and_gestures_spend_capture_budget() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = Device::new(Control::default(), c"fixture.performance");
     let gui = d.gui::<false, true>();
-    d.control.pending.store(true, Ordering::Release);
     d.run(0, 8, vec![on(0); INPUT_SCAN], false);
     gui(&[0.25]);
-    d.control.pending.store(false, Ordering::Release);
-    d.run(8, 8, vec![], true);
+    // A host batch that fills the scan leaves no cell for a GUI entry, so the
+    // change waits for a callback with room rather than displacing input.
+    d.run(8, 8, vec![on(0); INPUT_SCAN], true);
     assert!(d.sink.attempts.is_empty());
     assert_eq!(
         d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-        INPUT_SCAN
+        2 * INPUT_SCAN
     );
     // Only one work/cell remains after reserving this host batch: Begin uses
     // that credit, so Set must wait even though Begin needs no payload cell.
@@ -854,13 +848,13 @@ fn native_gui_waits_behind_full_input_and_gestures_spend_capture_budget() {
     assert_eq!(d.sink.attempts[0].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
     assert_eq!(
         d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.len(),
-        2 * INPUT_SCAN - 1
+        3 * INPUT_SCAN - 1
     );
     let Input::Transport(t) = transport(0, true, 42) else { unreachable!() };
     d.transport = Some(t);
     d.run(24, 8, vec![on(1)], true);
     let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-    let tail = &o.inputs[2 * INPUT_SCAN - 1..];
+    let tail = &o.inputs[3 * INPUT_SCAN - 1..];
     assert_eq!(tail.len(), 3);
     assert!(matches!(tail[0].value, InputValue::Transport(_)));
     assert!(matches!(tail[1].value, InputValue::Parameter { value: 0.25, .. }));
@@ -1060,10 +1054,9 @@ fn native_gui_full_notification_bank_wraps_without_reapplying_its_admitted_prefi
 }
 
 #[test]
-fn retained_input_has_exact_subblocks_transport_and_no_duplicate_consumer() {
+fn owned_input_has_exact_subblocks_transport_and_no_duplicate_consumer() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = Device::new(Control::default(), c"fixture.combined");
-    d.control.pending.store(true, Ordering::Release);
     d.run(
         100,
         64,
@@ -1078,7 +1071,6 @@ fn retained_input_has_exact_subblocks_transport_and_no_duplicate_consumer() {
         true,
     );
     assert_eq!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.len(), 6);
-    d.control.pending.store(false, Ordering::Release);
     d.run(164, 7, vec![on(0), on(6)], true);
     let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(o.configuration.len(), 8);
@@ -1155,20 +1147,20 @@ fn raw_signed_addresses_and_f64_are_preserved_without_hub_mailbox() {
 }
 
 #[test]
-fn total_input_pool_and_scan_limits_include_nonperformance_events() {
+fn one_batch_scan_limit_includes_nonperformance_events() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut d =
         Device::new(Control { final_emergency: true, ..Default::default() }, c"fixture.combined");
-    d.control.pending.store(true, Ordering::Release);
     let mut input = vec![on(0); INPUT_SCAN - 1];
     input[0] = d.param(0);
     input.push(transport(32, false, 100));
     assert_ne!(d.run(0, 64, input, true), CLAP_PROCESS_ERROR);
+    // A parameter and a transport occupy the same scan as note input.
     assert_eq!(
         d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).configuration.len(),
         INPUT_SCAN
     );
-    assert_eq!(d.run(64, 64, vec![on(0)], true), CLAP_PROCESS_ERROR);
+    assert_eq!(d.run(64, 64, vec![on(0); INPUT_SCAN + 1], true), CLAP_PROCESS_ERROR);
     assert_eq!(
         d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).callbacks[1].input_status,
         perf::InputStatus::Full
@@ -1500,43 +1492,6 @@ fn reused_notification_cells_do_not_overtake_an_open_older_gesture() {
     assert_eq!(d.sink.attempts[512].kind, CLAP_EVENT_PARAM_VALUE);
     assert_eq!(d.sink.attempts[513].kind, CLAP_EVENT_PARAM_GESTURE_END);
     assert_eq!(d.sink.attempts[514].kind, CLAP_EVENT_PARAM_GESTURE_BEGIN);
-}
-
-#[test]
-fn full_pool_with_real_transport_recovers_old_input_once() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    for id in [c"fixture.performance", c"fixture.combined"] {
-        let mut d = Device::new(Control::default(), id);
-        let Input::Transport(t) = transport(0, true, 123456789) else { unreachable!() };
-        d.transport = Some(t);
-        d.control.pending.store(true, Ordering::Release);
-        d.run(100, 64, vec![on(2); INPUT_SCAN - 1], true);
-        assert!(d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).inputs.is_empty());
-        d.control.pending.store(false, Ordering::Release);
-        assert_eq!(d.run(164, 64, vec![on(1)], true), CLAP_PROCESS_ERROR);
-        {
-            let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-            assert_eq!(o.inputs.len(), INPUT_SCAN);
-            assert_eq!(o.inputs[0].event_index, u32::MAX);
-            assert_eq!(o.inputs[0].sample, Some(100));
-            let InputValue::Transport(saved) = o.inputs[0].value else { panic!() };
-            assert_eq!(saved.song_pos_seconds, 123456789);
-            assert!(o.inputs[1..].iter().enumerate().all(|(index, i)| i.sample == Some(102)
-                && i.enclosing_start == Some(100)
-                && i.enclosing_frames == 64
-                && i.offset == 2
-                && i.event_index == index as u32
-                && i.batch == o.inputs[0].batch));
-        }
-        assert_eq!(d.run(228, 8, vec![on(1)], true), CLAP_PROCESS_CONTINUE_IF_NOT_QUIET);
-        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
-        assert_eq!(o.inputs.len(), INPUT_SCAN + 2);
-        assert_eq!(o.inputs[INPUT_SCAN].sample, Some(228));
-        assert_eq!(o.inputs[INPUT_SCAN + 1].sample, Some(229));
-        if id == c"fixture.combined" {
-            assert_eq!(o.configuration.len(), INPUT_SCAN + 2);
-        }
-    }
 }
 
 #[test]

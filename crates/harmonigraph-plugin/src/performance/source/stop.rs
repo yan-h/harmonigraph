@@ -26,9 +26,6 @@ impl Source {
                 self.fault(STORAGE_FAULT);
                 return false;
             }
-            if !self.charge(1) {
-                return false;
-            }
             let position = self.enqueue_cell(Event::Participation(value), NONE, sample, false);
             self.pending.seal(position);
             self.finish_work(position, NONE);
@@ -38,13 +35,10 @@ impl Source {
         true
     }
 
-    pub(super) fn capture_stop(&mut self, sample: i64) -> api::Consumption {
+    pub(super) fn capture_stop(&mut self, sample: i64) {
         if self.pending.free() == 0 || self.next_event == u64::MAX {
             self.fault(STORAGE_FAULT);
-            return api::Consumption::Pending;
-        }
-        if !self.charge(64) {
-            return api::Consumption::Pending;
+            return;
         }
         let position = self.enqueue_cell(Event::Stop, NONE, sample, false);
         let mut pending = self.pending.at(position).unwrap();
@@ -71,7 +65,6 @@ impl Source {
             }
         }
         self.pending.seal(position);
-        api::Consumption::Consumed
     }
 
     pub(super) fn next_stop_sample(&self) -> Option<i64> {

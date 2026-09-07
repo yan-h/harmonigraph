@@ -3196,7 +3196,7 @@ fn channel_references_leave_all_8192_original_event_slots_available() {
 }
 
 #[test]
-fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
+fn channel_reference_exhaustion_faults_without_advancing_the_input_cut() {
     let _scope = crate::test_scope::enter();
     let mut source = Device::aggregation(true);
     source.configure(SavedUuid::default(), true);
@@ -3228,6 +3228,9 @@ fn channel_reference_exhaustion_preserves_the_original_unconsumed_event() {
     assert!(refused.iter().all(|(_, event)| {
         matches!(event, Event::Midi { data, .. } if data[0] == 0xb0 && matches!(data[1], 64 | 66 | 69))
     }));
+    // The wrapper no longer retains a refused value for a later callback, so
+    // the latched fault IS the report. What must not move is this Source's own
+    // input cut: nothing was enqueued, so nothing may be counted as captured.
     let after = source.source_snapshot();
     assert_eq!((after.pending, after.references, after.input_cut), (576, 32768, 576));
     assert_ne!(after.faults & source::REFERENCE_FAULT, 0);

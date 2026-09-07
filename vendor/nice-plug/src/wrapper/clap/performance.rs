@@ -100,12 +100,6 @@ pub struct Block {
     pub transport: Option<clap_event_transport>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Consumption {
-    Consumed,
-    Pending,
-}
-
 /// Opaque caller identity. It must identify a unique staging attempt, including
 /// retries, and contain no pointer or allocation whose lifetime ends on audio.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
