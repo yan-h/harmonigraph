@@ -8,6 +8,7 @@ on:
       - Cargo.lock
       - crates/harmonigraph-render/Cargo.toml
       - crates/harmonigraph-render/src/lattice_tests/metal_precompile.rs
+      - crates/harmonigraph-render/src/lattice_tests/metal_assets.rs
       - crates/harmonigraph-render/src/shadow.rs
       - crates/harmonigraph-render/src/shaders/shadow.wgsl
   workflow_dispatch:
@@ -18,7 +19,7 @@ permissions:
 jobs:
   compile:
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
@@ -49,4 +50,19 @@ jobs:
           name: precompiled-shadow-blur
           path: target/metal-precompile/
           if-no-files-found: error
+          retention-days: 7
+      - name: Prepare the isolated generated-asset backend
+        run: python3 tools/metal-precompile/backend.py prepare target/generated-metal-assets
+      - name: Exercise metadata, pixel parity and artifact fallback
+        run: python3 tools/metal-precompile/exercise.py target/generated-metal-assets
+      - name: Preserve generated assets and feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-metal-assets
+          path: |
+            target/generated-metal-assets/assets/
+            target/generated-metal-assets/*.log
+            target/generated-metal-assets/results.json
+          if-no-files-found: warn
           retention-days: 7

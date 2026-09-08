@@ -1,5 +1,8 @@
 # One precompiled Metal pipeline
 
+The newer [generated-asset investigation](../../docs/generated-shader-assets.md) tests a copied-backend hook with runtime storage arrays, production pixel tests and fallback controls.
+This page preserves the original one-pipeline public-passthrough experiment.
+
 This experiment measures the horizontal shadow-blur pipeline from the production renderer.
 The regular plugin and offline renderer continue to use WGSL unchanged.
 The manual probe can instead load two precompiled `.metallib` stages through wgpu's public passthrough API,
