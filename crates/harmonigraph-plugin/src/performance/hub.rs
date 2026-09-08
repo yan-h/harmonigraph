@@ -205,18 +205,15 @@ impl Hub {
         // of those. A sum and a max, not a second measurement.
         let rows = &self.rows;
         let (misses, worst) = self.offer.as_ref().map_or((0, 0), |offer| {
-            offer
-                .session
-                .rows
-                .iter()
-                .zip(rows.iter())
-                .filter(|(_, row)| row.lease.is_some())
-                .fold((0, 0), |(misses, worst), (published, _)| {
+            offer.session.rows.iter().zip(rows.iter()).filter(|(_, row)| row.lease.is_some()).fold(
+                (0, 0),
+                |(misses, worst), (published, _)| {
                     (
                         misses + published.deadline_misses.load(Ordering::Relaxed),
                         worst.max(published.worst_lateness.load(Ordering::Relaxed)),
                     )
-                })
+                },
+            )
         });
         self.shared.deadline_misses.store(misses, Ordering::Relaxed);
         self.shared.extra_delay.store(worst as u64, Ordering::Relaxed);

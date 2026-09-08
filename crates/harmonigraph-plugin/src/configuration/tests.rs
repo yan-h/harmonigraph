@@ -514,7 +514,8 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     device.activate();
     device.run(500, vec![], false);
     assert_eq!(
-        mailbox.visible().0.effective_sample, 564,
+        mailbox.visible().0.effective_sample,
+        564,
         "an edit adopted at the boundary of [500,564) is effective at the next one"
     );
     let first = mailbox

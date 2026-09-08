@@ -515,12 +515,7 @@ fn frame(
     drop(guard);
     if state.params.configuration.get().is_some() {
         if let Some(session) = state.params.session.get() {
-            session_controls(
-                ui.ctx(),
-                session,
-                &mut state.session_draft,
-                &mut state.session_delay,
-            );
+            session_controls(ui.ctx(), session, &mut state.session_draft, &mut state.session_delay);
         }
     }
     if let Some(interval) = pace(state, fps_cap, display_max_fps) {
@@ -845,13 +840,7 @@ struct WindowState {
 
 impl WindowState {
     fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState {
-            shared,
-            params,
-            frame_interval: None,
-            session_draft: None,
-            session_delay: 1,
-        }
+        WindowState { shared, params, frame_interval: None, session_draft: None, session_delay: 1 }
     }
 
     /// The interval to arm on the window's frame timer, or `None` when it
@@ -1119,9 +1108,10 @@ fn session_controls(
                 ui.label("Tuning delay applies per Tune; this asks all paired ones at once.");
                 ui.horizontal(|ui| {
                     ui.label("Buffers of delay");
-                    ui.add(egui::DragValue::new(delay).range(
-                        1..=crate::performance::protocol::DELAY_MULTIPLIER_MAX,
-                    ));
+                    ui.add(
+                        egui::DragValue::new(delay)
+                            .range(1..=crate::performance::protocol::DELAY_MULTIPLIER_MAX),
+                    );
                 });
                 if ui.button("Apply to all paired Tunes").clicked() {
                     crate::performance::registry::global()

@@ -119,7 +119,9 @@ pub fn deadline_text(
     } else {
         format!("{worst} samples")
     };
-    let notes = if misses == 1 { "1 note missed its deadline" } else {
+    let notes = if misses == 1 {
+        "1 note missed its deadline"
+    } else {
         &format!("{misses} notes missed their deadline")
     };
     format!("{notes} - worst lateness {lateness}")
@@ -492,9 +494,10 @@ impl Adapter {
         // atomic store the wrapper makes for a host parameter event.
         use nice_plug::prelude::Param;
         unsafe {
-            params.delay.as_ptr()._internal_set_normalized_value(
-                Param::preview_normalized(&params.delay, plain),
-            );
+            params
+                .delay
+                .as_ptr()
+                ._internal_set_normalized_value(Param::preview_normalized(&params.delay, plain));
         }
         true
     }

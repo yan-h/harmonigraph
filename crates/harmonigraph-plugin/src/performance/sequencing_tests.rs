@@ -657,13 +657,7 @@ fn the_deadline_counter_counts_each_note_once_with_worst_lateness() {
     // behind, so both wait past input+D and both emit in the same later
     // callback: the first one 512 samples late, the second only 256.
     assert!(source
-        .run_format(
-            1536,
-            vec![note(7, 0, 60, 0, true), note(8, 0, 62, 256, true)],
-            None,
-            None,
-            512
-        )
+        .run_format(1536, vec![note(7, 0, 60, 0, true), note(8, 0, 62, 256, true)], None, None, 512)
         .values
         .is_empty());
     // Both deadlines pass here, unassigned, and each note is seen late a
@@ -2345,7 +2339,13 @@ fn production_a_tuning_edit_waits_for_the_next_boundary_and_a_group_keeps_its_sn
     );
     // The same D, assigned by a Hub block that has adopted the edit.
     let mut raw = 3072;
-    source.run_format(raw, vec![note(1, 0, 62, 0, false), note(2, 0, 69, 0, false)], None, None, 512);
+    source.run_format(
+        raw,
+        vec![note(1, 0, 62, 0, false), note(2, 0, 69, 0, false)],
+        None,
+        None,
+        512,
+    );
     hub.run_format(raw, vec![], None, None, 512);
     raw += 512;
     source.run_format(raw, vec![note(3, 0, 62, 0, true)], None, None, 512);
@@ -2424,4 +2424,3 @@ fn production_a_host_format_reactivation_reestablishes_the_paired_session() {
     assert_eq!(after.iter().filter(|(_, event)| event.release()).count(), 1);
     assert_eq!(source.source_snapshot().held, 0);
 }
-

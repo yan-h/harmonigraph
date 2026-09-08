@@ -3,7 +3,6 @@
 
 use crate::{Comma, LearnedTuning, Tempered, Tuning};
 
-
 /// Runtime mode state. Judgements and command acknowledgements are deliberately
 /// separate: neither is part of a saved musical setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

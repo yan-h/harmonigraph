@@ -421,8 +421,7 @@ impl Hub {
             self.trace.input_wait = 2;
             return None;
         }
-        let cap =
-            owner.recording.input_frontier().checked_add(self.clock.calibration.offset)?;
+        let cap = owner.recording.input_frontier().checked_add(self.clock.calibration.offset)?;
         let mut snapshot = Membership {
             clock: self.clock_id(),
             leases: [None; TUNERS],
@@ -858,9 +857,8 @@ impl Hub {
             };
             // The Tune owns its own delay, so the emission this onset is
             // planned for is that Tune's D and not a session-wide constant.
-            let shift = self.offer.as_ref().unwrap().session.rows[source - 1]
-                .delay
-                .load(Ordering::Acquire);
+            let shift =
+                self.offer.as_ref().unwrap().session.rows[source - 1].delay.load(Ordering::Acquire);
             if let Some(plan) = self.sequencer.plan_mut(index) {
                 plan.request = request;
                 plan.binding = binding;

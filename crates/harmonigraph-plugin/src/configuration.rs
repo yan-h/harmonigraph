@@ -237,8 +237,7 @@ impl Owner {
         // `process_configuration` call, so configuration for it is settled here
         // and never holds output publication behind an unconsumed event. Local
         // steady time, like every other frontier the recording compares.
-        self.recording.prefix =
-            boundary.steady_time.saturating_add(i64::from(boundary.frames));
+        self.recording.prefix = boundary.steady_time.saturating_add(i64::from(boundary.frames));
     }
 
     /// THE block boundary. Every command accepted before this callback has
@@ -504,12 +503,7 @@ impl Owner {
         if self.snapshot.status & 2 != 0 && recorder.recording_epoch() != 0 {
             recorder.fail_configuration();
         }
-        self.recording.segment(
-            recorder,
-            origin,
-            f64::from(self.boundary.sample_rate),
-            self.block,
-        );
+        self.recording.segment(recorder, origin, f64::from(self.boundary.sample_rate), self.block);
     }
 
     pub fn observe(&mut self, event: OwnedInput) {
@@ -528,10 +522,7 @@ impl Owner {
         if self.snapshot.status != 0 {
             return None;
         }
-        match self
-            .learning
-            .infer(&self.confirmed, self.reducer.resolved().modes.learning)
-        {
+        match self.learning.infer(&self.confirmed, self.reducer.resolved().modes.learning) {
             Ok(Some(learned)) => {
                 self.learned = Some(learned);
                 let mut payload = [0; PAYLOAD_WORDS];
