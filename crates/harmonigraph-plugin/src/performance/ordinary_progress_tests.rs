@@ -334,10 +334,13 @@ fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_in
         Some((0, 0.123456789)),
         "the healthy boundary retains observed held input"
     );
-    assert!(
-        inspect_hub(&hub, |hub| hub.test_context_voice(0, 1)).is_none(),
-        "forwarding released this note at the boundary, so it is no longer \
-         tuning context for anything the Hub assigns next"
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context_voice(0, 1))
+            .map(|(_, correction, player)| (correction, player)),
+        Some((0, 0.123456789)),
+        "forwarding released this note at the boundary, but the player is still \
+         holding the key: #712 requires the observation's contribution to tuning \
+         context to cross a healthy boundary with its display and recording"
     );
     assert!(!capture.drain_canonical().iter().any(|record| matches!(record, harmonigraph_take::CanonicalRecord::Delta(delta) if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }))), "clock reseed never fabricates a canonical On");
     hub.run(raw, vec![expression(31, 0.25, 1)], None);
@@ -349,8 +352,20 @@ fn production_healthy_direct_reanchor_preserves_observed_pitch_until_its_real_in
         Some((0, 0.25)),
         "the surviving observation still follows its own input"
     );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_context_voice(0, 1))
+            .map(|(_, correction, player)| (correction, player)),
+        Some((0, 0.25)),
+        "and the carried context voice scores at the value it is now heard at"
+    );
     hub.run(raw, vec![note(31, 0, 60, 1, false)], None);
     hub.run(raw + 64, vec![], None);
     assert!(inspect_direct(&hub, |state| state.voice(1).is_none()));
+    assert!(
+        inspect_hub(&hub, |hub| hub.test_context_voice(0, 1)).is_none(),
+        "the observation that carried the voice is what retires it: the capture \
+         stream forgot this note at the boundary and reports its later events \
+         with no lifetime, so nothing else could ever have taken it out"
+    );
     assert_eq!(inspect_hub(&hub, |hub| hub.direct.test_snapshot().faults), 0);
 }

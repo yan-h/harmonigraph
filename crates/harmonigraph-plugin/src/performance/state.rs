@@ -4,8 +4,10 @@
 use harmonigraph_core::canonical::{
     ChannelBaseline, EventTiming, NoteDelta, SourceBaseline, VoiceBaseline,
 };
-use harmonigraph_core::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
-use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
+use harmonigraph_core::confirmed::{
+    ConfirmedPitch, ConfirmedPitches, PitchProvenance, HELD_PER_SOURCE,
+};
+use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId, VoiceKey};
 
 use super::event::Event;
 
@@ -58,14 +60,23 @@ impl State {
                 *cell = None;
             }
             true
-        } else if let Event::Midi { port: 0, data: [status, cc, value], .. } = event {
-            if status & 0xf0 != 0xb0 || !(matches!(cc, 64 | 66 | 69) && value == 0) {
-                return false;
-            }
+        } else if let Event::Midi { port: 0, data: [status, first, second], .. } = event {
             let channel = &mut self.channels[usize::from(status & 15)];
-            channel.controllers[usize::from(cc)] = value;
-            channel.controller_valid[usize::from(cc / 64)] |= 1 << (cc % 64);
-            true
+            match status & 0xf0 {
+                0xb0 if matches!(first, 64 | 66 | 69) && second == 0 => {
+                    channel.controllers[usize::from(first)] = second;
+                    channel.controller_valid[usize::from(first / 64)] |= 1 << (first % 64);
+                    true
+                }
+                // The participation boundary's recenter. Like a pedal reset it
+                // is a neutral value the reset owes whatever the clock knows,
+                // so an unknown timestamp must not turn it into a lost fact.
+                0xe0 if (first, second) == (0, 64) => {
+                    channel.pitch_bend = Some(u16::from(first) | (u16::from(second) << 7));
+                    true
+                }
+                _ => false,
+            }
         } else {
             false
         }
@@ -106,17 +117,40 @@ impl State {
         &self.channels
     }
 
-    pub fn confirmed(
+    /// Replace what learning knows about one source with what this state
+    /// holds. Both observers of held pitch publish through here -- a Hub row
+    /// from its accepted output, DIRECT from its observed ingress -- because
+    /// the two differ in where they get their voices, not in what a confirmed
+    /// pitch is. `live` is the caller's own reason to contribute at all: a row
+    /// that is Off, or a state that has lost an event, has no confirmed
+    /// pitches rather than an empty list of them, and the caller decides which
+    /// of those two it means by clearing or by declining to call.
+    ///
+    /// The scratch rows past `count` are never read, so their key and
+    /// provenance are padding rather than a claim about this source.
+    pub fn publish_confirmed(
         &self,
         source: SourceId,
-        rows: &mut [ConfirmedPitch; HELD_PER_SOURCE],
-    ) -> usize {
+        live: bool,
+        confirmed: &mut ConfirmedPitches,
+    ) -> bool {
+        let empty = ConfirmedPitch {
+            key: VoiceKey { source, channel: 0, note: 0 },
+            lifetime: None,
+            host_note_id: None,
+            pitch_microcents: 0,
+            onset_sample: 0,
+            provenance: PitchProvenance::ObservedDirect,
+        };
+        let mut rows = [empty; HELD_PER_SOURCE];
         let mut count = 0;
-        for voice in self.voices() {
-            rows[count] = voice.confirmed(source);
-            count += 1;
+        if live {
+            for voice in self.voices() {
+                rows[count] = voice.confirmed(source);
+                count += 1;
+            }
         }
-        count
+        confirmed.replace_source(source, &rows[..count]).is_ok()
     }
 
     pub fn baseline(
@@ -154,10 +188,6 @@ impl State {
     /// accepted output, settled host acceptance. A wildcard is applied to the
     /// lifetime set resolved at its original stream position by that caller.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
-        self.apply_with_consumed_prefix(event, stamp)
-    }
-
-    fn apply_with_consumed_prefix(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
             let index = self

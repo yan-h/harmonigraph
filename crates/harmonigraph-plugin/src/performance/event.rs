@@ -74,6 +74,13 @@ impl Event {
         }
     }
 
+    /// A local ordering boundary rather than anything that reaches a host.
+    /// Both of these are consumed where the output cursor reaches their own
+    /// input sample, and both cancel and terminate what stands before them.
+    pub fn marker(self) -> bool {
+        matches!(self, Self::Stop | Self::Participation(_))
+    }
+
     pub fn channel_control(self) -> Option<u8> {
         match self {
             Self::Midi { port: 0, data, .. } if matches!(data[0] & 0xf0, 0xb0..=0xe0) => {

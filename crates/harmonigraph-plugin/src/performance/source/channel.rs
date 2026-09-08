@@ -284,8 +284,11 @@ impl Source {
         if let Role::Onset { previous, next } = pending.channel.role {
             self.unlink_onset(pending, previous, next);
         }
-        if let Role::Stop { previous, next } = pending.channel.role {
-            self.unlink_stop(previous, next);
+        if let Role::Stop { .. } = pending.channel.role {
+            // Disposed before output reached it. `retire_marker` is what keeps
+            // a cancelled participation toggle's pitch cleanup from going with
+            // the cell that carried it.
+            self.retire_marker(pending);
             return;
         }
         // Unlink a canceled/accepted waiter before its envelope can be reused.

@@ -8,12 +8,11 @@ pub(super) struct Wave {
     pub first: u16,
     pub last: u16,
     pub wire: channel::Reference,
-    pub delivered: u64,
 }
 
 impl Default for Wave {
     fn default() -> Self {
-        Self { first: NONE, last: NONE, wire: channel::Reference::default(), delivered: 0 }
+        Self { first: NONE, last: NONE, wire: channel::Reference::default() }
     }
 }
 
@@ -74,7 +73,6 @@ impl Source {
         };
         let next = self.pending_reference(next_header);
         let wave = &mut self.channels.waves[channel];
-        wave.delivered = pending.serial;
         wave.wire = next;
         let mut parent = self.pending.at(position).unwrap();
         parent.channel.accepted = true;
@@ -116,7 +114,7 @@ impl Source {
                     earlier.serial < self.pending.at(usize::from(first)).unwrap().serial
                         && earlier.event.attack().is_none()
                         && earlier.event.channel_control().is_none()
-                        && earlier.event != Event::Stop
+                        && !earlier.event.marker()
                         && (!earlier.inline_done || earlier.work_remaining != 0)
                 },
             )

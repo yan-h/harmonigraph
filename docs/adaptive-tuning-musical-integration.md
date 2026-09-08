@@ -127,13 +127,19 @@ Release preserves key history.
 Configuration revision, source withdrawal/reset and recovery/clock boundaries advance decision floors;
 old accepted output cannot repopulate a cleared table.
 Display-tolerance changes preserve the musical revision and history.
-NoCandidate is a completed musical clear, while intentionally unretuned Off births do not update musical history.
+NoCandidate is a completed musical clear, while Off births carry no adaptive correction and do not update musical history.
 
 Participation changes reserve an Original in the existing Capture arena before changing the local flag or acknowledging setup.
-That source-wide marker orders Off relative to its own earlier and later events.
-The Hub removes the source from future scoring when the marker is sequenced, while retaining its factual voices, output records, credits and release obligations.
-An onset's immutable birth mode still decides whether a pre-Off request receives its adaptive assignment.
+That source-wide marker orders the toggle relative to its own earlier and later events, and it is also the boundary the reset runs at:
+it links into the same list a transport Stop uses, so the Tune cancels through the marker's serial and terminates what it has forwarded where output reaches that sample.
+When the copied marker is sequenced the Hub takes the source out of future scoring, while retaining its factual voices, output records, credits and release obligations.
+That record is the whole of what the reset owes the Hub: the attacks the marker cancels reach it as cancellation dispositions and the voices it terminates as ordinary accepted releases, so neither needs a Stop-style sweep of its own.
+An onset's immutable birth mode decides whether it asks for an adaptive assignment at all, and the same field on the copied record decides whether the Hub mints a plan for it:
+an Off onset is refused before the request identity is even built, so it takes no plan slot, spends no decision and enters no context, and its Tune emits it at input plus D without waiting.
 Later factual baselines cannot reverse an already sequenced participation marker.
+The same field is not what excludes an Off track from the picture:
+publication runs off the accepted-output lane, which is the same lane in both modes, so the row's own participation gates it there.
+A note the track showed while Participating still ends truthfully, because the reset's release is published before the copied marker moves the mode — the Hub merges accepted output ahead of sequencing copied input, and the marker and the release it arms stand at one sample.
 
 Normal canonical deltas now carry optional assignment revision, decision, node, frozen correction and current player tuning.
 The Hub applies accepted binding metadata before normal display/take publication;

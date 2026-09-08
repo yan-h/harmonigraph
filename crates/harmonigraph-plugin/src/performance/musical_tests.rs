@@ -702,25 +702,78 @@ fn production_musical_no_candidate_uses_unbent_midi_pitch() {
 }
 
 #[test]
-fn production_musical_off_preserves_sounding_pitch_but_excludes_future_scoring() {
+fn production_musical_off_ends_its_own_phrase_and_excludes_future_scoring() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     phrase.step([vec![note(1, 0, 50, 0, true)], vec![], vec![]], [0, 1, 2]);
     phrase.idle();
-    let held = phrase.voice(0, 50, 0);
+    assert_eq!(phrase.sources[0].source_snapshot().held, 1);
     let off = phrase.sources[0].participation(false, 0);
     // Marker and foreign onset share a sample; callback order cannot let the
-    // still-sounding D decide this E. Empty context prefers 5/4, not 81/64.
-    phrase.step(
+    // ended D decide this E. Empty context prefers 5/4, not 81/64.
+    let output = phrase.step(
         [vec![off, expression(1, 0.25, 0)], vec![note(2, 0, 52, 0, true)], vec![]],
         [1, 2, 0],
     );
     phrase.idle();
-    let bent = phrase.voice(0, 50, 0);
-    assert_eq!(bent.frozen_offset_microcents, held.frozen_offset_microcents);
-    assert_eq!(bent.pitch_microcents, held.pitch_microcents);
     assert_eq!(phrase.voice(1, 52, 0).attack_node, Some(LatticePos::new(0, 1, 0)));
-    assert_eq!(phrase.sources[0].source_snapshot().held, 1);
+    // Off is a reset in either direction: the toggle terminates the D this
+    // Tune had already forwarded rather than carrying it into the new mode,
+    // and it does so on the wire before the ownership is given up.
+    assert!(output[0]
+        .iter()
+        .any(|(_, event)| matches!(event, Event::Note { kind: 1 | 2, key: 50, .. })));
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    assert_eq!(phrase.sources[0].source_snapshot().held, 0);
+    assert_eq!(inspect_source(&phrase.sources[0], |source| source.state.count()), 0);
+    phrase.release_all();
+}
+
+/// The Hub sequences later input against the membership the toggle
+/// established, so nothing the toggle ended is still scoring. Two ways that
+/// state goes obsolete: an Off voice still sounding when Participating is
+/// selected -- it would suddenly become context for everyone -- and an onset
+/// cancelled by the marker standing at its own sample.
+#[test]
+fn production_musical_a_toggle_drops_the_context_of_what_it_ended() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step([vec![off], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    phrase.step([vec![note(1, 0, 50, 0, true)], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    assert_eq!(phrase.sources[0].source_snapshot().held, 1, "an Off D is on the wire");
+    // Returning to Participating ends that D. It must not spend the callbacks
+    // its release takes as tuning context for a track that is participating.
+    let on = phrase.sources[0].participation(true, 0);
+    phrase.step([vec![on], vec![note(2, 0, 52, 0, true)], vec![]], [1, 2, 0]);
+    phrase.idle();
+    assert_eq!(
+        phrase.voice(1, 52, 0).attack_node,
+        Some(LatticePos::new(0, 1, 0)),
+        "the ended Off D is not context: empty context prefers 5/4, not 81/64"
+    );
+    phrase.step([vec![], vec![note(2, 0, 52, 0, false)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    // The other way: an onset the marker cancels at its own sample. It never
+    // sounds, so it is never anyone's context either.
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step(
+        [vec![note(3, 0, 50, 0, true), off], vec![], vec![note(4, 0, 52, 0, true)]],
+        [2, 1, 0],
+    );
+    phrase.idle();
+    assert_eq!(
+        phrase.voice(2, 52, 0).attack_node,
+        Some(LatticePos::new(0, 1, 0)),
+        "the cancelled D is not context either"
+    );
+    assert_eq!(phrase.sources[0].source_snapshot().held, 0, "and it never sounded");
     phrase.release_all();
 }
 
@@ -953,4 +1006,153 @@ fn production_musical_a_configuration_edit_clears_history_and_a_transport_stop_d
         );
         phrase.release_all();
     }
+}
+
+/// #712: Off "excludes the track from adaptive context and visualization". The
+/// context half is 4C's refusal in the Hub's `apply`; this is the other half.
+/// Publication runs off the accepted-output lane, which is the same lane in
+/// both modes, so nothing but an explicit gate keeps an Off track out of the
+/// display ring and the take.
+#[test]
+fn production_musical_off_is_excluded_from_display_and_the_take() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-off-display-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("off.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let identity = |index: usize| {
+        inspect_source(&phrase.sources[index], |source| source.offer.as_ref().unwrap().lease.source)
+    };
+    let (quiet, shown) = (identity(0).0, identity(1).0);
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step([vec![off], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..4 {
+        phrase.idle();
+    }
+    phrase.step([vec![note(1, 0, 50, 0, true)], vec![note(2, 0, 57, 0, true)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    writer.drain(&mut capture);
+    let display = writer.display_events();
+    let deltas = |source: u64| {
+        display
+            .iter()
+            .filter(
+                |record| matches!(record, CanonicalRecord::Delta(d) if d.event.source == source),
+            )
+            .count()
+    };
+    println!("PROBE off deltas quiet={} shown={}", deltas(quiet), deltas(shown));
+    assert_ne!(deltas(shown), 0, "the Participating track is published, or nothing is measured");
+    assert_eq!(deltas(quiet), 0, "an Off track is not published to the display or the take");
+    let mut live = harmonigraph_core::NoteTracker::new();
+    for record in &display {
+        record.apply(&mut live).unwrap();
+    }
+    assert_eq!(live.held_count(), 1, "and only the Participating note is shown");
+    // The gate reads the row's mode, so the note this track has ALREADY shown
+    // is the case that could strand it: the reset that ends the phrase emits
+    // that note's release, and a release published under the new mode would be
+    // dropped. Measured rather than assumed -- probes on both sites put the
+    // marker and the release it arms at one sample (8704 here), and the Hub
+    // merges accepted output before it sequences copied input, so the release
+    // is published while the row is still Participating and the mode moves
+    // after it. The delta assertion below is what holds that order; if it ever
+    // inverts, the display would depend instead on the non-participating
+    // baseline the toggle's `repair` owes.
+    let off = phrase.sources[1].participation(false, 0);
+    phrase.step([vec![], vec![off], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    writer.drain(&mut capture);
+    let after = writer.display_events();
+    for record in &after {
+        record.apply(&mut live).unwrap();
+    }
+    println!("PROBE off toggled held={} records={}", live.held_count(), after.len());
+    assert!(
+        after.iter().any(|record| matches!(record, CanonicalRecord::Delta(d)
+            if d.event.source == shown
+                && matches!(d.event.kind, harmonigraph_take::NoteKind::Off))),
+        "the toggle's own release is published before the mode moves"
+    );
+    assert_eq!(live.held_count(), 0, "so the toggle strands nothing the track had shown");
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// The third exclusion, and the one with nothing behind it until now: 4D
+/// measured that `Hub::confirm`'s `row.participating` clause forced true
+/// survives the whole suite, so an Off row contributing confirmed pitches to
+/// learning was invisible. Learning is armed here and the Off track is bent
+/// well off twelve-tone, so its contribution would be audible in the inferred
+/// tuning rather than only in a count.
+#[test]
+fn production_musical_off_pitches_do_not_reach_learning() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    let hub = unsafe {
+        &*((*phrase.hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    hub.configuration_handle()
+        .unwrap()
+        .submit(crate::configuration::packet(ConfigEdit {
+            learning: Some(true),
+            ..Default::default()
+        }))
+        .unwrap();
+    phrase.idle();
+    let learning = || {
+        hub.test_inspect_plugin(|plugin| {
+            let owner = plugin.configuration.as_ref().unwrap();
+            let rows: Vec<_> =
+                owner.confirmed.rows().map(|row| (row.key.source, row.pitch_microcents)).collect();
+            (rows, owner.reducer.resolved().tuning)
+        })
+    };
+    let identity = |index: usize| {
+        inspect_source(&phrase.sources[index], |source| source.offer.as_ref().unwrap().lease.source)
+    };
+    let (quiet, shown) = (identity(0), identity(1));
+    let (_, original) = learning();
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step([vec![off], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..4 {
+        phrase.idle();
+    }
+    // The only Participating note is a C, which is one class and therefore no
+    // interval at all: the learner reads no fifth from it and leaves the axis
+    // alone. Off forwards the player's own pitch, so the G beside it is heard
+    // twenty cents flat -- the ONLY fifth in the session, and the wrong one.
+    // If that class counts, `three` moves from just to 680 cents.
+    phrase.step(
+        [
+            vec![note(1, 0, 67, 0, true), expression(1, -0.2, 0)],
+            vec![note(2, 0, 60, 0, true)],
+            vec![],
+        ],
+        [0, 1, 2],
+    );
+    for _ in 0..8 {
+        phrase.idle();
+    }
+    let (rows, learned) = learning();
+    println!("PROBE learning rows={rows:?} tuning={learned:?}");
+    assert_eq!(rows.len(), 1, "only the Participating track supplies a confirmed pitch");
+    assert_eq!(rows[0], (shown, 6_000_000_000), "and it is the C, heard at C");
+    assert_ne!(quiet, shown, "the two tracks are distinguishable, or the row above proves nothing");
+    assert_eq!(learned, original, "so the flat Off G is no fifth: the learned axis holds");
+    phrase.release_all();
 }

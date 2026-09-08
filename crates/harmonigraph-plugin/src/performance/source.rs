@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub(super) mod channel;
+mod debt;
 #[cfg(all(test, debug_assertions))]
 mod replay_tests;
 mod stop;
@@ -31,6 +32,16 @@ pub(super) const NONE: u16 = u16::MAX;
 /// Records one input event can address: at most every held note plus the
 /// controller or onset itself. Copies are emitted one per addressed target.
 pub(super) const CAPTURE_GROUP: usize = 68;
+/// The per-channel wire state a reset may owe: sustain, sostenuto and soft
+/// neutralized, and the pitch bend recentered. `channel_reset` holds one
+/// pending bit and one staged bit for each, so this is half of a `u8`.
+pub(super) const CHANNEL_RESETS: usize = 4;
+/// The recentering slot. Unlike the three pedals it is never armed by
+/// `arm_release_debt`, because ending a phrase does not change who owns
+/// pitch; only a participation toggle does.
+const PITCH_RESET: usize = 3;
+/// The 14-bit MIDI pitch bend that means no bend.
+const BEND_CENTER: u16 = 0x2000;
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub struct Snapshot {
@@ -178,8 +189,9 @@ pub struct Source {
     active: [u16; 64],
     reserved: [u16; 64],
     owed_note_off: [u16; 64],
-    emergency: [Option<Release>; 64],
-    channel_reset: [u8; 16],
+    /// Every obligation only an accepted host output event can discharge,
+    /// behind the one rule that says when a new one may be minted.
+    debt: debt::Debt,
     /// Largest accepted onset shift seen since the delay setting was last
     /// applied, reported as this Tune's worst lateness above D. A gauge, not a
     /// schedule: nothing reads it back to decide when anything emits.
@@ -210,6 +222,11 @@ pub struct Source {
     cancel_cursor: Option<usize>,
     pub faults: u32,
     reset_armed: bool,
+    /// A participation toggle's recenter, retired with its marker while the
+    /// lease it belonged to was already sealed. Held rather than armed: a seal
+    /// refuses fresh output, and the bend it would neutralize is on the wire
+    /// rather than in the lease.
+    pitch_center_owed: bool,
     pub participating: bool,
     timing_failed: bool,
     generation: u64,
@@ -401,8 +418,7 @@ impl Source {
             active: [NONE; 64],
             reserved: [NONE; 64],
             owed_note_off: [NONE; 64],
-            emergency: [None; 64],
-            channel_reset: [0; 16],
+            debt: debt::Debt::new(),
             late_shift: 0,
             missed: 0,
             emergency_output: Queue::default(),
@@ -426,6 +442,7 @@ impl Source {
             cancel_cursor: None,
             faults: 0,
             reset_armed: false,
+            pitch_center_owed: false,
             participating: true,
             timing_failed: false,
             generation: 1,
@@ -586,8 +603,20 @@ impl Source {
     /// assertion. Retirement never invokes a host or increments sequence.
     pub fn join_producer(&mut self) {
         assert!(!self.producer_joined);
-        self.joined_unknown_wire = self.unknown_joined_wire_state();
+        // A participation marker still standing in the queue is disposed after
+        // this, by the retirement pump, and the recentre its disposal owes can
+        // no longer reach output. Resolve it here, into the evidence this
+        // publishes, rather than leaving it to arm debt nothing will clear:
+        // the bend stays on the wire either way, and that is exactly what
+        // unknown joined wire state means.
+        self.joined_unknown_wire = self.unknown_joined_wire_state()
+            || (self.pitch_center_owed || self.participation_marker_queued())
+                && self.owes_pitch_center();
         self.producer_joined = true;
+        // From here nothing may mint output debt: no callback follows the
+        // final cut to discharge it, and both `output_settled` and
+        // `publish_seal` would refuse this Source for good.
+        self.debt.join();
         if self.joined_unknown_wire {
             // Destruction removes the only possible owner of further physical
             // termination. Publish its exact row evidence before the joined
@@ -600,25 +629,19 @@ impl Source {
     pub fn joined_cut(&self) -> Option<u64> {
         self.producer_joined.then_some(self.sequence)
     }
+    /// What this Tune has already put on the wire and still owns: voices the
+    /// receiver is sounding, pedals it is holding, and note-offs owed for
+    /// terminals the host took. Every reset path asks this before it decides
+    /// whether it owes releases, because forgetting ownership without
+    /// terminating these is what strands a note in the instrument.
+    fn forwarded_wire_state(&self) -> bool {
+        self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64]
+    }
     pub fn unknown_joined_wire_state(&self) -> bool {
-        self.state.count() != 0
-            || self.state.pedals_held()
-            || self.owed_note_off != [NONE; 64]
-            || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
-            || self.channel_reset != [0; 16]
+        self.forwarded_wire_state() || self.debt.unsent()
     }
     pub fn settled(&self) -> bool {
-        self.held() == 0
-            && !self.state.pedals_held()
-            && self.owed_note_off == [NONE; 64]
-            && self.journal.len() == 0
-            && self.emergency_output.len() == 0
-            && self.pending.len() == 0
-            && self.permit.is_none()
-            && self.emergency.iter().all(Option::is_none)
-            && self.channel_reset == [0; 16]
-            && self.manifest.len() == 0
-            && self.capture_group.len() == 0
+        self.output_settled() && self.pending.len() == 0 && self.capture_group.len() == 0
     }
     fn lease_settled(&self) -> bool {
         self.old_pending == 0 && self.capture_group.len() == 0 && self.output_settled()
@@ -631,8 +654,7 @@ impl Source {
             && self.emergency_output.len() == 0
             && self.permit.is_none()
             && self.manifest.len() == 0
-            && self.emergency.iter().all(Option::is_none)
-            && self.channel_reset == [0; 16]
+            && self.debt.settled()
     }
 
     /// Reserve the return/ack slot BEFORE moving an endpoint-bearing offer.
@@ -658,11 +680,10 @@ impl Source {
             offer.session.rows[usize::from(offer.lease.slot - 1)].withdrawn.load(Ordering::Acquire)
         }) {
             if !self.withdrawal_reset {
-                // Once per withdrawal. `stop` is the established reset: it
-                // cancels every unsounded attack and arms the emergency lane
-                // for the voices this Tune has forwarded, which is also what
-                // lets the lease settle instead of waiting for input the new
-                // pairing will never deliver.
+                // Once per withdrawal, and the reason the reset is what a
+                // withdrawal wants: its cancel is also what lets the lease
+                // settle instead of waiting for input the new pairing will
+                // never deliver.
                 self.withdrawal_reset = true;
                 self.stop();
             }
@@ -778,11 +799,7 @@ impl Source {
         // here rather than importing them: the interruption is accepted, a
         // silent divergence between what sounds and what the Hub believes is
         // not.
-        if adopted
-            && (self.state.count() != 0
-                || self.state.pedals_held()
-                || self.owed_note_off != [NONE; 64])
-        {
+        if adopted && self.forwarded_wire_state() {
             self.arm_release_debt();
         }
     }
@@ -803,6 +820,13 @@ impl Source {
         }
         self.drain_finished();
         self.drain_ready_work();
+        // A recenter the seal refused, now that the lease it waited on has
+        // returned. Placed after the drain because that is where a cancelled
+        // marker is disposed, so an obligation raised this callback is armed
+        // in it rather than in the next one.
+        if self.pitch_center_owed {
+            self.arm_pitch_center();
+        }
         if let Some(session) = self.session() {
             let faults = session.faults.load(Ordering::Acquire)
                 | self.offer.as_ref().map_or(0, |o| {
@@ -914,10 +938,15 @@ impl Source {
         let Some(mut event) = Event::from_input(input.value) else {
             return;
         };
-        if self.delay() != 0 {
-            // The musical Tune owns pitch. Normalize before capture so both
-            // prospective scoring and factual output see the same pitch;
-            // DIRECT observation still forwards its original input.
+        if self.participating && self.delay() != 0 {
+            // A PARTICIPATING musical Tune owns pitch. Normalize before capture
+            // so both prospective scoring and factual output see the same
+            // pitch; DIRECT observation still forwards its original input.
+            //
+            // Off owns nothing, so its bend and its per-note tuning are the
+            // player's and go out unchanged. `participating` moves at this
+            // event's own place in the input order, which is what makes the
+            // note after the toggle the first one in the new mode.
             match &mut event {
                 Event::Expression { kind: 2, value, .. } => *value = 0.0,
                 Event::Midi { data, .. } if data[0] & 0xf0 == 0xe0 => {
@@ -1285,11 +1314,36 @@ impl Source {
             && self.manifest.front().is_none_or(|manifest| manifest.serial > self.cancel_cut)
             && self.work_cleanup_head == NONE
     }
+    /// The one reset a Tune has: cancel every unsounded attack at the current
+    /// input cut, then terminate what has already been forwarded, before its
+    /// ownership is forgotten. `cancel_cut` is also what rejects the replies
+    /// those cancelled attacks are still owed.
+    ///
+    /// It does NOT latch. Input past the cut is admitted again on the next
+    /// event, once the channel's release debt has been accepted. Every caller
+    /// takes this same whole-queue scope and differs only in what it does
+    /// afterwards, and in what the restart therefore needs:
+    ///
+    /// - transport Stop and host Reset resume by themselves.
+    /// - a host reactivation adopts the new format next; the lease, epoch and
+    ///   generation deliberately survive that boundary.
+    /// - a membership withdrawal resumes at the next adoption, and the old
+    ///   incarnation and epoch are what kill its replies.
+    /// - an explicit setup reset and a Hub clock fence are the only callers
+    ///   that also arm `reset_armed`, which is what lets `begin` clear a
+    ///   latched fault. A bare Reset without one stays terminal.
+    /// - destruction never resumes.
+    ///
+    /// A terminal fault is these same two steps plus that latch, and lives in
+    /// `fault` rather than here because it owes releases whatever the wire
+    /// state and refuses new attacks until an explicit Reset. A missed
+    /// deadline is neither: lateness goes to the late-playback path and never
+    /// reaches this function.
     pub fn stop(&mut self) {
         self.cancel_unsounded();
         // Credits can outlive an accepted Off until its factual ACK arrives.
         // Only actual wire state may create fresh release debt at Stop.
-        if self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64] {
+        if self.forwarded_wire_state() {
             self.arm_release_debt();
         }
     }
@@ -1428,33 +1482,70 @@ impl Source {
                             && state.controllers[controller] < 64;
                     // A completed reset is already factual; another fault
                     // cannot recreate it. A staged reset still owns its debt.
-                    if !known_neutral && self.channel_reset[channel] & (1 << (bit + 3)) == 0 {
-                        self.channel_reset[channel] |= 1 << bit;
+                    if !known_neutral && !self.debt.staged(channel, bit) {
+                        self.debt.arm(channel, bit);
                     }
                 }
             }
         }
     }
 
+    /// Participating means the Tune owns pitch again, so the wire cannot be
+    /// left holding a bend an Off phrase passed through: every note the Tune
+    /// tunes afterwards would sound at that offset. Recenter the channels
+    /// this Tune has actually bent -- one it never bent, or already left at
+    /// center, owes nothing and costs no event.
+    ///
+    /// Only a participation toggle arms this. Stop and a terminal fault end a
+    /// phrase without changing who owns pitch, and the recenter would be an
+    /// event no reset before this one sent.
+    fn arm_pitch_center(&mut self) {
+        // Past the producer join `Debt` refuses everything this arms, and
+        // `join_producer` has already put the bend into the teardown evidence
+        // instead. That rule is not restated here, deliberately: restating it
+        // per caller is what let the same leak reappear through `fault`.
+        //
+        // Behind the final cut `schedule_emergency` stages nothing, so a bit
+        // armed here would never leave and `output_settled` would wait on it
+        // for good. The obligation outlives the lease, though -- the wire keeps
+        // the bend across the seal -- so it waits rather than being dropped,
+        // and `begin` arms it on the far side.
+        if self.sealed {
+            self.pitch_center_owed = true;
+            return;
+        }
+        self.pitch_center_owed = false;
+        for channel in 0..16 {
+            if self.owes_pitch_center_on(channel) {
+                self.debt.arm(channel, PITCH_RESET);
+            }
+        }
+    }
+
+    /// A channel this Tune has actually bent and has not already recentred.
+    /// One it never bent, or already left at center, owes nothing.
+    fn owes_pitch_center_on(&self, channel: usize) -> bool {
+        self.state.channels()[channel].pitch_bend.is_some_and(|value| value != BEND_CENTER)
+            && !self.debt.staged(channel, PITCH_RESET)
+    }
+    fn owes_pitch_center(&self) -> bool {
+        (0..16).any(|channel| self.owes_pitch_center_on(channel))
+    }
+
     fn channel_has_release_debt(&self, channel: u8) -> bool {
-        self.channel_reset[usize::from(channel)] != 0
-            || self.emergency.iter().flatten().any(|release| {
+        self.debt.channel_owes(usize::from(channel))
+            || self.debt.releases().any(|release| {
                 release.accepted.is_none()
                     && self.lives.at(release.life).is_some_and(|life| life.channel == channel)
             })
     }
 
     fn ensure_emergency(&mut self, life: u16) {
-        if self.emergency.iter().flatten().any(|release| release.life == life) {
-            return;
+        // The slot owns a reference to the life, so the bump belongs to the
+        // one call that took the slot -- and to no call the join refused.
+        if self.debt.arm_release(life) {
+            self.lives.local_mut(life).unwrap().refs += 1;
         }
-        let slot = self
-            .emergency
-            .iter()
-            .position(Option::is_none)
-            .expect("at most64 held/owed wire lifetimes");
-        self.lives.local_mut(life).unwrap().refs += 1;
-        self.emergency[slot] = Some(Release { life, staged: false, accepted: None });
     }
     pub fn schedule(&mut self, block: api::Block, output: &mut api::Output<'_>) {
         let Some(start) = block.callback.steady_time.checked_add(i64::from(block.start)) else {
@@ -1573,7 +1664,7 @@ impl Source {
         let Some(parent) = self.pending.at(position) else {
             return true;
         };
-        if parent.event == Event::Stop {
+        if parent.event.marker() {
             return matches!(parent.channel.role, channel::Role::ReachedStop);
         }
         if matches!(parent.channel.role, channel::Role::Header { .. }) {
@@ -1767,7 +1858,11 @@ impl Source {
             if child == NONE { 0 } else { u64::from(child) + 3 },
         ]);
         let wire = self.assigned_event(pending);
-        let group = if pending.event.attack().is_some() && self.delay() != 0 {
+        // Only an adaptive onset carries an initial tuning. An Off onset has
+        // no assignment to state, and stating the default would be a zero
+        // sent over whatever bend or per-note tuning the player is holding --
+        // centering by another name, which is exactly what Off does not do.
+        let group = if pending.event.attack().is_some() && life.is_some_and(|life| life.adaptive) {
             let life = life.unwrap();
             let tuning = Event::Expression {
                 kind: 2,
@@ -1848,11 +1943,21 @@ impl Source {
         event
     }
 
+    /// Whether this onset may be emitted at all yet. Only an ADAPTIVE onset
+    /// waits: an Off Tune is a local forwarding path, so its onset has nothing
+    /// to wait for and takes the same input+D every other event takes.
+    /// DIRECT, whose whole delay is zero, is the same case.
+    ///
+    /// This relaxation is only sound because the Hub mints no plan for a
+    /// non-adaptive record: an onset that emits without an assignment reports
+    /// decision zero, which matches no plan, so a plan minted for one would
+    /// never be retired.
     fn assignment_ready(&self, life: u16) -> bool {
         self.delay() == 0
             || self.lives.at(life).is_some_and(|life| {
-                life.assignment.decision != 0
-                    && life.assignment.decision <= self.committed_assignment
+                !life.adaptive
+                    || life.assignment.decision != 0
+                        && life.assignment.decision <= self.committed_assignment
             })
     }
 
@@ -2012,15 +2117,17 @@ impl Source {
             };
             if let Some(offer) = &self.offer {
                 let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
-                let emission = self.emission(pending, row);
+                // Claiming the gate is a claim of OPEN. It used to be a claim
+                // of whatever generation the planned `Assignment` recorded, but
+                // the gate holds nothing but OPEN/BUSY/CLOSED, so the writer
+                // masked those flags off a value that never had anything else
+                // in it and both ends read zero -- 3,720 mints and 50,719
+                // claims across the suite, every one of them zero. Reverting
+                // the mode choice above to `delay() != 0` killed no test, which
+                // is what a field that is always zero looks like.
                 if row
                     .emission_gate
-                    .compare_exchange(
-                        emission,
-                        emission | BUSY,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
+                    .compare_exchange(OPEN, BUSY, Ordering::AcqRel, Ordering::Acquire)
                     .is_err()
                 {
                     return false;
@@ -2349,18 +2456,8 @@ impl Source {
         if let Some(offer) = &self.offer {
             let row = &offer.session.rows[usize::from(offer.lease.slot - 1)];
             // A Hub close can race any permitted group. All its actual facts
-            // are durable before BUSY is released; CLOSED and generation stay.
+            // are durable before BUSY is released; CLOSED stays.
             assert_ne!(row.emission_gate.fetch_and(!BUSY, Ordering::Release) & BUSY, 0);
-        }
-    }
-    fn emission(&self, pending: Pending, row: &SourceControl) -> u64 {
-        if self.delay() != 0
-            && pending.life != NONE
-            && self.lives.at(pending.life).is_some_and(|life| !life.sounded)
-        {
-            self.lives.at(pending.life).unwrap().assignment.emission
-        } else {
-            row.emission_gate.load(Ordering::Acquire) & !GATE_FLAGS
         }
     }
     /// The reservation a replacement takes over instead of claiming a fresh
@@ -2411,9 +2508,9 @@ impl Source {
         if self.sealed {
             return;
         }
-        // 64 voice releases and 48 pedal resets fit the reserved 128 exactly.
+        // 64 voice releases and 64 channel resets fit the reserved 128 exactly.
         for index in 0..64 {
-            let Some(mut release) = self.emergency[index] else {
+            let Some(mut release) = self.debt.release(index) else {
                 continue;
             };
             if release.staged || release.accepted.is_some() {
@@ -2438,15 +2535,14 @@ impl Source {
                 break;
             }
             release.staged = true;
-            self.emergency[index] = Some(release);
+            self.debt.update_release(index, release);
         }
         for channel in 0..16 {
-            for (bit, controller) in [64, 66, 69].into_iter().enumerate() {
-                if self.channel_reset[channel] & (1 << bit) == 0 {
+            for bit in 0..CHANNEL_RESETS {
+                if !self.debt.armed(channel, bit) {
                     continue;
                 }
-                let event =
-                    Event::Midi { port: 0, data: [0xb0 | channel as u8, controller, 0], flags: 0 };
+                let event = Self::channel_reset_event(channel as u8, bit);
                 let group = api::Group::single(
                     api::Token([0, channel as u64, bit as u64, 2]),
                     api::Lane::Emergency,
@@ -2457,15 +2553,35 @@ impl Source {
                 if output.stage(group).is_err() {
                     return;
                 }
-                self.channel_reset[channel] &= !(1 << bit);
-                self.channel_reset[channel] |= 1 << (bit + 3);
+                self.debt.stage(channel, bit);
             }
         }
+    }
+    /// The neutral wire value for one channel reset slot. The three pedals go
+    /// out as their controller at zero; the recenter is the only one that is
+    /// not a CC, and it carries the 14-bit center split the way MIDI does.
+    fn channel_reset_event(channel: u8, bit: usize) -> Event {
+        if bit == PITCH_RESET {
+            return Event::Midi {
+                port: 0,
+                data: [0xe0 | channel, (BEND_CENTER & 0x7f) as u8, (BEND_CENTER >> 7) as u8],
+                flags: 0,
+            };
+        }
+        Event::Midi { port: 0, data: [0xb0 | channel, [64, 66, 69][bit], 0], flags: 0 }
     }
     fn prepare_emergency(&mut self, group: api::Group) -> bool {
         if self.sealed || self.emergency_output.free() == 0 || self.sequence == u64::MAX {
             return false;
         }
+        // `position` and `serial` are the ordinary lane's slot-reuse guard --
+        // `complete` asserts the pending cell it is about to write is still
+        // the one the permit was prepared for. The emergency lane compares
+        // neither, and cannot with what it carries: `complete_emergency`
+        // derives both from `completion.group.token`, the same token this
+        // prepared from, so an assertion here would compare a value to itself.
+        // A real check wants a serial on `Release`, which is a mechanism and
+        // an abort path rather than a deletion (#712).
         self.permit = Some(Permit {
             position: group.token.0[1] as usize,
             serial: group.token.0[2],
@@ -2486,7 +2602,7 @@ impl Source {
         let permit = self.permit.take();
         let index = completion.group.token.0[1] as usize;
         if completion.group.token.0[3] == 1 {
-            let Some(mut release) = self.emergency[index] else {
+            let Some(mut release) = self.debt.release(index) else {
                 return;
             };
             release.staged = false;
@@ -2520,20 +2636,18 @@ impl Source {
                     }
                 }
             }
-            self.emergency[index] = Some(release);
+            self.debt.update_release(index, release);
         } else {
-            let bit = completion.group.token.0[2] as u8;
-            let (pending_bit, staged_bit) = (1 << bit, 1 << (bit + 3));
-            self.channel_reset[index] &= !staged_bit;
-            if completion.accepted & 1 != 0 {
+            let bit = completion.group.token.0[2] as usize;
+            let accepted = completion.accepted & 1 != 0;
+            self.debt.complete(index, bit, accepted);
+            if accepted {
                 let event = Event::from_input(completion.group.event(0).unwrap()).unwrap();
                 let actual = self.callback.unwrap().steady_time + i64::from(completion.group.time);
                 let delta = self.record(event, NONE, actual, actual);
                 self.emergency_output
                     .push(delta)
                     .unwrap_or_else(|_| unreachable!("prepared emergency cell"));
-            } else {
-                self.channel_reset[index] |= pending_bit;
             }
         }
     }
@@ -2715,14 +2829,14 @@ impl Source {
             self.emergency_sent = self.emergency_sent.saturating_sub(1);
         }
         for slot in 0..64 {
-            if self.emergency[slot].is_some_and(|release| {
+            if self.debt.release(slot).is_some_and(|release| {
                 release.accepted.is_some_and(|delta| {
                     delta.sequence <= cut
                         && (delta.mapped && delta.actual < through
                             || self.sealed_ack.is_some_and(|sealed| delta.sequence <= sealed))
                 })
             }) {
-                let release = self.emergency[slot].take().unwrap();
+                let release = self.debt.discharge_release(slot).unwrap();
                 self.lives.local_mut(release.life).unwrap().refs -= 1;
                 self.recycle(release.life);
             }
@@ -2858,8 +2972,8 @@ impl Source {
                 | (i64::from(self.emergency_output.len() != 0) << 4)
                 | (i64::from(self.permit.is_some()) << 5)
                 | (i64::from(self.manifest.len() != 0) << 6)
-                | (i64::from(self.emergency.iter().any(Option::is_some)) << 7)
-                | (i64::from(self.channel_reset != [0; 16]) << 8),
+                | (i64::from(self.debt.any_release()) << 7)
+                | (i64::from(self.debt.any_channel()) << 8),
             self.capture_published as i64,
             self.trace.last_output_player,
             self.trace.last_output_correction,
@@ -3182,7 +3296,13 @@ impl Source {
             input_cut: pending.serial,
             lifetime,
             request: pending.life,
-            original_on: child == NONE && pending.event.attack().is_some(),
+            // What this flag asks the Hub for is the retirement of the plan
+            // this attack minted. An Off attack minted none, so saying yes
+            // would have the Hub hold a placeholder for a request that is
+            // never coming — one `LIFETIMES` slot per cancelled Off note.
+            original_on: child == NONE
+                && pending.event.attack().is_some()
+                && self.lives.at(pending.life).is_some_and(|life| life.adaptive),
         };
         let Some(cell) =
             offer.session.rows[usize::from(offer.lease.slot - 1)].to_hub.reserve_repair()
@@ -3421,9 +3541,8 @@ impl Source {
             || self.owed_note_off != [NONE; 64]
             || self.old_pending != 0
             || self.state.count() != 0
-            || self.channel_reset != [0; 16]
             || self.permit.is_some()
-            || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
+            || self.debt.unsent()
         {
             return;
         }

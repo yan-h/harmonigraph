@@ -2,6 +2,7 @@
 //! waits for the display, file drainer, an editor, or registry bookkeeping.
 use super::{
     clock::{Clock, Coverage},
+    direct::Direct,
     protocol::*,
     queue::Queue,
     registry::HubOffer,
@@ -11,8 +12,7 @@ use super::{
 };
 use crate::configuration::Owner;
 use harmonigraph_core::canonical::{ClockId, EventTiming};
-use harmonigraph_core::confirmed::{ConfirmedPitch, PitchProvenance};
-use harmonigraph_core::VoiceKey;
+use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_record::Recorder;
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
@@ -122,6 +122,31 @@ impl Default for Row {
     }
 }
 impl Row {
+    /// This row owns nothing in flight: no copied input left to sequence, no
+    /// accepted output left to publish, and nothing it believes is sounding.
+    /// Every path that gives a row up asks this first, because it is the
+    /// point at which forgetting the row cannot strand anything.
+    fn settled(&self) -> bool {
+        self.output.len() == 0 && self.state.count() == 0 && self.inputs.len() == 0
+    }
+    /// Rejects a message minted before the lease or the session epoch this row
+    /// now holds. A reset ends both, so this one test is what keeps every
+    /// obsolete reply from acting on the row that replaced it.
+    fn current(&self, incarnation: u64, epoch: u64) -> bool {
+        self.lease.is_some_and(|lease| lease.incarnation == incarnation) && self.epoch == epoch
+    }
+    /// The lease is gone and the row is free for the next pairing: everything
+    /// the lease owned goes back to its fresh value in one place, rather than
+    /// a field list here that has to be kept level with `Default`. What a row
+    /// keeps across a lease is the storage the pairing boundary moved in --
+    /// taking it back would be an audio-thread allocation -- and the
+    /// monotonic seal generation, which numbers seals across every lease.
+    fn release(&mut self) {
+        let output = std::mem::replace(&mut self.output, Queue::detached());
+        let inputs = std::mem::replace(&mut self.inputs, Queue::detached());
+        let seal_generation = self.seal_generation;
+        *self = Row { output, inputs, seal_generation, ..Row::default() };
+    }
     fn input_progress(&mut self, coverage: Coverage, input_cut: u64, membership: u64) {
         let new_segment = self.coverage.is_some_and(|output| output.start == coverage.start)
             && self.input_coverage.is_none_or(|(old, _)| coverage.start >= old.through);
@@ -368,7 +393,7 @@ impl Hub {
         }
         offer.session.closing.store(0, Ordering::Release);
     }
-    pub fn input_boundary(&mut self) {
+    pub fn input_boundary(&mut self, owner: &mut Owner) {
         if let Some(update) = self.direct.apply_setup_with_clock(false) {
             if self.transition.is_none() {
                 self.transition = Some(update);
@@ -376,6 +401,14 @@ impl Hub {
                     self.fence_rows(update.generation);
                 }
                 self.direct.fence_transition();
+                // The same cut, in the observation's own numbering. Every
+                // input this callback carried is already observed AND
+                // captured -- the wrapper delivers performance input in full
+                // before it calls this -- so what the fence orphans and what
+                // the observation may carry are one set. A key struck while
+                // the transition waits is above the cut, and its retained
+                // onset record is what will own it.
+                owner.direct.fence();
             }
         }
         if self.sequences_inputs() {
@@ -535,10 +568,7 @@ impl Hub {
             row.emission_gate.load(Ordering::Acquire) & BUSY != 0
                 || !row.source_detached.load(Ordering::Acquire)
                 || !row.hub_detached.load(Ordering::Acquire)
-        }) || self
-            .rows
-            .iter()
-            .any(|row| row.output.len() != 0 || row.inputs.len() != 0 || row.state.count() != 0)
+        }) || self.rows.iter().any(|row| !row.settled())
             || offer.session.credits.load(Ordering::Acquire) != 0
         {
             self.trace.setup_wait = 7;
@@ -578,7 +608,10 @@ impl Hub {
         self.sequencer.terminal_session = false;
         self.sequencer.terminal_sources = 0;
         self.sequencer.retire_cohort();
-        self.sequencer.clear_clock_context();
+        // `resume_clock` above has already reset the observation if this
+        // boundary was discontinuous, so what it still holds here is exactly
+        // what a healthy one carries: keys the player has not let go of.
+        self.sequencer.carry_observed(&mut owner.direct);
         // Rematching cannot reopen a row until the complete committed clock is
         // visible. Old returned/still-Ready offers remain withdrawn and fenced.
         offer.session.faults.store(0, Ordering::Release);
@@ -659,42 +692,10 @@ impl Hub {
             if row.lease.is_some_and(|lease| {
                 lease.incarnation != shared.expected_incarnation.load(Ordering::Acquire)
             }) && shared.hub_detached.load(Ordering::Acquire)
-                && row.output.len() == 0
-                && row.state.count() == 0
-                && row.inputs.len() == 0
+                && row.settled()
             {
-                row.lease = None;
-                row.last_disposition = None;
-                row.channel_witness = None;
-                row.epoch = 0;
-                row.state = State::default();
-                row.received = 0;
-                row.received_actual = None;
-                row.actual_order = true;
-                row.applied = 0;
-                row.report = None;
-                row.coverage = None;
-                row.member = false;
-                row.participating = true;
-                self.sequencer.participating[index + 1] = true;
-                self.sequencer.participation_serial[index + 1] = 0;
-                self.sequencer.history.clear(index + 1, self.sequencer.decision);
-                row.repair = false;
-                row.baseline_id = 0;
-                row.detach = None;
-                row.last_ack = None;
-                row.input_coverage = None;
-                row.input_settled = (0, 0);
-                row.terminal_cut = None;
-                self.sequencer.terminal_sources &= !(1 << index);
-                row.input_membership = 0;
-                row.acknowledged_membership = 0;
-                self.sequencer.captured[index + 1] = 0;
-                row.seal = None;
-                row.producer_joined = None;
-                row.joined_unknown_wire = false;
-                row.last_sealed_ack = None;
-                row.joining = None;
+                row.release();
+                self.sequencer.release_row(index);
             }
             // This lane never waits for Capture ingress or an older Progress
             // report. Reserve cancellation ACK before consuming its authority.
@@ -702,9 +703,7 @@ impl Hub {
                 let ack = shared.to_source.reserve_repair();
                 let repair = shared.to_hub.take_repair_if(|control| match control {
                     Control::Disposition { incarnation, epoch, transaction, .. }
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                            && transaction != 0 =>
+                        if row.current(incarnation, epoch) && transaction != 0 =>
                     {
                         ack.is_some()
                             && row.last_disposition.is_none_or(|last| {
@@ -725,10 +724,7 @@ impl Hub {
                             lifetime,
                             request,
                             original_on,
-                        } if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                            && transaction != 0 =>
-                        {
+                        } if row.current(incarnation, epoch) && transaction != 0 => {
                             ack.unwrap().publish(Reply::Disposition {
                                 incarnation,
                                 transaction,
@@ -808,8 +804,7 @@ impl Hub {
                         }
                     }
                     Control::Progress { incarnation, epoch, coverage, output_cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch =>
+                        if row.current(incarnation, epoch) =>
                     {
                         if row.joining.is_some_and(|start| coverage.start >= start) && !row.member {
                             row.coverage =
@@ -824,8 +819,7 @@ impl Hub {
                         }
                     }
                     Control::Seal { incarnation, epoch, generation, cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch
+                        if row.current(incarnation, epoch)
                             && shared.withdrawn.load(Ordering::Acquire) =>
                     {
                         row.seal = Some(cut);
@@ -833,8 +827,7 @@ impl Hub {
                         row.joining = None;
                     }
                     Control::ProducerJoined { incarnation, epoch, cut, unknown_wire }
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && epoch == row.epoch
+                        if row.current(incarnation, epoch)
                             && shared.withdrawn.load(Ordering::Acquire)
                             && row.received <= cut
                             && row.producer_joined.is_none_or(|old| old == cut) =>
@@ -844,8 +837,7 @@ impl Hub {
                         row.joining = None;
                     }
                     Control::Detach { incarnation, epoch, cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch =>
+                        if row.current(incarnation, epoch) =>
                     {
                         row.detach = Some(cut)
                     }
@@ -873,15 +865,12 @@ impl Hub {
                 self.service_revision = self.service_revision.wrapping_add(1);
                 match intent {
                     Intent::Coverage { incarnation, epoch, coverage, input_cut, membership } => {
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                        {
+                        if row.current(incarnation, epoch) {
                             row.input_progress(coverage, input_cut, membership);
                         }
                     }
                     Intent::InputSettled { incarnation, epoch, input_cut, output_cut } => {
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
+                        if row.current(incarnation, epoch)
                             && input_cut >= row.input_settled.0
                             && output_cut >= row.input_settled.1
                         {
@@ -1251,7 +1240,20 @@ impl Hub {
                     };
                     row.state.assignment(value.lifetime, binding, player);
                 }
-                if let Some(mut delta) = delta {
+                // #712: Off "excludes the track from adaptive context and
+                // visualization". 4C refused the context half where the copied
+                // record is applied; this is the visualization half, and the
+                // accepted-output lane is the same lane in both modes, so a
+                // gate here is the whole of it.
+                //
+                // The predicate is the row's mode rather than the note's,
+                // because the row's mode is what `publish_snapshots` already
+                // sends downstream as the baseline's `participating`, and that
+                // is what hides the source in `NoteTracker`. A per-note gate
+                // would publish deltas for a source the display has hidden.
+                // It also leaves the deferred "report Off notes for display
+                // only" option exactly one flag, as #712 anticipates.
+                if let Some(mut delta) = delta.filter(|_| row.participating) {
                     delta.assignment = row
                         .state
                         .voice(value.lifetime)
@@ -1329,7 +1331,7 @@ impl Hub {
         #[cfg(test)]
         self.shared.before_direct_repair.reach();
         if owner.direct.pending().is_none() {
-            owner.publish_direct(recorder, observation);
+            owner.publish_direct_repair(recorder, observation);
         }
         if let Some(offer) = &self.offer {
             if self.clock.valid && offer.session.alive.load(Ordering::Acquire) {
@@ -1372,25 +1374,15 @@ impl Hub {
             false
         }
     }
+    /// A row that is Off, or whose state has lost an event, contributes no
+    /// confirmed pitches -- and says so by clearing, since the Hub is the only
+    /// thing that knows anything about this source at all.
     fn confirm(row: &Row, confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches) {
         let Some(lease) = row.lease else {
             return;
         };
-        let empty = ConfirmedPitch {
-            key: VoiceKey { source: lease.source, channel: 0, note: 0 },
-            lifetime: None,
-            host_note_id: None,
-            onset_sample: 0,
-            pitch_microcents: 0,
-            provenance: PitchProvenance::AcceptedOutput,
-        };
-        let mut rows = [empty; 64];
-        let count = if row.participating && row.state.complete {
-            row.state.confirmed(lease.source, &mut rows)
-        } else {
-            0
-        };
-        let _ = confirmed.replace_source(lease.source, &rows[..count]);
+        let live = row.participating && row.state.complete;
+        let _ = row.state.publish_confirmed(lease.source, live, confirmed);
     }
     /// The row snapshot display and recording read after a gap: built from
     /// what the Hub itself has applied, not from anything the Tune sends. The
@@ -1490,13 +1482,10 @@ impl Hub {
                     }
                 }
             }
-            if row.detach.is_some_and(|cut| {
-                row.seal == Some(cut)
-                    && row.applied == cut
-                    && row.output.len() == 0
-                    && row.state.count() == 0
-                    && row.inputs.len() == 0
-            }) {
+            if row
+                .detach
+                .is_some_and(|cut| row.seal == Some(cut) && row.applied == cut && row.settled())
+            {
                 row.member = false;
                 if !session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
                     self.service_revision = self.service_revision.wrapping_add(1);
@@ -1587,9 +1576,7 @@ impl Hub {
             // producer can still capture post-cut input before its enclosing
             // detach boundary; only Detach certifies that transfer has ended.
             if row.detach.is_some_and(|cut| row.seal == Some(cut) && row.applied == cut)
-                && row.output.len() == 0
-                && row.state.count() == 0
-                && row.inputs.len() == 0
+                && row.settled()
                 && !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel)
             {
                 self.service_revision = self.service_revision.wrapping_add(1);
@@ -1601,12 +1588,10 @@ impl Hub {
             return false;
         }
         self.direct.settled()
-            && self.rows.iter().all(|r| {
-                r.output.len() == 0
-                    && r.state.count() == 0
-                    && r.inputs.len() == 0
-                    && (r.lease.is_none() || r.seal == Some(r.applied))
-            })
+            && self
+                .rows
+                .iter()
+                .all(|r| r.settled() && (r.lease.is_none() || r.seal == Some(r.applied)))
             && self.offer.as_ref().is_none_or(|offer| {
                 offer.session.credits.load(Ordering::Acquire) == 0
                     && offer.session.rows.iter().all(|row| {
@@ -1658,6 +1643,16 @@ impl Hub {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TestRow {
+    pub lease: Option<Lease>,
+    pub epoch: u64,
+    pub detach: Option<u64>,
+    pub participating: bool,
+    pub participation_serial: u64,
+}
+
+#[cfg(test)]
 impl Hub {
     pub fn test_row_receiver(&self, slot: usize, channel: usize) -> (Option<u8>, usize, u64, u64) {
         let row = &self.rows[slot];
@@ -1668,6 +1663,17 @@ impl Hub {
             row.received,
             row.applied,
         )
+    }
+    /// What a row holds and how this Hub is sequencing the source that owns
+    /// it. `detach` is the plainest thing an obsolete `Control` would move.
+    pub fn test_row_identity(&self, slot: usize) -> TestRow {
+        TestRow {
+            lease: self.rows[slot].lease,
+            epoch: self.rows[slot].epoch,
+            detach: self.rows[slot].detach,
+            participating: self.sequencer.participating[slot + 1],
+            participation_serial: self.sequencer.participation_serial[slot + 1],
+        }
     }
     pub fn test_joined_rows(&self) -> [(Option<Lease>, Option<u64>, bool, u64); TUNERS] {
         std::array::from_fn(|index| {

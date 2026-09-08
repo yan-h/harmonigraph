@@ -634,34 +634,24 @@ impl Plugin for Harmonigraph {
             {
                 let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
                 let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
-                let mut delta: harmonigraph_core::canonical::NoteDelta = event.into();
-                let route = if let Some(owner) = self.configuration.as_ref() {
-                    delta.timing = owner.direct_timing(timing);
-                    match delta.timing.and_then(|timing| owner.recording_route(timing, time).ok()) {
-                        Some(route) => route,
-                        None => {
-                            self.take.fail_configuration();
-                            Default::default()
-                        }
-                    }
-                } else {
-                    Default::default()
-                };
+                let delta: harmonigraph_core::canonical::NoteDelta = event.into();
+                // This whole arm is the no-configuration plugin: a Harmonigraph
+                // with a session owner observes and routes its own MIDI through
+                // `Owner::observe` and publishes it from the Hub's merge, so
+                // there is no owner here to take a route or a timing from.
                 let _ = self.take.publish_note(
                     delta,
                     ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
-                    route,
+                    Default::default(),
                 );
                 if let Some(origin) = take_origin {
-                    if self.configuration.is_none() {
-                        self.take.note(
-                            take_time(origin, timing, self.sample_rate),
-                            SourceId::DIRECT,
-                            channel,
-                            note,
-                            kind,
-                        );
-                    }
+                    self.take.note(
+                        take_time(origin, timing, self.sample_rate),
+                        SourceId::DIRECT,
+                        channel,
+                        note,
+                        kind,
+                    );
                     self.take_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -802,7 +792,7 @@ impl ClapPlugin for Harmonigraph {
         self.aggregation.as_mut().unwrap().direct.input(input);
     }
     fn clap_performance_input_boundary(&mut self) {
-        self.aggregation.as_mut().unwrap().input_boundary();
+        self.aggregation.as_mut().unwrap().input_boundary(self.configuration.as_mut().unwrap());
     }
     fn clap_performance_process(
         &mut self,

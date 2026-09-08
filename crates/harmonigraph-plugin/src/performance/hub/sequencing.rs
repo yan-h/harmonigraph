@@ -23,6 +23,13 @@ const NO_PLAN: u32 = u32::MAX;
 #[derive(Clone, Copy, PartialEq)]
 struct Voice {
     source: u8,
+    /// True for the DIRECT voices a clock boundary carried across. The copied
+    /// record stream owns every other cell and numbers its notes in the
+    /// source's own lifetime space; these are numbered in `Direct`'s, so no
+    /// capture record may address them and only the observation retires them.
+    /// The two spaces are disjoint by this flag rather than by their values,
+    /// which can and do collide.
+    observed: bool,
     lifetime: u64,
     correction: i64,
     player: f64,
@@ -38,6 +45,7 @@ impl Voice {
     fn factual(source: u8, voice: &harmonigraph_core::canonical::VoiceBaseline) -> Self {
         Self {
             source,
+            observed: false,
             lifetime: voice.lifetime,
             correction: voice.frozen_offset_microcents,
             player: voice.player_tuning,
@@ -75,14 +83,12 @@ pub(super) struct Sequencer {
     pub captured: [u64; TUNERS + 1],
     membership: Option<Membership>,
     config: Option<ResolvedConfig>,
-    binding_sample: i64,
     pub(super) decision: u64,
     cohort_floor: u64,
     cohort_unsent: usize,
     cohort_recipients: u16,
     committing: bool,
     pub finalized: Option<i64>,
-    pub copied: Option<i64>,
     /// One LIFETIMES-long ledger per PAIRED row, and nothing at all for a row
     /// that has never been paired. The registry allocates a row's ledger on
     /// the main thread when it hands out that row's lease; the Hub only ever
@@ -120,14 +126,12 @@ impl Default for Sequencer {
             captured: [0; TUNERS + 1],
             membership: None,
             config: None,
-            binding_sample: 0,
             decision: 0,
             cohort_floor: 0,
             cohort_unsent: 0,
             cohort_recipients: 0,
             committing: false,
             finalized: None,
-            copied: None,
             // DIRECT has no plan row. Birth indices are already separately
             // reserved at Source; they are never authority without the key.
             plans: std::array::from_fn(|_| None),
@@ -157,22 +161,116 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    /// The per-row half of giving a lease up. It lives here rather than on the
+    /// `Row` because the sequencer indexes these by source -- DIRECT is zero
+    /// and a Hub row is one past its own index -- and a fresh lease must not
+    /// inherit the participation, history or input cut of the one before it.
+    pub(super) fn release_row(&mut self, index: usize) {
+        self.participating[index + 1] = true;
+        self.participation_serial[index + 1] = 0;
+        self.history.clear(index + 1, self.decision);
+        self.terminal_sources &= !(1 << index);
+        self.captured[index + 1] = 0;
+    }
     /// A clock boundary empties the Hub's belief about what is sounding.
     ///
-    /// Nothing is reseeded across it. The copied input records own every cell
-    /// here and number their notes in the Tune's own lifetime space, so a
-    /// voice put here from anywhere else is a voice no later Terminal record
-    /// can address — it would sit in the policy's context until the next
-    /// clock boundary swept it out. The DIRECT observation this used to be
-    /// seeded from keeps its own held notes in `Direct::state`, which is
-    /// where display and recording read them; and a boundary is only
-    /// committed once forwarding has settled, so nothing is still sounding
-    /// for the seeded voices to have represented.
+    /// The copied input records own every cell this leaves behind and number
+    /// their notes in the source's own lifetime space, so a voice put here
+    /// from anywhere else is a voice no later Terminal record can address.
+    /// That is why the boundary does not simply retarget the old DIRECT seed
+    /// at this table: measured at the boundary, the DIRECT capture stream has
+    /// already forgotten the note the player is still holding and reports its
+    /// next events with no lifetime at all, so a cell seeded in the
+    /// observation's numbering would sit in the policy's context until the
+    /// next boundary swept it out. [`Sequencer::carry_observed`] is what
+    /// preserves the contribution instead.
     pub(super) fn clear_clock_context(&mut self) {
         self.history.clear_all(self.decision);
         for cell in self.context.iter_mut() {
             *cell = None;
         }
+    }
+    /// Carry the notes the player is still holding across a healthy boundary.
+    ///
+    /// A setup transition terminates what DIRECT has forwarded before it can
+    /// commit — that is the settled-ownership precondition `commit_transition`
+    /// waits on — but the key is still down and the observation still holds the
+    /// note, which is what display, recording and learning read. #712 requires
+    /// DIRECT's contribution to tuning context to survive with them.
+    ///
+    /// These cells are owned by the observation alone, and marked so: they are
+    /// moved and retired by [`Sequencer::apply_observed`] from the observation's
+    /// own stream of changes, and no capture record may address them. That is
+    /// the whole of what keeps this from being the old seed, which put one
+    /// subsystem's numbering into cells another subsystem's records were
+    /// expected to retire.
+    ///
+    /// The fence is what keeps that ownership single. Only voices struck before
+    /// the boundary are carried: a key struck while the transition waits for the
+    /// paired rows to settle still has its onset record retained in the capture
+    /// stream, so it arrives under the new session with its own identity, and
+    /// carrying the observation of it too would leave one physical note holding
+    /// two cells, scored twice in every assignment after it.
+    ///
+    /// A discontinuous boundary has already reset the observation, so this
+    /// carries nothing across one.
+    pub(super) fn carry_observed(&mut self, direct: &mut Direct) {
+        self.clear_clock_context();
+        // The clear leaves every cell free, and there are four times as many
+        // of them as one source can hold voices, so this zip drops nothing.
+        for (cell, voice) in self.context.iter_mut().zip(direct.fenced_voices()) {
+            *cell = Some(Voice { observed: true, ..Voice::factual(0, voice) });
+        }
+        direct.start_carry();
+    }
+    /// The observation is the sole authority over the cells it carried, and it
+    /// exercises it here, at the merge front rather than once a callback.
+    ///
+    /// The wrapper walks a whole callback of input through
+    /// `clap_configuration_observe` before performance sees any of it, so the
+    /// observation's own `State` is always a block-end answer: reconciling
+    /// against it would retire a voice, or move its tuning, for onsets earlier
+    /// in the same callback than the release or bend that did it. The changes
+    /// arrive here as a stream stamped with their samples instead, and the
+    /// merge applies each where it stands -- before the onsets at that sample,
+    /// like every other release and controller.
+    ///
+    /// Nothing here creates a cell, so a note struck after the boundary
+    /// belongs to the capture stream like every other note.
+    ///
+    /// False where the replay was lost. The surrender is a change like the
+    /// rest of them and takes the same rule: everything the queue still holds
+    /// is ordered and still true, so it lands first, and the cells go at the
+    /// sample the loss happened at rather than at whatever front this pass has
+    /// reached. Then it is the caller's, because a context missing keys the
+    /// player is still holding must stop assignment rather than quietly score
+    /// against what is left. What display, recording and learning read is the
+    /// observation's own state, and that is untouched.
+    #[must_use]
+    pub(super) fn apply_observed(&mut self, direct: &mut Direct, through: i64) -> bool {
+        while let Some(update) = direct.next_carried(through) {
+            let Some(cell) = self
+                .context
+                .iter_mut()
+                .find(|cell| cell.is_some_and(|v| v.observed && v.lifetime == update.lifetime))
+            else {
+                continue;
+            };
+            match update.player {
+                None => *cell = None,
+                Some(player) => cell.as_mut().unwrap().tune(player),
+            }
+        }
+        if direct.carried_lost.is_none_or(|sample| sample > through) {
+            return true;
+        }
+        direct.carried_lost = None;
+        for cell in self.context.iter_mut() {
+            if cell.is_some_and(|voice| voice.observed) {
+                *cell = None;
+            }
+        }
+        false
     }
     /// A settled reset retires the cohort still in flight along with the
     /// session that owned it.
@@ -353,6 +451,12 @@ impl Hub {
     #[cfg(test)]
     pub(in crate::performance) fn test_plan_ledger_bytes(&self) -> usize {
         self.sequencer.plan_ledger_bytes()
+    }
+    /// Plan slots currently held across every paired row's ledger. A note that
+    /// asks the Hub for nothing must leave this where it found it.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_count(&self) -> usize {
+        self.sequencer.plan_count
     }
     #[cfg(test)]
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
@@ -574,7 +678,18 @@ impl Hub {
             let boundary = sample.map_or(membership.through, |sample| sample.max(membership.floor));
             let finalized = boundary.min(membership.through);
             self.sequencer.finalized = Some(finalized);
-            self.sequencer.copied = Some(finalized);
+            // The observation's own changes to the cells a boundary carried,
+            // replayed at their samples inside the same chronological merge
+            // the copied records take. `finalized` is how far this pass has
+            // proved input complete, so everything at or before it is settled
+            // history and everything after it is still the callback's future.
+            if !self.sequencer.apply_observed(&mut owner.direct, finalized) {
+                // A bounded store could not hold what it was given, which is
+                // the same failure `same_sample_records` latches for below and
+                // takes the same latch. The one thing it must not be is quiet.
+                self.configuration_exhausted();
+                return;
+            }
             let Some(sample) = sample.filter(|_| boundary < membership.through) else { return };
             // Collection and assembly spend one allowance, so a callback that
             // spent most of it collecting cannot be trusted to finish taking
@@ -599,7 +714,6 @@ impl Hub {
             };
             self.batch.begin(sample);
             self.sequencer.membership = Some(membership);
-            self.sequencer.binding_sample = boundary;
             self.sequencer.history.configuration(config.revision, self.sequencer.decision);
             self.sequencer.config = Some(config);
             self.sequencer.cohort_floor = self.sequencer.decision;
@@ -694,6 +808,14 @@ impl Hub {
                 if !value {
                     self.sequencer.history.clear(source, self.sequencer.decision);
                 }
+                // Either direction is now a reset of that Tune, and this
+                // record is still the whole of what the reset owes the Hub.
+                // The two things the toggle ends reach it on the lanes stage
+                // 2 already built: the attacks it cancels as cancellation
+                // dispositions, and the voices it terminates as ordinary
+                // accepted releases. Neither needs a Stop-style sweep here --
+                // DIRECT needs one because it reaches neither lane, and a
+                // paired Tune reaches both.
                 if source != 0 {
                     self.rows[source - 1].participating = value;
                     self.rows[source - 1].repair = true;
@@ -716,7 +838,9 @@ impl Hub {
         if !record.onset() {
             let voice = self.sequencer.context.iter_mut().find(|cell| {
                 cell.is_some_and(|voice| {
-                    voice.source == record.lease.slot && voice.lifetime == record.lifetime
+                    !voice.observed
+                        && voice.source == record.lease.slot
+                        && voice.lifetime == record.lifetime
                 })
             });
             match (record.kind, voice) {
@@ -741,6 +865,20 @@ impl Hub {
                 }
                 _ => {}
             }
+            return true;
+        }
+        // An Off Tune forwards locally, so its onset asks for nothing and
+        // nothing is created here for it to need: no plan, and therefore no
+        // reply owed, no `LIFETIMES` slot held and no retirement outstanding;
+        // no decision spent and no context cell taken, which is what excluding
+        // the track from adaptive context means at this end. The whole of what
+        // the record still does is pass the input cursor. Its cancellations
+        // never arrive either: `dispose_work` reports `original_on` for an
+        // adaptive attack only, so no placeholder is minted here for one.
+        //
+        // Refusing the plan is what makes `Source::assignment_ready` sound;
+        // that is where the other half of this pairing is written down.
+        if source != 0 && !record.adaptive {
             return true;
         }
         let request = Request {
@@ -782,7 +920,10 @@ impl Hub {
             .map(|plan| plan.binding.configuration)
             .or(self.sequencer.config)
             .expect("owned original cohort configuration");
-        let (correction, selection) = if source != 0 && record.adaptive {
+        // Every onset that reaches here from a paired row is adaptive; the
+        // refusal above is what makes that true. DIRECT is the other case and
+        // is never assigned.
+        let (correction, selection) = if source != 0 {
             let mut count = 0;
             for voice in self.sequencer.context.iter().flatten() {
                 if self.sequencer.participating[usize::from(voice.source)] {
@@ -843,14 +984,9 @@ impl Hub {
         };
         if source != 0 {
             let index = (source - 1) * LIFETIMES + usize::from(record.request);
-            let emission = self.offer.as_ref().unwrap().session.rows[source - 1]
-                .emission_gate
-                .load(Ordering::Acquire)
-                & !super::super::source::GATE_FLAGS;
             let binding = Assignment {
                 configuration,
                 decision,
-                emission,
                 correction,
                 selection,
                 initial_player: player,
@@ -882,7 +1018,7 @@ impl Hub {
                 self.configuration_exhausted();
                 return false;
             }
-            if record.adaptive && self.sequencer.participating[source] {
+            if self.sequencer.participating[source] {
                 self.sequencer.history.commit(record.lease, record.channel, record.key, binding);
             }
             self.sequencer.cohort_unsent += 1;
@@ -896,6 +1032,7 @@ impl Hub {
         if let Some(slot) = slot {
             self.sequencer.context[slot] = Some(Voice {
                 source: record.lease.slot,
+                observed: false,
                 lifetime: record.lifetime,
                 correction: i64::from(correction),
                 player,
@@ -1089,7 +1226,9 @@ impl Sequencer {
     /// `apply`; this is for the endings that never become one.
     fn forget_voice(&mut self, source: u8, lifetime: u64) {
         if let Some(cell) = self.context.iter_mut().find(|cell| {
-            cell.is_some_and(|voice| voice.source == source && voice.lifetime == lifetime)
+            cell.is_some_and(|voice| {
+                !voice.observed && voice.source == source && voice.lifetime == lifetime
+            })
         }) {
             *cell = None;
         }

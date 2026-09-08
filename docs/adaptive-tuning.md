@@ -348,6 +348,14 @@ Source health uses the measured audio progress/region model, with explicit reset
 Queue saturation and invalidation must remain observable even when the ordinary channel is full.
 Required-storage exhaustion follows the visible emergency-stop contract, never an unretuned assignment fallback.
 
+**The emission gate carries no generation, and the write-only bookkeeping beside it is gone** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+The [engineering contracts](adaptive-tuning-contracts.md) describe a gate packing a checked emission generation into the 62 bits above CLOSED and BUSY, and that half was never built:
+the value a planned `Assignment` recorded and the value the Tune claimed against were both always zero — 3,720 mints and 50,719 claims across the suite, every one of them zero, which is why reverting the mode choice that reads it killed no test.
+Claiming the gate is now a plain claim of OPEN and `Assignment::emission` is removed.
+Removed with it, each written and never read: `Sequencer::binding_sample`, `Sequencer::copied`, `Stops::reached` and `Wave::delivered`.
+The emergency lane's `Permit { position, serial }` stays, because those two fields are the *ordinary* lane's slot-reuse guard and only the emergency lane's copies of them go uncompared;
+making that guard real needs a serial on the emergency `Release`, which is a mechanism rather than a deletion.
+
 ## Voice identity
 
 Channel and MIDI key are not enough once several tracks contribute.
@@ -475,14 +483,43 @@ Offline rendering runs the same sample-timed state machine and cannot depend on 
 
 The initial tuner has one participation control rather than three independent visibility/context/retune switches:
 
-- **Participating:** report actual output, contribute to context, appear in Harmonigraph and retune new notes;
-- **Off:** remove the source from project context and visualization and intentionally leave newly received notes unretuned at the same D, while finishing the expression/lifecycle handling of already-held voices.
+- **Participating:** report actual output, contribute to context, appear in Harmonigraph, retune new notes and override incoming pitch expression;
+- **Off:** remove the source from project context and visualization and forward newly received notes without adaptive correction at the same D, passing the player's MIDI pitch bend and per-note pitch expression through instead of centering or zeroing them.
 
-Off is an explicit user selection, not an automatic deadline fallback.
-It affects newly received notes;
-preexisting pending adaptive requests remain adaptive and finish with their valid assignments under the late-stream rules unless explicitly canceled by Stop/Reset or emergency stop.
-Withdrawing a source from future context does not erase its pre-transition sequencing obligations or permit it to stop required callbacks.
+Off is an explicit user selection, not an automatic deadline fallback, and it is not host bypass:
+D and the latency reported for it are the same in both modes.
+
+**Off is a local forwarding path** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+An Off onset asks the Hub for no assignment, so it waits for no reply and the Hub mints no plan for it:
+it emits at its own input plus D whatever the Hub is doing, spends no decision, holds no slot in the plan ledger and takes no cell in the policy's context.
+Those two halves are one decision rather than two.
+An onset that emits without an assignment reports decision zero, which matches no plan, so a Hub that minted one for it would never retire that slot — one leaked lifetime per Off note, ending in `configuration_exhausted` as soon as the Tune hands the same request slot back.
+For the same reason a cancelled Off attack reports no cancellation: there is no plan for the Hub to retire, and a placeholder minted for one would leak the same slot.
+What Off keeps is what the reset needs — bounded local storage, note and release tracking, truthful output-acceptance handling, and the control coordination that withdraws the source and rejects obsolete work.
+
+**Off leaves the display, the take and learning too** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+Those are three separate consumers of one exclusion, and each gate is written where that consumer reads:
+the Hub refuses an Off record before it builds a request identity, so nothing enters the policy's context;
+`Hub::confirm` declines to contribute an Off row's pitches, so nothing enters what auto/learn infers from;
+and the accepted-output lane skips the note delta, so nothing reaches the display ring or the `.take`.
+The publication gate reads the row's mode rather than the note's, because the row's mode is already what a published baseline carries downstream as `participating`, and that flag is what hides the source in `NoteTracker` — a per-note gate would publish deltas for a source the display has already hidden.
+It is also where the deferred "report Off notes for display only" option would be one flag rather than a change of shape.
+Baselines keep flowing in both modes, and they have to:
+a baseline is how the display learns that a track went Off, and it carries that track's truthful voices while hiding them.
+
+**Either toggle direction resets that Tune** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+The toggle stands as a boundary marker in the Tune's own input queue, at the sample it arrived on, and the reset runs where output reaches it:
+cancel the attacks still standing before the marker and reject their obsolete replies, send the releases and controller cleanup needed to terminate what has already been forwarded before that ownership is forgotten, then establish the new mode's pitch state.
+Returning to Participating recenters the channels an Off phrase actually bent, because Participating owns pitch and a leftover bend would detune every note tuned after it.
+The copied participation record tells the Hub, which drops that source's obsolete context and sequences later input against the new membership.
+Audible interruption of that Tune's phrase is accepted, and notes started in the old mode are not carried into the new one.
+Instrument release tails may remain, and smooth sustain or bend continuity across the toggle is not required.
+Other tracks' issued assignments are not recomputed because this Tune withdrew or its pending notes were canceled.
+Withdrawing a source from future context does not permit it to stop required callbacks.
 Already-issued replies retain their original configuration binding across a later configuration edit.
+
+**A missed deadline is not a participation toggle** and is not authorization to cancel:
+ordinary lateness follows independent late playback and never reaches this reset.
 
 An explicit transport **Stop** transition or user **Reset** cancels affected pending attacks, invalidates their replies and dependent planned state, and sends releases for affected sounding voices at the earliest legal output opportunity without the retained stream delay.
 Handle sustain/hold state so a queued pedal or release cannot keep those voices alive after the cancellation.
@@ -501,19 +538,19 @@ The single participation control does not remove the need for internal transitio
 | Transition or state | New or pending notes | Already-held voices and session state |
 |---|---|---|
 | Healthy and participating | Central sequential assignment, normally emitted at input time + D | Continue reporting actual output and preserving each frozen offset despite incoming bends |
-| Participating to Off | Newly received notes intentionally use zero correction; pending adaptive requests finish tuned under the normal/late timing contract | Withdraw this source from future context/display; preserve existing offsets until release |
+| Participating to Off | Newly received notes forward the player's own bend and per-note tuning; attacks still pending at the marker are canceled and their replies rejected | Withdraw this source from future context/display and terminate its forwarded voices at the marker, before their ownership is forgotten |
 | Assignment deadline missed | Retain the attack for its valid assignment and report a timing failure; no unretuned or dropped-note fallback | Preserve frozen offsets; handle related queued events under the specified late-event schedule |
 | Missing, ambiguous, expired or overloaded session | Report the fault and hold unresolved participating attacks while required storage fits | Preserve locally known offsets and lifecycle; do not use stale context or invent new assignments |
 | Selected terminal fault | Cancel affected pending performance visibly and reject new attacks until explicit Reset and a valid fresh boundary | Preserve accepted history, finish cancellation into CLOSED and retry independent physical debt; terminate shared affected performance for an enrolled contributor |
 | Transport Stop or explicit Reset | Cancel affected pending attacks and reject their obsolete replies | Send releases without accumulated delay, invalidate dependent plans and establish a fresh sequencing boundary |
-| Off to Participating, reconnect or report-loss recovery | Resume adaptive sequencing only after the complete held baseline and pending-request state are accepted | Restore actual state without re-emitting attacks or retuning survivors |
+| Off to Participating | The same reset as the other direction, plus a recenter of every channel the Off phrase bent | Nothing sounding survives to be imported, so there is no baseline to restore or retune |
+| Reconnect or report-loss recovery | Resume adaptive sequencing only after the complete held baseline and pending-request state are accepted | Restore actual state without re-emitting attacks or retuning survivors |
 | Source unregister or slot reuse | Old requests and replies cannot address the replacement | Invalidate the old incarnation and release only its context/display voices |
 | Explicit voice reset or host-guaranteed note termination | Cancel obsolete pending lifetimes under the reset contract, reject their replies and start fresh | Clear offsets only after downstream voices are terminated or the host guarantees they are gone |
 
-A later pitch-expression event repeats only the frozen offset while Off or disconnected.
-Incoming bends cannot erase or alter the held voice's correction.
-The local table also tracks notes deliberately started with zero correction while Off so rejoining restores the actual held set.
-No note is assigned zero correction merely because a participating request missed its deadline.
+While Participating, an incoming bend or pitch expression cannot erase or alter a held voice's correction.
+While Off nothing is overridden, and the toggle out of Off ends the notes that were forwarded that way, so there is no Off-note held set for rejoining to restore.
+No note is left uncorrected merely because a participating request missed its deadline.
 Transient policy history is cleared on participation withdrawal, configuration revision change, session/epoch change and lifecycle-loss recovery;
 clearing that history never changes a held offset.
 

@@ -355,29 +355,21 @@ impl Owner {
         })
     }
 
-    pub fn publish_direct(
-        &mut self,
-        recorder: &mut harmonigraph_record::Recorder,
-        observation_time: f64,
-    ) {
-        let Some(end) =
-            self.recording.block_start.checked_add(i64::from(self.recording.block_frames))
-        else {
-            recorder.fail_configuration();
-            return;
-        };
-        self.publish_direct_history(recorder, observation_time, Some(end));
-        self.publish_direct_repair(recorder, observation_time);
-    }
-
     /// A refused Hub has no peer or registry retirement owner. Its joined
     /// wrapper still owes every observed DIRECT delta at its original route.
+    ///
+    /// Only retirement drains history here. A live Hub publishes every
+    /// observed delta through its own chronological merge with the rows'
+    /// accepted output, and calls [`Owner::publish_direct_repair`] only once
+    /// that queue is empty -- so the bounded second drain this used to make
+    /// alongside it could never move a record, and the block end that bounded
+    /// it never bounded anything.
     pub fn publish_retired_direct(
         &mut self,
         recorder: &mut harmonigraph_record::Recorder,
         observation_time: f64,
     ) {
-        self.publish_direct_history(recorder, observation_time, None);
+        self.publish_direct_history(recorder, observation_time);
         self.publish_direct_repair(recorder, observation_time);
     }
 
@@ -385,7 +377,6 @@ impl Owner {
         &mut self,
         recorder: &mut harmonigraph_record::Recorder,
         observation_time: f64,
-        end: Option<i64>,
     ) {
         // The Hub is the sole dispatcher of aggregation resync requests. A
         // later hint must remain pending for its next all-source collection.
@@ -399,9 +390,6 @@ impl Owner {
                 self.direct.published();
                 continue;
             };
-            if end.is_some_and(|end| timing.sample >= end) {
-                break;
-            }
             let route = match self.recording_route(timing, delta.event.time) {
                 Ok(route) => route,
                 Err(()) => {
@@ -415,7 +403,7 @@ impl Owner {
             self.direct.published();
         }
     }
-    fn publish_direct_repair(
+    pub fn publish_direct_repair(
         &mut self,
         recorder: &mut harmonigraph_record::Recorder,
         observation_time: f64,
