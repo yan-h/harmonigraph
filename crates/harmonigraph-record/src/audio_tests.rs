@@ -24,6 +24,22 @@ struct Worker {
 }
 
 impl Worker {
+    fn ordinary(name: &str) -> Self {
+        let directory = std::env::temp_dir()
+            .join(format!("harmonigraph-boundary-{}-{name}", std::process::id()));
+        let (recorder, control) = channel();
+        let fence = control.fence.clone();
+        *fence.test_directory.lock() = Some(directory.clone());
+        let worker = Self { recorder: Some(recorder), control: Some(control), fence, directory };
+        worker.control.as_ref().unwrap().start(48_000.0, String::new(), true);
+        wait_for("ordinary Start", || worker.find_wav().is_some());
+        worker.fence.worker_before_commands.enabled.store(true, Ordering::Release);
+        wait_for("before command poll", || {
+            worker.fence.worker_before_commands.entered.load(Ordering::Acquire)
+        });
+        worker
+    }
+
     fn start(name: &str, fenced: bool, fail_finish: bool, pending_start: bool) -> Self {
         let directory = std::env::temp_dir().join(format!(
             "harmonigraph-audio-{}-{name}-{fenced}-{pending_start}",
@@ -54,6 +70,9 @@ impl Worker {
             assert!(recorder.is_armed());
             recorder.mark_audio_start(0.25);
             recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
+            if !fenced {
+                recorder.finish_callback();
+            }
         });
         fence.worker_after_empty.enabled.store(false, Ordering::Release);
         // The limit only becomes reachable once the two-frame prefix is on
@@ -85,6 +104,8 @@ impl Worker {
             if self.fence.enabled.load(Ordering::Acquire) {
                 recorder.configuration_pass_complete(RecordAddress { epoch: 1, pass: 1 });
                 recorder.configuration_epoch_complete(1);
+            } else {
+                recorder.finish_callback();
             }
         });
         // A failure may already be accounted before Stop. Wait for this
@@ -137,6 +158,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.fence.worker_before_commands.enabled.store(false, Ordering::Release);
         self.fence.worker_after_empty.enabled.store(false, Ordering::Release);
         self.recorder.take();
         self.control.take();
@@ -148,6 +170,54 @@ impl Drop for Worker {
         }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+fn wav_samples(path: &std::path::Path) -> Vec<f32> {
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize, bytes.len() - 44);
+    bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+}
+
+#[test]
+fn ordinary_queued_stop_preserves_the_audio_prefix() {
+    let mut worker = Worker::ordinary("queued-stop");
+    let recorder = worker.recorder.as_mut().unwrap();
+    assert_no_alloc(|| {
+        assert!(recorder.is_armed());
+        recorder.mark_audio_start(0.25);
+        recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
+        recorder.finish_callback();
+    });
+    worker.control.as_ref().unwrap().stop(None);
+    worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
+    wait_for("ordinary Stop", || worker.control.as_ref().unwrap().last_take().is_some());
+    assert_eq!(wav_samples(&worker.wav()), PREFIX);
+}
+
+#[test]
+fn ordinary_queued_rollover_keeps_each_pass_audio() {
+    let mut worker = Worker::ordinary("queued-rollover");
+    let first = worker.wav();
+    let recorder = worker.recorder.as_mut().unwrap();
+    assert_no_alloc(|| {
+        assert!(recorder.is_armed());
+        assert!(recorder.observe_transport(1.0, true));
+        recorder.mark_audio_start(1.0);
+        recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
+        recorder.finish_callback();
+        assert!(recorder.is_armed());
+        assert!(recorder.observe_transport(0.0, true));
+        recorder.mark_audio_start(0.0);
+        recorder.audio(&mut [0.75, -0.75].into_iter(), 2);
+        recorder.finish_callback();
+    });
+    worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
+    let second =
+        first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
+    wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
+    worker.control.as_ref().unwrap().stop(None);
+    wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
+    assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));
 }
 
 #[test]

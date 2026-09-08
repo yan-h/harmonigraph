@@ -83,7 +83,7 @@ mod audio_tests;
 mod canonical_tests;
 pub mod configuration;
 pub mod publication;
-use configuration::{RecordAddress, RecordFence, RECORD_PASSES};
+use configuration::{RecordAddress, RecordFence, CALLBACK_ACTIVE, RECORD_PASSES};
 
 /// Ring capacity. Sized for a fast offline render rather than for a
 /// frame: even at 20x realtime a dense piece is only a few thousand
@@ -301,9 +301,8 @@ pub struct Recorder {
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, when the take is recording audio too.
     audio: rtrb::Producer<f32>,
-    /// Set by the GUI alongside `armed`.
+    /// Selected for the whole take; Stop cannot change an in-flight callback.
     with_audio: Arc<AtomicBool>,
-    armed: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
     /// Reset to NaN on arm so the first block of a take always writes a
@@ -461,11 +460,21 @@ impl Recorder {
             self.fence.source_closed.store(epoch, Ordering::Release);
         }
     }
+    /// Begin the callback's recording observation. Ordinary callers pair this
+    /// with `finish_callback` after their final publication, even when disarmed.
     pub fn is_armed(&mut self) -> bool {
-        if self.fence.enabled.load(Ordering::Acquire) {
-            return self.is_armed_at(self.capture_recording_intent());
+        self.is_armed_at(self.capture_recording_intent())
+    }
+
+    /// Release ordinary callback ownership after its final publication, or
+    /// after joining callbacks. Stop can then close the prefix even when no
+    /// further callback will run. Configuration/source closures stay separate.
+    pub fn finish_callback(&mut self) {
+        let intent =
+            self.fence.intent.fetch_and(!CALLBACK_ACTIVE, Ordering::AcqRel) & !CALLBACK_ACTIVE;
+        if intent & 1 == 0 {
+            self.is_armed_at(intent);
         }
-        self.update_armed(self.armed.load(Ordering::Relaxed))
     }
 
     /// Use the arm/disarm intent captured at the enclosing callback boundary,
@@ -478,7 +487,9 @@ impl Recorder {
             self.record_pass = 1;
         }
         if !armed && epoch > self.closed_epoch {
-            self.push(Entry::ProducerClosed(epoch));
+            if self.fence.enabled.load(Ordering::Acquire) {
+                self.push(Entry::ProducerClosed(epoch));
+            }
             #[cfg(feature = "test-support")]
             self.fence.producer_close_pause.reach();
             self.closed_epoch = epoch;
@@ -504,7 +515,9 @@ impl Recorder {
     fn push(&mut self, entry: Entry) {
         if self.producer.push(entry).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            if self.fence.enabled.load(Ordering::Acquire) {
+            if self.fence.enabled.load(Ordering::Acquire)
+                || matches!(entry, Entry::AudioSamples(_) | Entry::AudioStart(_) | Entry::NewPass)
+            {
                 self.fence.fail();
             }
         }
@@ -515,7 +528,9 @@ impl Recorder {
     }
 
     pub fn wants_audio(&self) -> bool {
-        self.with_audio.load(Ordering::Relaxed) && !self.fence.failed.load(Ordering::Acquire)
+        self.was_armed
+            && self.with_audio.load(Ordering::Relaxed)
+            && !self.fence.failed.load(Ordering::Acquire)
     }
 
     /// Declare where the audio about to be written sits in take time.
@@ -550,9 +565,7 @@ impl Recorder {
             interleaved_reservation(self.audio.slots(), samples / TAKE_CHANNELS, TAKE_CHANNELS);
         if room < samples {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            if self.fence.enabled.load(Ordering::Acquire) {
-                self.fence.fail();
-            }
+            self.fence.fail();
         }
         if room == 0 {
             return;
@@ -563,7 +576,7 @@ impl Recorder {
         } else {
             false
         };
-        if written && self.fence.enabled.load(Ordering::Acquire) {
+        if written {
             self.push(Entry::AudioSamples(room));
         }
     }
@@ -681,12 +694,10 @@ impl Recorder {
             && std::mem::take(&mut self.pending_split)
             && !self.end_at_rewind.load(Ordering::Relaxed)
         {
-            if self.fence.enabled.load(Ordering::Acquire) {
-                if let Some(pass) = self.record_pass.checked_add(1) {
-                    self.record_pass = pass;
-                } else {
-                    self.fence.fail();
-                }
+            if let Some(pass) = self.record_pass.checked_add(1) {
+                self.record_pass = pass;
+            } else {
+                self.fence.fail();
             }
             self.push(Entry::NewPass);
             self.last_configuration = None;
@@ -700,8 +711,16 @@ impl Recorder {
     pub fn enable_configuration(&self) {
         self.fence.enabled.store(true, Ordering::Release);
     }
+    /// Capture a callback boundary. An ordinary producer must pair this with
+    /// `finish_callback` after its last publication, even for a disarmed block.
     pub fn capture_recording_intent(&self) -> u64 {
-        let intent = self.fence.intent.load(Ordering::Acquire);
+        let intent = if self.fence.enabled.load(Ordering::Acquire) {
+            self.fence.intent.load(Ordering::Acquire)
+        } else {
+            // A single RMW arbitrates with Stop: either this callback owns
+            // its armed prefix, or it sees disarmed and can publish no audio.
+            self.fence.intent.fetch_or(CALLBACK_ACTIVE, Ordering::AcqRel)
+        } & !CALLBACK_ACTIVE;
         #[cfg(feature = "test-support")]
         self.fence.boundary_pause.reach();
         intent
@@ -775,10 +794,13 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        if self.fence.enabled.load(Ordering::Acquire)
-            && self.record_epoch != 0
+        if !self.fence.enabled.load(Ordering::Acquire) {
+            self.finish_callback();
+        }
+        if self.record_epoch != 0
             && (self.closed_epoch < self.record_epoch
-                || self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch
+                || (self.fence.enabled.load(Ordering::Acquire)
+                    && self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch)
                 || (self.fence.canonical_enabled.load(Ordering::Acquire)
                     && self.fence.source_closed.load(Ordering::Acquire) < self.record_epoch))
         {
@@ -794,7 +816,6 @@ pub struct Control {
     display: Arc<Mutex<Option<publication::Consumer>>>,
     fence: Arc<RecordFence>,
     commands: mpsc::Sender<Command>,
-    armed: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// One line for the UI, owned by whichever side last had news.
     status: Arc<Mutex<String>>,
@@ -907,7 +928,7 @@ impl Control {
         }
         if self.fence.finishing.load(Ordering::Acquire) {
             *self.status.lock() =
-                "finishing the previous take — waiting for its audio/configuration prefix".into();
+                "finishing the previous take — waiting for its recording prefix".into();
             return;
         }
         let dir = take_dir();
@@ -929,17 +950,11 @@ impl Control {
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
         let spec = audio.then_some(AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 });
-        let epoch = if self.fence.enabled.load(Ordering::Acquire) {
-            let Some(epoch) =
-                self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
-            else {
-                *self.status.lock() = "recording epoch exhausted".into();
-                return;
-            };
-            self.fence.failed.store(false, Ordering::Release);
-            epoch
-        } else {
-            0
+        let Some(epoch) =
+            self.fence.epoch().checked_add(1).filter(|epoch| *epoch < CALLBACK_ACTIVE >> 1)
+        else {
+            *self.status.lock() = "recording epoch exhausted".into();
+            return;
         };
         if self.commands.send(Command::Start(epoch, Box::new(header), path, spec)).is_err() {
             *self.status.lock() = "take writer thread is gone".into();
@@ -950,10 +965,10 @@ impl Control {
         // Clear a previous take's rewind latch so it can't end this one before
         // the transport even rolls. The audio thread also clears it on arm.
         self.hit_rewind.store(false, Ordering::Relaxed);
-        self.armed.store(true, Ordering::Relaxed);
-        if epoch != 0 {
-            self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
-        }
+        // Finishing barred Start until every old armed callback retired.
+        // An overlapping idle callback captured disarmed and owns no audio,
+        // so its activity bit cannot carry ownership into this new epoch.
+        self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
 
@@ -965,17 +980,11 @@ impl Control {
         if !self.is_recording() {
             return;
         }
-        // Disarm first, so the audio thread stops pushing before the
-        // writer is told to close.
-        self.armed.store(false, Ordering::Relaxed);
-        if !self.fence.enabled.load(Ordering::Acquire) {
-            self.with_audio.store(false, Ordering::Relaxed);
-        }
+        // Stop is intent, not producer closure. Keep the selected audio mode
+        // until the next Start so a callback that observed armed can finish.
         let epoch = self.fence.epoch();
-        if self.fence.enabled.load(Ordering::Acquire) {
-            self.fence.intent.store(epoch << 1, Ordering::Release);
-            self.fence.finishing.store(true, Ordering::Release);
-        }
+        self.fence.finishing.store(true, Ordering::Release);
+        self.fence.intent.fetch_and(!1, Ordering::AcqRel);
         let _ = self.commands.send(Command::Stop(epoch, render.map(Box::new)));
         self.recording.store(false, Ordering::Relaxed);
     }
@@ -1106,7 +1115,6 @@ pub fn channel() -> (Recorder, Control) {
     let (display, display_consumer) = publication::channel();
     let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
-    let armed = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicU64::new(0));
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
@@ -1131,6 +1139,8 @@ pub fn channel() -> (Recorder, Control) {
         let failure = FailureAccount::default();
         let mut disconnected = false;
         loop {
+            #[cfg(feature = "test-support")]
+            thread_fence.worker_before_commands.reach();
             let mut waiting_for_start = false;
             #[cfg(all(test, feature = "test-support"))]
             let mut processed_stop = false;
@@ -1143,6 +1153,7 @@ pub fn channel() -> (Recorder, Control) {
                         open =
                             Open::create(*header, path, 1, spec, &thread_status).map(|mut open| {
                                 open.epoch = epoch;
+                                open.configuration_enabled = thread_fence.enabled.load(Ordering::Acquire);
                                 open.source_enabled =
                                     thread_fence.canonical_enabled.load(Ordering::Acquire);
                                 open
@@ -1168,40 +1179,17 @@ pub fn channel() -> (Recorder, Control) {
                 Ok(Command::Stop(epoch, render)) => {
                     #[cfg(all(test, feature = "test-support"))]
                     { processed_stop = true; }
-                    if thread_fence.enabled.load(Ordering::Acquire) {
-                        pending_stop = Some((epoch, render));
-                        if !failure.contains(epoch) {
-                            *thread_status.lock() =
-                                "finishing — waiting for the audio/configuration prefix".into();
-                        }
-                    } else {
-                        // Drain what the audio thread already queued
-                        // before closing, or the tail of the take is lost.
-                        drain_with_audio(&mut consumer, None, &mut open, &thread_status, Some(&thread_fence));
-                        let finished = if thread_fence.failed.load(Ordering::Acquire) {
-                            None
-                        } else {
-                            finish_open(&mut open, &thread_fence)
-                        };
-                        if let Some(path) = &finished {
-                            *thread_last_take.lock() = Some(path.clone());
-                        }
-                        if let (Some(path), Some(render)) = (finished, render) {
-                            spawn_render(
-                                *render,
-                                path,
-                                thread_status.clone(),
-                                thread_progress.clone(),
-                                thread_render.clone(),
-                            );
-                        }
+                    pending_stop = Some((epoch, render));
+                    if !failure.contains(epoch) {
+                        *thread_status.lock() =
+                            "finishing — waiting for the recording prefix".into();
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // Start can arrive just after this poll and arm a producer
                     // before the drains below. With no file yet, its records
-                    // and audio still belong to that pending command. Stop's
-                    // own drain/disposal and terminal failures keep their paths.
+                    // and audio still belong to that pending command. An
+                    // accounted failure can dispose its remaining entries.
                     waiting_for_start = open.is_none()
                         && !failure.contains(thread_fence.epoch());
                     #[cfg(feature = "test-support")]
@@ -1213,6 +1201,12 @@ pub fn channel() -> (Recorder, Control) {
                 Err(mpsc::TryRecvError::Disconnected) => disconnected = true,
             }
             }
+            // Acquire idle ownership BEFORE draining: the callback's release
+            // follows its last AudioSamples record. A later callback's RMW
+            // sees disarmed, so it cannot extend this prefix behind the drain.
+            if let Some(current) = open.as_mut() {
+                current.observe_idle_producer(&thread_fence);
+            }
             let had_records = !waiting_for_start && drain_with_boundaries(
                 &mut consumer, Some(&mut audio_consumer), &mut open,
                 &thread_status, Some(&thread_fence), &failure,
@@ -1220,8 +1214,6 @@ pub fn channel() -> (Recorder, Control) {
                     fanout.drain(&mut publications, open, &thread_fence, &failure);
                 },
             );
-            let had_audio = !waiting_for_start && !thread_fence.enabled.load(Ordering::Acquire)
-                && drain_audio(&mut audio_consumer, &mut open, &thread_fence);
             let had_publications =
                 fanout.drain(&mut publications, &mut open, &thread_fence, &failure) != 0;
             #[cfg(feature = "test-support")]
@@ -1299,7 +1291,7 @@ pub fn channel() -> (Recorder, Control) {
                         });
                 }
             }
-            if !had_records && !had_audio && !had_publications {
+            if !had_records && !had_publications {
                 std::thread::sleep(DRAIN_IDLE);
             }
         }
@@ -1317,7 +1309,6 @@ pub fn channel() -> (Recorder, Control) {
             closed_epoch: 0,
             last_configuration: None,
             producer,
-            armed: armed.clone(),
             dropped: dropped.clone(),
             last_params: [f32::NAN; ParamKey::ALL.len()],
             was_armed: false,
@@ -1336,7 +1327,6 @@ pub fn channel() -> (Recorder, Control) {
             display: Arc::new(Mutex::new(Some(display_consumer))),
             fence,
             commands,
-            armed,
             dropped,
             status,
             last_take,
@@ -1369,6 +1359,12 @@ pub mod testing {
         WorkerProbe { fence: control.fence.clone() }
     }
     impl WorkerProbe {
+        pub fn pause_boundary(&self, enabled: bool) {
+            self.fence.boundary_pause.enabled.store(enabled, Ordering::Release);
+        }
+        pub fn boundary_entered(&self) -> bool {
+            self.fence.boundary_pause.entered.load(Ordering::Acquire)
+        }
         pub fn empty_visits(&self) -> u64 {
             self.fence.worker_empty_visits.load(Ordering::Acquire)
         }
@@ -1398,7 +1394,6 @@ pub mod testing {
         fence: Arc<RecordFence>,
         _records: rtrb::Consumer<Entry>,
         audio: rtrb::Consumer<f32>,
-        armed: Arc<AtomicBool>,
         with_audio: Arc<AtomicBool>,
     }
 
@@ -1444,14 +1439,10 @@ pub mod testing {
             self.fence.producer_close_pause.entered.load(Ordering::Acquire)
         }
         pub fn arm(&self) {
-            if self.fence.enabled.load(Ordering::Acquire) {
-                self.fence.intent.store((self.fence.epoch() + 1) << 1 | 1, Ordering::Release);
-            }
-            self.armed.store(true, Ordering::Relaxed);
+            self.fence.intent.store((self.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         }
         pub fn stop(&self) {
-            self.armed.store(false, Ordering::Relaxed);
-            self.fence.intent.store(self.fence.epoch() << 1, Ordering::Release);
+            self.fence.intent.fetch_and(!1, Ordering::AcqRel);
             self.fence.finishing.store(true, Ordering::Release);
         }
         pub fn drain_entries(&mut self) -> Vec<Entry> {
@@ -1470,7 +1461,6 @@ pub mod testing {
         pub fn arm_audio(&self) {
             self.arm();
             self.with_audio.store(true, Ordering::Relaxed);
-            self.armed.store(true, Ordering::Relaxed);
         }
 
         pub fn drain_audio(&mut self) -> Vec<f32> {
@@ -1505,6 +1495,7 @@ pub mod testing {
             let mut open =
                 Open::create(harmonigraph_take::Header::default(), path, 1, spec, &status).unwrap();
             open.epoch = capture.fence.epoch();
+            open.configuration_enabled = capture.fence.enabled.load(Ordering::Acquire);
             open.source_enabled = capture.fence.canonical_enabled.load(Ordering::Acquire);
             Self {
                 open: Some(open),
@@ -1520,6 +1511,9 @@ pub mod testing {
             self.stopping = true;
         }
         pub fn drain(&mut self, capture: &mut Capture) {
+            if let Some(current) = self.open.as_mut() {
+                current.observe_idle_producer(&self.fence);
+            }
             drain_with_boundaries(
                 &mut capture._records,
                 Some(&mut capture.audio),
@@ -1568,7 +1562,6 @@ pub mod testing {
         let (publication, publications) = publication::channel();
         let (display, displayed) = publication::channel();
         let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-        let armed = Arc::new(AtomicBool::new(false));
         let with_audio = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
         let rolling = Arc::new(AtomicBool::new(false));
@@ -1588,7 +1581,6 @@ pub mod testing {
             producer,
             audio,
             with_audio: with_audio.clone(),
-            armed: armed.clone(),
             dropped,
             last_params: [f32::NAN; ParamKey::ALL.len()],
             was_armed: false,
@@ -1607,7 +1599,6 @@ pub mod testing {
             displayed,
             _records: records,
             audio: audio_consumer,
-            armed,
             with_audio,
         };
         (recorder, capture)
@@ -1843,35 +1834,13 @@ impl CanonicalFanout {
     }
 }
 
-/// Move queued audio into the WAV. Separate from [`drain_with_audio`] because the
-/// volume is different by orders of magnitude: one ring read per pass
-/// rather than per sample.
-fn drain_audio(
-    consumer: &mut rtrb::Consumer<f32>,
-    open: &mut Option<Open>,
-    fence: &RecordFence,
-) -> bool {
-    let available = consumer.slots();
-    if available == 0 {
-        return false;
-    }
-    let Ok(chunk) = consumer.read_chunk(available) else { return false };
-    if let Some(current) = open.as_mut() {
-        let (first, second) = chunk.as_slices();
-        if let Err(error) = current.write_audio(first, second) {
-            fence.fail_with_message(error.to_string());
-        }
-    }
-    chunk.commit_all();
-    true
-}
-
 /// The file currently being written, and what it takes to open the next
 /// one when the transport loops.
 struct Open {
     epoch: u64,
     retained: Vec<Open>,
     producer_closed: bool,
+    configuration_enabled: bool,
     configuration_closed: bool,
     configuration_complete: bool,
     source_enabled: bool,
@@ -1936,6 +1905,7 @@ impl Open {
                     epoch: 0,
                     retained: Vec::new(),
                     producer_closed: false,
+                    configuration_enabled: false,
                     configuration_closed: false,
                     configuration_complete: false,
                     source_enabled: false,
@@ -2072,9 +2042,10 @@ impl Open {
         if let Some(record) = previous.incomplete {
             let _ = next.mark_incomplete(record);
         }
-        if previous.epoch != 0 {
-            next.epoch = previous.epoch;
-            next.source_enabled = previous.source_enabled;
+        next.epoch = previous.epoch;
+        next.configuration_enabled = previous.configuration_enabled;
+        next.source_enabled = previous.source_enabled;
+        if previous.configuration_enabled || previous.source_enabled {
             next.last_voiced_number =
                 if previous.voiced { previous.pass } else { previous.last_voiced_number };
             next.retained = std::mem::take(&mut previous.retained);
@@ -2087,10 +2058,16 @@ impl Open {
         Ok(())
     }
 
+    fn observe_idle_producer(&mut self, fence: &RecordFence) {
+        if !self.configuration_enabled && fence.intent.load(Ordering::Acquire) == self.epoch << 1 {
+            self.producer_closed = true;
+        }
+    }
+
     fn ready(&self, epoch: u64) -> bool {
         self.epoch == epoch
             && self.producer_closed
-            && self.configuration_closed
+            && (!self.configuration_enabled || self.configuration_closed)
             && (!self.source_enabled || self.source_closed)
             && self.retained.is_empty()
     }
@@ -2098,7 +2075,7 @@ impl Open {
     fn finish_completed_passes(&mut self) -> std::io::Result<()> {
         let mut index = 0;
         while index < self.retained.len() {
-            if self.retained[index].configuration_complete
+            if (!self.configuration_enabled || self.retained[index].configuration_complete)
                 && (!self.source_enabled || self.retained[index].source_complete)
             {
                 self.retained[index].finish()?;
@@ -2190,6 +2167,7 @@ fn drain(
     drain_with_audio(consumer, None, open, status, None)
 }
 
+#[cfg(test)]
 fn drain_with_audio(
     consumer: &mut rtrb::Consumer<Entry>,
     audio: Option<&mut rtrb::Consumer<f32>>,
@@ -2934,7 +2912,6 @@ mod tests {
         rec: Recorder,
         entries: rtrb::Consumer<Entry>,
         samples: rtrb::Consumer<f32>,
-        armed: Arc<AtomicBool>,
         end_at_rewind: Arc<AtomicBool>,
         hit_rewind: Arc<AtomicBool>,
         dropped: Arc<AtomicU64>,
@@ -2944,7 +2921,6 @@ mod tests {
         fn new() -> Bench {
             let (producer, entries) = rtrb::RingBuffer::new(1024);
             let (audio, samples) = rtrb::RingBuffer::new(1024);
-            let armed = Arc::new(AtomicBool::new(false));
             let end_at_rewind = Arc::new(AtomicBool::new(false));
             let hit_rewind = Arc::new(AtomicBool::new(false));
             let dropped = Arc::new(AtomicU64::new(0));
@@ -2962,7 +2938,6 @@ mod tests {
                     producer,
                     audio,
                     with_audio: Arc::new(AtomicBool::new(false)),
-                    armed: armed.clone(),
                     dropped: dropped.clone(),
                     last_params: [f32::NAN; ParamKey::ALL.len()],
                     was_armed: false,
@@ -2977,7 +2952,6 @@ mod tests {
                 },
                 entries,
                 samples,
-                armed,
                 end_at_rewind,
                 hit_rewind,
                 dropped,
@@ -2986,7 +2960,7 @@ mod tests {
 
         /// Take the arming edge, as `process` does on a take's first block.
         fn arm(&mut self) {
-            self.armed.store(true, Ordering::Relaxed);
+            self.rec.fence.intent.store((self.rec.fence.epoch() + 1) << 1 | 1, Ordering::Release);
             assert!(self.rec.is_armed(), "the arming edge");
         }
 
@@ -3075,7 +3049,7 @@ mod tests {
         rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9);
         ctrl.tick(true, 0);
         assert!(
-            ctrl.status().contains("DROPPED"),
+            ctrl.dropped.load(Ordering::Relaxed) == 1 && ctrl.fence.failed.load(Ordering::Acquire),
             "an odd tail must be dropped, not written out of phase; got: {}",
             ctrl.status()
         );
@@ -3632,7 +3606,7 @@ mod tests {
     #[test]
     fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
         let (mut rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed(), "arming clears last_position and the done latch");
 
@@ -3654,7 +3628,7 @@ mod tests {
     #[test]
     fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
         let (mut rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         // end_at_rewind stays off — the default OnDisarm/looping behavior.
         assert!(rec.is_armed());
         assert!(rec.observe_transport(0.0, true));
@@ -3667,7 +3641,7 @@ mod tests {
     #[test]
     fn re_arming_clears_the_loop_end_latch() {
         let (mut rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed());
         assert!(rec.observe_transport(0.0, true));
@@ -3677,9 +3651,9 @@ mod tests {
 
         // Disarm, then re-arm: the done latch and the loop-end flag clear, so
         // the next take records from scratch rather than starting finished.
-        ctrl.armed.store(false, Ordering::Relaxed);
+        ctrl.fence.intent.store(ctrl.fence.epoch() << 1, Ordering::Release);
         assert!(!rec.is_armed());
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         assert!(rec.is_armed(), "re-arm");
         assert!(!ctrl.hit_rewind(), "the latch cleared on re-arm");
         assert!(rec.observe_transport(0.0, true), "records again");
@@ -3688,7 +3662,7 @@ mod tests {
     #[test]
     fn at_loop_end_ignores_the_jump_to_the_loop_start_when_playback_begins() {
         let (mut rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.set_end_at_rewind(true);
         assert!(rec.is_armed());
 
@@ -4071,6 +4045,7 @@ mod tests {
                 &status,
             );
             open.as_mut().unwrap().epoch = 1;
+            open.as_mut().unwrap().configuration_enabled = true;
             assert!(b.rec.observe_transport(10.0, true));
             for _ in 1..RECORD_PASSES {
                 assert!(b.rec.observe_transport(0.0, true));
@@ -4379,17 +4354,23 @@ mod tests {
     /// is still finishing.
     #[test]
     fn stopping_a_take_that_is_not_running_does_nothing() {
-        let (rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        let (mut rec, ctrl) = channel();
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         ctrl.with_audio.store(true, Ordering::Relaxed);
+        assert!(rec.is_armed());
         ctrl.stop(None);
-        assert!(ctrl.armed.load(Ordering::Relaxed), "not recording, so there is nothing to stop");
+        assert!(
+            ctrl.fence.intent.load(Ordering::Acquire) & 1 != 0,
+            "not recording, so there is nothing to stop"
+        );
         assert!(rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
         ctrl.recording.store(true, Ordering::Relaxed);
         ctrl.stop(None);
-        assert!(!ctrl.armed.load(Ordering::Relaxed), "a running take disarms");
+        assert_eq!(ctrl.fence.intent.load(Ordering::Acquire) & 1, 0, "a running take disarms");
         assert!(!ctrl.is_recording());
+        assert!(rec.wants_audio(), "the observed callback still owns its audio");
+        assert!(!rec.is_armed());
         assert!(!rec.wants_audio(), "and the audio thread stops reading the selected audio");
     }
 
@@ -4420,7 +4401,7 @@ mod tests {
     #[test]
     fn the_gui_reads_back_the_rolling_the_audio_thread_published() {
         let (mut rec, ctrl) = channel();
-        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
         assert!(rec.is_armed());
 
         assert!(!rec.observe_transport(3.0, false));

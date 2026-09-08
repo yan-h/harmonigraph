@@ -2146,6 +2146,10 @@ name = "nice-assert-no-alloc"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a565fc41dece610aa5f63d5e03c34fc9997a69006c9bcfcb575fdca5c2c5e56"
+dependencies = [
+ "backtrace",
+ "log",
+]
 
 [[package]]
 name = "nice-log"
@@ -2174,6 +2178,7 @@ dependencies = [
  "crossbeam",
  "libc",
  "log",
+ "nice-assert-no-alloc",
  "nice-log",
  "nice-plug-core",
  "nice-plug-derive",
@@ -2199,6 +2204,7 @@ dependencies = [
  "crossbeam-utils",
  "log",
  "midi-consts",
+ "nice-assert-no-alloc",
  "nice-plug-derive",
  "parking_lot",
  "raw-window-handle 0.5.2",

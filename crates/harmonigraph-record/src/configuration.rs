@@ -1,9 +1,13 @@
 //! Internal recording addresses and completion fences. Runtime identities never
-//! enter the take format. A stop is intent; the producer and configuration owner
-//! must both close its actual prefix before the writer can publish a finished file.
+//! enter the take format. Stop is intent; the producer and any optional
+//! configuration/source owners must close their prefixes before finalization.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub const RECORD_PASSES: usize = 128;
+
+// Ordinary callbacks and Stop share one atomic order. The exposed intent
+// keeps its existing epoch/armed shape; this private bit is never returned.
+pub(crate) const CALLBACK_ACTIVE: u64 = 1 << 63;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordAddress {
@@ -15,7 +19,8 @@ pub struct RecordAddress {
 pub(crate) struct RecordFence {
     pub enabled: AtomicBool,
     pub canonical_enabled: AtomicBool,
-    /// One coherent off-thread intent: epoch in the high bits, armed in bit zero.
+    /// Epoch in bits 1..62, armed in bit zero; CALLBACK_ACTIVE arbitrates
+    /// ordinary callbacks with Stop without changing the exposed intent shape.
     pub intent: AtomicU64,
     pub finishing: AtomicBool,
     pub failed: AtomicBool,
@@ -28,6 +33,8 @@ pub(crate) struct RecordFence {
     pub retirement_hold: AtomicBool,
     #[cfg(feature = "test-support")]
     pub worker_after_empty: TestPause,
+    #[cfg(feature = "test-support")]
+    pub worker_before_commands: TestPause,
     #[cfg(feature = "test-support")]
     pub worker_after_stop: TestPause,
     #[cfg(feature = "test-support")]
@@ -71,7 +78,7 @@ impl TestPause {
 }
 impl RecordFence {
     pub fn epoch(&self) -> u64 {
-        self.intent.load(Ordering::Acquire) >> 1
+        (self.intent.load(Ordering::Acquire) & !CALLBACK_ACTIVE) >> 1
     }
     pub fn fail(&self) {
         self.failed.store(true, Ordering::Release);
