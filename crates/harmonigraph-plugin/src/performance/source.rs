@@ -1,5 +1,6 @@
 //! Serialized ordinary performance owner. Storage is allocated before activation;
-//! only actual host completions establish output facts or settle reservations.
+//! only actual host completions establish output facts. Destruction abandons
+//! undeliverable obligations while retaining unknown-wire evidence.
 use super::{
     clock::{Calibration, Clock, Coverage},
     event::Event,
@@ -189,8 +190,8 @@ pub struct Source {
     active: [u16; 64],
     reserved: [u16; 64],
     owed_note_off: [u16; 64],
-    /// Every obligation only an accepted host output event can discharge,
-    /// behind the one rule that says when a new one may be minted.
+    /// Every live output obligation, abandoned only at producer destruction
+    /// after its unknown-wire evidence has been captured.
     debt: debt::Debt,
     /// Largest accepted onset shift seen since the delay setting was last
     /// applied, reported as this Tune's worst lateness above D. A gauge, not a
@@ -613,10 +614,14 @@ impl Source {
             || (self.pitch_center_owed || self.participation_marker_queued())
                 && self.owes_pitch_center();
         self.producer_joined = true;
-        // From here nothing may mint output debt: no callback follows the
-        // final cut to discharge it, and both `output_settled` and
-        // `publish_seal` would refuse this Source for good.
-        self.debt.join();
+        // This is ownership settlement, not a musical seal: abandon the
+        // obligations no callback can deliver, preserving State, the final
+        // accepted sequence and both journals exactly as they were. A live
+        // reset must still earn every release through host acceptance.
+        for release in self.debt.join().into_iter().flatten() {
+            self.lives.local_mut(release.life).unwrap().refs -= 1;
+            self.recycle(release.life);
+        }
         if self.joined_unknown_wire {
             // Destruction removes the only possible owner of further physical
             // termination. Publish its exact row evidence before the joined
@@ -624,6 +629,19 @@ impl Source {
             // local/session scope from its retained membership. Missing initial
             // controller state and factual ACK debt alone are not wire loss.
             self.fault(REFERENCE_FAULT);
+        }
+        for index in std::mem::replace(&mut self.owed_note_off, [NONE; 64]) {
+            if index != NONE {
+                let life = self.lives.local_mut(index).unwrap();
+                life.note_off_owed = false;
+                life.refs -= 1;
+                self.recycle(index);
+            }
+        }
+        for index in self.reserved {
+            if index != NONE {
+                self.return_credit(index);
+            }
         }
     }
     pub fn joined_cut(&self) -> Option<u64> {
@@ -638,7 +656,7 @@ impl Source {
         self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64]
     }
     pub fn unknown_joined_wire_state(&self) -> bool {
-        self.forwarded_wire_state() || self.debt.unsent()
+        self.joined_unknown_wire || self.forwarded_wire_state() || self.debt.unsent()
     }
     pub fn settled(&self) -> bool {
         self.output_settled() && self.pending.len() == 0 && self.capture_group.len() == 0
@@ -648,7 +666,7 @@ impl Source {
     }
     fn output_settled(&self) -> bool {
         self.held() == 0
-            && !self.state.pedals_held()
+            && (self.producer_joined || !self.state.pedals_held())
             && self.owed_note_off == [NONE; 64]
             && self.journal.len() == 0
             && self.emergency_output.len() == 0
@@ -1379,7 +1397,8 @@ impl Source {
                 let cell = self.work.at(child);
                 if cell.phase == 0 {
                     let life = self.lives.at(cell.life).unwrap();
-                    if cell.operation == work::CHANNEL
+                    if self.producer_joined
+                        || cell.operation == work::CHANNEL
                         || !life.sounded
                         || life.terminal.is_some()
                         || pending.event.attack().is_none() && !pending.event.release()
@@ -1404,7 +1423,8 @@ impl Source {
             if let Some(parent) = self.pending.at(position) {
                 if !parent.inline_done
                     && !parent.disposition
-                    && (parent.life == NONE
+                    && (self.producer_joined
+                        || parent.life == NONE
                         || parent.event.attack().is_none() && !parent.event.release()
                         || self
                             .lives
@@ -3536,7 +3556,10 @@ impl Source {
     }
 
     fn publish_seal(&mut self) {
-        if self.sealed
+        // A destroyed producer closes through ProducerJoined. Its abandoned
+        // debt is not accepted neutralization and must never mint a seal.
+        if self.producer_joined
+            || self.sealed
             || self.state.pedals_held()
             || self.owed_note_off != [NONE; 64]
             || self.old_pending != 0

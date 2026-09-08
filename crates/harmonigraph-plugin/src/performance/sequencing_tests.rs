@@ -3858,3 +3858,79 @@ fn production_destroying_a_tune_with_an_unreached_toggle_still_reclaims_its_entr
     drop(hub);
     assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
 }
+
+#[test]
+fn production_destruction_settles_held_direct_without_fabricating_releases() {
+    destruction_settlement(true);
+}
+
+#[test]
+fn production_destruction_settles_held_pedal_without_fabricating_releases() {
+    destruction_settlement(false);
+}
+
+fn destruction_settlement(direct: bool) {
+    let _scope = crate::test_scope::enter();
+    use harmonigraph_take::{CanonicalRecord, NoteKind};
+    let directory = std::env::temp_dir()
+        .join(format!("harmonigraph-destruction-{}-{direct}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let (recorder, control) = harmonigraph_record::channel();
+    let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    crate::configuration::inject_recorder(recorder);
+    let (hub, source) = production_pair();
+    control.start(44100.0, String::new(), false);
+    source.run_format(1536, vec![], None, None, 512);
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(
+        2048,
+        if direct { vec![] } else { vec![raw_midi([0xb0, 64, 127], 0)] },
+        None,
+        None,
+        512,
+    );
+    hub.run_format(
+        2048,
+        if direct { vec![note(1, 0, 60, 0, true)] } else { vec![] },
+        None,
+        None,
+        512,
+    );
+    source.run_format(2560, vec![], None, None, 512);
+    hub.run_format(2560, vec![], None, None, 512);
+    if direct {
+        assert_eq!(inspect_hub(&hub, |hub| hub.direct.state.count()), 1);
+    } else {
+        assert!(source.source_snapshot().pedals_held);
+    }
+    // No output callback follows either destroy. Deletion is not proof
+    // that the downstream instrument released the note or pedal.
+    drop(control);
+    drop(hub);
+    drop(source);
+    wait_until(|| writer.finished());
+    assert!(writer.failed());
+    let file = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|extension| extension == harmonigraph_take::EXTENSION)
+        })
+        .unwrap();
+    let take = harmonigraph_take::Take::read(&file).unwrap();
+    assert!(take.incomplete.is_some(), "unknown wire state survives reclamation");
+    let notes: Vec<_> = take
+        .events
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Delta(delta) => Some(delta),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), usize::from(direct));
+    if direct {
+        assert!(matches!(notes[0].event.kind, NoteKind::On { .. }));
+    }
+    assert_eq!(registry::global().lock().unwrap().test_counts(), (0, 0, 0));
+    std::fs::remove_dir_all(directory).unwrap();
+}
