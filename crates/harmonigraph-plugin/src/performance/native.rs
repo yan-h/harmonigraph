@@ -240,8 +240,11 @@ impl Editor for NativeEditor {
             field
         };
         label("Harmonigraph Tune", 502.0);
-        let delay_label = label("Tuning delay", 470.0);
+        let delay_label =
+            NSTextField::wrappingLabelWithString(&NSString::from_str("Tuning delay"), mtm);
+        delay_label.setFrame(rect(16.0, 466.0, 485.0, 34.0));
         delay_label.setMaximumNumberOfLines(0);
+        view.addSubview(&delay_label);
         // Stepped and discontinuous: the tick marks are the only values it can
         // take, and the action arrives once the drag is over.
         let delay = unsafe {

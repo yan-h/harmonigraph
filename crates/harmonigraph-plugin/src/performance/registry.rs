@@ -226,7 +226,6 @@ impl Registry {
     /// this Hub's session is asked; each one adopts it as its own parameter
     /// and requests its own reactivation, so they change one at a time and a
     /// transient mismatch between them is only a live-feel difference.
-    #[cfg(target_os = "macos")]
     pub fn request_delay(&self, bridge: &Arc<HubBridge>, multiplier: u32) {
         let Some(hub) =
             self.hubs.iter().flatten().find(|h| !h.retired && Arc::ptr_eq(&h.bridge, bridge))

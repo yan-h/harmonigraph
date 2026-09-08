@@ -60,7 +60,10 @@ pub fn delay_text(requested: u32, active: u32, frames: u32, rate: f64) -> String
         if frames == 0 || rate <= 0.0 {
             return format!("{multiplier}x buffer");
         }
-        format!("{multiplier}x buffer - {samples} samples / {:.2} ms", samples as f64 * 1000.0 / rate)
+        format!(
+            "{multiplier}x buffer - {samples} samples / {:.2} ms",
+            samples as f64 * 1000.0 / rate
+        )
     };
     if active == 0 {
         return format!("Tuning delay {} - waiting for the host format", describe(requested));
@@ -69,9 +72,8 @@ pub fn delay_text(requested: u32, active: u32, frames: u32, rate: f64) -> String
         return format!("Tuning delay {}", describe(active));
     }
     format!(
-        "Tuning delay {} active - requested {}, waiting for host reactivation",
-        describe(active),
-        describe(requested)
+        "Tuning delay {} · requested {requested}x, waiting for host reactivation",
+        describe(active)
     )
 }
 
