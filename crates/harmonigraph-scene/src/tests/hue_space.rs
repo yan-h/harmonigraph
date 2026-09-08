@@ -656,13 +656,19 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
     }
 }
 
-/// The fresh look opens about as colored as a fraction of the per-hue ceiling
-/// opened it, and spends that color evenly instead of banking it in the
-/// magentas.
+/// What a gradient's mean chroma is held to: an equivalence to the denominator
+/// it was dialled against, or a number the look itself draws.
+enum Want {
+    RetiredFraction(f64),
+    Mean(f64),
+}
+
+/// The fresh look opens at a known colorfulness and spends that color evenly
+/// instead of banking it in the magentas.
 ///
 /// What `default_chroma`'s 0.669 IS: the figure holding the default arc's MEAN
 /// absolute chroma where the retired denominator put it at 0.5. Pinned because
-/// the alternative reading of this change — that it simply washed the picture
+/// the alternative reading of that change — that it simply washed the picture
 /// out — is one a number can settle, and because the figure moves whenever the
 /// arc does.
 ///
@@ -670,16 +676,28 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
 /// default and `ViewConfig`'s composed one are independent numbers by design
 /// (see `view.rs`, which says so), and the one a fresh install actually DRAWS is
 /// the composed one — so a retune that reached only `default_chroma` would leave
-/// the lattice 37% duller with every test still green. The retired fraction is
-/// each gradient's OWN, since each was dialled against the per-hue ceiling.
+/// the lattice 37% duller with every test still green.
+///
+/// The two are pinned to DIFFERENT things, and that is the point. The type's
+/// default is still an equivalence: it was dialled against the per-hue ceiling
+/// and must open where 0.5 of that ceiling opened it. `ViewConfig`'s composed
+/// gradient no longer is — the 2026-09-07 capture dialled its chroma up and
+/// gave it a ramp, so it is a look someone chose rather than an arc converted,
+/// and holding it to the retired figure would be refusing the dial. It is
+/// pinned to what the captured look itself draws, which keeps the protection
+/// above: a `default_chroma` retune still cannot reach it unnoticed.
 #[test]
 fn the_default_opens_at_the_colorfulness_it_used_to() {
-    for (name, g, retired_fraction) in [
-        ("Gradient::default", Gradient::default().sanitized(), 0.5),
+    for (name, g, want) in [
+        // 0.5 of the per-hue ceiling, the denominator this arc was dialled
+        // against before `chroma_of` replaced it.
+        ("Gradient::default", Gradient::default().sanitized(), Want::RetiredFraction(0.5)),
+        // The mean the captured look draws. Not an equivalence to anything —
+        // see above.
         (
             "ViewConfig's lattice",
             crate::ViewConfig::default().pitch_gradient.sanitized(),
-            0.601_670_8,
+            Want::Mean(0.126_8),
         ),
     ] {
         let mean = |f: &dyn Fn(f64, f64, f64) -> f64| {
@@ -693,14 +711,19 @@ fn the_default_opens_at_the_colorfulness_it_used_to() {
                 / 201.0
         };
         let now = mean(&|l, h, fraction| crate::color::chroma_of_for_docs(fraction, l, h));
-        // The ramp is flat on both of these, so the retired fraction is one
-        // number rather than a curve; `chroma_at` is read above anyway so a
-        // ramped gradient added here would still be measured honestly.
-        let retired = mean(&|l, h, _| retired_fraction * crate::color::max_chroma_for_docs(l, h));
+        // `chroma_at` is read inside `mean`, so a RAMPED gradient — which the
+        // composed one now is — is measured over its whole ramp rather than at
+        // one point of it.
+        let (want, whence) = match want {
+            Want::RetiredFraction(f) => (
+                mean(&|l, h, _| f * crate::color::max_chroma_for_docs(l, h)),
+                format!("the retired denominator at {f}"),
+            ),
+            Want::Mean(m) => (m, "the captured look".to_owned()),
+        };
         assert!(
-            (now - retired).abs() / retired < 0.02,
-            "{name}'s mean chroma is {now:.4} where the retired denominator at \
-             {retired_fraction} put it at {retired:.4}; its chroma no longer holds it there",
+            (now - want).abs() / want < 0.02,
+            "{name}'s mean chroma is {now:.4} where {whence} puts it at {want:.4}",
         );
     }
 }

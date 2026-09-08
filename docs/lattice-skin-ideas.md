@@ -21,7 +21,8 @@ but not what the LATTICE draws at rest.
 The audio ring where it reads silence, the octave band's unsounding slices and an unplayed node all stand on one view setting instead, `ViewConfig::lattice_ground`:
 a neutral `L*` resolved per frame off the Ground bar, so it is dialable while a picture is being read.
 The markers stand on `ViewConfig::marker_ink`, an `L*` of their own on the same axis, so the resting field is free of the node's unlit rings.
-The skin's part in it is `surface_faint`, the rung a fresh view opens on.
+The skin has no part in either of them:
+the tie that once opened the fresh ground on `surface_faint` was cut when the 2026-09-07 DAW look was captured, so the chrome's ladder and the lattice's ground are dialled apart.
 
 A node is a camera-facing billboard with signed-distance masks, so new node shapes are cheap:
 change the coverage math, keep the compositing.

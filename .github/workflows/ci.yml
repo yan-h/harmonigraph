@@ -24,6 +24,9 @@ jobs:
     # the summary job below, which is the one to look at on a PR.
     name: ${{ matrix.group }}
     runs-on: macos-latest
+    env:
+      # Pixel tests must render; a missing adapter must not become a green skip.
+      HARMONIGRAPH_REQUIRE_GPU: "1"
     timeout-minutes: 20
     strategy:
       # Both groups always report. A failure in one says nothing about the

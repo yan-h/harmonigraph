@@ -50,7 +50,9 @@ pub struct Alignment {
     pub confidence: f32,
 }
 
-/// RMS energy per [`HOP`]-length frame.
+/// RMS energy across the original channels per [`HOP`]-length frame.
+/// Squaring before combining channels preserves opposite-phase attacks and
+/// avoids allocating a whole-file mono signal just to reduce it again.
 ///
 /// Frame boundaries are placed by *time*, not by a fixed sample count, so
 /// frame `k` covers exactly `[k*HOP, (k+1)*HOP)` seconds whatever the rate
@@ -59,14 +61,15 @@ pub struct Alignment {
 /// smear the correlation. Placing boundaries by time keeps both files on
 /// one grid, which is what lets a reference and a bounce at different
 /// rates line up at all.
-fn envelope(samples: &[f32], sample_rate: f32) -> Vec<f32> {
-    let sr = f64::from(sample_rate);
-    let frames = ((samples.len() as f64 / sr) / HOP).floor() as usize;
+fn envelope(audio: &Audio) -> Vec<f32> {
+    let sr = f64::from(audio.sample_rate);
+    let channels = audio.channels.max(1);
+    let frames = (audio.seconds() / HOP).floor() as usize;
     (0..frames)
         .map(|k| {
             let start = (k as f64 * HOP * sr) as usize;
-            let end = (((k + 1) as f64 * HOP * sr) as usize).min(samples.len());
-            let frame = &samples[start..end.max(start)];
+            let end = (((k + 1) as f64 * HOP * sr) as usize).min(audio.frames());
+            let frame = &audio.samples[start * channels..end.max(start) * channels];
             if frame.is_empty() {
                 return 0.0;
             }
@@ -160,8 +163,8 @@ fn best_lag(template: &[f32], template_norm: f64, haystack: &[f32]) -> (usize, f
 /// `reference_start`). Returns `None` when either file is too short to
 /// correlate.
 pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<Alignment> {
-    let reference_onsets = onset_strength(&envelope(&reference.mono(), reference.sample_rate));
-    let clean_onsets = onset_strength(&envelope(&clean.mono(), clean.sample_rate));
+    let reference_onsets = onset_strength(&envelope(reference));
+    let clean_onsets = onset_strength(&envelope(clean));
     align_onsets(&reference_onsets, reference_start, &clean_onsets)
 }
 
@@ -177,7 +180,7 @@ pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<A
 /// is better nudged by eye.
 pub fn align_to_notes(onsets: &[(f64, f32)], span: f64, clean: &Audio) -> Option<Alignment> {
     let reference_onsets = note_onset_envelope(onsets, span);
-    let clean_onsets = onset_strength(&envelope(&clean.mono(), clean.sample_rate));
+    let clean_onsets = onset_strength(&envelope(clean));
     // The note train is on the take clock, so its frame 0 is take-time 0.
     align_onsets(&reference_onsets, 0.0, &clean_onsets)
 }
@@ -350,6 +353,29 @@ mod tests {
             "expected ~-0.5s, got {:.4}s",
             alignment.start,
         );
+    }
+
+    #[test]
+    fn stereo_polarity_does_not_change_alignment() {
+        let (reference, clean) = scenario(-0.35, 0.5, 4.0);
+        let expected = align(&reference, 0.5, &clean).expect("mono reference aligns");
+        assert!((expected.start + 0.35).abs() < 0.02);
+        let onsets: Vec<_> = beat(4.0).into_iter().map(|t| (t, 0.8)).collect();
+        let expected_notes = align_to_notes(&onsets, 4.0, &clean).expect("MIDI reference aligns");
+        for sign in [1.0, -1.0] {
+            let stereo = |audio: &Audio| Audio {
+                sample_rate: audio.sample_rate,
+                samples: audio.samples.iter().flat_map(|&x| [x, sign * x]).collect(),
+                channels: 2,
+            };
+            let (reference, clean) = (stereo(&reference), stereo(&clean));
+            let actual = align(&reference, 0.5, &clean).expect("stereo attacks survive");
+            assert_eq!(actual.start, expected.start);
+            assert!((actual.confidence - expected.confidence).abs() < 1e-6);
+            let notes = align_to_notes(&onsets, 4.0, &clean).expect("stereo aligns to notes");
+            assert_eq!(notes.start, expected_notes.start);
+            assert!((notes.confidence - expected_notes.confidence).abs() < 1e-6);
+        }
     }
 
     #[test]

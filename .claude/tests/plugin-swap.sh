@@ -181,6 +181,65 @@ mkdir -p "$TMP/bin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/cargo"
 chmod +x "$TMP/bin/cargo"
 
+# Deterministic process snapshots: never inspect/control the real Bitwig hosts.
+# lsof field records match macOS 4.91 output observed from a scratch dlopen
+# process across an atomic rename: same n pathname, different D/i identity.
+export PLUGIN_SWAP_REPO="$(cd "$repo" && pwd -P)" PLUGIN_SWAP_QUERY_LOG="$TMP/queries"
+cat > "$TMP/bin/ps" <<'SH'
+#!/bin/bash
+echo ps >> "$PLUGIN_SWAP_QUERY_LOG"
+case "${PLUGIN_SWAP_DIAGNOSTIC_CASE:-closed}" in
+  closed) exit 0 ;;
+  ps-failed) exit 1 ;;
+esac
+for pid in 7101 7102 7103 7104 7105 7106; do
+  start="Mon Sep  7 10:40:18 2026"
+  if [[ "$1" == -p && "$pid" == 7104 ]]; then
+    start="Mon Sep  7 10:41:19 2026"  # PID reused while lsof ran.
+  fi
+  name=BitwigPluginHost-ARM64-NEON
+  [[ "$pid" == 7102 ]] && name=BitwigAudioEngine-ARM64-NEON
+  printf '%s %s /Applications/Bitwig Studio.app/Contents/MacOS/%s\n' "$pid" "$start" "$name"
+done
+echo '7199 Mon Sep  7 10:40:18 2026 /tmp/NotBitwigPluginHost'
+SH
+cat > "$TMP/bin/lsof" <<'SH'
+#!/bin/bash
+echo lsof >> "$PLUGIN_SWAP_QUERY_LOG"
+# Assert one batch covers only the selected hosts and mapped text. A filename
+# selection would hide precisely the old inode this regression needs to reach.
+[[ "$*" == '-nP -b -a -p 7101,7102,7103,7104,7105,7106 -d txt -FpfDin' ]] || exit 2
+[[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == unavailable ]] && exit 127
+record() {
+  printf 'ftxt\nD%s\ni%s\nn%s\n' "${2%:*}" "${2#*:}" "$1"
+}
+for pid in 7101 7102 7103 7104 7105 7106; do
+  [[ "$pid" == 7105 && "$PLUGIN_SWAP_DIAGNOSTIC_CASE" != no-match ]] && continue
+  echo "p$pid"
+  record /usr/lib/dyld 0x100000d:1152921500312573255
+  [[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == no-match ]] && continue
+  for ext in clap vst3; do
+    live="$PLUGIN_SWAP_REPO/target/bundled/Harmonigraph.$ext/Contents/MacOS/Harmonigraph"
+    old=$(cat "$PLUGIN_SWAP_REPO/old-$ext")
+    current=$(stat -f '0x%Xd:%i' "$live")
+    case "$pid" in
+      7101) record "$live" "$old"; record "$live" "$old" ;; # deduplicated
+      7102) record "$live" "$current" ;;
+      7103)
+        if [[ "$ext" == clap ]]; then
+          printf 'ftxt\nn%s\n' "$live"  # no identity: pathname is insufficient
+        else
+          record "$live" "0x999:${current#*:}"  # same inode, different device
+        fi ;;
+      7104) record "$live" "$old" ;;
+    esac
+  done
+done
+[[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == failed ]] && exit 1
+exit 0
+SH
+chmod +x "$TMP/bin/ps" "$TMP/bin/lsof"
+
 # Model a timestamp tick collision deterministically: the first metadata touch
 # per bundle leaves mtime unchanged, just as a repeat install within the same
 # clock tick can. Subsequent calls use the real touch. The direct-loader case
@@ -331,8 +390,82 @@ if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
 fi
 check_loads load-plugin.sh "$codex_branch @$sha"
 
+# 6. Diagnostics use executable identity, tolerate incomplete OS queries, and
+# never turn a successful swap into failure. The first two swaps above model
+# Bitwig closed; even lsof must stay uncalled in that case.
+if grep -Eq 'PID |Snapshot only|process diagnostic|Process mapping query' "$out" "$codex_out" \
+  || grep -q lsof "$PLUGIN_SWAP_QUERY_LOG"; then
+  echo "✗ closed Bitwig produced extra diagnostics or an lsof query" >&2
+  failures=$((failures + 1))
+fi
+
+diagnostic_check() {
+  local pattern="$1" expected="$2" actual
+  actual=$(grep -Ec "$pattern" "$diagnostic_out")
+  if [[ "$actual" != "$expected" ]]; then
+    echo "✗ $diagnostic_case: expected $expected matches for $pattern, got $actual" >&2
+    sed 's/^/    /' "$diagnostic_out" >&2
+    failures=$((failures + 1))
+  fi
+}
+for diagnostic_case in identities no-match failed unavailable ps-failed; do
+  # Keep both old inodes alive as a mapped host would, preventing inode reuse
+  # from making the fixture claim a different file is the replaced image.
+  exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
+  exec 4< "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME"
+  for ext in clap vst3; do
+    stat -f '0x%Xd:%i' "$repo/target/bundled/$NAME.$ext/Contents/MacOS/$NAME" > "$repo/old-$ext"
+  done
+  : > "$PLUGIN_SWAP_QUERY_LOG"
+  diagnostic_out="$TMP/diagnostic-$diagnostic_case.log"
+  prime_discovery_metadata
+  (cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" \
+    PLUGIN_SWAP_DIAGNOSTIC_CASE="$diagnostic_case" /bin/bash ./load-plugin.sh "$codex_branch") \
+    > "$diagnostic_out" 2>&1
+  if [[ "$?" != 0 ]]; then
+    echo "✗ $diagnostic_case: process diagnostic failed the install" >&2
+    sed 's/^/    /' "$diagnostic_out" >&2
+    failures=$((failures + 1))
+  fi
+  diagnostic_check 'Installed: codex/app-worktree' 1
+  diagnostic_check "The performance overlay will read:  build  $codex_branch @$sha" 1
+  if [[ "$diagnostic_case" == ps-failed ]]; then
+    diagnostic_check 'NOTE: Bitwig process diagnostic unavailable; installation succeeded' 1
+    expected_queries=ps
+  else
+    expected_queries=$'ps\nlsof\nps'
+    diagnostic_check 'Snapshot only: unseen mappings and the next load are not verified' 1
+    case "$diagnostic_case" in
+      identities|failed)
+        diagnostic_check 'PID 7101 \(started Mon Sep 7 10:40:18 2026\): observed old image' 2
+        diagnostic_check 'PID 7102 .*observed current image' 2
+        diagnostic_check 'PID 7103 .*uncertain.*pathname matches' 2
+        diagnostic_check 'PID 7104 \(start unavailable or changed\): uncertain' 2
+        diagnostic_check 'PID 710[12].*uncertain|PID 710[345].*observed (old|current)' 0
+        ;;
+      no-match)
+        diagnostic_check 'observed old image|observed current image' 0
+        diagnostic_check 'No Harmonigraph image observed in the queried Bitwig hosts' 1
+        ;;
+      unavailable)
+        diagnostic_check 'PID 710[1-6].*uncertain' 6
+        ;;
+    esac
+    diagnostic_check 'PID 7105 .*uncertain.*inaccessible or have exited' \
+      "$([[ "$diagnostic_case" == no-match ]] && echo 0 || echo 1)"
+    diagnostic_check 'PID 7106|PID 7199' "$([[ "$diagnostic_case" == unavailable ]] && echo 1 || echo 0)"
+    diagnostic_check 'Process mapping query unavailable or incomplete; installation succeeded' \
+      "$([[ "$diagnostic_case" == failed || "$diagnostic_case" == unavailable ]] && echo 1 || echo 0)"
+  fi
+  if [[ "$(cat "$PLUGIN_SWAP_QUERY_LOG")" != "$expected_queries" ]]; then
+    echo "✗ $diagnostic_case did not use the expected bounded process queries" >&2
+    failures=$((failures + 1))
+  fi
+  exec 3<&- 4<&-
+done
+
 if [ "$failures" -eq 0 ]; then
-  echo "  ok — fresh signed inodes load each selected build and preserve old open files"
+  echo "  ok — fresh signed inodes preserve old files; host diagnostics distinguish identities and tolerate query failures"
 else
   echo "✗ $failures plugin-swap check(s) failed" >&2
   exit 1

@@ -44,7 +44,7 @@ use egui::Color32;
 
 use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::note_color;
-use super::spectral::spectrogram::{cell_color, footprint_mean};
+use super::spectral::spectrogram::{cell_color, footprint_mean_db};
 use crate::SharedState;
 
 /// How much of the disc's radius the hole in the middle keeps, as a share of
@@ -719,9 +719,9 @@ fn strip(
     // a max would lift this pane's noise floor as the pitch range was widened.
     let half_step = span / (2.0 * steps as f32);
     let level = |midi: f32| {
-        let Some(levels) = levels else { return 0.0 };
+        let Some(levels) = levels else { return power_db(0.0) };
         let bucket_x = |m: f32| (m - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
-        footprint_mean(levels, bucket_x(midi - half_step), bucket_x(midi + half_step))
+        footprint_mean_db(levels, bucket_x(midi - half_step), bucket_x(midi + half_step))
     };
 
     let mut mesh = egui::Mesh::default();
@@ -730,10 +730,8 @@ fn strip(
         // Opaque, and untinted by anything of this pane's: the gradient's dark
         // end is black, so silence recedes into the disc rather than letting
         // the pane's own `well` through in rings between the turns.
-        let color = cell_color(
-            cfg.spectrogram_gradient,
-            spectrogram_level_db(cfg, power_db(level(midi)), midi),
-        );
+        let color =
+            cell_color(cfg.spectrogram_gradient, spectrogram_level_db(cfg, level(midi), midi));
         mesh.colored_vertex(spiral.at(midi, -spiral.half()), color);
         mesh.colored_vertex(spiral.at(midi, spiral.half()), color);
         if i > 0 {
@@ -1217,7 +1215,7 @@ mod tests {
     /// the reason it has to exist: every other fixture builds `fresh()`, whose
     /// analyzer has no samples, so `display` answers `None` and the level
     /// closure returns 0.0 at every step. Without this, the bucket lookup, the
-    /// bucket-run footprint, `footprint_mean`, `loudness` and `cell_color` are reached
+    /// bucket-run footprint, `footprint_mean_db`, `loudness` and `cell_color` are reached
     /// by nothing at all, and the picture's whole colour path reads as covered
     /// while being untested.
     ///
@@ -1230,7 +1228,7 @@ mod tests {
     /// What it does not pin is which operator the run is read by — a
     /// single-bucket read would still put the peak here. That choice is argued
     /// in `strip`'s own comment and is shared with the Spectral pane, whose
-    /// `footprint_mean` tests hold it.
+    /// `footprint_mean_db` tests hold it.
     #[test]
     fn a_tone_lands_on_its_own_pitch_class() {
         let mut state = fresh();

@@ -22,6 +22,7 @@ use harmonigraph_ui::SharedState;
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 
 fn main() -> eframe::Result {
+    harmonigraph_render::shader_assets::initialize();
     // Ask for timestamp queries where the adapter has them, so the
     // performance overlay can report GPU time. Only where advertised:
     // `request_device` fails outright on an unsupported feature, and a
