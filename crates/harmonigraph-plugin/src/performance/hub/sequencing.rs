@@ -365,6 +365,12 @@ impl Hub {
     pub(in crate::performance) fn test_plan_ledger_bytes(&self) -> usize {
         self.sequencer.plan_ledger_bytes()
     }
+    /// Plan slots currently held across every paired row's ledger. A note that
+    /// asks the Hub for nothing must leave this where it found it.
+    #[cfg(test)]
+    pub(in crate::performance) fn test_plan_count(&self) -> usize {
+        self.sequencer.plan_count
+    }
     #[cfg(test)]
     pub(in crate::performance) fn test_policy_counts(&self) -> [usize; 3] {
         self.sequencer.policy_counts
@@ -762,6 +768,20 @@ impl Hub {
             }
             return true;
         }
+        // An Off Tune forwards locally, so its onset asks for nothing and
+        // nothing is created here for it to need: no plan, and therefore no
+        // reply owed, no `LIFETIMES` slot held and no retirement outstanding;
+        // no decision spent and no context cell taken, which is what excluding
+        // the track from adaptive context means at this end. The whole of what
+        // the record still does is pass the input cursor. Its cancellations
+        // never arrive either: `dispose_work` reports `original_on` for an
+        // adaptive attack only, so no placeholder is minted here for one.
+        //
+        // Refusing the plan is what makes `Source::assignment_ready` sound;
+        // that is where the other half of this pairing is written down.
+        if source != 0 && !record.adaptive {
+            return true;
+        }
         let request = Request {
             lease: record.lease,
             epoch: record.epoch,
@@ -801,7 +821,10 @@ impl Hub {
             .map(|plan| plan.binding.configuration)
             .or(self.sequencer.config)
             .expect("owned original cohort configuration");
-        let (correction, selection) = if source != 0 && record.adaptive {
+        // Every onset that reaches here from a paired row is adaptive; the
+        // refusal above is what makes that true. DIRECT is the other case and
+        // is never assigned.
+        let (correction, selection) = if source != 0 {
             let mut count = 0;
             for voice in self.sequencer.context.iter().flatten() {
                 if self.sequencer.participating[usize::from(voice.source)] {
@@ -901,7 +924,7 @@ impl Hub {
                 self.configuration_exhausted();
                 return false;
             }
-            if record.adaptive && self.sequencer.participating[source] {
+            if self.sequencer.participating[source] {
                 self.sequencer.history.commit(record.lease, record.channel, record.key, binding);
             }
             self.sequencer.cohort_unsent += 1;

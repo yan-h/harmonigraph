@@ -134,7 +134,8 @@ That source-wide marker orders the toggle relative to its own earlier and later 
 it links into the same list a transport Stop uses, so the Tune cancels through the marker's serial and terminates what it has forwarded where output reaches that sample.
 When the copied marker is sequenced the Hub takes the source out of future scoring, while retaining its factual voices, output records, credits and release obligations.
 That record is the whole of what the reset owes the Hub: the attacks the marker cancels reach it as cancellation dispositions and the voices it terminates as ordinary accepted releases, so neither needs a Stop-style sweep of its own.
-An onset's immutable birth mode decides whether it asks for an adaptive assignment at all.
+An onset's immutable birth mode decides whether it asks for an adaptive assignment at all, and the same field on the copied record decides whether the Hub mints a plan for it:
+an Off onset is refused before the request identity is even built, so it takes no plan slot, spends no decision and enters no context, and its Tune emits it at input plus D without waiting.
 Later factual baselines cannot reverse an already sequenced participation marker.
 
 Normal canonical deltas now carry optional assignment revision, decision, node, frozen correction and current player tuning.

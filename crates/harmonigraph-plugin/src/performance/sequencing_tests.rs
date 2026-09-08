@@ -3193,3 +3193,165 @@ fn production_a_fresh_lease_is_not_sequenced_as_the_off_tune_whose_slot_it_took(
     assert_eq!(back.source_snapshot().faults, 0);
     settle(&hub, &back, raw, vec![note(1, 0, 50, 0, false), note(2, 0, 52, 0, false)]);
 }
+
+/// Hold the Tune one callback ahead of its Hub for the whole run, so no reply
+/// can reach an onset before that onset's own input plus D. Everything the
+/// Off path is supposed to do without the Hub is measured under this lag.
+fn lead(
+    hub: &Device,
+    source: &Device,
+    raw: &mut i64,
+    behind: &mut i64,
+    inputs: Vec<Input>,
+) -> Vec<(i64, Event)> {
+    let sink = source.run_format(*raw, inputs, None, None, 512);
+    let emitted =
+        sink.values.into_iter().map(|(offset, event)| (*raw + i64::from(offset), event)).collect();
+    hub.run_format(*behind, vec![], None, None, 512);
+    *raw += 512;
+    *behind += 512;
+    emitted
+}
+
+/// Go Off, settle that toggle, then take the lead. Returns the Tune's next
+/// input sample and the Hub's, which trails it by one callback.
+fn off_and_leading(hub: &Device, source: &Device, mut raw: i64) -> (i64, i64) {
+    source.run_format(raw, vec![source.participation(false, 0)], None, None, 512);
+    hub.run_format(raw, vec![], None, None, 512);
+    raw += 512;
+    for _ in 0..4 {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+        raw += 512;
+    }
+    source.run_format(raw, vec![], None, None, 512);
+    (raw + 512, raw)
+}
+
+/// #712: "Off note processing should not require Hub assignment replies or
+/// adaptive scheduling." So the lag that makes a Participating onset late
+/// leaves an Off onset exactly on time — it was never waiting for anything —
+/// while D itself is untouched, because this control is not host bypass.
+#[test]
+fn production_an_off_note_emits_at_input_plus_d_without_an_assignment_reply() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let (mut raw, mut behind) = off_and_leading(&hub, &source, 1536);
+    let mut onsets = Vec::new();
+    let collect = |emitted: Vec<(i64, Event)>, onsets: &mut Vec<i64>| {
+        onsets.extend(
+            emitted
+                .into_iter()
+                .filter(|(_, event)| event.attack().is_some())
+                .map(|(sample, _)| sample),
+        );
+    };
+    let off = raw;
+    let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![note(1, 0, 64, 0, true)]);
+    collect(emitted, &mut onsets);
+    let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![note(1, 0, 64, 0, false)]);
+    collect(emitted, &mut onsets);
+    assert_eq!(onsets, [off + 512], "an Off onset plays at its own input plus D and no later");
+    assert_eq!(
+        source.shared().deadline_misses.load(Ordering::Acquire),
+        0,
+        "and misses no deadline, because it had none to wait for"
+    );
+    assert_eq!(
+        inspect_hub(&hub, |hub| hub.test_cohort_delivery().0),
+        0,
+        "the Hub spent no decision on it: it was never asked"
+    );
+    // The same lag, the other mode. A Participating onset does wait.
+    let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![source.participation(true, 0)]);
+    collect(emitted, &mut onsets);
+    for _ in 0..3 {
+        let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![]);
+        collect(emitted, &mut onsets);
+    }
+    let participating = raw;
+    let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![note(2, 0, 64, 0, true)]);
+    collect(emitted, &mut onsets);
+    for _ in 0..2 {
+        let emitted = lead(&hub, &source, &mut raw, &mut behind, vec![]);
+        collect(emitted, &mut onsets);
+    }
+    assert_eq!(
+        onsets,
+        [off + 512, participating + 1024],
+        "the fixture must actually deny the reply, or the Off onset's punctuality means nothing"
+    );
+    assert_eq!(source.shared().deadline_misses.load(Ordering::Acquire), 1);
+    assert_eq!(source.source_snapshot().faults, 0);
+    hub.run_format(behind, vec![], None, None, 512);
+    settle(&hub, &source, raw, vec![note(2, 0, 64, 0, false)]);
+}
+
+/// The other half of the same decision, and the one that goes quietly wrong:
+/// an onset that emits without an assignment reports decision zero, which
+/// matches no plan, so a plan minted for it is never retired. One `LIFETIMES`
+/// slot per Off note — and the Tune's free list hands the same request slot
+/// straight back, so the SECOND note finds a stranger's plan in its own slot,
+/// which is `configuration_exhausted` and a latched STORAGE_FAULT.
+///
+/// The run below is twelve times longer than the leak needs to latch, and the
+/// chord holds eight distinct request slots open at once.
+#[test]
+fn production_off_notes_take_no_plan_slot_and_never_exhaust_the_ledger() {
+    let _scope = crate::test_scope::enter();
+    let (hub, source) = production_pair();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
+    let (mut raw, mut behind) = off_and_leading(&hub, &source, 1536);
+    let mut attacks = 0;
+    let ledger = std::cell::Cell::new(0);
+    let slots = std::cell::Cell::new(0);
+    let play = |inputs, raw: &mut i64, behind: &mut i64| {
+        let emitted = lead(&hub, &source, raw, behind, inputs);
+        ledger.set(ledger.get().max(inspect_hub(&hub, |hub| hub.test_plan_count())));
+        slots.set(slots.get().max(source.source_snapshot().lives));
+        emitted.iter().filter(|(_, event)| event.attack().is_some()).count()
+    };
+    for index in 0..24 {
+        let id = index + 1;
+        attacks += play(vec![note(id, 0, 64, 0, true)], &mut raw, &mut behind);
+        attacks += play(vec![note(id, 0, 64, 0, false)], &mut raw, &mut behind);
+        attacks += play(vec![], &mut raw, &mut behind);
+        attacks += play(vec![], &mut raw, &mut behind);
+    }
+    assert_eq!(ledger.get(), 0, "not one of the 24 took a plan slot");
+    assert_eq!(slots.get(), 1, "and one slot served them all, so the Hub saw that one 24 times");
+    let voices =
+        |on| (0..8).map(|voice| note(100 + voice, 0, 60 + voice as i16, 0, on)).collect::<Vec<_>>();
+    attacks += play(voices(true), &mut raw, &mut behind);
+    attacks += play(vec![], &mut raw, &mut behind);
+    attacks += play(voices(false), &mut raw, &mut behind);
+    for _ in 0..4 {
+        attacks += play(vec![], &mut raw, &mut behind);
+    }
+    assert_eq!(slots.get(), 8, "and the chord held eight distinct ones at once");
+    assert_eq!(attacks, 32, "every note reached the wire");
+    // The other way a slot could be taken: a cancelled attack. The Hub holds a
+    // placeholder plan for one until the onset's own record retires it, and an
+    // Off onset's record retires nothing — so an Off attack must not report
+    // itself cancelled either.
+    let stopped = || {
+        let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        Input::Transport(value)
+    };
+    play(vec![transport(0, 120.0)], &mut raw, &mut behind);
+    attacks += play(vec![note(200, 0, 64, 0, true), stopped()], &mut raw, &mut behind);
+    for _ in 0..4 {
+        attacks += play(vec![], &mut raw, &mut behind);
+    }
+    assert_eq!(attacks, 32, "the Stop must actually cancel that attack before it sounds");
+    assert_eq!(ledger.get(), 0, "and not one of them took a plan slot");
+    assert_eq!(
+        (source.source_snapshot().faults, inspect_hub(&hub, |hub| hub.test_cohort_delivery().0)),
+        (0, 0),
+        "nothing was exhausted and no decision was spent"
+    );
+    hub.run_format(behind, vec![], None, None, 512);
+    settle(&hub, &source, raw, vec![]);
+}

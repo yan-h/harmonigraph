@@ -481,6 +481,14 @@ The initial tuner has one participation control rather than three independent vi
 Off is an explicit user selection, not an automatic deadline fallback, and it is not host bypass:
 D and the latency reported for it are the same in both modes.
 
+**Off is a local forwarding path** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+An Off onset asks the Hub for no assignment, so it waits for no reply and the Hub mints no plan for it:
+it emits at its own input plus D whatever the Hub is doing, spends no decision, holds no slot in the plan ledger and takes no cell in the policy's context.
+Those two halves are one decision rather than two.
+An onset that emits without an assignment reports decision zero, which matches no plan, so a Hub that minted one for it would never retire that slot — one leaked lifetime per Off note, ending in `configuration_exhausted` as soon as the Tune hands the same request slot back.
+For the same reason a cancelled Off attack reports no cancellation: there is no plan for the Hub to retire, and a placeholder minted for one would leak the same slot.
+What Off keeps is what the reset needs — bounded local storage, note and release tracking, truthful output-acceptance handling, and the control coordination that withdraws the source and rejects obsolete work.
+
 **Either toggle direction resets that Tune** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
 The toggle stands as a boundary marker in the Tune's own input queue, at the sample it arrived on, and the reset runs where output reaches it:
 cancel the attacks still standing before the marker and reject their obsolete replies, send the releases and controller cleanup needed to terminate what has already been forwarded before that ownership is forgotten, then establish the new mode's pitch state.

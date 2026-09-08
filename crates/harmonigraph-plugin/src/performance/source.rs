@@ -1904,11 +1904,21 @@ impl Source {
         event
     }
 
+    /// Whether this onset may be emitted at all yet. Only an ADAPTIVE onset
+    /// waits: an Off Tune is a local forwarding path, so its onset has nothing
+    /// to wait for and takes the same input+D every other event takes.
+    /// DIRECT, whose whole delay is zero, is the same case.
+    ///
+    /// This relaxation is only sound because the Hub mints no plan for a
+    /// non-adaptive record: an onset that emits without an assignment reports
+    /// decision zero, which matches no plan, so a plan minted for one would
+    /// never be retired.
     fn assignment_ready(&self, life: u16) -> bool {
         self.delay() == 0
             || self.lives.at(life).is_some_and(|life| {
-                life.assignment.decision != 0
-                    && life.assignment.decision <= self.committed_assignment
+                !life.adaptive
+                    || life.assignment.decision != 0
+                        && life.assignment.decision <= self.committed_assignment
             })
     }
 
@@ -2409,10 +2419,14 @@ impl Source {
             assert_ne!(row.emission_gate.fetch_and(!BUSY, Ordering::Release) & BUSY, 0);
         }
     }
+    /// The gate value an unsounded onset must still find to be admitted: the
+    /// one its own assignment was minted against, so a gate that has closed
+    /// and reopened underneath it refuses it. Only an ADAPTIVE onset has one;
+    /// an Off onset and DIRECT carry no assignment at all, so what they claim
+    /// against is the gate as it stands.
     fn emission(&self, pending: Pending, row: &SourceControl) -> u64 {
-        if self.delay() != 0
-            && pending.life != NONE
-            && self.lives.at(pending.life).is_some_and(|life| !life.sounded)
+        if pending.life != NONE
+            && self.lives.at(pending.life).is_some_and(|life| life.adaptive && !life.sounded)
         {
             self.lives.at(pending.life).unwrap().assignment.emission
         } else {
@@ -3250,7 +3264,13 @@ impl Source {
             input_cut: pending.serial,
             lifetime,
             request: pending.life,
-            original_on: child == NONE && pending.event.attack().is_some(),
+            // What this flag asks the Hub for is the retirement of the plan
+            // this attack minted. An Off attack minted none, so saying yes
+            // would have the Hub hold a placeholder for a request that is
+            // never coming — one `LIFETIMES` slot per cancelled Off note.
+            original_on: child == NONE
+                && pending.event.attack().is_some()
+                && self.lives.at(pending.life).is_some_and(|life| life.adaptive),
         };
         let Some(cell) =
             offer.session.rows[usize::from(offer.lease.slot - 1)].to_hub.reserve_repair()
