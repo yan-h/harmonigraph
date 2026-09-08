@@ -129,7 +129,10 @@ The `notes()` iterator is an inspection adapter, not a second replay list.
 Parsing validates the ordered stream before offline replay can consume it.
 Standalone direct recording retains its ordinary Note adapter;
 standalone verification and incremental/full offline replay use the canonical consumer.
-An incomplete take is readable for inspection, but the offline render entrypoint refuses to render it.
+An incomplete take renders, with a warning naming the lost publication range printed before anything the command line can complain about (#712).
+Refusal belongs to parsing — version, header, corrupt or invalid line — because those are takes nothing can be drawn from;
+missing note history is a hole in a picture that is otherwise true, and the gap record exists precisely so the roll can draw it.
+The renderer marks its warnings with a `warning:` prefix, which is how the plugin picks one out of the renderer's stderr and puts it on the Video pane's status line beside `rendered <file>`.
 
 Live timing uses continuous presentation seconds across raw sample-clock resets/rate changes and a fresh audio heartbeat independent of historical delivery times.
 Queued pre-reset history therefore keeps its presentation domain while exact clock epochs remain available for original recording routes.

@@ -2372,9 +2372,39 @@ fn parse_report(segment: &str) -> Option<Report> {
 /// only costs memory.
 const STDERR_SEGMENT_CAP: usize = 8 * 1024;
 
+/// What following a render's stderr left worth saying afterwards.
+#[derive(Default)]
+struct Tail {
+    /// The last segment that was not a progress counter: the renderer's own
+    /// last word, and what a failed render is reported by.
+    last: String,
+    /// The FIRST segment the renderer marked `warning:`, kept even when the
+    /// render then succeeds.
+    ///
+    /// A render that warns and finishes is the case #712 asks for — the video
+    /// exists and something about it is not what was played — and success
+    /// otherwise throws [`last`](Self::last) away, so without this the only
+    /// notice of it is a stderr pipe nobody reads. The status line is the one
+    /// place a plugin user sees the renderer at all.
+    ///
+    /// First rather than last: the renderer prints the take's own warnings
+    /// before anything the command line can add, so what a person is told
+    /// about is the recording rather than the flags.
+    warning: Option<String>,
+}
+
+/// What the status line says when a render finished. A warning it printed on
+/// the way rides along, because "rendered X" alone would say a take with holes
+/// in its note history came out whole.
+fn rendered_status(out: &std::path::Path, warning: Option<&str>) -> String {
+    match warning {
+        Some(warning) => format!("rendered {} — {warning}", out.display()),
+        None => format!("rendered {}", out.display()),
+    }
+}
+
 /// Follow the renderer's stderr to its end, publishing progress as it arrives,
-/// and hand back the last line that ISN'T progress — which is the one worth
-/// showing if the render then fails.
+/// and hand back what it said that was not progress.
 ///
 /// Read continuously rather than collected at the end (what `Command::output`
 /// would do) for two reasons: a frame counter is only useful while the render
@@ -2384,11 +2414,11 @@ const STDERR_SEGMENT_CAP: usize = 8 * 1024;
 /// Split on `\r` as well as `\n`: the counter is REWRITTEN in place on one
 /// terminal line, so newlines alone would deliver the whole run of it as a
 /// single line, once, at the end.
-fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> String {
+fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
     let mut buffer = [0u8; 4096];
     let mut segment: Vec<u8> = Vec::new();
-    let mut last = String::new();
-    let take = |segment: &mut Vec<u8>, last: &mut String| {
+    let mut tail = Tail::default();
+    let take = |segment: &mut Vec<u8>, tail: &mut Tail| {
         let text = String::from_utf8_lossy(segment);
         let text = text.trim();
         match parse_report(text) {
@@ -2397,9 +2427,16 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> String {
                 progress.total.store(total, Ordering::Relaxed);
             }
             Some(Report::Total(total)) => progress.total.store(total, Ordering::Relaxed),
-            // Diagnostics, warnings, the renderer's own error: keep the last
-            // one for the status line.
-            None if !text.is_empty() => *last = text.to_owned(),
+            // Diagnostics, warnings, the renderer's own error. The last of
+            // them is the status line's if the render fails; the first
+            // `warning:` among them is its own, because success discards the
+            // last and a warned-about export still needs to say so.
+            None if !text.is_empty() => {
+                if tail.warning.is_none() && text.starts_with("warning:") {
+                    tail.warning = Some(text.to_owned());
+                }
+                tail.last = text.to_owned();
+            }
             None => {}
         }
         segment.clear();
@@ -2416,18 +2453,18 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> String {
         };
         for &byte in &buffer[..read] {
             if byte == b'\r' || byte == b'\n' {
-                take(&mut segment, &mut last);
+                take(&mut segment, &mut tail);
             } else {
                 segment.push(byte);
                 if segment.len() >= STDERR_SEGMENT_CAP {
-                    take(&mut segment, &mut last);
+                    take(&mut segment, &mut tail);
                 }
             }
         }
     }
     // Whatever the renderer left unterminated on its way out.
-    take(&mut segment, &mut last);
-    last
+    take(&mut segment, &mut tail);
+    tail
 }
 
 /// Run the renderer on the finished take, on a thread of its own so a
@@ -2553,7 +2590,7 @@ fn spawn_render(
         // spends the spawn offering a cancel that would quietly do nothing.
         progress.begin();
         // Ends at EOF on the pipe, which a kill brings about immediately.
-        let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
+        let tail = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
         let result = match control.child.lock().take() {
             Some(mut flight) => flight.child.wait(),
             // Unreachable in practice: nothing else takes the child, only
@@ -2576,7 +2613,9 @@ fn spawn_render(
             Ok(exit) if exit.success() => {
                 // Whole, and only now under the name anything else reads.
                 match std::fs::rename(&partial, &out) {
-                    Ok(()) => *status.lock() = format!("rendered {}", out.display()),
+                    Ok(()) => {
+                        *status.lock() = rendered_status(&out, tail.warning.as_deref());
+                    }
                     Err(err) => {
                         *status.lock() = format!("rendered, but could not move into place: {err}")
                     }
@@ -2590,7 +2629,7 @@ fn spawn_render(
             // ever see them.
             Ok(_) => {
                 cleanup();
-                *status.lock() = format!("render failed: {last}");
+                *status.lock() = format!("render failed: {}", tail.last);
             }
             Err(err) => {
                 cleanup();
@@ -3297,8 +3336,57 @@ mod tests {
         let progress = Progress::default();
         progress.begin();
         assert_eq!(
-            follow(stream.as_bytes(), &progress),
+            follow(stream.as_bytes(), &progress).last,
             "harmonigraph-offline: ffmpeg exited with status 1"
+        );
+    }
+
+    /// #712's other half: a render that WARNED and then succeeded says so on
+    /// the status line, which is the only place a plugin user sees the
+    /// renderer's output.
+    ///
+    /// The fixture is shaped like the real stream rather than like a warning on
+    /// its own. The warning is printed before the render starts, and what comes
+    /// after it is the counters and then ffmpeg's own summary — ffmpeg is a
+    /// grandchild sharing this pipe, so it gets the last word on every
+    /// successful render. `last` is therefore NOT the warning by the end, which
+    /// is the whole reason the warning is carried separately.
+    #[test]
+    fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
+        let warning = "warning: take-1.take: note history 6..=8 is missing \
+                       (PublicationFull) — rendering the records that survived.";
+        let muxed = "video:512kB audio:0kB subtitle:0kB muxing overhead: 1.234567%";
+        // The renderer's second warning, in the order `run()` prints them: the
+        // take's own trouble, then the command line's. Present so "first, not
+        // last" is a claim this fixture can tell apart.
+        let later = "warning: take names take-1.wav but it is not beside the take";
+        let stream = format!(
+            "take-1.take: 2.0s of events -> 120 frames at 60 fps, 640x360 @ 1.00x \
+             -> take-1.mp4\n\
+             {warning}\n\
+             {later}\n\
+             \r  60/120 frames (50%)\r  120/120 frames (100%)\n\
+             done: 120 frames -> take-1.mp4\n\
+             {muxed}\n"
+        );
+        let progress = Progress::default();
+        progress.begin();
+        let tail = follow(stream.as_bytes(), &progress);
+        assert_eq!(tail.warning.as_deref(), Some(warning), "the take's warning, not the flags'");
+        assert_eq!(
+            tail.last, muxed,
+            "the warning is kept BESIDE the last word, which ffmpeg has taken",
+        );
+
+        let status =
+            rendered_status(std::path::Path::new("/takes/take-1.mp4"), tail.warning.as_deref());
+        assert!(status.contains("rendered /takes/take-1.mp4"), "{status}");
+        assert!(status.contains("note history 6..=8 is missing"), "{status}");
+        // A clean render says nothing extra, or every export would read as one
+        // that went wrong.
+        assert_eq!(
+            rendered_status(std::path::Path::new("/takes/take-1.mp4"), None),
+            "rendered /takes/take-1.mp4",
         );
     }
 
@@ -4231,7 +4319,7 @@ mod tests {
             .into_iter(),
         };
         assert_eq!(
-            follow(signalled, &progress),
+            follow(signalled, &progress).last,
             "harmonigraph-offline: ffmpeg died",
             "everything after the signal still belongs to this render"
         );
@@ -4250,7 +4338,7 @@ mod tests {
             .into_iter(),
         };
         assert_eq!(
-            follow(broken, &progress),
+            follow(broken, &progress).last,
             "harmonigraph-offline: writing frames",
             "a broken pipe is the end, not something to read past"
         );
