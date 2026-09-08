@@ -253,8 +253,6 @@ impl<P: ClapPlugin> Wrapper<P> {
             runtime.fault = false;
             runtime.reset_generation = reset;
         }
-        // THE configuration boundary. Everything reduced during the previous
-        // callback is adopted here, once, for every group this block starts.
         plugin.clap_configuration_begin(boundary);
         if boundary.steady_time < 0 || runtime.fault {
             plugin.clap_configuration_fault();
@@ -263,6 +261,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         if !self.drain_configuration_commands(runtime, &mut plugin, boundary.steady_time) {
             return;
         }
+        // THE configuration boundary, once every command accepted before this
+        // callback has reduced: one value for every group this block starts.
+        plugin.clap_configuration_adopt();
         input.storage.bind_untimed(boundary.steady_time);
         // One walk, in input order, with each event's sample-precise timestamp
         // preserved. Automation reduces where it arrives and becomes effective

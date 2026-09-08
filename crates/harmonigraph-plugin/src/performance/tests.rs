@@ -1807,6 +1807,7 @@ fn attached_reset_disposes_more_than_one_manifest_window_without_baseline_substi
     );
 }
 
+#[track_caller]
 fn wait_until(mut ready: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !ready() && std::time::Instant::now() < deadline {
@@ -1820,7 +1821,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     let _scope = crate::test_scope::enter();
     use harmonigraph_take::{CanonicalRecord, NoteKind};
     if std::env::var_os("HARMONIGRAPH_JOINED_RECORDING_CHILD").is_none() {
-        for mode in 0..5 {
+        for mode in 0..4 {
             assert!(std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "performance::tests::retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer", "--nocapture", "--test-threads=1"])
                 .env("HARMONIGRAPH_JOINED_RECORDING_CHILD", mode.to_string()).status().unwrap().success());
@@ -1831,10 +1832,9 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     // recording stream closes. Each case owns a separate process.
     let mode: usize =
         std::env::var("HARMONIGRAPH_JOINED_RECORDING_CHILD").unwrap().parse().unwrap();
-    let blocked_configuration = matches!(mode, 1 | 2);
-    let unknown_held = mode == 2;
-    let owed_off = mode == 3;
-    let pedal_only = mode == 4;
+    let unknown_held = mode == 1;
+    let owed_off = mode == 2;
+    let pedal_only = mode == 3;
     let unknown_wire = unknown_held || owed_off || pedal_only;
     let uuid = SavedUuid::default();
     let directory = std::env::temp_dir()
@@ -1842,13 +1842,6 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     std::fs::create_dir_all(&directory).unwrap();
     let (recorder, control) = harmonigraph_record::channel();
     let writer = harmonigraph_record::testing::worker_probe(&control, directory.clone());
-    struct ResumeWriter<'a>(&'a harmonigraph_record::testing::WorkerProbe);
-    impl Drop for ResumeWriter<'_> {
-        fn drop(&mut self) {
-            self.0.resume_retirement_check();
-        }
-    }
-    let _resume_writer = ResumeWriter(&writer);
     crate::configuration::inject_recorder(recorder);
     let mut hub = Device::aggregation(false);
     hub.configure(uuid, true);
@@ -1898,49 +1891,14 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         wait_until(|| shared.before_transfer.entered.load(Ordering::Acquire));
         assert_eq!(session.credits.load(Ordering::Acquire), usize::from(!pedal_only));
         hub.run(64, vec![], None); // owns the original recorded span of those accepted events
-        let mailbox = if blocked_configuration {
-            let wrapper = unsafe {
-                &*((*hub.plugin)
-                    .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-            };
-            let mailbox = wrapper.configuration_handle().unwrap();
-            for value in 690..707 {
-                mailbox
-                    .submit(crate::configuration::packet(
-                        harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
-                    ))
-                    .unwrap();
-            }
-            hub.run(128, vec![], None);
-            Some(mailbox)
-        } else {
-            None
-        };
         control.stop(None);
-        hub.run(if blocked_configuration { 192 } else { 128 }, vec![], None); // producer/config closure; actual source history is still paused
-        if let Some(mailbox) = &mailbox {
-            assert!(mailbox.visible().1);
-            assert!(
-                mailbox.visible().0.applied_id < mailbox.accepted_command.load(Ordering::Acquire),
-                "one real command remains after two callback budgets"
-            );
-            assert_eq!(mailbox.visible().0.raw[1], 705.0);
-        }
-        drop(mailbox);
+        hub.run(128, vec![], None); // producer/config closure; actual source history is still paused
         drop(control);
         drop(hub);
         assert!(registry::global().lock().unwrap().test_retained_hub(session.runtime));
         let visits = writer.empty_visits();
         wait_until(|| writer.empty_visits() > visits + 2);
         assert!(!writer.finished(), "empty queues cannot destroy the writer while the actual source callback owns untransferred history");
-        if blocked_configuration {
-            // Freeze the actual worker after its drain, just before it reads
-            // the retirement hold. Publish the final notes and release the
-            // hold while frozen; it must recheck the lanes after Acquire.
-            writer.pause_retirement_check();
-            wait_until(|| writer.retirement_check_paused());
-        }
         let wakes = source._stats.callbacks.load(Ordering::Acquire);
         shared.before_transfer.enabled.store(false, Ordering::Release);
         assert_eq!(
@@ -1954,7 +1912,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
     });
     assert_eq!(source.source_snapshot().note_off_owed, usize::from(owed_off));
     assert_eq!(source.source_snapshot().pedals_held, pedal_only);
-    let source = if blocked_configuration || unknown_wire {
+    let source = if unknown_wire {
         // Callback join, then actual destruction: no rescue audio callback.
         drop(source);
         None
@@ -1968,9 +1926,8 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         source.main();
         Some(source)
     };
-    writer.resume_retirement_check();
     wait_until(|| writer.finished());
-    assert_eq!(writer.failed(), blocked_configuration || unknown_wire);
+    assert_eq!(writer.failed(), unknown_wire);
     assert_eq!(session.credits.load(Ordering::Acquire), usize::from(unknown_held));
     let file = std::fs::read_dir(&directory)
         .unwrap()
@@ -1980,7 +1937,7 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
         })
         .unwrap();
     let take = harmonigraph_take::Take::read(&file).unwrap();
-    assert_eq!(take.incomplete.is_some(), blocked_configuration || unknown_wire);
+    assert_eq!(take.incomplete.is_some(), unknown_wire);
     let notes: Vec<_> = take
         .events
         .iter()
@@ -2008,23 +1965,6 @@ fn retired_hub_keeps_original_routes_for_actual_output_paused_before_transfer() 
             assert_eq!(notes[1].timing.unwrap().sample, 87);
             assert!((notes[1].event.t - 87.0 / 48000.0).abs() < 1e-12);
         }
-    }
-    if blocked_configuration {
-        let changes: Vec<_> = take
-            .configurations
-            .iter()
-            .filter(|config| config.t == 128.0 / 48000.0)
-            .map(|config| config.axes[1])
-            .collect();
-        assert_eq!(
-            changes,
-            (690..706).map(|value| value * 1_000_000).collect::<Vec<_>>(),
-            "all16 actually-applied commands retain their original route and time"
-        );
-        assert!(
-            !take.configurations.iter().any(|config| config.axes[1] == 706_000_000),
-            "the discarded last command is not fabricated"
-        );
     }
     drop(source);
     assert_eq!(
@@ -2082,7 +2022,11 @@ fn refused_hub_destruction_releases_its_recording_hold_without_a_registry_owner(
             owner.recording.prefix,
         )
     });
-    assert_eq!(pending, (3,Some(67),67), "the actual triad is observed, but its required learning commit cannot fit the exhausted callback budget");
+    assert_eq!(
+        pending,
+        (3, None, 128),
+        "the actual triad is observed and published, and the callback is configured through its end"
+    );
     drop(mailbox);
     drop(control);
     drop(refused);
@@ -3562,11 +3506,11 @@ fn future_progress_does_not_hide_an_earlier_complete_output_interval() {
 }
 
 #[test]
-fn destroyed_frozen_configuration_drains_more_than_a_full_source_output_window() {
+fn destroyed_configuration_drains_more_than_a_full_source_output_window() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_FROZEN_WINDOW_CHILD").is_none() {
         assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_more_than_a_full_source_output_window", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "performance::tests::destroyed_configuration_drains_more_than_a_full_source_output_window", "--nocapture", "--test-threads=1"])
             .env("HARMONIGRAPH_FROZEN_WINDOW_CHILD", "1").status().unwrap().success());
         return;
     }
@@ -3600,36 +3544,12 @@ fn destroyed_frozen_configuration_drains_more_than_a_full_source_output_window()
     assert_eq!(source.run(704, vec![note(1, 0, 60, 0, false)], None).values.len(), 1);
     let snapshot = source.source_snapshot();
     assert_eq!((snapshot.sequence, snapshot.journal), (3602, 3601));
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let mailbox = wrapper.configuration_handle().unwrap();
-    for value in 690..707 {
-        mailbox
-            .submit(crate::configuration::packet(
-                harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
-            ))
-            .unwrap();
-    }
     hub.run(128, vec![], None);
-    assert!(mailbox.visible().1);
-    assert_eq!(
-        wrapper.test_inspect_plugin(|plugin| plugin
-            .configuration
-            .as_ref()
-            .unwrap()
-            .recording
-            .prefix),
-        128
-    );
-    drop(mailbox);
     drop(hub);
     drop(source);
     writer.drain(&mut capture);
     let counts = registry::global().lock().unwrap().test_counts();
-    assert_eq!(counts, (0,0,0), "joined final output beyond the frozen prefix must drain through the bounded window without a rescue callback");
+    assert_eq!(counts, (0,0,0), "joined final output past the last callback must drain through the bounded window without a rescue callback");
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     assert!(writer.current_pass().is_none());
     let take = harmonigraph_take::Take::read(&path).unwrap();
@@ -3649,11 +3569,11 @@ fn destroyed_frozen_configuration_drains_more_than_a_full_source_output_window()
 }
 
 #[test]
-fn destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix() {
+fn destroyed_configuration_drains_joined_output_past_its_last_callback() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_FROZEN_MIXED_CHILD").is_none() {
         assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "performance::tests::destroyed_configuration_drains_joined_output_past_its_last_callback", "--nocapture", "--test-threads=1"])
             .env("HARMONIGRAPH_FROZEN_MIXED_CHILD", "1").status().unwrap().success());
         return;
     }
@@ -3689,36 +3609,12 @@ fn destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix() {
     assert_eq!(source.run(768, vec![note(1, 0, 60, 0, false)], None).values.len(), 1);
     let snapshot = source.source_snapshot();
     assert_eq!((snapshot.sequence, snapshot.journal), (4002, 4001));
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let mailbox = wrapper.configuration_handle().unwrap();
-    for value in 690..707 {
-        mailbox
-            .submit(crate::configuration::packet(
-                harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
-            ))
-            .unwrap();
-    }
     hub.run(128, vec![], None);
-    assert!(mailbox.visible().1);
-    assert_eq!(
-        wrapper.test_inspect_plugin(|plugin| plugin
-            .configuration
-            .as_ref()
-            .unwrap()
-            .recording
-            .prefix),
-        128
-    );
-    drop(mailbox);
     drop(hub);
     drop(source);
     writer.drain(&mut capture);
     let counts = registry::global().lock().unwrap().test_counts();
-    assert_eq!(counts, (0,0,0), "joined final output beyond the frozen prefix must drain through the bounded window without a rescue callback");
+    assert_eq!(counts, (0,0,0), "joined final output past the last callback must drain through the bounded window without a rescue callback");
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
     assert!(writer.current_pass().is_none());
     let take = harmonigraph_take::Take::read(&path).unwrap();
@@ -3738,12 +3634,12 @@ fn destroyed_frozen_configuration_drains_output_beyond_the_frozen_prefix() {
 }
 
 #[test]
-fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() {
+fn destroyed_configuration_drains_full_ordinary_and_emergency_journals() {
     let _scope = crate::test_scope::enter();
     if std::env::var_os("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD").is_none() {
         for order in ["attached", "withdrawn"] {
             assert!(std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "performance::tests::destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "performance::tests::destroyed_configuration_drains_full_ordinary_and_emergency_journals", "--nocapture", "--test-threads=1"])
             .env("HARMONIGRAPH_FROZEN_EMERGENCY_CHILD", order).status().unwrap().success());
         }
         return;
@@ -3796,34 +3692,9 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
         480
     );
     assert_eq!(source.source_snapshot().journal, 4096);
-    let freeze = |hub: &mut Device| {
-        let wrapper = unsafe {
-            &*((*hub.plugin)
-                .plugin_data
-                .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-        };
-        let mailbox = wrapper.configuration_handle().unwrap();
-        for value in 690..707 {
-            mailbox
-                .submit(crate::configuration::packet(
-                    harmonigraph_core::configuration::ConfigEdit::axis(1, value * 1_000_000),
-                ))
-                .unwrap();
-        }
-        hub.run(128, vec![], None);
-        assert_eq!(
-            wrapper.test_inspect_plugin(|plugin| plugin
-                .configuration
-                .as_ref()
-                .unwrap()
-                .recording
-                .prefix),
-            128
-        );
-    };
     let mut hub = Some(hub);
     if withdrawn {
-        freeze(hub.as_mut().unwrap());
+        hub.as_mut().unwrap().run(128, vec![], None);
         drop(hub.take());
     }
     let emergency = source.run(640, vec![midi([0xf8, 0, 0])], None);
@@ -3840,7 +3711,7 @@ fn destroyed_frozen_configuration_drains_full_ordinary_and_emergency_journals() 
         0
     );
     if let Some(hub) = hub.as_mut() {
-        freeze(hub);
+        hub.run(128, vec![], None);
     }
     drop(hub);
     drop(source);

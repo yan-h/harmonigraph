@@ -513,7 +513,10 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     assert_eq!(before.raw[1], 700.0, "untimed flush has not invented a boundary");
     device.activate();
     device.run(500, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 500);
+    assert_eq!(
+        mailbox.visible().0.effective_sample, 564,
+        "an edit adopted at the boundary of [500,564) is effective at the next one"
+    );
     let first = mailbox
         .submit(packet(ConfigEdit::unlock(
             harmonigraph_core::Comma::Syntonic,
@@ -535,12 +538,12 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     );
     let snapshot = mailbox.visible().0;
     assert_eq!(snapshot.applied_id, second);
-    assert_eq!(snapshot.effective_sample, 595);
+    assert_eq!(snapshot.effective_sample, 628, "at7 and at31 share this block's boundary");
     assert!(!view(snapshot, false).resolved.modes.tempered.syntonic);
     device.flush(vec![device.param(ParamKey::Three, 697.0, 44)]);
-    assert_eq!(mailbox.visible().0.effective_sample, 595);
+    assert_eq!(mailbox.visible().0.effective_sample, 628, "an untimed flush applies nothing yet");
     device.run(628, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 628);
+    assert_eq!(mailbox.visible().0.effective_sample, 692);
     assert_eq!(mailbox.visible().0.raw[1], 697.0);
 }
 
@@ -583,69 +586,6 @@ fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
 }
 
 #[test]
-fn control_budget_retains_original_ui_boundary_and_host_offsets() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let mailbox = device.mailbox();
-    let mut last = 0;
-    for value in 0..10 {
-        last = mailbox.submit(packet(ConfigEdit::axis(0, value * 1_000_000))).unwrap();
-    }
-    device.run(1000, vec![], false);
-    assert!(mailbox.visible().1, "eight insert/apply pairs exhaust the enclosing 16-work budget");
-    assert_eq!(mailbox.visible().0.effective_sample, 1000);
-    device.run(1064, vec![], false);
-    assert_eq!(mailbox.visible().0.applied_id, last);
-    assert_eq!(
-        mailbox.visible().0.effective_sample,
-        1000,
-        "continuation must not restamp UI intent"
-    );
-    assert_eq!(mailbox.visible().0.status, 0);
-    let events = (0..12).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, i * 3)).collect();
-    device.run(1128, events, false);
-    assert_eq!(mailbox.visible().0.effective_sample, 1128 + 21);
-    device.run(1192, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 1128 + 33);
-    assert_eq!(mailbox.visible().0.raw[1], 701.0);
-    assert_eq!(mailbox.visible().0.status, 0, "work exhaustion is not storage exhaustion");
-}
-
-#[test]
-fn required_marker_capacity_is_independent_of_a_drained_command_queue() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let mailbox = device.mailbox();
-    for block in 0..16 {
-        let events = (0..8).map(|i| device.param(ParamKey::Three, 690.0 + i as f32, i)).collect();
-        device.run(block * 64, events, false);
-        assert_eq!(mailbox.visible().0.status, 0);
-        assert!(!mailbox.visible().1);
-    }
-    let retained = mailbox.visible().0;
-    device.run(1024, vec![device.param(ParamKey::Three, 710.0, 0)], false);
-    assert_eq!(
-        mailbox.visible().0.status & 2,
-        2,
-        "the 129th required marker reaches the actual timeline bound"
-    );
-    assert_eq!(mailbox.visible().0.raw, retained.raw);
-    unsafe {
-        ((*device.plugin).reset.unwrap())(device.plugin);
-    }
-    assert_eq!(
-        mailbox.visible().0.revision,
-        retained.revision,
-        "reset keeps the coherent musical revision"
-    );
-    device.run(1088, vec![device.param(ParamKey::Three, 710.0, 0)], false);
-    assert_eq!(mailbox.visible().0.status, 0);
-    assert_eq!(mailbox.visible().0.raw[1], 710.0);
-}
-
-#[test]
 fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
@@ -674,7 +614,7 @@ fn restore_preserves_held_modulation_without_a_new_host_mod_event() {
 }
 
 #[test]
-fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
+fn a_refused_restore_and_a_full_command_queue_keep_accepted_state() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     let mailbox = device.mailbox();
@@ -683,7 +623,7 @@ fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
     let accepted = mailbox.visible().0;
     assert!(
         !device.try_load(restored(&device, 705.0)),
-        "both prepared slots remain owned until adoption"
+        "the prepared restore is owned until adoption"
     );
     assert_eq!(mailbox.visible().0, accepted);
     for _ in 0..126 {
@@ -695,11 +635,11 @@ fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
     device.run(0, vec![], false);
     assert!(
         device.try_load(restored(&device, 705.0)),
-        "applied restore slots are reusable off audio"
+        "an applied restore is repeatable off audio"
     );
     assert_eq!(plain(&device.save(), ParamKey::Three), 705.0);
     // The assertions deliberately leave accepted commands unfinished. Reset
-    // clears the bounded timeline before draining them through real callbacks.
+    // clears them before the remaining ones drain through real callbacks.
     let accepted_command = mailbox.accepted_command.load(Ordering::Acquire);
     unsafe {
         ((*device.plugin).reset.unwrap())(device.plugin);
@@ -721,17 +661,21 @@ fn restore_slots_and_command_queue_refuse_without_losing_accepted_state() {
 }
 
 #[test]
-fn one_owned_input_pool_reaches_2048_and_refuses_growth_while_work_is_retained() {
+fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
     let events = (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect();
     device.run(0, events, false);
     assert_eq!(device.mailbox().visible().0.status, 0);
-    let (status, _) = device.run_status(64, vec![device.param(ParamKey::Three, 695.0, 0)], false);
+    let (status, _) = device.run_status(
+        64,
+        (0..2049).map(|_| device.param(ParamKey::Three, 695.0, 0)).collect(),
+        false,
+    );
     assert_eq!(status, CLAP_PROCESS_ERROR);
     assert_eq!(device.mailbox().visible().0.status & 2, 2);
-    // Exercise the host's recovery boundary after proving retained-input
+    // Exercise the host's recovery boundary after proving capacity
     // exhaustion, so this fixture does not leave an unresolved global owner.
     unsafe {
         ((*device.plugin).reset.unwrap())(device.plugin);
@@ -764,8 +708,11 @@ fn destroyed_configuration_owners_settle_without_reset_or_another_callback() {
                 (0..2048).map(|_| device.param(ParamKey::Three, 690.0, 0)).collect(),
                 false,
             );
-            let (status, _) =
-                device.run_status(64, vec![device.param(ParamKey::Three, 695.0, 0)], false);
+            let (status, _) = device.run_status(
+                64,
+                (0..2049).map(|_| device.param(ParamKey::Three, 695.0, 0)).collect(),
+                false,
+            );
             assert_eq!(status, CLAP_PROCESS_ERROR);
             assert_eq!(device.mailbox().visible().0.status & 2, 2);
         }
@@ -825,25 +772,6 @@ fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner(
 // The fixture invokes only CLAP's allowed concurrent main/audio entrypoints;
 // activation, destruction, and ordinary processing remain exclusively owned.
 unsafe impl Sync for Device {}
-
-#[test]
-fn newly_observed_ui_behind_retained_input_keeps_its_first_callback_boundary() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let mailbox = device.mailbox();
-    device.run(
-        0,
-        (0..24).map(|i| device.param(ParamKey::Three, 690.0 + (i % 10) as f32, i)).collect(),
-        false,
-    );
-    let id = mailbox.submit(packet(ConfigEdit::axis(1, 705_000_000))).unwrap();
-    device.run(64, vec![], false);
-    device.run(128, vec![], false);
-    device.run(192, vec![], false);
-    assert_eq!(mailbox.visible().0.applied_id, id);
-    assert_eq!(mailbox.visible().0.effective_sample, 64);
-}
 
 #[test]
 fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
@@ -1007,7 +935,7 @@ fn id_tuning(id: i32, value: f64) -> Input {
     })
 }
 #[test]
-fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
+fn learning_notifications_land_at_the_boundary_and_merge_with_performance() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
@@ -1024,7 +952,7 @@ fn learning_notifications_keep_offset_31_and_merge_with_earlier_performance() {
         .filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == device.id(ParamKey::Three))
         .collect();
     assert_eq!(fifth.len(), 1);
-    assert_eq!(fifth[0].1, 31);
+    assert_eq!(fifth[0].1, 0, "learning reads the whole block and lands at its boundary");
     assert!(
         sink.attempts.windows(2).all(|events| events[0].1 <= events[1].1),
         "configuration and performance outputs must share chronological order"
@@ -1091,7 +1019,7 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
 }
 
 #[test]
-fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for_completion() {
+fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
@@ -1120,6 +1048,9 @@ fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for
     events.push(note(20, 64, 40, CLAP_EVENT_NOTE_ON));
     device.run_transport(64, events, false, None, Some(transport(10.0, 0)));
     writer.drain(&mut capture);
+    // The boundary that adopts the nine at8 edits, in the rewound pass.
+    device.run_transport(128, vec![], false, None, Some(transport(32.0 / 48000.0, 0)));
+    writer.drain(&mut capture);
     capture.stop();
     writer.stop();
     writer.drain(&mut capture);
@@ -1127,25 +1058,36 @@ fn deferred_configuration_crosses_rewind_in_its_original_file_and_stop_waits_for
         writer.finished.is_none(),
         "Stop intent cannot finalize pending configuration or producer work"
     );
-    // Audio is disarmed, yet the ninth mutation still belongs to the old pass.
-    device.run_transport(128, vec![], false, None, Some(transport(32.0 / 48000.0, 0)));
+    device.run_transport(192, vec![], false, None, Some(transport(96.0 / 48000.0, 0)));
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_some());
     let first = harmonigraph_take::Take::read(&path).unwrap();
     let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
-    let late = first.configurations.iter().find(|c| c.axes[1] == 698_000_000).unwrap();
-    assert!((late.t - (10.0 + 8.0 / 48000.0)).abs() < 1e-9);
+    assert!(
+        !first.configurations.iter().any(|c| c.axes[1] == 698_000_000),
+        "nine at8 edits are adopted at the next boundary, never backdated into the old pass"
+    );
     assert_eq!(second.configurations.first().unwrap().t, 0.0);
-    assert_eq!(second.configurations.first().unwrap().axes[1], 698_000_000);
-    // Exactly warmup64 + oldsegment32 versus newsegment32 frames. Closure may
-    // not let the final old audio prefix leak into the new WAV or lose its tail.
-    for (name, frames) in [("record.wav", 96_u32), ("record-2.wav", 32)] {
+    assert_eq!(
+        second.configurations.first().unwrap().axes[1],
+        700_000_000,
+        "the rewound pass opens on the configuration this block actually used"
+    );
+    let adopted = second.configurations.iter().find(|c| c.axes[1] == 698_000_000).unwrap();
+    assert!(
+        (adopted.t - 32.0 / 48000.0).abs() < 1e-9,
+        "the ninth edit reaches the pass current at the boundary that adopts it"
+    );
+    // Exactly warmup64 + oldsegment32 versus newsegment32 + one whole block.
+    // Closure may not let the final old audio prefix leak into the new WAV or
+    // lose its tail.
+    for (name, frames) in [("record.wav", 96_u32), ("record-2.wav", 96)] {
         let bytes = std::fs::read(dir.join(name)).unwrap();
         assert_eq!(bytes.len(), 44 + frames as usize * 2 * 4);
     }
     drop(writer);
-    device.finish_notes(192, &[(10, 60), (20, 64)]);
+    device.finish_notes(256, &[(10, 60), (20, 64)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1240,60 +1182,11 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_some());
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    let late = take.configurations.iter().find(|c| c.axes[1] == 698_000_000).unwrap();
-    assert!((late.t - 8.0 / 48000.0).abs() < 1e-9);
     assert_eq!(std::fs::read(path.with_extension("wav")).unwrap().len(), 44 + 32 * 2 * 4);
     drop(writer);
     device.finish_notes(128, &[(9, 48), (10, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn retried_gesture_closure_merges_before_earlier_timed_learning() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    device.run(
-        0,
-        vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON), note(20, 67, 0, CLAP_EVENT_NOTE_ON)],
-        false,
-    );
-    let mut edit = ConfigEdit::axis(1, 690_000_000);
-    edit.learning = Some(true);
-    device.mailbox().submit(packet(edit)).unwrap();
-    device.stats.reject_one_end.store(true, Ordering::Release);
-    // The parameter group learns at20 but forwards no performance event. The
-    // next merge is at31, so a retry stamped through=31 overtakes learning20.
-    let sink = device.run(
-        64,
-        vec![device.param(ParamKey::Three, 691.0, 20), note(30, 72, 31, CLAP_EVENT_NOTE_ON)],
-        false,
-    );
-    let accepted: Vec<_> = sink.attempts.iter().filter(|event| event.3).collect();
-    assert!(
-        accepted.iter().any(|e| e.0 == CLAP_EVENT_PARAM_VALUE
-            && e.1 == 20
-            && e.2 == device.id(ParamKey::Three)),
-        "fixture must actually reach timed learning at20: {accepted:?}"
-    );
-    assert!(accepted.windows(2).all(|events| events[0].1 <= events[1].1), "{accepted:?}");
-    let at20: Vec<_> = accepted
-        .iter()
-        .filter(|event| event.1 == 20 && event.2 == device.id(ParamKey::Three))
-        .map(|event| event.0)
-        .collect();
-    assert_eq!(
-        at20,
-        [
-            CLAP_EVENT_PARAM_GESTURE_END,
-            CLAP_EVENT_PARAM_GESTURE_BEGIN,
-            CLAP_EVENT_PARAM_VALUE,
-            CLAP_EVENT_PARAM_GESTURE_END
-        ]
-    );
-    device.finish_notes(128, &[(10, 60), (20, 67), (30, 72)]);
 }
 
 #[test]

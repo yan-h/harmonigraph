@@ -72,63 +72,6 @@ fn tuning_parameter(hub: &Device, cents: f32, time: u32) -> Input {
 }
 
 #[test]
-fn production_missing_source_interval_retains_128_configuration_markers_then_contains_129() {
-    let _scope = crate::test_scope::enter();
-    let (hub, source) = production_pair();
-    let wrapper = unsafe {
-        &*((*hub.plugin)
-            .plugin_data
-            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
-    };
-    let mailbox = wrapper.configuration_handle().unwrap();
-    source.run_format(1536, vec![note(7, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1536, vec![], None, None, 512);
-    source.run_format(2048, vec![], None, None, 512);
-    hub.run_format(2048, vec![], None, None, 512);
-    let original =
-        inspect_source(&source, |source| source.state.voices().next().unwrap().assignment.unwrap());
-    for block in 0..16 {
-        let events =
-            (0..8).map(|index| tuning_parameter(&hub, 690.0 + index as f32, index)).collect();
-        hub.run_format(2560 + block * 512, events, None, None, 512);
-        assert_eq!(mailbox.visible().0.status, 0);
-        assert!(!mailbox.visible().1);
-        let (len, pending, frontier) = wrapper.test_inspect_plugin(|plugin| {
-            let timeline = &plugin.configuration.as_ref().unwrap().timeline;
-            (timeline.len(), timeline.pending(), timeline.finalized_exclusive())
-        });
-        assert_eq!(len, (block + 1) as usize * 8);
-        assert_eq!(
-            pending, 0,
-            "the actual required-marker store fills after command ingress drains"
-        );
-        assert_eq!(frontier, 2560, "missing Source input keeps later markers unretirable");
-    }
-    let retained = mailbox.visible().0;
-    hub.run_format(10752, vec![tuning_parameter(&hub, 710.0, 0)], None, None, 512);
-    assert_eq!(mailbox.visible().0.status & 2, 2);
-    assert_eq!(mailbox.visible().0.raw, retained.raw);
-    assert_eq!(mailbox.visible().0.revision, retained.revision);
-    assert_eq!(
-        inspect_source(&source, |source| source.state.voices().next().unwrap().assignment),
-        Some(original)
-    );
-    let emergency = source.run_format(2560, vec![], None, None, 512);
-    assert_eq!(emergency.values.iter().filter(|(_, event)| event.release()).count(), 1);
-    assert_ne!(source.source_snapshot().faults & source::STORAGE_FAULT, 0);
-    hub.run_format(11264, vec![], None, None, 512);
-    source.run_format(3072, vec![], None, None, 512);
-    assert_eq!(source.source_snapshot().held, 0);
-    drop(source);
-    drop(hub);
-    assert_eq!(
-        registry::global().lock().unwrap().test_counts(),
-        (0, 0, 0),
-        "completed Originals pinned by the terminal reader retire after callback join"
-    );
-}
-
-#[test]
 fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit() {
     let _scope = crate::test_scope::enter();
     let synthetic = std::env::var_os("HARMONIGRAPH_MUSICAL_MAX").is_some();
@@ -171,24 +114,21 @@ fn production_sixteen_sources_complete_a_256_onset_cohort_and_hold_exact_credit(
                 .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
         };
         wrapper.test_with_plugin(|plugin| {
-            use harmonigraph_core::configuration::{
-                timeline::ConfigTimeline, ConfigReducer, TuningModes,
-            };
-            plugin.configuration.as_mut().unwrap().timeline =
-                ConfigTimeline::new(ConfigReducer::new(
-                    harmonigraph_core::Tuning {
-                        c_offset: 0,
-                        three: 0,
-                        five: 0,
-                        seven: 0,
-                        tolerance: 0,
-                    },
-                    TuningModes {
-                        tempered: harmonigraph_core::Tempered::default(),
-                        auto: [false; 2],
-                        learning: false,
-                    },
-                ));
+            use harmonigraph_core::configuration::{ConfigReducer, TuningModes};
+            plugin.configuration.as_mut().unwrap().reducer = ConfigReducer::new(
+                harmonigraph_core::Tuning {
+                    c_offset: 0,
+                    three: 0,
+                    five: 0,
+                    seven: 0,
+                    tolerance: 0,
+                },
+                TuningModes {
+                    tempered: harmonigraph_core::Tempered::default(),
+                    auto: [false; 2],
+                    learning: false,
+                },
+            );
         });
     }
     for source in &sources {

@@ -909,6 +909,9 @@ impl ClapPlugin for Harmonigraph {
     ) {
         self.configuration.as_mut().unwrap().begin(boundary, &self.take, self.presentation_seconds);
     }
+    fn clap_configuration_adopt(&mut self) {
+        self.configuration.as_mut().unwrap().adopt();
+    }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
     }

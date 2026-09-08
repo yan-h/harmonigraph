@@ -235,14 +235,19 @@ impl Owner {
         self.recording.block_frames = boundary.frames;
         // The whole callback's input is applied and observed inside the same
         // `process_configuration` call, so configuration for it is settled here
-        // and never holds output publication behind an unconsumed event.
-        self.recording.prefix = boundary
-            .steady_time
-            .saturating_add(i64::from(boundary.frames))
-            .saturating_sub(self.recording.hub_offset);
-        // THE block boundary: everything the reducer took during the previous
-        // callback becomes effective now, all at once.
-        self.block = self.reducer.resolved();
+        // and never holds output publication behind an unconsumed event. Local
+        // steady time, like every other frontier the recording compares.
+        self.recording.prefix =
+            boundary.steady_time.saturating_add(i64::from(boundary.frames));
+    }
+
+    /// THE block boundary. Every command accepted before this callback has
+    /// reduced by now; this is where the whole of it becomes effective, and
+    /// nothing later in the callback moves the value again.
+    pub fn adopt(&mut self) {
+        if !self.frozen {
+            self.block = self.reducer.resolved();
+        }
     }
 
     /// The one configuration for assignment groups started in this block. A
