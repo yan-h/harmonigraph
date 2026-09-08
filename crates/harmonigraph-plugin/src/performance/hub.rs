@@ -1231,7 +1231,20 @@ impl Hub {
                     };
                     row.state.assignment(value.lifetime, binding, player);
                 }
-                if let Some(mut delta) = delta {
+                // #712: Off "excludes the track from adaptive context and
+                // visualization". 4C refused the context half where the copied
+                // record is applied; this is the visualization half, and the
+                // accepted-output lane is the same lane in both modes, so a
+                // gate here is the whole of it.
+                //
+                // The predicate is the row's mode rather than the note's,
+                // because the row's mode is what `publish_snapshots` already
+                // sends downstream as the baseline's `participating`, and that
+                // is what hides the source in `NoteTracker`. A per-note gate
+                // would publish deltas for a source the display has hidden.
+                // It also leaves the deferred "report Off notes for display
+                // only" option exactly one flag, as #712 anticipates.
+                if let Some(mut delta) = delta.filter(|_| row.participating) {
                     delta.assignment = row
                         .state
                         .voice(value.lifetime)

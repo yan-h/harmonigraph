@@ -489,6 +489,16 @@ An onset that emits without an assignment reports decision zero, which matches n
 For the same reason a cancelled Off attack reports no cancellation: there is no plan for the Hub to retire, and a placeholder minted for one would leak the same slot.
 What Off keeps is what the reset needs — bounded local storage, note and release tracking, truthful output-acceptance handling, and the control coordination that withdraws the source and rejects obsolete work.
 
+**Off leaves the display, the take and learning too** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
+Those are three separate consumers of one exclusion, and each gate is written where that consumer reads:
+the Hub refuses an Off record before it builds a request identity, so nothing enters the policy's context;
+`Hub::confirm` declines to contribute an Off row's pitches, so nothing enters what auto/learn infers from;
+and the accepted-output lane skips the note delta, so nothing reaches the display ring or the `.take`.
+The publication gate reads the row's mode rather than the note's, because the row's mode is already what a published baseline carries downstream as `participating`, and that flag is what hides the source in `NoteTracker` — a per-note gate would publish deltas for a source the display has already hidden.
+It is also where the deferred "report Off notes for display only" option would be one flag rather than a change of shape.
+Baselines keep flowing in both modes, and they have to:
+a baseline is how the display learns that a track went Off, and it carries that track's truthful voices while hiding them.
+
 **Either toggle direction resets that Tune** ([#712](https://github.com/yan-h/harmonigraph/issues/712)).
 The toggle stands as a boundary marker in the Tune's own input queue, at the sample it arrived on, and the reset runs where output reaches it:
 cancel the attacks still standing before the marker and reject their obsolete replies, send the releases and controller cleanup needed to terminate what has already been forwarded before that ownership is forgotten, then establish the new mode's pitch state.

@@ -1796,8 +1796,11 @@ fn hub_reinitialize_waits_for_differently_timed_source_seals_and_preserves_the_t
             _ => None,
         })
         .collect();
-    assert_eq!(notes.iter().filter(|d| matches!(d.event.kind, NoteKind::On { .. })).count(), 2);
-    assert_eq!(notes.iter().filter(|d| matches!(d.event.kind, NoteKind::Off)).count(), 2);
+    // One pair, not two: `b` is the Off source and #712 excludes it from the
+    // recording as well as the display. Both its onset and its release go, so
+    // the take stays balanced and the tracker below still ends up empty.
+    assert_eq!(notes.iter().filter(|d| matches!(d.event.kind, NoteKind::On { .. })).count(), 1);
+    assert_eq!(notes.iter().filter(|d| matches!(d.event.kind, NoteKind::Off)).count(), 1);
     let mut tracker = harmonigraph_core::NoteTracker::default();
     for record in &take.events {
         record.apply(&mut tracker).unwrap();
@@ -2451,7 +2454,11 @@ fn display_resync_arriving_during_hub_publication_repairs_every_source_without_p
     assert!(writer.finished.is_some());
     let take = harmonigraph_take::Take::read(&path).unwrap();
     assert!(take.incomplete.is_none());
-    assert_eq!(take.events.iter().filter(|record| matches!(record, CanonicalRecord::Delta(delta) if matches!(delta.event.kind, NoteKind::On { .. }))).count(), 3);
+    // Two of the three sources, not three: `b` is the Off one, and #712's
+    // "Off excludes the track from ... visualization" now holds on the take as
+    // well as the display. Its baseline above still carries the truthful voice
+    // and its own `participating: false`, which is what hides the source.
+    assert_eq!(take.events.iter().filter(|record| matches!(record, CanonicalRecord::Delta(delta) if matches!(delta.event.kind, NoteKind::On { .. }))).count(), 2);
     a.run(71 * 64, vec![], None);
     b.run(71 * 64, vec![], None);
     hub.run(71 * 64, vec![], None);
@@ -4604,4 +4611,96 @@ fn defensive_old_child_completion_cannot_consume_the_reused_parents_live_permit(
     );
     assert_eq!(deltas.iter().filter(|delta| matches!(delta.event.kind, NoteKind::Off)).count(), 3);
     assert_eq!(session.credits.load(Ordering::Acquire), 0);
+}
+
+/// The refused Hub's retirement drain. `publish_direct_history` runs from one
+/// place only -- `publish_retired_direct`, on the destruction of a Hub that
+/// never got a registry slot -- and 4D reported that stubbing it to a no-op
+/// passed the whole suite. It is reachable, but only past the merge's own
+/// budget: `publish_output` carries `through` to the end of the block it is
+/// in, so every observed DIRECT delta is published inside its own callback
+/// until more than 1024 of them arrive at once. The surplus is what has
+/// nowhere else to go.
+#[test]
+fn a_refused_hub_drains_its_observed_direct_history_when_it_retires() {
+    let _scope = crate::test_scope::enter();
+    use harmonigraph_take::{CanonicalRecord, NoteKind};
+    let mut registered = Vec::new();
+    for _ in 0..4 {
+        let uuid = SavedUuid::default();
+        let mut hub = Device::aggregation(false);
+        hub.configure(uuid, true);
+        hub.activate();
+        hub.run(0, vec![], None);
+        registered.push(hub);
+    }
+    assert_eq!(registry::global().lock().unwrap().test_counts().0, 4);
+    let (mut hub, mut capture) = Device::recorded_aggregation_hub();
+    assert!(hub.shared().registration().is_none(), "the fifth Hub is the refused one");
+    hub.activate();
+    capture.arm();
+    hub.run(0, vec![], None);
+    hub.run(64, vec![note(30, 0, 60, 0, true)], None);
+    let mut burst = vec![note(31, 0, 62, 0, true)];
+    burst.extend((0..1100).map(|_| expression(31, 0.125, 1)));
+    hub.run(128, burst, None);
+    let deltas = |records: &[CanonicalRecord]| {
+        records
+            .iter()
+            .filter_map(|record| match record {
+                CanonicalRecord::Delta(delta) => Some(delta.event.kind),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let live = deltas(&capture.drain_canonical());
+    assert_eq!(live.len(), 1026, "the merge publishes its 1024 and the two before them");
+    drop(hub);
+    let retired = deltas(&capture.drain_canonical());
+    println!("PROBE refused live={} retired={}", live.len(), retired.len());
+    assert_eq!(retired.len(), 1101 - 1024, "and retirement is the only drain the rest have");
+    assert!(retired.iter().all(|kind| matches!(kind, NoteKind::Tuning { .. })));
+    drop(registered);
+}
+
+/// The other half of the same decline. `Direct::sync_learning` gates on its
+/// own `State::complete`, and 4D reported that removing the gate survives the
+/// suite. An observation that lost an event is not an empty one, so learning
+/// declines rather than being handed a set it cannot vouch for -- and says so
+/// through the status bit the editor shows.
+#[test]
+fn an_incomplete_direct_observation_declines_to_feed_learning() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    let wrapper = unsafe {
+        &*((*hub.plugin)
+            .plugin_data
+            .cast::<nice_plug::wrapper::clap::Wrapper<crate::Harmonigraph>>())
+    };
+    wrapper
+        .configuration_handle()
+        .unwrap()
+        .submit(crate::configuration::packet(harmonigraph_core::configuration::ConfigEdit {
+            learning: Some(true),
+            ..Default::default()
+        }))
+        .unwrap();
+    let learning = || {
+        wrapper.test_inspect_plugin(|plugin| {
+            let owner = plugin.configuration.as_ref().unwrap();
+            (owner.direct.state.complete, owner.snapshot.status & 1, owner.confirmed.rows().count())
+        })
+    };
+    // HELD_PER_SOURCE voices exactly fill the observation, and every one of
+    // them reaches learning: that is what makes the next note's refusal a
+    // measurement rather than an empty set arriving late.
+    hub.run(0, (0..64).map(|key| note(key, 0, 40 + key as i16, 0, true)).collect(), None);
+    assert_eq!(learning(), (true, 0, 64), "a complete observation feeds learning");
+    hub.run(64, vec![note(64, 0, 104, 0, true)], None);
+    let (complete, declined, rows) = learning();
+    println!("PROBE incomplete complete={complete} declined={declined} rows={rows}");
+    assert!(!complete, "the sixty-fifth voice has nowhere to go");
+    assert_ne!(declined, 0, "so learning declines rather than reading a set it cannot vouch for");
+    assert_eq!(rows, 64, "and what it already holds is still the last thing that was true");
 }

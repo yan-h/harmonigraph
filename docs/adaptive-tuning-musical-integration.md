@@ -137,6 +137,9 @@ That record is the whole of what the reset owes the Hub: the attacks the marker 
 An onset's immutable birth mode decides whether it asks for an adaptive assignment at all, and the same field on the copied record decides whether the Hub mints a plan for it:
 an Off onset is refused before the request identity is even built, so it takes no plan slot, spends no decision and enters no context, and its Tune emits it at input plus D without waiting.
 Later factual baselines cannot reverse an already sequenced participation marker.
+The same field is not what excludes an Off track from the picture:
+publication runs off the accepted-output lane, which is the same lane in both modes, so the row's own participation gates it there.
+A note the track showed while Participating still ends truthfully, because the reset's release is published before the copied marker moves the mode — the Hub merges accepted output ahead of sequencing copied input, and the marker and the release it arms stand at one sample.
 
 Normal canonical deltas now carry optional assignment revision, decision, node, frozen correction and current player tuning.
 The Hub applies accepted binding metadata before normal display/take publication;
