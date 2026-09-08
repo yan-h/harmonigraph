@@ -909,7 +909,12 @@ mod tests {
 pub struct WavWriter {
     file: std::fs::File,
     channels: u16,
-    frames: u32,
+    frames: u64,
+    max_frames: u64,
+    failed: bool,
+    bytes: Vec<u8>,
+    #[cfg(feature = "test-support")]
+    fail_finish: bool,
 }
 
 impl WavWriter {
@@ -923,10 +928,18 @@ impl WavWriter {
         sample_rate: f32,
         channels: u16,
     ) -> std::io::Result<WavWriter> {
-        let mut file = std::fs::File::create(path)?;
         let channels = channels.max(1);
         let rate = sample_rate.max(1.0) as u32;
-        let block_align = channels * (Self::BITS / 8);
+        let invalid = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "WAV format exceeds RIFF header limits",
+            )
+        };
+        let block_align = channels.checked_mul(Self::BITS / 8).ok_or_else(invalid)?;
+        let byte_rate = rate.checked_mul(u32::from(block_align)).ok_or_else(invalid)?;
+        let max_frames = u64::from(u32::MAX - (Self::HEADER_BYTES - 8)) / u64::from(block_align);
+        let mut file = std::fs::File::create(path)?;
 
         let mut header = Vec::with_capacity(Self::HEADER_BYTES as usize);
         header.extend(b"RIFF");
@@ -937,34 +950,81 @@ impl WavWriter {
         header.extend(Self::FORMAT_FLOAT.to_le_bytes());
         header.extend(channels.to_le_bytes());
         header.extend(rate.to_le_bytes());
-        header.extend((rate * u32::from(block_align)).to_le_bytes());
+        header.extend(byte_rate.to_le_bytes());
         header.extend(block_align.to_le_bytes());
         header.extend(Self::BITS.to_le_bytes());
         header.extend(b"data");
         header.extend(0u32.to_le_bytes()); // patched by finish()
         std::io::Write::write_all(&mut file, &header)?;
 
-        Ok(WavWriter { file, channels, frames: 0 })
+        Ok(WavWriter {
+            file,
+            channels,
+            frames: 0,
+            max_frames,
+            failed: false,
+            bytes: Vec::new(),
+            #[cfg(feature = "test-support")]
+            fail_finish: false,
+        })
     }
 
-    /// Append interleaved samples. A partial frame at the end of a chunk
-    /// is impossible in practice (blocks are whole frames) and would
-    /// desync the channels, so the count is taken in whole frames.
+    /// Append whole interleaved frames. Refuse an oversized chunk before
+    /// writing any of it, keeping the existing prefix within standard RIFF.
+    /// A failed writer accepts no further samples; `finish` repairs its prefix.
     pub fn write(&mut self, interleaved: &[f32]) -> std::io::Result<()> {
+        self.append(interleaved, std::io::Write::write_all)
+    }
+
+    fn append(
+        &mut self,
+        interleaved: &[f32],
+        write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        if self.failed {
+            return Err(std::io::Error::other("WAV recording already failed"));
+        }
         if interleaved.is_empty() {
             return Ok(());
         }
-        let mut bytes = Vec::with_capacity(interleaved.len() * 4);
-        for sample in interleaved {
-            bytes.extend(sample.to_le_bytes());
+        let frames =
+            self.frames.checked_add((interleaved.len() / usize::from(self.channels)) as u64);
+        if !interleaved.len().is_multiple_of(usize::from(self.channels))
+            || frames.is_none_or(|frames| frames > self.max_frames)
+        {
+            self.failed = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "WAV requires whole frames within the 4 GiB RIFF size limit",
+            ));
         }
-        std::io::Write::write_all(&mut self.file, &bytes)?;
-        self.frames += (interleaved.len() / usize::from(self.channels)) as u32;
+        self.bytes.clear();
+        self.bytes.reserve(interleaved.len() * 4);
+        for sample in interleaved {
+            self.bytes.extend(sample.to_le_bytes());
+        }
+        if let Err(error) = write(&mut self.file, &self.bytes) {
+            self.failed = true;
+            return Err(error);
+        }
+        self.frames = frames.unwrap();
         Ok(())
     }
 
-    pub fn frames(&self) -> u32 {
+    pub fn frames(&self) -> u64 {
         self.frames
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn limit_frames_for_test(&mut self, frames: u64) {
+        self.max_frames = self.max_frames.min(frames);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn fail_finish_for_test(&mut self) {
+        self.fail_finish = true;
     }
 
     /// Patch the two size fields and close.
@@ -974,12 +1034,28 @@ impl WavWriter {
 
     fn patch(&mut self) -> std::io::Result<()> {
         use std::io::{Seek, SeekFrom, Write};
-        let data_bytes = self.frames * u32::from(self.channels) * u32::from(Self::BITS / 8);
+        #[cfg(feature = "test-support")]
+        if self.fail_finish {
+            return Err(std::io::Error::other("injected WAV finalization failure"));
+        }
+        let (data_bytes, riff_bytes) = Self::sizes(self.frames, self.channels)?;
+        // A failed write_all may have appended a partial chunk. Only frames
+        // whose entire write succeeded belong to the file's declared prefix.
+        self.file.set_len(u64::from(Self::HEADER_BYTES) + u64::from(data_bytes))?;
         self.file.seek(SeekFrom::Start(4))?;
-        self.file.write_all(&(Self::HEADER_BYTES - 8 + data_bytes).to_le_bytes())?;
+        self.file.write_all(&riff_bytes.to_le_bytes())?;
         self.file.seek(SeekFrom::Start(40))?;
         self.file.write_all(&data_bytes.to_le_bytes())?;
         self.file.flush()
+    }
+
+    fn sizes(frames: u64, channels: u16) -> std::io::Result<(u32, u32)> {
+        let data = frames.checked_mul(u64::from(channels)).and_then(|n| n.checked_mul(4));
+        let sizes = data.and_then(|data| {
+            let riff = data.checked_add(u64::from(Self::HEADER_BYTES - 8))?;
+            Some((u32::try_from(data).ok()?, u32::try_from(riff).ok()?))
+        });
+        sizes.ok_or_else(|| std::io::Error::other("WAV exceeds the 4 GiB RIFF size limit"))
     }
 }
 
@@ -1042,5 +1118,77 @@ mod wav_tests {
         let bytes = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 3 * 4);
+    }
+
+    #[test]
+    fn wav_limit_includes_the_riff_header_and_whole_frames() {
+        let max = (u64::from(u32::MAX) - 36) / 8;
+        assert_eq!(WavWriter::sizes(max, 2).unwrap(), (4_294_967_256, 4_294_967_292));
+        assert!(WavWriter::sizes(max - 1, 2).is_ok());
+        assert!((max + 1) * 8 <= u64::from(u32::MAX), "data still fits, RIFF does not");
+        assert!(WavWriter::sizes(max + 1, 2).is_err());
+        assert!(WavWriter::sizes(u64::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn wav_limit_refuses_a_chunk_and_preserves_its_playable_prefix() {
+        let path = temp("limited.wav");
+        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+        writer.limit_frames_for_test(3);
+        writer.write(&[0.5, -0.5, 0.25, -0.25]).unwrap();
+        assert!(writer.write(&[1.0; 4]).is_err());
+        assert!(writer.write(&[1.0; 2]).is_err(), "a failed recording cannot resume");
+        assert_eq!(writer.frames(), 2);
+        writer.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 44 + 16);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 36 + 16);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 16);
+        assert_eq!(f32::from_le_bytes(bytes[44..48].try_into().unwrap()), 0.5);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wav_accepts_its_exact_frame_limit_and_refuses_partial_frames() {
+        let path = temp("whole-frames.wav");
+        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+        writer.limit_frames_for_test(1);
+        writer.write(&[0.5, -0.5]).unwrap();
+        assert_eq!(writer.frames(), 1);
+        assert!(writer.write(&[1.0]).is_err());
+        writer.finish().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 8);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unsupported_wav_header_values_do_not_truncate_an_existing_file() {
+        let path = temp("invalid-format.wav");
+        std::fs::write(&path, b"existing recording").unwrap();
+        for (rate, channels) in [(48_000.0, u16::MAX), (u32::MAX as f32, 2)] {
+            assert!(WavWriter::create(&path, rate, channels).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), b"existing recording");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_partial_wav_append_is_removed_when_finalizing() {
+        use std::io::Write;
+        let path = temp("partial-write.wav");
+        let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+        writer.write(&[0.5, -0.5]).unwrap();
+        let result = writer.append(&[1.0; 4], |file, bytes| {
+            file.write_all(&bytes[..11])?;
+            Err(std::io::Error::other("disk stopped during a frame"))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 8 + 11);
+        assert!(writer.write(&[1.0; 2]).is_err());
+        writer.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 44 + 8);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 8);
+        std::fs::remove_file(path).unwrap();
     }
 }

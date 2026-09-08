@@ -1,28 +1,40 @@
-name: Metal precompile probe
+name: Metal shader assets
 
 on:
   pull_request:
     paths:
       - .github/workflows/metal-precompile-probe.yml
-      - tools/metal-precompile/**
+      - tools/shader-assets.py
+      - crates/harmonigraph-metal-assets/**
+      - vendor/wgpu-hal/**
+      - vendor/egui-baseview/**
+      - Cargo.toml
       - Cargo.lock
-      - crates/harmonigraph-render/Cargo.toml
-      - crates/harmonigraph-render/src/lattice_tests/metal_precompile.rs
-      - crates/harmonigraph-render/src/shadow.rs
-      - crates/harmonigraph-render/src/shaders/shadow.wgsl
+      - crates/harmonigraph-render/**
+      - crates/harmonigraph-plugin/src/editor.rs
+      - crates/harmonigraph-offline/**
+      - crates/harmonigraph-standalone/src/main.rs
   workflow_dispatch:
+    inputs:
+      regenerate:
+        description: Generate and validate a replacement corpus for import
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: metal-assets-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   compile:
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
-      HARMONIGRAPH_METAL_PROBE_DIR: ${{ github.workspace }}/target/metal-precompile
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,20 +45,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
-      - name: Export the production blur shader through Naga
-        run: cargo test --locked --release -p harmonigraph-render --lib export_shadow_blur_metal -- --ignored --nocapture
+      - name: Check the committed production corpus
+        if: ${{ !inputs.regenerate }}
+        run: python3 tools/shader-assets.py check
       - name: Ensure Apple's compiler is available
         run: |
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
           fi
-      - name: Compile and verify the Metal libraries
-        run: |
-          python3 tools/metal-precompile/compile.py "$HARMONIGRAPH_METAL_PROBE_DIR"
-          python3 tools/metal-precompile/compile.py "$HARMONIGRAPH_METAL_PROBE_DIR" --verify
-      - uses: actions/upload-artifact@v4
+      - name: Generate and validate replacement embedded assets
+        if: ${{ inputs.regenerate }}
+        run: python3 tools/shader-assets.py generate target/generated-metal-assets
+      - name: Exercise metadata and provider fallback
+        if: ${{ !inputs.regenerate }}
+        run: python3 tools/shader-assets.py controls
+      - name: Preserve assets and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: precompiled-shadow-blur
-          path: target/metal-precompile/
-          if-no-files-found: error
+          name: production-metal-assets
+          path: |
+            target/generated-metal-assets/
+            target/shader-asset-logs/*.log
+          if-no-files-found: warn
           retention-days: 7

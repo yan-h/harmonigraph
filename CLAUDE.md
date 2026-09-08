@@ -236,7 +236,7 @@ claude session <name> (pid <n> start <date>)
 
 A reason that does not match that belongs to nobody, and all of them are right to leave it alone rather than guess at whose it is.
 That makes a hand-written lock the one lock here that NOTHING can release:
-it stands until a human runs `git worktree unlock`, and while it stands the worktree is invisible to both tiers of the reclaim script —
+it stands until a human runs `git worktree unlock`, and while it stands the worktree is invisible to the reclaim script's prune and remove tiers alike —
 `target/debug` is never pruned out of it and the worktree itself is never removable.
 The instance that produced this rule pinned 2.2G behind a lock that only a human could clear (#369).
 

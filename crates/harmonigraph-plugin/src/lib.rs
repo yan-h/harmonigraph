@@ -15,6 +15,8 @@ use parking_lot::Mutex;
 mod background;
 mod configuration;
 mod editor;
+#[cfg(all(feature = "startup-probe", target_os = "macos"))]
+pub use editor::startup_probe::run as editor_startup_probe;
 mod performance;
 #[cfg(test)]
 mod test_scope;

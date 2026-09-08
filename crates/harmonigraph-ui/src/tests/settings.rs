@@ -5,6 +5,27 @@
 use super::harness::*;
 use crate::*;
 
+#[test]
+fn opening_analyzer_settings_does_not_change_loaded_values() {
+    let mut state = fresh();
+    state.spectrum_config.tilt = -2.0;
+    assert!(state.load_persist(&state.save_persist()));
+    assert_eq!(state.spectrum_config.tilt, -1.5);
+    let before = ron::to_string(&state.spectrum_config).unwrap();
+    let tab = SettingsPane::Page(DisplayPage::Analyzer).install(&mut state);
+    let path = state.workspace.dock.find_tab(&tab).unwrap();
+    state.workspace.dock.set_active_tab(path).unwrap();
+    let mut harness = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    let output = harness.frame(&mut state, vec![]);
+    assert!(
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Tilt (dB/oct)")
+        }),
+        "the no-input frame must reach the tilt controls"
+    );
+    assert_eq!(ron::to_string(&state.spectrum_config).unwrap(), before);
+}
+
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
 /// harnesses below are written against: they read the settings leaf as the box
 /// from the tab bar down to the 0.55 split, and the default layout opens that

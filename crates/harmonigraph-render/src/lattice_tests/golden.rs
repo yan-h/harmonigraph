@@ -14,7 +14,7 @@
 //!
 //! **Scenes a feature PR is not supposed to reach** — a node standing in its
 //! own shadow, and the resting marker field standing in one node's light. A
-//! Shimmer or a Wash change leaves both alone, so a diff here on such a PR is
+//! Wash change leaves both alone, so a diff here on such a PR is
 //! the blast radius being wider than its author believed, which is the one
 //! thing the claim tests cannot say.
 //!
@@ -247,18 +247,15 @@ fn a_chord_at_a_wide_reach() -> Scene {
     lattice(&view, near_camera())
 }
 
-/// The lattice as Yan's DAW draws it.
+/// The captured live view, explicitly drawn with Gaussian shadows.
 ///
 /// Read out of a live Bitwig project with `./read-plugin-state.py` (the
-/// `capture-daw-state` skill) on 2026-08-28. Of everything that capture holds,
-/// three fields differ from the fresh view: a Shadow a fifth wider, the Shadow
-/// depth at the top of its bar rather than 0.85, and the window centred one
-/// fifth along.
+/// `capture-daw-state` skill) on 2026-08-28. It fixes the captured Shadow width,
+/// full depth and window centred one fifth along. The kernel is explicit so
+/// a change to the fresh view cannot collapse the two golden families.
 ///
-/// That is the whole of the difference and it earns the frame, because the
-/// freeze list and the shadow rework are both judged at these settings and
-/// nowhere else — a picture change invisible at the fresh Shadow and obvious at
-/// a wider one at full depth is a change that ships.
+/// Full shadow depth makes changes to reach and profile visible even when a
+/// shallower fresh view would hide them.
 ///
 /// The capture's TUNING, zoom and pan are deliberately not taken. The tuning
 /// would empty the frame (see [`lattice`]); zoom and pan are navigation state,
@@ -269,6 +266,7 @@ pub(super) fn the_live_view() -> Scene {
     // The capture's two Shadow numbers, on both groups: it was taken before the
     // groups existed, so one width and one depth is what it says.
     for style in view.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Gaussian;
         style.width = 0.196_915_06;
         style.depth = 1.0;
     }
@@ -283,12 +281,24 @@ pub(super) fn the_live_view() -> Scene {
 /// is actually looking at. A diff here on a later PR is the distance row moving
 /// — which is what a freeze PR is for — and the Gaussian frames beside it stay
 /// still, that being the contract this family arrived under.
-fn the_live_view_on_the_distance_row() -> Scene {
+pub(super) fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();
     for style in scene.shadow.groups_mut() {
         style.kernel = harmonigraph_scene::ShadowKernel::Distance;
     }
     scene
+}
+
+#[test]
+fn the_live_view_goldens_exercise_both_shadow_kernels() {
+    for (scene, kernel) in [
+        (the_live_view(), harmonigraph_scene::ShadowKernel::Gaussian),
+        (the_live_view_on_the_distance_row(), harmonigraph_scene::ShadowKernel::Distance),
+    ] {
+        for style in scene.shadow.groups() {
+            assert_eq!(style.kernel, kernel);
+        }
+    }
 }
 
 /// The live view's DISTANCE row at the top of the Shadow bar.
@@ -313,11 +323,7 @@ fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
 fn the_zoomed_out_view_on_the_distance_row() -> Scene {
     let view = harmonigraph_scene::ViewConfig {
         center_threes: 1,
-        shadow: one_shadow(
-            harmonigraph_scene::ShadowStyle::default().width,
-            1.0,
-            harmonigraph_scene::ShadowKernel::Distance,
-        ),
+        shadow: one_shadow(fresh_shadow(), 1.0, harmonigraph_scene::ShadowKernel::Distance),
         ..Default::default()
     };
     lattice(&view, Camera::default())
@@ -335,10 +341,12 @@ fn a_sheet_behind_a_node() -> Scene {
     lattice(&view, near_camera())
 }
 
-/// How far the Shadow bar opens on a fresh blob — for the frames that are
-/// about something else and want the bar where the picture has it.
+/// How far the lattice geometry's Shadow bar opens on a fresh blob — for the
+/// frames that are about something else and want the bar where the picture
+/// has it. The geometry group's, because these frames are of nodes: a bare
+/// `ShadowStyle::default()` is a fixture, not what the fresh view draws.
 fn fresh_shadow() -> f32 {
-    harmonigraph_scene::ShadowStyle::default().width
+    harmonigraph_scene::ShadowSettings::default().lattice_geometry.width
 }
 
 /// Where the name goldens stand, and closer than the claim tests' own
@@ -569,8 +577,8 @@ pub(super) fn names_overlapping_on_one_sheet() -> Shot {
 
 /// Draw `shot` and hold it against the frame on record.
 ///
-/// A machine with no usable GPU adapter draws nothing and asserts nothing —
-/// the same skip the rest of this suite takes.
+/// Local runs may skip without a GPU; CI requires one through the shared
+/// device setup before this function can return without comparing pixels.
 fn check(name: &str, shot: Shot) {
     let Some(mut shooter) = Shooter::new(GOLDEN_SIZE) else {
         return;

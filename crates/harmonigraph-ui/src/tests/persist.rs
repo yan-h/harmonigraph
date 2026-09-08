@@ -496,6 +496,37 @@ fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
     }
 }
 
+#[test]
+fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
+    type Field = fn(&mut SpectrumConfig) -> &mut f32;
+    let fields: [(Field, f32, f32); 5] = [
+        (|cfg| &mut cfg.tilt, -6.0, 0.0),
+        (|cfg| &mut cfg.keyline, 0.0, 1.0),
+        (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
+        (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
+        (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
+    ];
+    for (field, min, max) in fields {
+        let default = *field(&mut SpectrumConfig::default());
+        for (value, expected) in [
+            (min - 1.0, min),
+            (max + 1.0, max),
+            (f32::NAN, default),
+            (f32::INFINITY, default),
+            (f32::NEG_INFINITY, default),
+        ] {
+            let mut state = fresh();
+            *field(&mut state.spectrum_config) = value;
+            let mut restored = fresh();
+            assert!(restored.load_persist(&state.save_persist()));
+            assert_eq!(*field(&mut restored.spectrum_config), expected);
+            let normalized = restored.save_persist();
+            assert!(restored.load_persist(&normalized));
+            assert_eq!(restored.save_persist(), normalized, "normalization is idempotent");
+        }
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a
@@ -547,41 +578,39 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
-/// The octave glyphs' own shimmer is gone, and a project saved against it
-/// carries a `pulse_octaves` key nothing reads now. It has to open with the
-/// glyphs steady and every other setting intact — including the marks'
-/// pattern, which is the one that survived and which sits next to it in the
-/// blob, so a reader that choked on the retired key would take the live one
-/// down with it.
-///
-/// Worth a blob rather than a comment for the same reason the taper's is: that
-/// an unknown field is ignored rather than refused is a property of how the
-/// blob is read, not something this crate spells out, and a saved project
-/// failing to parse loses the user's layout and camera along with it.
+/// Retired shimmer fields, including bare enum tokens, must not discard a
+/// saved view or prevent an offline export. They disappear on the next save.
 #[test]
-fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
+fn a_blob_with_retired_shimmer_settings_survives_both_doors() {
     let mut state = fresh();
     state.camera.yaw = 1.23;
-    state.view.pulse_marks = harmonigraph_scene::Pulse::Hex;
+    state.view.extent_sevens = 3;
+    state.take.render_config.short_edge = 2160;
     let saved = state.save_persist();
-    // Where the retired key sat: beside the marks' own pattern, written
-    // bare as RON writes a unit variant.
-    let marks = "pulse_marks:Hex,";
-    let with_octaves = saved.replace(marks, &format!("pulse_octaves:Bands,{marks}"));
-    assert_ne!(with_octaves, saved, "`{marks}` is not in the blob to splice against");
+    let stale = saved.replace(
+        "pitch_gradient:",
+        "pulse_octaves:Bands,pulse_marks:Hex,shimmer_speed:1.6,shimmer_width:5.0,\
+         shimmer_intensity:1.0,shimmer_softness:0.8,pitch_gradient:",
+    );
+    assert_ne!(stale, saved, "the anchor must exist to exercise the retired keys");
 
     let mut restored = fresh();
-    restored.load_persist(&with_octaves);
-    assert_eq!(
-        restored.view.pulse_marks,
-        harmonigraph_scene::Pulse::Hex,
-        "the pattern that survived the retirement came back changed",
-    );
-    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
-    assert!(
-        !restored.save_persist().contains("pulse_octaves"),
-        "the retired key was written back out; it should drop on the next save",
-    );
+    assert!(restored.load_persist(&stale));
+    assert_eq!(restored.camera.yaw, 1.23);
+    assert_eq!(restored.view.extent_sevens, 3);
+    let offline = crate::render_config_from_persist(&stale).expect("the offline blob must load");
+    assert_eq!(offline.short_edge, 2160);
+    let resaved = restored.save_persist();
+    for key in [
+        "pulse_octaves",
+        "pulse_marks",
+        "shimmer_speed",
+        "shimmer_width",
+        "shimmer_intensity",
+        "shimmer_softness",
+    ] {
+        assert!(!resaved.contains(key), "the retired {key} key must disappear on save");
+    }
 }
 
 /// The render frame round-trips its side and the split beside it, through
@@ -1499,21 +1528,23 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
         let loaded: harmonigraph_scene::ShadowSettings =
             ron::from_str(&format!("({})", kept.join(",")))
                 .unwrap_or_else(|e| panic!("dropping {missing} sank the endpoint: {e}"));
+        // A missing group comes back at the FRESH endpoint's value for that
+        // group, not at a bare `ShadowStyle::default()`: the container-level
+        // `serde(default)` fills from `ShadowSettings::default()`, whose four
+        // groups differ.
+        let fresh = harmonigraph_scene::ShadowSettings::default();
         for (name, group) in [
             ("lattice_geometry", loaded.lattice_geometry),
             ("lattice_text", loaded.lattice_text),
             ("spectral_geometry", loaded.spectral_geometry),
             ("spectral_text", loaded.spectral_text),
         ] {
-            let want = if name == missing {
-                harmonigraph_scene::ShadowStyle::default()
-            } else {
-                match name {
-                    "lattice_geometry" => endpoint.lattice_geometry,
-                    "lattice_text" => endpoint.lattice_text,
-                    "spectral_geometry" => endpoint.spectral_geometry,
-                    _ => endpoint.spectral_text,
-                }
+            let source = if name == missing { &fresh } else { &endpoint };
+            let want = match name {
+                "lattice_geometry" => source.lattice_geometry,
+                "lattice_text" => source.lattice_text,
+                "spectral_geometry" => source.spectral_geometry,
+                _ => source.spectral_text,
             };
             assert_eq!(group, want, "dropping {missing} changed {name}");
         }

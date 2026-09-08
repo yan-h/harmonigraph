@@ -222,6 +222,175 @@ check_handmade_lock() {
   fi
 }
 
+# Containment is the widest removal signal, so it is the one that has to be
+# proved in BOTH directions from a single fixture: the two shapes equality
+# missed, and a branch that is genuinely still in flight. A test that only
+# showed the positives would pass just as happily against a rubber stamp — and
+# `--ignore-missing` makes a rubber stamp the natural failure here, since it
+# drops an unreadable rev rather than complaining.
+#
+# The repo below puts main at A and hangs three branches off it:
+#   closed-w  at B, and a CLOSED PR whose head is B      -> resolved
+#   behind-w  at B, and a MERGED PR whose head is C (B's child, not in main)
+#                                                        -> resolved, and the
+#                                                           case sha equality
+#                                                           reads as unmerged
+#   live-w    at D, named by no PR at all                -> KEPT
+# None of the three is an ancestor of main, so every one of them reaches the
+# gh-backed signals rather than stopping at the offline test.
+check_containment() {
+  work="$TMP/containment"
+  main="$work/main"
+  mkdir -p "$main" "$work/bin"
+
+  shas="$work/shas"
+  (
+    cd "$main" || exit 1
+    git init -q . 2>/dev/null || exit 1
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    printf '/.claude/worktrees/\n' > .gitignore
+    git add .gitignore
+    git commit -q -m base || exit 1
+
+    # B, then C on top of it. C is the sha that "merged"; the worktree stays
+    # at B, which is exactly the drift that left five worktrees standing.
+    git checkout -q -b feature 2>/dev/null || exit 1
+    git commit -q --allow-empty -m B || exit 1
+    b=$(git rev-parse HEAD)
+    git commit -q --allow-empty -m C || exit 1
+    c=$(git rev-parse HEAD)
+
+    git checkout -q main 2>/dev/null || exit 1
+    git branch -q -f closed-b "$b" || exit 1
+    git branch -q -f behind-b "$b" || exit 1
+
+    git checkout -q -b unresolved 2>/dev/null || exit 1
+    git commit -q --allow-empty -m D || exit 1
+    git checkout -q main 2>/dev/null || exit 1
+
+    git worktree add -q .claude/worktrees/closed-w closed-b 2>/dev/null || exit 1
+    git worktree add -q .claude/worktrees/behind-w behind-b 2>/dev/null || exit 1
+    git worktree add -q .claude/worktrees/live-w unresolved 2>/dev/null || exit 1
+    printf 'CLOSED %s\nMERGED %s\n' "$b" "$c" > "$shas"
+  ) || { echo "✗ containment: could not build the fixture" >&2; failures=$((failures + 1)); return; }
+
+  # The script asks gh for `--json state,headRefOid --jq ...`; the shim stands
+  # in for the whole call and emits what that jq would have produced.
+  cat > "$work/bin/gh" <<SHIM
+#!/usr/bin/env bash
+cat "$shas"
+SHIM
+  chmod +x "$work/bin/gh"
+
+  # The idle guard sits after the resolved-signal check and would otherwise
+  # hold all three back on a reason that is not what this case is about.
+  find "$main/.claude/worktrees" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+
+  out=$(cd "$main" && PATH="$work/bin:$PATH" CLAUDE_PROJECT_DIR="$main" \
+    RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    "$SCRIPT" </dev/null 2>&1)
+
+  for case in "closed-w:a PR closed unmerged" "behind-w:a branch behind the sha that merged"; do
+    wt=${case%%:*}
+    if printf '%s\n' "$out" | grep -q "would remove .*$wt"; then
+      echo "✓ ${case#*:} is resolved by containment"
+    else
+      echo "✗ containment missed ${case#*:} ($wt)" >&2
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+      failures=$((failures + 1))
+    fi
+  done
+
+  # The one that must survive. Asserting on "no-remove" rather than on the
+  # absence of "would remove" keeps a fixture that never reached the decision
+  # from passing as a success.
+  if printf '%s\n' "$out" | grep -q "no-remove live-w: unresolved" &&
+    ! printf '%s\n' "$out" | grep -q "would remove .*live-w"; then
+    echo "✓ a branch in no PR is still kept"
+  else
+    echo "✗ containment removed a branch that no PR resolves" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+  fi
+}
+
+# A directory git no longer lists is reachable by neither tier above — they
+# both walk `git worktree list` — so it is not skipped for a reason, it is
+# never examined. Six were on disk on 2026-09-07 and no dry-run line mentioned
+# them. The fixture is a plain directory: no `.git`, nothing registered.
+#
+# BOTH halves are asserted, and the second one carries the history: a
+# reviewed-away version of this tier deleted what it found, and "git does not
+# list it" turned out to be the wrong aim for an `rm -rf` in three separate
+# ways (see ORPHANS in the script). So "it is named" is paired with "it is
+# still there", and the pairing is what stops a future change from quietly
+# turning a report back into a deletion.
+check_orphan_report() {
+  desc="an unregistered directory is named, not removed"
+  work="$TMP/orphan"
+  main="$work/main"
+  orphan="$main/.claude/worktrees/left-behind"
+  mkdir -p "$main"
+
+  (
+    cd "$main" || exit 1
+    git init -q . 2>/dev/null || exit 1
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    printf '/.claude/worktrees/\n' > .gitignore
+    git add .gitignore
+    git commit -q -m base || exit 1
+    mkdir -p "$orphan/target/release" || exit 1
+    : > "$orphan/target/release/sentinel"
+  ) || { echo "✗ $desc: could not build the fixture" >&2; failures=$((failures + 1)); return; }
+
+  if git -C "$main" worktree list --porcelain | grep -q "left-behind"; then
+    echo "✗ $desc: fixture is registered, so it is not an orphan" >&2
+    failures=$((failures + 1))
+    return
+  fi
+
+  find "$orphan" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+  touch -t 200001010000 "$orphan"
+
+  out=$(cd "$main" && CLAUDE_PROJECT_DIR="$main" RECLAIM_FORCE=1 \
+    RECLAIM_NO_NETWORK=1 RECLAIM_MIN_IDLE_MINUTES=0 \
+    "$SCRIPT" </dev/null 2>&1)
+
+  # A detached `rm -rf` would land after the script exits, so give one a chance
+  # to run before concluding the directory survived.
+  n=0
+  while [ -d "$orphan" ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+
+  if [ ! -d "$orphan" ] || [ ! -f "$orphan/target/release/sentinel" ]; then
+    echo "✗ $desc: the orphan was REMOVED; this tier must only report" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+    return
+  fi
+
+  if printf '%s\n' "$out" | grep -q "left-behind"; then
+    echo "✓ $desc"
+  else
+    echo "✗ $desc: survived but was never named, so it stays invisible" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    failures=$((failures + 1))
+  fi
+}
+
 case_n=0
 
 # A CLAIMED spare is a live session. Its argv is fixed at exec and still names
@@ -247,6 +416,8 @@ check "an unrecognised holder's lock is live" \
 
 check_codex_ownership
 check_handmade_lock
+check_containment
+check_orphan_report
 
 echo
 if [ "$failures" -gt 0 ]; then

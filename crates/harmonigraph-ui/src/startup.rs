@@ -47,9 +47,9 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
     let Some(mut loading) = ui.ctx().data(|data| data.get_temp::<Loading>(id())) else {
         return false;
     };
-    // Do not compile a hidden lattice just because the editor was opened.
+    // Stay dormant until a pane needs the lattice. Removing the opt-in here
+    // would make its first later reveal compile synchronously on the UI thread.
     if !needs_lattice(state) {
-        ui.ctx().data_mut(|data| data.remove::<Loading>(id()));
         return false;
     }
     let status = loading.progress.status();
@@ -109,18 +109,19 @@ mod tests {
     use super::*;
     use crate::panes::Tab;
 
+    struct Defaults;
+    impl crate::params::ParamBackend for Defaults {
+        fn get(&self, key: crate::params::ParamKey) -> f32 {
+            key.default_value()
+        }
+        fn set(&self, _: crate::params::ParamKey, _: f32) {}
+    }
+
     #[test]
     fn loading_frames_age_released_notes_without_pruning_live_voices() {
         if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
             eprintln!("hot reload uses synchronous initialization; no loading frames");
             return;
-        }
-        struct Defaults;
-        impl crate::params::ParamBackend for Defaults {
-            fn get(&self, key: crate::params::ParamKey) -> f32 {
-                key.default_value()
-            }
-            fn set(&self, _: crate::params::ParamKey, _: f32) {}
         }
         let ctx = egui::Context::default();
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
@@ -156,5 +157,42 @@ mod tests {
         assert!(!needs_lattice(&state), "a folded lattice must stay cheap to open");
         state.workspace.dock = egui_dock::DockState::new(vec![Tab::Video]);
         assert!(needs_lattice(&state), "the video preview also draws the lattice");
+    }
+
+    #[test]
+    fn first_reveal_after_hidden_frames_uses_the_loading_path() {
+        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
+            eprintln!("hot reload uses synchronous initialization; no loading frames");
+            return;
+        }
+        for tab in [Tab::Lattice, Tab::Video] {
+            let ctx = egui::Context::default();
+            let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.workspace.dock = egui_dock::DockState::new(vec![Tab::Spectral, tab]);
+            begin_editor_loading(&ctx);
+            let loading_text = |output: &egui::FullOutput| {
+                output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Stage::Graphics.label())
+            })
+            };
+            for _ in 0..3 {
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    crate::root_ui(ui, &mut state, &Defaults, 0.0);
+                });
+                assert!(!loading_text(&output), "hidden panes do not request preparation");
+            }
+            assert!(editor_loading_status(&ctx).is_some(), "first-use opt-in survives");
+            let path = state.workspace.dock.find_tab(&tab).unwrap();
+            state.workspace.dock.set_active_tab(path).unwrap();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::root_ui(ui, &mut state, &Defaults, 0.0);
+            });
+            assert!(loading_text(&output), "first reveal enters asynchronous preparation");
+            assert!(output
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Callback(_))));
+            assert_eq!(editor_loading_status(&ctx), Some(Status::Preparing(Stage::Graphics)));
+        }
     }
 }

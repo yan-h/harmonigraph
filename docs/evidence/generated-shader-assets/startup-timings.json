@@ -1,0 +1,254 @@
+[
+  {
+    "condition": "cache-blocked",
+    "pair": 0,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 378.243583,
+        "lattice_ms": 7185.120542
+      },
+      "1": {
+        "device_ms": 44.489583,
+        "lattice_ms": 5015.386
+      },
+      "2": {
+        "device_ms": 28.491666,
+        "lattice_ms": 4810.204167
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 0,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 107.638375,
+        "lattice_ms": 646.321792
+      },
+      "1": {
+        "device_ms": 10.778792,
+        "lattice_ms": 594.42825
+      },
+      "2": {
+        "device_ms": 12.471708,
+        "lattice_ms": 645.028375
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 1,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 88.921458,
+        "lattice_ms": 684.634167
+      },
+      "1": {
+        "device_ms": 12.822625,
+        "lattice_ms": 646.53175
+      },
+      "2": {
+        "device_ms": 11.880875,
+        "lattice_ms": 583.750416
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 1,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 121.373584,
+        "lattice_ms": 4041.125958
+      },
+      "1": {
+        "device_ms": 25.534292,
+        "lattice_ms": 3938.335125
+      },
+      "2": {
+        "device_ms": 29.9105,
+        "lattice_ms": 4245.042292
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 2,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 91.742459,
+        "lattice_ms": 4565.552791
+      },
+      "1": {
+        "device_ms": 32.313666,
+        "lattice_ms": 4751.2540420000005
+      },
+      "2": {
+        "device_ms": 38.622917,
+        "lattice_ms": 5034.4502919999995
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-blocked",
+    "pair": 2,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 87.419417,
+        "lattice_ms": 737.340042
+      },
+      "1": {
+        "device_ms": 12.927542,
+        "lattice_ms": 675.224666
+      },
+      "2": {
+        "device_ms": 13.113625,
+        "lattice_ms": 743.655458
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  },
+  {
+    "condition": "cache-available",
+    "pair": 0,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 26.14125,
+        "lattice_ms": 37.32125
+      },
+      "1": {
+        "device_ms": 1.156916,
+        "lattice_ms": 24.40075
+      },
+      "2": {
+        "device_ms": 1.301542,
+        "lattice_ms": 23.029792
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-available",
+    "pair": 0,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 19.426417,
+        "lattice_ms": 28.64475
+      },
+      "1": {
+        "device_ms": 1.017417,
+        "lattice_ms": 24.961125
+      },
+      "2": {
+        "device_ms": 0.994125,
+        "lattice_ms": 27.7955
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  },
+  {
+    "condition": "cache-available",
+    "pair": 1,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 19.42625,
+        "lattice_ms": 27.544709
+      },
+      "1": {
+        "device_ms": 1.9775,
+        "lattice_ms": 24.463917
+      },
+      "2": {
+        "device_ms": 1.034167,
+        "lattice_ms": 25.210375
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  },
+  {
+    "condition": "cache-available",
+    "pair": 1,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 21.64675,
+        "lattice_ms": 26.538875
+      },
+      "1": {
+        "device_ms": 1.918541,
+        "lattice_ms": 25.033167
+      },
+      "2": {
+        "device_ms": 1.0985,
+        "lattice_ms": 25.931083
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-available",
+    "pair": 2,
+    "mode": "source",
+    "openings": {
+      "0": {
+        "device_ms": 22.587625,
+        "lattice_ms": 26.576584
+      },
+      "1": {
+        "device_ms": 1.005792,
+        "lattice_ms": 25.275834
+      },
+      "2": {
+        "device_ms": 1.01225,
+        "lattice_ms": 25.939042
+      }
+    },
+    "hits": 0,
+    "sources": 156
+  },
+  {
+    "condition": "cache-available",
+    "pair": 2,
+    "mode": "asset",
+    "openings": {
+      "0": {
+        "device_ms": 19.599666,
+        "lattice_ms": 32.229666
+      },
+      "1": {
+        "device_ms": 1.471959,
+        "lattice_ms": 28.163667
+      },
+      "2": {
+        "device_ms": 2.171416,
+        "lattice_ms": 42.5645
+      }
+    },
+    "hits": 156,
+    "sources": 0
+  }
+]
