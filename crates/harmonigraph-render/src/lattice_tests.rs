@@ -15,6 +15,8 @@ mod golden;
 mod labels;
 mod marks;
 #[cfg(target_os = "macos")]
+mod metal_assets;
+#[cfg(target_os = "macos")]
 mod metal_precompile;
 mod octaves;
 mod quantization;
