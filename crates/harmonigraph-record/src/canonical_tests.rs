@@ -740,3 +740,110 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     wait_for(&fence.worker_finished);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+/// #712, the stage-5 review's third round: a gap outliving the pass it landed
+/// on, and the file that exports being one opened after it.
+///
+/// The interleaving the reviewer named, built here in the order the worker
+/// runs it. `Start` is unpolled and `NewPass` is already queued, so the drain
+/// that consumes the gap has no file — the round-2 case — and the ONE that
+/// follows opens pass 1, marks it, and rolls straight over to pass 2 without
+/// leaving the loop: `drain_with_boundaries` calls the fanout from
+/// `before_new_pass`, ahead of `Open::next_pass`. Pass 2 is where the music
+/// is, so pass 2 is what `Open::take_path` seals and hands to the renderer,
+/// and pass 1 is not even retained by then.
+///
+/// What the range proves is that the fixture reaches the case rather than one
+/// beside it: `4097` is the publication routed to PASS 2, and it is inside the
+/// coalesced `4096..=4098` the take carries. So the marker on the exported
+/// file is describing history that file owns, not only the disarmed prefix
+/// ahead of it. Both closures are published and accepted, so nothing here is
+/// standing in for a take that refused.
+#[test]
+fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
+    let (mut publisher, mut consumer) = publication::channel();
+    let disarmed = publication::Route::default();
+    let first_pass = RecordAddress { epoch: 1, pass: 1 };
+    let second_pass = RecordAddress { epoch: 1, pass: 2 };
+    let routed_to_second = publication::Route { address: Some(second_pass), time_offset: 0.0 };
+    let sounding =
+        |i: usize| NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into();
+    for i in 0..publication::PUBLICATION_RING - 1 {
+        publisher.note(sounding(i), disarmed).unwrap();
+    }
+    // The reserve takes the first outage. The second is history PASS 2 owns,
+    // and it is held on the audio thread until a cell frees.
+    assert_eq!(publisher.note(sounding(0), disarmed), Err(publication::PublishError::Lost));
+    assert_eq!(publisher.note(sounding(1), routed_to_second), Err(publication::PublishError::Lost));
+    let mut seen = 0;
+    consumer.drain(|_, _| {
+        seen += 1;
+        seen < 2
+    });
+    // A third loss merges into the held one. The routes differ, so the merged
+    // outage keeps NEITHER address and covers the pass-2 publication inside it.
+    assert_eq!(publisher.note(sounding(2), disarmed), Err(publication::PublishError::Lost));
+
+    let (mut entries, mut queued) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+    entries.push(Entry::NewPass).expect("ring has room");
+    let fence = RecordFence::default();
+    fence.enabled.store(true, Ordering::Release);
+    let failure = FailureAccount::default();
+    let status = Mutex::new(String::new());
+    let mut fanout = CanonicalFanout::default();
+    let mut open: Option<Open> = None;
+    let pump = |open: &mut Option<Open>,
+                entries: &mut rtrb::Consumer<Entry>,
+                consumer: &mut publication::Consumer,
+                fanout: &mut CanonicalFanout| {
+        let had =
+            drain_with_boundaries(entries, None, open, &status, Some(&fence), &failure, |o| {
+                fanout.drain(consumer, o, &fence, &failure);
+            });
+        fanout.drain(consumer, open, &fence, &failure);
+        had
+    };
+    // `Start` is queued and unpolled. The entry ring is not even read while an
+    // armed fence has no file, so `NewPass` is still waiting afterwards.
+    assert!(!pump(&mut open, &mut queued, &mut consumer, &mut fanout));
+
+    let file = path("rollover-gap");
+    let mut opened =
+        Open::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status).unwrap();
+    opened.epoch = 1;
+    opened.source_enabled = true;
+    open = Some(opened);
+    assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
+    assert_eq!(open.as_ref().unwrap().pass, 2, "the queued NewPass rolled the recording over");
+
+    // Pass 2 is the voiced one, and both passes close cleanly.
+    publisher
+        .note(accepted(NoteEvent::on(0.5, SourceId(1), 0, 60, 0.8), 1), routed_to_second)
+        .expect("the lane drained, so the take's own note fits");
+    publisher.pass_complete(first_pass, 1.0).expect("pass 1 closes");
+    publisher.pass_complete(second_pass, 2.0).expect("pass 2 closes");
+    publisher.epoch_complete(1, 2.0).expect("the epoch closes");
+    entries.push(Entry::ConfigurationPassComplete(first_pass)).expect("ring has room");
+    entries.push(Entry::ConfigurationPassComplete(second_pass)).expect("ring has room");
+    entries.push(Entry::ProducerClosed(1)).expect("ring has room");
+    entries.push(Entry::ConfigurationEpochComplete(1)).expect("ring has room");
+    assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
+    assert!(open.as_ref().unwrap().voiced, "pass 2 is the one holding the music");
+    assert!(open.as_ref().unwrap().retained.is_empty(), "and pass 1 has already been sealed");
+
+    let sealed = finish_ready(&mut open, 1, &fence).expect("the take seals");
+    assert_eq!(
+        sealed.file_name().unwrap(),
+        std::path::Path::new("capture-2.take"),
+        "the voiced later pass is what export selects"
+    );
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let loss = take.incomplete.expect("the gap the earlier pass took is on the pass that exports");
+    assert_eq!(
+        (loss.first_publication, loss.last_publication),
+        (4096, 4098),
+        "coalesced over both outages, and 4097 inside it is routed to pass 2"
+    );
+    assert!(!fence.failed.load(Ordering::Acquire), "a hole warns, it does not refuse");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}

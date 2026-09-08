@@ -1617,6 +1617,14 @@ struct CanonicalFanout {
     waiting_file: bool,
     /// A gap that arrived with no file open, kept until one does.
     ///
+    /// **The marker's lifetime is the recording, not the file:** it waits here
+    /// until the recording has a file, is written into that one, and is then
+    /// carried by [`Open`] into every pass the recording opens afterwards. The
+    /// two halves are what put it beyond a caller's memory — a gap cannot be
+    /// dropped for arriving too early, and it cannot be left behind by a
+    /// rollover, so the set of files a marked recording can export unmarked is
+    /// empty.
+    ///
     /// An unaddressed gap names no pass, so it deliberately waits for nothing
     /// and marks whatever is open. When NOTHING is open its marker used to be
     /// dropped where it stood, and since a gap no longer fails the fence that
@@ -1645,7 +1653,10 @@ impl CanonicalFanout {
     ) -> usize {
         use harmonigraph_core::canonical::CanonicalEvent;
         self.waiting_file = false;
-        // The first file to open after an unplaceable gap carries its warning.
+        // The first file to open after an unplaceable gap carries its warning,
+        // and from there the recording carries it — `Open::next_pass` writes it
+        // into every pass opened after this one, so the marker survives a
+        // rollover the same way it survives having arrived too early.
         //
         // STATED RESIDUAL rather than a reconciler: that file need not be the
         // one whose history was lost. An outage entirely inside a disarmed
@@ -1826,7 +1837,9 @@ struct Open {
     source_closed: bool,
     source_complete: bool,
     last_voiced_number: u32,
-    incomplete: bool,
+    /// The marker this RECORDING carries, not this file: whatever was written
+    /// into this pass, so [`Open::next_pass`] can write it into the next one.
+    incomplete: Option<harmonigraph_take::IncompleteRecord>,
     writer: harmonigraph_take::Writer,
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
@@ -1886,7 +1899,7 @@ impl Open {
                     source_closed: false,
                     source_complete: false,
                     last_voiced_number: 0,
-                    incomplete: false,
+                    incomplete: None,
                     writer,
                     header,
                     base,
@@ -1967,6 +1980,19 @@ impl Open {
         // Keep the entire old owner until creation and the capacity check pass.
         let mut previous = open.take().unwrap();
         next.last_voiced = previous.voiced_so_far();
+        // Incompleteness belongs to the RECORDING, so it crosses the rollover
+        // with everything else the new pass inherits.
+        //
+        // A gap that named no pass covers whatever this recording still owns,
+        // and that includes passes it has not opened yet: an outage spanning a
+        // boundary is exactly the one that arrives address-less. Marking only
+        // the passes that existed when it arrived left the take EXPORTABLE and
+        // unmarked whenever a later pass was the voiced one, because
+        // [`Open::take_path`] picks the last voiced pass and `mark_incomplete`
+        // reaches downward into `retained` rather than forward in time (#712).
+        if let Some(record) = previous.incomplete {
+            let _ = next.mark_incomplete(record);
+        }
         if previous.epoch != 0 {
             next.epoch = previous.epoch;
             next.source_enabled = previous.source_enabled;
@@ -2017,14 +2043,18 @@ impl Open {
         Ok(())
     }
 
+    /// Mark this recording — this pass, every pass it still retains, and by
+    /// [`Open::next_pass`] every pass it opens from here on.
     fn mark_incomplete(
         &mut self,
         record: harmonigraph_take::IncompleteRecord,
     ) -> std::io::Result<()> {
         let mut result = Ok(());
-        if !self.incomplete {
+        if self.incomplete.is_none() {
             result = self.writer.incomplete(record).and_then(|_| self.writer.flush());
-            self.incomplete = result.is_ok();
+            if result.is_ok() {
+                self.incomplete = Some(record);
+            }
         }
         for pass in &mut self.retained {
             if let Err(error) = pass.mark_incomplete(record) {
