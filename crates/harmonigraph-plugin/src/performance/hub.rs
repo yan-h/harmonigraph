@@ -122,6 +122,31 @@ impl Default for Row {
     }
 }
 impl Row {
+    /// This row owns nothing in flight: no copied input left to sequence, no
+    /// accepted output left to publish, and nothing it believes is sounding.
+    /// Every path that gives a row up asks this first, because it is the
+    /// point at which forgetting the row cannot strand anything.
+    fn settled(&self) -> bool {
+        self.output.len() == 0 && self.state.count() == 0 && self.inputs.len() == 0
+    }
+    /// Rejects a message minted before the lease or the session epoch this row
+    /// now holds. A reset ends both, so this one test is what keeps every
+    /// obsolete reply from acting on the row that replaced it.
+    fn current(&self, incarnation: u64, epoch: u64) -> bool {
+        self.lease.is_some_and(|lease| lease.incarnation == incarnation) && self.epoch == epoch
+    }
+    /// The lease is gone and the row is free for the next pairing: everything
+    /// the lease owned goes back to its fresh value in one place, rather than
+    /// a field list here that has to be kept level with `Default`. What a row
+    /// keeps across a lease is the storage the pairing boundary moved in --
+    /// taking it back would be an audio-thread allocation -- and the
+    /// monotonic seal generation, which numbers seals across every lease.
+    fn release(&mut self) {
+        let output = std::mem::replace(&mut self.output, Queue::detached());
+        let inputs = std::mem::replace(&mut self.inputs, Queue::detached());
+        let seal_generation = self.seal_generation;
+        *self = Row { output, inputs, seal_generation, ..Row::default() };
+    }
     fn input_progress(&mut self, coverage: Coverage, input_cut: u64, membership: u64) {
         let new_segment = self.coverage.is_some_and(|output| output.start == coverage.start)
             && self.input_coverage.is_none_or(|(old, _)| coverage.start >= old.through);
@@ -535,10 +560,7 @@ impl Hub {
             row.emission_gate.load(Ordering::Acquire) & BUSY != 0
                 || !row.source_detached.load(Ordering::Acquire)
                 || !row.hub_detached.load(Ordering::Acquire)
-        }) || self
-            .rows
-            .iter()
-            .any(|row| row.output.len() != 0 || row.inputs.len() != 0 || row.state.count() != 0)
+        }) || self.rows.iter().any(|row| !row.settled())
             || offer.session.credits.load(Ordering::Acquire) != 0
         {
             self.trace.setup_wait = 7;
@@ -659,42 +681,10 @@ impl Hub {
             if row.lease.is_some_and(|lease| {
                 lease.incarnation != shared.expected_incarnation.load(Ordering::Acquire)
             }) && shared.hub_detached.load(Ordering::Acquire)
-                && row.output.len() == 0
-                && row.state.count() == 0
-                && row.inputs.len() == 0
+                && row.settled()
             {
-                row.lease = None;
-                row.last_disposition = None;
-                row.channel_witness = None;
-                row.epoch = 0;
-                row.state = State::default();
-                row.received = 0;
-                row.received_actual = None;
-                row.actual_order = true;
-                row.applied = 0;
-                row.report = None;
-                row.coverage = None;
-                row.member = false;
-                row.participating = true;
-                self.sequencer.participating[index + 1] = true;
-                self.sequencer.participation_serial[index + 1] = 0;
-                self.sequencer.history.clear(index + 1, self.sequencer.decision);
-                row.repair = false;
-                row.baseline_id = 0;
-                row.detach = None;
-                row.last_ack = None;
-                row.input_coverage = None;
-                row.input_settled = (0, 0);
-                row.terminal_cut = None;
-                self.sequencer.terminal_sources &= !(1 << index);
-                row.input_membership = 0;
-                row.acknowledged_membership = 0;
-                self.sequencer.captured[index + 1] = 0;
-                row.seal = None;
-                row.producer_joined = None;
-                row.joined_unknown_wire = false;
-                row.last_sealed_ack = None;
-                row.joining = None;
+                row.release();
+                self.sequencer.release_row(index);
             }
             // This lane never waits for Capture ingress or an older Progress
             // report. Reserve cancellation ACK before consuming its authority.
@@ -702,9 +692,7 @@ impl Hub {
                 let ack = shared.to_source.reserve_repair();
                 let repair = shared.to_hub.take_repair_if(|control| match control {
                     Control::Disposition { incarnation, epoch, transaction, .. }
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                            && transaction != 0 =>
+                        if row.current(incarnation, epoch) && transaction != 0 =>
                     {
                         ack.is_some()
                             && row.last_disposition.is_none_or(|last| {
@@ -725,10 +713,7 @@ impl Hub {
                             lifetime,
                             request,
                             original_on,
-                        } if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                            && transaction != 0 =>
-                        {
+                        } if row.current(incarnation, epoch) && transaction != 0 => {
                             ack.unwrap().publish(Reply::Disposition {
                                 incarnation,
                                 transaction,
@@ -808,8 +793,7 @@ impl Hub {
                         }
                     }
                     Control::Progress { incarnation, epoch, coverage, output_cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch =>
+                        if row.current(incarnation, epoch) =>
                     {
                         if row.joining.is_some_and(|start| coverage.start >= start) && !row.member {
                             row.coverage =
@@ -824,8 +808,7 @@ impl Hub {
                         }
                     }
                     Control::Seal { incarnation, epoch, generation, cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch
+                        if row.current(incarnation, epoch)
                             && shared.withdrawn.load(Ordering::Acquire) =>
                     {
                         row.seal = Some(cut);
@@ -833,8 +816,7 @@ impl Hub {
                         row.joining = None;
                     }
                     Control::ProducerJoined { incarnation, epoch, cut, unknown_wire }
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && epoch == row.epoch
+                        if row.current(incarnation, epoch)
                             && shared.withdrawn.load(Ordering::Acquire)
                             && row.received <= cut
                             && row.producer_joined.is_none_or(|old| old == cut) =>
@@ -844,8 +826,7 @@ impl Hub {
                         row.joining = None;
                     }
                     Control::Detach { incarnation, epoch, cut }
-                        if row.lease.is_some_and(|l| l.incarnation == incarnation)
-                            && epoch == row.epoch =>
+                        if row.current(incarnation, epoch) =>
                     {
                         row.detach = Some(cut)
                     }
@@ -873,15 +854,12 @@ impl Hub {
                 self.service_revision = self.service_revision.wrapping_add(1);
                 match intent {
                     Intent::Coverage { incarnation, epoch, coverage, input_cut, membership } => {
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
-                        {
+                        if row.current(incarnation, epoch) {
                             row.input_progress(coverage, input_cut, membership);
                         }
                     }
                     Intent::InputSettled { incarnation, epoch, input_cut, output_cut } => {
-                        if row.lease.is_some_and(|lease| lease.incarnation == incarnation)
-                            && row.epoch == epoch
+                        if row.current(incarnation, epoch)
                             && input_cut >= row.input_settled.0
                             && output_cut >= row.input_settled.1
                         {
@@ -1490,13 +1468,10 @@ impl Hub {
                     }
                 }
             }
-            if row.detach.is_some_and(|cut| {
-                row.seal == Some(cut)
-                    && row.applied == cut
-                    && row.output.len() == 0
-                    && row.state.count() == 0
-                    && row.inputs.len() == 0
-            }) {
+            if row
+                .detach
+                .is_some_and(|cut| row.seal == Some(cut) && row.applied == cut && row.settled())
+            {
                 row.member = false;
                 if !session.rows[index].hub_detached.swap(true, Ordering::AcqRel) {
                     self.service_revision = self.service_revision.wrapping_add(1);
@@ -1587,9 +1562,7 @@ impl Hub {
             // producer can still capture post-cut input before its enclosing
             // detach boundary; only Detach certifies that transfer has ended.
             if row.detach.is_some_and(|cut| row.seal == Some(cut) && row.applied == cut)
-                && row.output.len() == 0
-                && row.state.count() == 0
-                && row.inputs.len() == 0
+                && row.settled()
                 && !offer.session.rows[index].hub_detached.swap(true, Ordering::AcqRel)
             {
                 self.service_revision = self.service_revision.wrapping_add(1);
@@ -1601,12 +1574,10 @@ impl Hub {
             return false;
         }
         self.direct.settled()
-            && self.rows.iter().all(|r| {
-                r.output.len() == 0
-                    && r.state.count() == 0
-                    && r.inputs.len() == 0
-                    && (r.lease.is_none() || r.seal == Some(r.applied))
-            })
+            && self
+                .rows
+                .iter()
+                .all(|r| r.settled() && (r.lease.is_none() || r.seal == Some(r.applied)))
             && self.offer.as_ref().is_none_or(|offer| {
                 offer.session.credits.load(Ordering::Acquire) == 0
                     && offer.session.rows.iter().all(|row| {

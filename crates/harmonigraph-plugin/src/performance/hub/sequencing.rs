@@ -157,6 +157,17 @@ impl Default for Sequencer {
     }
 }
 impl Sequencer {
+    /// The per-row half of giving a lease up. It lives here rather than on the
+    /// `Row` because the sequencer indexes these by source -- DIRECT is zero
+    /// and a Hub row is one past its own index -- and a fresh lease must not
+    /// inherit the participation, history or input cut of the one before it.
+    pub(super) fn release_row(&mut self, index: usize) {
+        self.participating[index + 1] = true;
+        self.participation_serial[index + 1] = 0;
+        self.history.clear(index + 1, self.decision);
+        self.terminal_sources &= !(1 << index);
+        self.captured[index + 1] = 0;
+    }
     /// A clock boundary empties the Hub's belief about what is sounding.
     ///
     /// Nothing is reseeded across it. The copied input records own every cell

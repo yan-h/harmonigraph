@@ -600,25 +600,21 @@ impl Source {
     pub fn joined_cut(&self) -> Option<u64> {
         self.producer_joined.then_some(self.sequence)
     }
+    /// What this Tune has already put on the wire and still owns: voices the
+    /// receiver is sounding, pedals it is holding, and note-offs owed for
+    /// terminals the host took. Every reset path asks this before it decides
+    /// whether it owes releases, because forgetting ownership without
+    /// terminating these is what strands a note in the instrument.
+    fn forwarded_wire_state(&self) -> bool {
+        self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64]
+    }
     pub fn unknown_joined_wire_state(&self) -> bool {
-        self.state.count() != 0
-            || self.state.pedals_held()
-            || self.owed_note_off != [NONE; 64]
+        self.forwarded_wire_state()
             || self.emergency.iter().flatten().any(|release| release.accepted.is_none())
             || self.channel_reset != [0; 16]
     }
     pub fn settled(&self) -> bool {
-        self.held() == 0
-            && !self.state.pedals_held()
-            && self.owed_note_off == [NONE; 64]
-            && self.journal.len() == 0
-            && self.emergency_output.len() == 0
-            && self.pending.len() == 0
-            && self.permit.is_none()
-            && self.emergency.iter().all(Option::is_none)
-            && self.channel_reset == [0; 16]
-            && self.manifest.len() == 0
-            && self.capture_group.len() == 0
+        self.output_settled() && self.pending.len() == 0 && self.capture_group.len() == 0
     }
     fn lease_settled(&self) -> bool {
         self.old_pending == 0 && self.capture_group.len() == 0 && self.output_settled()
@@ -658,11 +654,10 @@ impl Source {
             offer.session.rows[usize::from(offer.lease.slot - 1)].withdrawn.load(Ordering::Acquire)
         }) {
             if !self.withdrawal_reset {
-                // Once per withdrawal. `stop` is the established reset: it
-                // cancels every unsounded attack and arms the emergency lane
-                // for the voices this Tune has forwarded, which is also what
-                // lets the lease settle instead of waiting for input the new
-                // pairing will never deliver.
+                // Once per withdrawal, and the reason the reset is what a
+                // withdrawal wants: its cancel is also what lets the lease
+                // settle instead of waiting for input the new pairing will
+                // never deliver.
                 self.withdrawal_reset = true;
                 self.stop();
             }
@@ -778,11 +773,7 @@ impl Source {
         // here rather than importing them: the interruption is accepted, a
         // silent divergence between what sounds and what the Hub believes is
         // not.
-        if adopted
-            && (self.state.count() != 0
-                || self.state.pedals_held()
-                || self.owed_note_off != [NONE; 64])
-        {
+        if adopted && self.forwarded_wire_state() {
             self.arm_release_debt();
         }
     }
@@ -1285,11 +1276,36 @@ impl Source {
             && self.manifest.front().is_none_or(|manifest| manifest.serial > self.cancel_cut)
             && self.work_cleanup_head == NONE
     }
+    /// The one reset a Tune has: cancel every unsounded attack at the current
+    /// input cut, then terminate what has already been forwarded, before its
+    /// ownership is forgotten. `cancel_cut` is also what rejects the replies
+    /// those cancelled attacks are still owed.
+    ///
+    /// It does NOT latch. Input past the cut is admitted again on the next
+    /// event, once the channel's release debt has been accepted. Every caller
+    /// takes this same whole-queue scope and differs only in what it does
+    /// afterwards, and in what the restart therefore needs:
+    ///
+    /// - transport Stop and host Reset resume by themselves.
+    /// - a host reactivation adopts the new format next; the lease, epoch and
+    ///   generation deliberately survive that boundary.
+    /// - a membership withdrawal resumes at the next adoption, and the old
+    ///   incarnation and epoch are what kill its replies.
+    /// - an explicit setup reset and a Hub clock fence are the only callers
+    ///   that also arm `reset_armed`, which is what lets `begin` clear a
+    ///   latched fault. A bare Reset without one stays terminal.
+    /// - destruction never resumes.
+    ///
+    /// A terminal fault is these same two steps plus that latch, and lives in
+    /// `fault` rather than here because it owes releases whatever the wire
+    /// state and refuses new attacks until an explicit Reset. A missed
+    /// deadline is neither: lateness goes to the late-playback path and never
+    /// reaches this function.
     pub fn stop(&mut self) {
         self.cancel_unsounded();
         // Credits can outlive an accepted Off until its factual ACK arrives.
         // Only actual wire state may create fresh release debt at Stop.
-        if self.state.count() != 0 || self.state.pedals_held() || self.owed_note_off != [NONE; 64] {
+        if self.forwarded_wire_state() {
             self.arm_release_debt();
         }
     }
