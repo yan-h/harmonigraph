@@ -226,8 +226,6 @@ pub struct Shared {
     pub before_transfer: TestPause,
     #[cfg(test)]
     pub after_offer_take: TestPause,
-    #[cfg(test)]
-    pub before_direct_repair: TestPause,
     main: Mutex<Main>,
     pub updates: Arc<Slots<Update>>,
     pub hub: Option<Arc<HubBridge>>,
@@ -261,8 +259,6 @@ impl Shared {
             before_transfer: TestPause::default(),
             #[cfg(test)]
             after_offer_take: TestPause::default(),
-            #[cfg(test)]
-            before_direct_repair: TestPause::default(),
             main: Mutex::new(Main {
                 value: Update {
                     generation: 0,

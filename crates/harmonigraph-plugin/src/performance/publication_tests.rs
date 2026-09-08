@@ -65,28 +65,45 @@ fn full_primary_publication_does_not_block_three_sources_actual_releases_and_cre
     a.run(36 * 64, vec![], None);
     b.run(36 * 64, vec![], None);
     hub.run(36 * 64, vec![], None);
-    let (actual_loss, actual_route) =
-        capture.publication_loss().expect("actual primary loss descriptor");
-    assert_eq!(actual_route.address, None, "the outage spans recording and disarmed closure");
     writer.drain(&mut capture);
+    // The take fails, and #712's export decision does not change that: what
+    // could not be published here is the pass CLOSURE, not note history.
+    //
+    // The refusal is `Recorder::source_pass_complete` and
+    // `source_epoch_complete` failing the fence on ANY publication error of
+    // their own — NOT, as this comment used to claim, the file being unable to
+    // seal without a `PassComplete`. `Open::ready` never consults the CURRENT
+    // pass's `source_complete`; only `EpochComplete` and a RETAINED pass's
+    // closure can hold a file open. The claim held, the reason did not.
+    //
+    // The note gap on its own no longer refuses — see
+    // `an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with`
+    // in harmonigraph-record.
     assert!(writer.failed());
     let take = harmonigraph_take::Take::read(&path).unwrap();
     let incomplete = take.incomplete.as_ref().unwrap();
     assert_eq!(incomplete.reason, harmonigraph_take::canonical::GapReasonRecord::PublicationFull);
-    assert_eq!(
-        (incomplete.first_publication, incomplete.last_publication),
-        (actual_loss.first, actual_loss.last)
-    );
     assert!(
         incomplete.first_publication > 0
             && incomplete.last_publication >= incomplete.first_publication
     );
-    // Loss spans armed output and the later disarmed closure. The global loss
-    // descriptor has no single pass route: each affected file gets the exact
-    // incomplete range, and the display receives the canonical gap.
-    // The stalled display ring can independently fill during this fanout and
-    // report its own sequence namespace. Compare the file to its primary loss.
-    assert!(writer.display_events().iter().any(|record| matches!(record, CanonicalRecord::Gap(gap) if gap.reason == harmonigraph_take::canonical::GapReasonRecord::PublicationFull)));
+    // The outage spans armed output and the later disarmed closure, so it has
+    // no single pass route and the whole still-owned file is marked. Both
+    // lanes carry their own gap on the cell ordinary history may not take, so
+    // neither depends on a further callback to report it.
+    let displayed = capture.display_events();
+    let gap = displayed
+        .iter()
+        .find_map(|record| match record {
+            CanonicalRecord::Gap(gap)
+                if gap.reason == harmonigraph_take::canonical::GapReasonRecord::PublicationFull =>
+            {
+                Some(gap)
+            }
+            _ => None,
+        })
+        .expect("the display lane reports its own outage");
+    assert!(gap.first > 0 && gap.last >= gap.first);
     drop(writer);
     drop(a);
     drop(b);

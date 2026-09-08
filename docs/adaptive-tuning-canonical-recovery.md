@@ -15,9 +15,11 @@ A delta distinguishes observed direct input from accepted output and retains exa
 The ordinary plugin direct path remains observed input;
 forwarding through nice-plug does not establish host output acceptance.
 
-A baseline contains all 64 possible voices and 16 channel states.
+A baseline contains all 64 possible voices, and nothing about how they came to be sounding.
+It also carried 16 channel states and the time its knowledge began, both for a repair protocol #712 replaced with "clear the gap's held state and re-publish what is sounding";
+neither had a reader anywhere on the consuming side, and the channel block was 2,432 of every 15,816 published bytes.
 Construction and consumption validate the whole frame before changing any source.
-Duplicate addresses/lifetimes, a 65th voice, invalid final entries and malformed channel state refuse the complete frame.
+Duplicate addresses/lifetimes, a 65th voice and invalid final entries refuse the complete frame.
 Stored voice facts include original input/actual onset, host address, current exact pitch/player expression, frozen correction, optional assignment/attack node and release/partial-output status.
 An aggregation producer leaves assignment absent.
 The tracker retains the full baseline metadata independently of its floating-point drawing adapter.
@@ -129,7 +131,10 @@ The `notes()` iterator is an inspection adapter, not a second replay list.
 Parsing validates the ordered stream before offline replay can consume it.
 Standalone direct recording retains its ordinary Note adapter;
 standalone verification and incremental/full offline replay use the canonical consumer.
-An incomplete take is readable for inspection, but the offline render entrypoint refuses to render it.
+An incomplete take renders, with a warning naming the lost publication range printed before anything the command line can complain about (#712).
+Refusal belongs to parsing — version, header, corrupt or invalid line — because those are takes nothing can be drawn from;
+missing note history is a hole in a picture that is otherwise true, and the gap record exists precisely so the roll can draw it.
+The renderer marks its warnings with a `warning:` prefix, which is how the plugin picks one out of the renderer's stderr and puts it on the Video pane's status line beside `rendered <file>`.
 
 Live timing uses continuous presentation seconds across raw sample-clock resets/rate changes and a fresh audio heartbeat independent of historical delivery times.
 Queued pre-reset history therefore keeps its presentation domain while exact clock epochs remain available for original recording routes.

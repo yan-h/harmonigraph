@@ -13,7 +13,7 @@ use super::{
 use crate::configuration::Owner;
 use harmonigraph_core::canonical::{ClockId, EventTiming};
 use harmonigraph_core::confirmed::PitchProvenance;
-use harmonigraph_record::Recorder;
+use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::performance as api;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -65,8 +65,12 @@ struct Row {
     coverage: Option<Coverage>,
     member: bool,
     participating: bool,
-    repair: bool,
-    baseline_id: u64,
+    /// Which lane still owes this row a snapshot, and the last identity each
+    /// lane accepted. Per lane throughout: a lane's own overflow is what puts
+    /// it in debt, its own free cells are what let it pay, and its own
+    /// consumer is what deduplicates the identity it is paid with.
+    repair: publication::Lanes<bool>,
+    baseline_id: publication::Lanes<u64>,
     detach: Option<u64>,
     last_ack: Option<(u64, i64)>,
     /// Copied input records this row has received and not yet sequenced. The
@@ -101,8 +105,8 @@ impl Default for Row {
             coverage: None,
             member: false,
             participating: true,
-            repair: false,
-            baseline_id: 0,
+            repair: publication::Lanes::default(),
+            baseline_id: publication::Lanes::default(),
             detach: None,
             last_ack: None,
             inputs: Queue::detached(),
@@ -298,7 +302,8 @@ impl Hub {
                 row.applied as i64,
                 row.output.len() as i64,
                 row.inputs.len() as i64,
-                i64::from(row.repair),
+                // `repair_lanes`: bit 0 is the take lane, bit 1 the display's.
+                i64::from(row.repair.take) | i64::from(row.repair.display) << 1,
                 row.state.count() as i64,
                 row.acknowledged_membership as i64,
                 row.input_membership as i64,
@@ -787,7 +792,7 @@ impl Hub {
                             }
                             // The row joins holding nothing, and a take needs
                             // to see that it exists before its first note.
-                            row.repair = true;
+                            row.repair = publication::Lanes::both(true);
                         }
                         // A request repeated after a moved join floor carries
                         // the Tune's fresh coverage, so it is the same message
@@ -919,14 +924,14 @@ impl Hub {
                 if delta.sequence != row.received + 1 {
                     shared.faults.fetch_or(super::source::STORAGE_FAULT, Ordering::AcqRel);
                     row.state.complete = false;
-                    row.repair = true;
+                    row.repair = publication::Lanes::both(true);
                     break;
                 }
                 if delta.mapped {
                     if row.received_actual.is_some_and(|actual| delta.actual < actual) {
                         row.actual_order = false;
                         row.state.complete = false;
-                        row.repair = true;
+                        row.repair = publication::Lanes::both(true);
                         shared.faults.fetch_or(super::source::CLOCK_FAULT, Ordering::AcqRel);
                     }
                     row.received_actual = Some(delta.actual);
@@ -1119,10 +1124,17 @@ impl Hub {
                 through = through.min(coverage.through);
             }
         }
-        if recorder.take_resync_request() {
-            owner.direct.recovery = true;
+        // One lost report clears that lane's whole held set, so every source
+        // the Hub knows about owes a fresh snapshot on THAT lane — not just the
+        // row whose report did not fit, and not the lane that lost nothing.
+        let outage = recorder.take_publication_outage();
+        for lane in publication::Lane::ALL {
+            if !outage[lane] {
+                continue;
+            }
+            owner.direct.recovery[lane] = true;
             for row in self.rows.iter_mut().filter(|r| r.lease.is_some()) {
-                row.repair = true;
+                row.repair[lane] = true;
             }
         }
         let clock = self.clock_id();
@@ -1147,7 +1159,7 @@ impl Hub {
                     recorder.fail_configuration();
                 }
                 self.clock_loss_pending = true;
-                row.repair = true;
+                row.repair = publication::Lanes::both(true);
                 row.applied = value.sequence;
                 Self::confirm(row, &mut owner.confirmed);
                 let accepted = row.state.voice(value.lifetime).copied();
@@ -1183,9 +1195,11 @@ impl Hub {
                         recorder.fail_configuration();
                         Default::default()
                     });
-                if recorder.publish_note(delta, observation, route).is_err() {
-                    owner.direct.recovery = true;
-                } else {
+                let published = recorder.publish_note(delta, route);
+                for lane in publication::Lane::ALL {
+                    owner.direct.recovery[lane] |= published[lane].is_err();
+                }
+                if published.take.is_ok() && published.display.is_ok() {
                     self.trace.published(delta);
                 }
                 owner.direct.published();
@@ -1194,7 +1208,7 @@ impl Hub {
                 let value = self.rows[index].output.pop().unwrap();
                 if !Self::valid_outcome(&mut self.rows[index], value) {
                     self.rows[index].state.complete = false;
-                    self.rows[index].repair = true;
+                    self.rows[index].repair = publication::Lanes::both(true);
                     self.rows[index].applied = value.sequence;
                     recorder.fail_configuration();
                     recorder.publication_lost(observation, Default::default());
@@ -1263,9 +1277,13 @@ impl Hub {
                         recorder.fail_configuration();
                         Default::default()
                     });
-                    if recorder.publish_note(delta, observation, route).is_err() {
-                        row.repair = true;
-                    } else {
+                    let published = recorder.publish_note(delta, route);
+                    for lane in publication::Lane::ALL {
+                        row.repair[lane] |= published[lane].is_err();
+                    }
+                    // The trace counts a delta that reached everything, which
+                    // is a diagnostic and not either lane's decision.
+                    if published.take.is_ok() && published.display.is_ok() {
                         self.trace.published(delta);
                     }
                 }
@@ -1312,12 +1330,12 @@ impl Hub {
             recorder.fail_configuration();
             recorder.publication_lost(observation, Default::default());
             self.clock_loss_pending = false;
-            owner.direct.recovery = true;
+            owner.direct.recovery = publication::Lanes::both(true);
             for row in self.rows.iter_mut().filter(|row| row.lease.is_some()) {
-                row.repair = true;
+                row.repair = publication::Lanes::both(true);
             }
         }
-        self.publish_snapshots(owner, recorder, observation, completed);
+        self.publish_snapshots(owner, recorder, completed);
         // Source journals may release only through this actual audio-owned
         // retention cut. GUI/file progress and baseline ack are absent here.
         self.acknowledge(completed);
@@ -1328,8 +1346,6 @@ impl Hub {
         }
         // DIRECT repair is shared with the existing rich owner, after all of its
         // available earlier history has been merged and originally routed.
-        #[cfg(test)]
-        self.shared.before_direct_repair.reach();
         if owner.direct.pending().is_none() {
             owner.publish_direct_repair(recorder, observation);
         }
@@ -1388,13 +1404,7 @@ impl Hub {
     /// what the Hub itself has applied, not from anything the Tune sends. The
     /// Tune-to-Hub snapshot this replaced existed to resynchronize `row.state`
     /// after a lost delta, and a lost delta is now a latched terminal fault.
-    fn publish_snapshots(
-        &mut self,
-        owner: &mut Owner,
-        recorder: &mut Recorder,
-        observation: f64,
-        through: i64,
-    ) {
+    fn publish_snapshots(&mut self, owner: &mut Owner, recorder: &mut Recorder, through: i64) {
         let clock = self.clock_id();
         let time_offset = self.presentation(0);
         if self.offer.is_none() {
@@ -1405,35 +1415,36 @@ impl Hub {
             let Some(lease) = row.lease else {
                 continue;
             };
-            if self.clock_loss_pending
-                || !row.repair
-                || row.output.len() != 0
-                || recorder.publication_free() < 2
-            {
+            if self.clock_loss_pending || !row.repair.any() || row.output.len() != 0 {
                 continue;
             }
-            let Some(id) = row.baseline_id.checked_add(1) else {
-                continue;
-            };
             let sample = through.saturating_sub(1);
             let time = sample as f64 / self.rate + time_offset;
-            let start = row.coverage.map_or(sample, |c| c.start) as f64 / self.rate + time_offset;
-            let Some(frame) = row.state.baseline(
-                lease.source,
-                id,
-                row.applied,
-                time,
-                start.min(time),
-                row.participating,
-            ) else {
-                continue;
-            };
             let timing =
                 EventTiming { clock, input: sample, planned: None, sample, sample_rate: self.rate };
             let route = owner.recording_route(timing, time).unwrap_or_default();
-            if recorder.publish_baseline(index + 1, &frame, observation, route).is_ok() {
-                row.baseline_id = id;
-                row.repair = false;
+            // One lane at a time, on its own free cells and its own next
+            // identity. A display ring nobody is draining must not hold this
+            // frame back from a healthy take, and the lane that accepts a
+            // frame must advance past it even when the other lane refuses:
+            // the refused retry would otherwise arrive at the taker as a
+            // duplicate id, which is dropped without a word.
+            for lane in publication::Lane::ALL {
+                if !row.repair[lane] || recorder.publication_free()[lane] < 2 {
+                    continue;
+                }
+                let Some(id) = row.baseline_id[lane].checked_add(1) else {
+                    continue;
+                };
+                let Some(frame) =
+                    row.state.baseline(lease.source, id, row.applied, time, row.participating)
+                else {
+                    continue;
+                };
+                if recorder.publish_baseline(lane, &frame, route).is_ok() {
+                    row.baseline_id[lane] = id;
+                    row.repair[lane] = false;
+                }
             }
         }
     }
@@ -1506,7 +1517,7 @@ impl Hub {
                         .iter()
                         .map(|row| row.inputs.len() + row.output.len())
                         .sum::<usize>(),
-                self.rows.iter().filter(|row| row.repair).count(),
+                self.rows.iter().filter(|row| row.repair.any()).count(),
                 self.rows.iter().filter(|row| row.seal.is_some()).count(),
             ],
             self.retired_publication

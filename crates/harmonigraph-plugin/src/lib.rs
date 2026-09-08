@@ -586,7 +586,6 @@ impl Plugin for Harmonigraph {
         self.take.publish_clock(self.presentation_seconds);
         let _ = self.take.publish_note(
             CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
-            self.presentation_seconds,
             Default::default(),
         );
     }
@@ -639,11 +638,7 @@ impl Plugin for Harmonigraph {
                 // with a session owner observes and routes its own MIDI through
                 // `Owner::observe` and publishes it from the Hub's merge, so
                 // there is no owner here to take a route or a timing from.
-                let _ = self.take.publish_note(
-                    delta,
-                    ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
-                    Default::default(),
-                );
+                let _ = self.take.publish_note(delta, Default::default());
                 if let Some(origin) = take_origin {
                     self.take.note(
                         take_time(origin, timing, self.sample_rate),
@@ -1495,10 +1490,9 @@ mod tests {
             .take
             .publish_note(
                 CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                11.0,
                 Default::default(),
             )
-            .unwrap();
+            .expect_both();
         plugin.reset();
         assert_eq!(plugin.samples_processed, 0);
         plugin.sample_rate = 96_000.0;
@@ -1507,10 +1501,9 @@ mod tests {
             .take
             .publish_note(
                 CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into(),
-                12.0,
                 Default::default(),
             )
-            .unwrap();
+            .expect_both();
         plugin.take.publish_clock(12.0);
         let deadline = Instant::now() + ANALYSIS_DEADLINE;
         while shared.ui.tracker.roll().notes().count() < 2 && Instant::now() < deadline {

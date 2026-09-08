@@ -407,7 +407,6 @@ mod tests {
             self.notes
                 .note(
                     CoreNoteEvent { source: SourceId::DIRECT, time, channel: 0, note, kind }.into(),
-                    time,
                     Default::default(),
                 )
                 .expect("the ring is sized for this");

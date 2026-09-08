@@ -1,7 +1,13 @@
 //! Single-producer canonical publication. Musical retention acknowledgement is
 //! the caller's audio-owned responsibility and never waits for these consumers.
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+//!
+//! Loss is reported, never repaired. A publication that does not fit becomes a
+//! [`PublicationGap`]; the consumer clears the held state that gap covers and
+//! the producer re-publishes a snapshot of what is sounding NOW. Nothing here
+//! reconstructs the attacks, releases or bend trajectories that went missing
+//! (#712), so there is no acknowledgement, generation or resync protocol
+//! between the two ends — one FIFO of items and one FIFO of snapshot frames.
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::canonical::{
@@ -11,13 +17,94 @@ use harmonigraph_core::canonical::{
 use crate::configuration::RecordAddress;
 
 pub const PUBLICATION_RING: usize = 4096;
-pub const SOURCE_ROWS: usize = 17;
-pub const BASELINES_PER_SOURCE: usize = 2;
-const BASELINES: usize = SOURCE_ROWS * BASELINES_PER_SOURCE;
-const EMPTY: u8 = 0;
-const WRITING: u8 = 1;
-const READY: u8 = 2;
-const READING: u8 = 3;
+/// A snapshot frame is two orders of magnitude larger than an item, so it
+/// rides its own FIFO rather than widening every ring cell to hold one. Depth
+/// covers a frame for each of the 17 sources in one pass, plus the one a
+/// drainer that declined an item is still holding.
+pub const SNAPSHOT_SLOTS: usize = 20;
+/// Ordinary history may never take the last cell. That reservation is what
+/// makes an outage observable when the host never calls the audio thread
+/// again: the gap describing it is pushed at the moment of the loss, rather
+/// than waiting for a later publication to carry it out.
+const GAP_RESERVE: usize = 1;
+
+/// Which of the two publication lanes a call is about.
+///
+/// The take's file and the editor's display each own a [`channel`] of their
+/// own, so one can fill without the other noticing. Snapshots are therefore
+/// published one lane at a time: each lane's consumer deduplicates on
+/// [`SourceBaseline::id`], so each lane needs an identity that advances when
+/// IT accepted a frame rather than when both did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lane {
+    Take,
+    Display,
+}
+
+impl Lane {
+    pub const ALL: [Lane; 2] = [Lane::Take, Lane::Display];
+}
+
+/// One value per lane, and the only shape anything in this path hands back.
+///
+/// The rule it exists to enforce: **no capacity, outcome or cursor on the
+/// publication path is a value derived from both lanes.** A `usize` of free
+/// cells or a `Result` for "the publication" is what let a full display ring
+/// gate a snapshot the take was waiting for, and what let one lane's refusal
+/// hold back the other lane's baseline identity (#712). Neither is
+/// expressible here without writing the fold by hand, which is what makes the
+/// separation structural instead of a habit each new caller has to keep.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Lanes<T> {
+    pub take: T,
+    pub display: T,
+}
+
+impl<T: Copy> Lanes<T> {
+    pub fn both(value: T) -> Self {
+        Self { take: value, display: value }
+    }
+}
+
+impl Lanes<bool> {
+    /// "Is either lane armed at all" — for a diagnostic count, or an early
+    /// return that still decides per lane afterwards. Deliberately the only
+    /// fold on this type, and named so a reviewer sees it happening.
+    pub fn any(self) -> bool {
+        self.take || self.display
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Lanes<Result<(), PublishError>> {
+    /// Both lanes accepted. Test-only, and it yields nothing: a fixture that
+    /// wants one `unwrap` over a publication should still be checking both
+    /// halves, but nothing may DECIDE from a folded pair.
+    #[track_caller]
+    pub fn expect_both(self) {
+        self.take.expect("the take lane accepted");
+        self.display.expect("the display lane accepted");
+    }
+}
+
+impl<T> std::ops::Index<Lane> for Lanes<T> {
+    type Output = T;
+    fn index(&self, lane: Lane) -> &T {
+        match lane {
+            Lane::Take => &self.take,
+            Lane::Display => &self.display,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<Lane> for Lanes<T> {
+    fn index_mut(&mut self, lane: Lane) -> &mut T {
+        match lane {
+            Lane::Take => &mut self.take,
+            Lane::Display => &mut self.display,
+        }
+    }
+}
 
 /// Resolved on audio from the ORIGINAL actual-output recording segment. None
 /// is explicit disarmed provenance; a drainer never consults today's arm state.
@@ -28,145 +115,68 @@ pub struct Route {
     pub time_offset: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Handle {
-    slot: u8,
-    generation: u64,
-}
-
-struct BaselineSlot {
-    state: AtomicU8,
-    generation: AtomicU64,
-    value: UnsafeCell<Option<SourceBaseline>>,
-}
-
-// Only the single publisher writes (after Empty -> Writing); only the single
-// consumer reads (after Ready -> Reading). Release/Acquire transfers ownership.
-// A handle's generation is checked while Reading, before ordinary payload access.
-unsafe impl Sync for BaselineSlot {}
-
-impl Default for BaselineSlot {
-    fn default() -> Self {
-        Self {
-            state: AtomicU8::new(EMPTY),
-            generation: AtomicU64::new(0),
-            value: UnsafeCell::new(None),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 enum Value {
     Note(NoteDelta),
-    Baseline(Handle),
+    /// The frame itself is the next entry of the snapshot FIFO. The producer
+    /// writes the frame BEFORE this marker and only once both FIFOs have room,
+    /// so a marker without its frame is unreachable, and a consumer that has
+    /// acquired the marker has by transitivity acquired the frame's own
+    /// release too. That is the whole of the ordering contract between the
+    /// two FIFOs — no handle, generation or slot state.
+    Snapshot,
     Gap(PublicationGap),
     PassComplete(RecordAddress),
     EpochComplete(u64),
 }
 
+/// Neither the publisher's serial nor the audio time the item was heard at is
+/// carried here.
+///
+/// The serial names an outage's extent inside the [`PublicationGap`] it
+/// produces and nothing else reads it, since nothing on this lane is ever
+/// republished or acknowledged. The observation time was the writer thread's,
+/// for a fanout that forwarded the display's copy along with the take's; the
+/// display has its own lane now, every drainer binds the value to `_`, and a
+/// payload that needs a time already carries its own.
 #[derive(Clone, Copy, Debug)]
 struct Item {
-    serial: u64,
-    observation_time: f64,
     route: Route,
     value: Value,
 }
 
-/// All payload words are atomic, so a concurrent read is memory-safe even if
-/// the single bounded version check fails. A consumer retries on its NEXT poll.
-#[derive(Default)]
-struct Loss {
-    version: AtomicU64,
-    first: AtomicU64,
-    last: AtomicU64,
-    time: AtomicU64,
-    through: AtomicU64,
-    epoch: AtomicU64,
-    pass: AtomicU64,
-    offset: AtomicU64,
-}
-
-impl Loss {
-    fn write(&self, gap: PublicationGap, route: Route) {
-        let version = self.version.load(Ordering::Relaxed);
-        // Counter exhaustion is terminal and leaves the previous durable loss.
-        let Some(next) = version.checked_add(2) else { return };
-        self.version.fetch_add(1, Ordering::AcqRel);
-        // A reader observing any new payload word synchronizes this fence
-        // with its Acquire fence, so its final version cannot precede the odd
-        // write. Atomic payload alone does not establish that ordering.
-        std::sync::atomic::fence(Ordering::Release);
-        self.first.store(gap.first, Ordering::Relaxed);
-        self.last.store(gap.last, Ordering::Relaxed);
-        self.time.store(gap.time.to_bits(), Ordering::Relaxed);
-        self.through.store(gap.through.to_bits(), Ordering::Relaxed);
-        self.epoch.store(route.address.map_or(0, |a| a.epoch), Ordering::Relaxed);
-        self.pass.store(route.address.map_or(0, |a| u64::from(a.pass)), Ordering::Relaxed);
-        self.offset.store(route.time_offset.to_bits(), Ordering::Relaxed);
-        self.version.store(next, Ordering::Release);
-    }
-
-    fn read(&self) -> Option<(PublicationGap, Route)> {
-        let before = self.version.load(Ordering::Acquire);
-        if before == 0 || before & 1 != 0 {
-            return None;
-        }
-        let first = self.first.load(Ordering::Relaxed);
-        let last = self.last.load(Ordering::Relaxed);
-        let time = f64::from_bits(self.time.load(Ordering::Relaxed));
-        let through = f64::from_bits(self.through.load(Ordering::Relaxed));
-        let epoch = self.epoch.load(Ordering::Relaxed);
-        let pass = self.pass.load(Ordering::Relaxed) as u32;
-        let offset = f64::from_bits(self.offset.load(Ordering::Relaxed));
-        std::sync::atomic::fence(Ordering::Acquire);
-        (before == self.version.load(Ordering::Acquire)).then_some((
-            PublicationGap {
-                source: None,
-                time,
-                through,
-                first,
-                last,
-                reason: GapReason::PublicationFull,
-            },
-            Route {
-                address: (epoch != 0).then_some(RecordAddress { epoch, pass }),
-                time_offset: offset,
-            },
-        ))
-    }
-}
-
-struct Shared {
-    slots: Box<[BaselineSlot]>,
-    loss: Loss,
-    clock: AtomicU64,
-    // Reporting-only hint: no state, cut, epoch, termination or musical credit
-    // is selected by a display/worker. The serialized audio owner supplies facts.
-    resync_requested: AtomicBool,
-}
-
 pub struct Publisher {
     ring: rtrb::Producer<Item>,
-    shared: Arc<Shared>,
+    snapshots: rtrb::Producer<SourceBaseline>,
+    clock: Arc<AtomicU64>,
     serial: u64,
-    pending_gap: Option<(PublicationGap, Route)>,
+    /// An outage whose gap could not reach the ring even on the reserved cell,
+    /// because an earlier gap still occupies it. It keeps growing until the
+    /// drainer makes room; the earlier gap has already told the consumer to
+    /// clear, so nothing downstream is waiting on this one.
+    outage: Option<(PublicationGap, Route)>,
 }
 
 pub struct Consumer {
     ring: rtrb::Consumer<Item>,
-    shared: Arc<Shared>,
-    seen: u64,
+    snapshots: rtrb::Consumer<SourceBaseline>,
+    clock: Arc<AtomicU64>,
     pending: Option<Item>,
+    /// A frame popped for a drainer that then declined its item. Popping is
+    /// what frees the producer's cell, so it cannot be given back.
+    held: Option<SourceBaseline>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishError {
-    /// An actual canonical publication attempt failed. The independent loss
-    /// descriptor remains readable even if audio never calls again.
+    /// An actual canonical publication attempt failed. The gap describing it
+    /// is queued by the same call, so the loss stays observable even if audio
+    /// never calls again.
     Lost,
-    /// Both payloads remain owned by the drainer. Caller retains its complete
-    /// baseline; this alone creates no fictional history loss.
-    BaselineBusy,
+    /// A snapshot found no room. Nothing was written and no serial was spent,
+    /// so this is not history loss: the caller still holds a complete frame
+    /// and republishes it once the drainer has caught up.
+    Busy,
     Invalid,
 }
 
@@ -178,40 +188,34 @@ pub enum Delivery<'a> {
 
 pub fn channel() -> (Publisher, Consumer) {
     let (producer, consumer) = rtrb::RingBuffer::new(PUBLICATION_RING);
-    let shared = Arc::new(Shared {
-        slots: (0..BASELINES).map(|_| BaselineSlot::default()).collect(),
-        loss: Loss::default(),
-        clock: AtomicU64::new(f64::NAN.to_bits()),
-        resync_requested: AtomicBool::new(false),
-    });
+    let (frames, staged) = rtrb::RingBuffer::new(SNAPSHOT_SLOTS);
+    let clock = Arc::new(AtomicU64::new(f64::NAN.to_bits()));
     (
-        Publisher { ring: producer, shared: shared.clone(), serial: 0, pending_gap: None },
-        Consumer { ring: consumer, shared, seen: 0, pending: None },
+        Publisher {
+            ring: producer,
+            snapshots: frames,
+            clock: clock.clone(),
+            serial: 0,
+            outage: None,
+        },
+        Consumer { ring: consumer, snapshots: staged, clock, pending: None, held: None },
     )
 }
 
 impl Publisher {
-    pub fn take_resync_request(&self) -> bool {
-        self.shared.resync_requested.swap(false, Ordering::AcqRel)
-    }
-    #[cfg(all(test, feature = "test-support"))]
-    pub(crate) fn bank_observer(&self) -> impl Fn() -> bool + use<> {
-        let shared = self.shared.clone();
-        move || shared.slots.iter().all(|slot| slot.state.load(Ordering::Acquire) == EMPTY)
-    }
-
     /// A fresh hub clock observation, independent of delayed history and cuts.
     pub fn observe_clock(&self, time: f64) {
         if time.is_finite() {
-            self.shared.clock.store(time.to_bits(), Ordering::Release);
+            self.clock.store(time.to_bits(), Ordering::Release);
         }
     }
+    /// Cells ordinary history may still take — the reserve is not one of them.
     pub fn free(&self) -> usize {
-        self.ring.slots()
+        self.ring.slots().saturating_sub(GAP_RESERVE)
     }
 
-    /// Explicit downstream fanout loss when that consumer cannot retain a
-    /// complete payload. This is distinct from caller-owned baseline backpressure.
+    /// Explicit loss the caller detected before it reached this lane at all —
+    /// an unroutable record, or a merge that lost its clock provenance.
     pub fn discarded(&mut self, time: f64, route: Route) {
         if let Some(serial) = self.serial.checked_add(1) {
             self.serial = serial;
@@ -219,22 +223,8 @@ impl Publisher {
         }
     }
 
-    fn flush_gap(&mut self, observation_time: f64) -> bool {
-        if let Some((gap, route)) = self.pending_gap {
-            if self
-                .ring
-                .push(Item { serial: gap.last, observation_time, route, value: Value::Gap(gap) })
-                .is_err()
-            {
-                return false;
-            }
-            self.pending_gap = None;
-        }
-        true
-    }
-
     fn lost(&mut self, time: f64, route: Route) -> PublishError {
-        let gap = match self.pending_gap {
+        let gap = match self.outage {
             Some((old, _)) => {
                 PublicationGap { last: self.serial, through: old.through.max(time), ..old }
             }
@@ -249,194 +239,129 @@ impl Publisher {
         };
         // If an outage crosses pass boundaries the writer marks the entire
         // still-owned recording incomplete, rather than guessing one address.
-        let route = match self.pending_gap {
+        let route = match self.outage {
             Some((_, old)) if old != route => Route::default(),
             _ => route,
         };
-        self.pending_gap = Some((gap, route));
-        self.shared.loss.write(gap, route);
+        self.outage = Some((gap, route));
+        self.flush_outage();
         PublishError::Lost
     }
 
-    fn push(
-        &mut self,
-        value: Value,
-        time: f64,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    /// Put the outage on the ring the moment it happens. The reserved cell is
+    /// free unless an earlier gap already occupies it, and that gap has told
+    /// the consumer everything this one would.
+    fn flush_outage(&mut self) {
+        let Some((gap, route)) = self.outage else { return };
+        if self.ring.push(Item { route, value: Value::Gap(gap) }).is_ok() {
+            self.outage = None;
+        }
+    }
+
+    fn push(&mut self, value: Value, time: f64, route: Route) -> Result<(), PublishError> {
         let Some(serial) = self.serial.checked_add(1) else { return Err(PublishError::Invalid) };
-        if !time.is_finite() || !observation_time.is_finite() || !route.time_offset.is_finite() {
+        if !time.is_finite() || !route.time_offset.is_finite() {
             return Err(PublishError::Invalid);
         }
-        let flushed = self.flush_gap(observation_time);
-        self.serial = serial;
-        if !flushed || self.ring.push(Item { serial, observation_time, route, value }).is_err() {
+        if self.ring.slots() < self.needed() {
+            self.serial = serial;
             return Err(self.lost(time, route));
         }
+        self.flush_outage();
+        self.serial = serial;
+        let _ = self.ring.push(Item { route, value });
         Ok(())
     }
 
-    pub fn note(
-        &mut self,
-        note: NoteDelta,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    /// Cells one ordinary publication costs: its own, the reserve it may not
+    /// spend, and one more for an outage queued ahead of it.
+    fn needed(&self) -> usize {
+        1 + GAP_RESERVE + usize::from(self.outage.is_some())
+    }
+
+    pub fn note(&mut self, note: NoteDelta, route: Route) -> Result<(), PublishError> {
         note.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Note(note), note.event.time, observation_time, route)
+        self.push(Value::Note(note), note.event.time, route)
     }
 
-    pub fn gap(
-        &mut self,
-        gap: PublicationGap,
-        observation_time: f64,
-        route: Route,
-    ) -> Result<(), PublishError> {
+    pub fn gap(&mut self, gap: PublicationGap, route: Route) -> Result<(), PublishError> {
         gap.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Gap(gap), gap.time, observation_time, route)
+        self.push(Value::Gap(gap), gap.time, route)
     }
 
+    /// What the source is sounding NOW. Published whole or not at all: both
+    /// FIFOs are checked before either is written, so a marker and its frame
+    /// cannot come apart and a refused snapshot costs no serial.
     pub fn baseline(
         &mut self,
-        row: usize,
         baseline: &SourceBaseline,
-        observation_time: f64,
         route: Route,
     ) -> Result<(), PublishError> {
         baseline.validate().map_err(|_| PublishError::Invalid)?;
-        if row >= SOURCE_ROWS {
-            return Err(PublishError::Invalid);
+        if self.snapshots.slots() == 0 || self.ring.slots() < self.needed() {
+            return Err(PublishError::Busy);
         }
-        for index in row * BASELINES_PER_SOURCE..(row + 1) * BASELINES_PER_SOURCE {
-            let slot = &self.shared.slots[index];
-            if slot
-                .state
-                .compare_exchange(EMPTY, WRITING, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                continue;
-            }
-            let Some(generation) = slot.generation.load(Ordering::Relaxed).checked_add(1) else {
-                slot.state.store(EMPTY, Ordering::Release);
-                return Err(PublishError::Invalid);
-            };
-            // SAFETY: successful acquisition owns the entire empty slot.
-            unsafe {
-                *slot.value.get() = Some(*baseline);
-            }
-            slot.generation.store(generation, Ordering::Relaxed);
-            slot.state.store(READY, Ordering::Release);
-            let handle = Handle { slot: index as u8, generation };
-            let result = self.push(Value::Baseline(handle), baseline.time, observation_time, route);
-            if result.is_err() {
-                // No handle was published, so no reader can own this payload.
-                let slot = &self.shared.slots[index];
-                unsafe {
-                    *slot.value.get() = None;
-                }
-                slot.state.store(EMPTY, Ordering::Release);
-            }
-            return result;
-        }
-        Err(PublishError::BaselineBusy)
+        let _ = self.snapshots.push(*baseline);
+        let result = self.push(Value::Snapshot, baseline.time, route);
+        debug_assert!(result.is_ok(), "capacity for both halves was checked together");
+        result
     }
 
+    /// A closure carries no time of its own, so the caller's observation time
+    /// is what stamps the gap if the lane is full — the only use either of
+    /// these has for it.
     pub fn pass_complete(
         &mut self,
         address: RecordAddress,
-        observation_time: f64,
+        observed: f64,
     ) -> Result<(), PublishError> {
-        self.push(
-            Value::PassComplete(address),
-            observation_time,
-            observation_time,
-            Route::default(),
-        )
+        self.push(Value::PassComplete(address), observed, Route::default())
     }
 
-    pub fn epoch_complete(
-        &mut self,
-        epoch: u64,
-        observation_time: f64,
-    ) -> Result<(), PublishError> {
-        self.push(Value::EpochComplete(epoch), observation_time, observation_time, Route::default())
+    pub fn epoch_complete(&mut self, epoch: u64, observed: f64) -> Result<(), PublishError> {
+        self.push(Value::EpochComplete(epoch), observed, Route::default())
     }
 }
 
 impl Consumer {
-    #[cfg(feature = "test-support")]
-    pub(crate) fn test_loss(&self) -> Option<(PublicationGap, Route)> {
-        self.shared.loss.read()
-    }
-    pub(crate) fn request_resync(&self) {
-        self.shared.resync_requested.store(true, Ordering::Release);
-    }
-    /// No retained payload or unconsumed loss snapshot remains. An unstable
-    /// snapshot is pending work, never evidence that failure may be finalized.
+    /// No retained payload remains. Every outage this lane produced is already
+    /// an item by the time its `Err` was returned, so an empty lane is a fully
+    /// delivered one.
     pub(crate) fn settled(&self) -> bool {
-        self.pending.is_none()
-            && self.ring.is_empty()
-            && (self.shared.loss.version.load(Ordering::Acquire) == 0
-                || self.shared.loss.read().is_some_and(|(gap, _)| gap.last <= self.seen))
+        self.pending.is_none() && self.held.is_none() && self.ring.is_empty()
     }
 
     pub fn clock(&self) -> Option<f64> {
-        let time = f64::from_bits(self.shared.clock.load(Ordering::Acquire));
+        let time = f64::from_bits(self.clock.load(Ordering::Acquire));
         time.is_finite().then_some(time)
     }
     /// One bounded drain of the actual selected ring capacity. The borrowed
-    /// baseline cannot escape the call; deferred consumers must make an owned
+    /// snapshot cannot escape the call; deferred consumers must make an owned
     /// copy BEFORE this returns and permits reuse.
-    pub fn drain(&mut self, mut consume: impl FnMut(Delivery<'_>, f64, Route) -> bool) -> usize {
+    pub fn drain(&mut self, mut consume: impl FnMut(Delivery<'_>, Route) -> bool) -> usize {
         let mut count = 0;
         for _ in 0..PUBLICATION_RING {
             let Some(item) = self.pending.take().or_else(|| self.ring.pop().ok()) else { break };
-            if item.serial <= self.seen {
-                continue;
-            }
             let consumed = match item.value {
-                Value::Note(note) => consume(
-                    Delivery::Event(CanonicalEvent::Note(note)),
-                    item.observation_time,
-                    item.route,
-                ),
-                Value::Gap(gap) => consume(
-                    Delivery::Event(CanonicalEvent::Gap(gap)),
-                    item.observation_time,
-                    item.route,
-                ),
+                Value::Note(note) => {
+                    consume(Delivery::Event(CanonicalEvent::Note(note)), item.route)
+                }
+                Value::Gap(gap) => consume(Delivery::Event(CanonicalEvent::Gap(gap)), item.route),
                 Value::PassComplete(address) => {
-                    consume(Delivery::PassComplete(address), item.observation_time, item.route)
+                    consume(Delivery::PassComplete(address), item.route)
                 }
-                Value::EpochComplete(epoch) => {
-                    consume(Delivery::EpochComplete(epoch), item.observation_time, item.route)
-                }
-                Value::Baseline(handle) => {
-                    let slot = &self.shared.slots[usize::from(handle.slot)];
-                    assert_eq!(
-                        slot.state.compare_exchange(
-                            READY,
-                            READING,
-                            Ordering::Acquire,
-                            Ordering::Relaxed
-                        ),
-                        Ok(READY)
-                    );
-                    assert_eq!(slot.generation.load(Ordering::Relaxed), handle.generation);
-                    // SAFETY: exclusive Reading ownership lasts through fanout.
-                    let baseline = unsafe { (&*slot.value.get()).as_ref().unwrap() };
-                    let consumed = consume(
-                        Delivery::Event(CanonicalEvent::Baseline(baseline)),
-                        item.observation_time,
-                        item.route,
-                    );
-                    if consumed {
-                        unsafe {
-                            *slot.value.get() = None;
-                        }
+                Value::EpochComplete(epoch) => consume(Delivery::EpochComplete(epoch), item.route),
+                Value::Snapshot => {
+                    let Some(frame) = self.held.take().or_else(|| self.snapshots.pop().ok()) else {
+                        debug_assert!(false, "a snapshot marker always follows its frame");
+                        count += 1;
+                        continue;
+                    };
+                    let consumed =
+                        consume(Delivery::Event(CanonicalEvent::Baseline(&frame)), item.route);
+                    if !consumed {
+                        self.held = Some(frame);
                     }
-                    slot.state.store(if consumed { EMPTY } else { READY }, Ordering::Release);
                     consumed
                 }
             };
@@ -444,19 +369,7 @@ impl Consumer {
                 self.pending = Some(item);
                 break;
             }
-            self.seen = item.serial;
             count += 1;
-        }
-        if let Some((gap, route)) = self.shared.loss.read() {
-            // A loss cannot overtake successful history still in the ring.
-            // This is also what makes a no-further-callback outage observable.
-            if gap.last > self.seen
-                && self.seen >= gap.first - 1
-                && consume(Delivery::Event(CanonicalEvent::Gap(gap)), gap.through, route)
-            {
-                self.seen = gap.last;
-                count += 1;
-            }
         }
         count
     }
@@ -464,18 +377,15 @@ impl Consumer {
 
 const _: () = assert!(std::mem::size_of::<Item>() <= 256);
 const _: () = assert!(std::mem::align_of::<Item>() <= 8);
-const _: () = assert!(std::mem::size_of::<BaselineSlot>() <= 16 * 1024);
-const _: () = assert!(std::mem::align_of::<BaselineSlot>() <= 8);
 
 #[cfg(feature = "test-support")]
 pub fn print_test_memory_layout() {
     use std::mem::size_of;
     println!(
-        "LEDGER publication [item,baseline_slot,shared,publisher,consumer] {:?}",
+        "LEDGER publication [item,snapshot,publisher,consumer] {:?}",
         [
             size_of::<Item>(),
-            size_of::<BaselineSlot>(),
-            size_of::<Shared>(),
+            size_of::<SourceBaseline>(),
             size_of::<Publisher>(),
             size_of::<Consumer>()
         ]
@@ -485,207 +395,113 @@ pub fn print_test_memory_layout() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_core::canonical::{ChannelBaseline, VoiceBaseline};
+    use harmonigraph_core::canonical::VoiceBaseline;
     use harmonigraph_core::{NoteEvent, SourceId};
 
-    #[test]
-    fn loss_snapshot_never_accepts_words_from_two_outages() {
-        // Small memory-model equivalent of Loss::{write, read}, with every
-        // independently published payload word represented by first/last.
-        // The production prefix skip is safe only if an accepted range is
-        // wholly old (1,1) or wholly new (3,3), never (1,3).
-        loom::model(|| {
-            use loom::sync::atomic::{fence, AtomicU64, Ordering};
-            let state =
-                loom::sync::Arc::new([AtomicU64::new(2), AtomicU64::new(1), AtomicU64::new(1)]);
-            let writer = state.clone();
-            let thread = loom::thread::spawn(move || {
-                writer[0].fetch_add(1, Ordering::AcqRel);
-                fence(Ordering::Release);
-                // Paired release fence belongs here, exactly as in Loss::write.
-                writer[1].store(3, Ordering::Relaxed);
-                writer[2].store(3, Ordering::Relaxed);
-                writer[0].store(4, Ordering::Release);
-            });
-            let before = state[0].load(Ordering::Acquire);
-            if before & 1 == 0 {
-                let first = state[1].load(Ordering::Relaxed);
-                let last = state[2].load(Ordering::Relaxed);
-                fence(Ordering::Acquire);
-                if before == state[0].load(Ordering::Acquire) {
-                    assert!(
-                        (first == 1 && last == 1) || (first == 3 && last == 3),
-                        "accepted mixed loss range {first}..={last}"
-                    );
-                }
-            }
-            thread.join().unwrap();
-        });
+    fn held(note: u8, onset: f64, pitch: i64) -> VoiceBaseline {
+        VoiceBaseline {
+            note,
+            actual_onset: onset,
+            input_onset: onset,
+            velocity: 0.8,
+            pitch_microcents: pitch,
+            ..Default::default()
+        }
+    }
+
+    fn frame(id: u64, time: f64, voices: &[VoiceBaseline]) -> SourceBaseline {
+        SourceBaseline::new(SourceId::DIRECT, id, time, 0, true, voices).unwrap()
     }
 
     #[test]
-    fn actual_publication_capacity_retains_loss_without_another_audio_callback() {
+    fn a_full_lane_reports_its_outage_without_another_audio_callback() {
         let (mut publisher, mut consumer) = channel();
-        for i in 0..PUBLICATION_RING {
+        for note in [60, 72] {
             publisher
-                .note(
-                    NoteEvent::on(i as f64, SourceId::DIRECT, 0, 60, 0.8).into(),
-                    i as f64,
-                    Route::default(),
-                )
+                .note(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8).into(), Route::default())
                 .unwrap();
         }
-        assert_eq!(publisher.free(), 0);
+        // Bends rather than repeated attacks: one onset per key, so a note the
+        // snapshot restores can be checked against the onset it really had.
+        for i in 2..PUBLICATION_RING - GAP_RESERVE {
+            let mut event = NoteEvent::on(i as f64, SourceId::DIRECT, 0, 72, 0.8);
+            event.kind = harmonigraph_core::NoteEventKind::Tuning { semitones: 0.1 };
+            publisher.note(event.into(), Route::default()).unwrap();
+        }
+        assert_eq!(publisher.free(), 0, "the fixture must actually fill the lane");
         assert_eq!(
-            publisher.note(
-                NoteEvent::off(4096.0, SourceId::DIRECT, 0, 60).into(),
-                4096.0,
-                Route::default()
-            ),
+            publisher
+                .note(NoteEvent::off(9000.0, SourceId::DIRECT, 0, 60).into(), Route::default()),
             Err(PublishError::Lost)
         );
-        let mut notes = 0;
-        let mut gaps = Vec::new();
-        assert_eq!(
-            consumer.drain(|delivery, _, _| {
-                match delivery {
-                    Delivery::Event(CanonicalEvent::Note(_)) => notes += 1,
-                    Delivery::Event(CanonicalEvent::Gap(gap)) => gaps.push(gap),
-                    _ => panic!("unexpected control"),
-                }
-                true
-            }),
-            PUBLICATION_RING + 1
-        );
-        assert_eq!(notes, PUBLICATION_RING);
-        assert_eq!((gaps[0].first, gaps[0].last), (4097, 4097));
-        assert_eq!(consumer.drain(|_, _, _| panic!("duplicate loss")), 0);
+        // Nothing publishes after the loss: whatever the drainer can see now
+        // is all it would ever see if this were the host's last callback.
         let mut tracker = harmonigraph_core::NoteTracker::new();
-        tracker.handle_canonical(CanonicalEvent::Gap(gaps[0])).unwrap();
-        assert!(!tracker.source_current_certain(SourceId::DIRECT));
-        // Resume the actual full queue, including its queued duplicate loss
-        // marker, and transfer a complete recovery through the owned bank.
-        publisher
-            .note(
-                NoteEvent::on(4097.0, SourceId::DIRECT, 0, 72, 0.8).into(),
-                4097.0,
-                Route::default(),
-            )
-            .unwrap();
-        consumer.drain(|event, _, _| {
-            let Delivery::Event(event) = event else { panic!() };
+        let mut held_at_gap = None;
+        let mut gaps = 0;
+        let drained = consumer.drain(|delivery, _| {
+            let Delivery::Event(event) = delivery else { panic!("unexpected control") };
+            if let CanonicalEvent::Gap(_) = event {
+                held_at_gap = Some(tracker.held_count());
+                gaps += 1;
+            }
             tracker.handle_canonical(event).unwrap();
             true
         });
-        assert!(
-            !tracker.source_current_certain(SourceId::DIRECT),
-            "a new On repairs only its own lifetime"
-        );
-        let recovered = SourceBaseline::new(
-            SourceId::DIRECT,
-            1,
-            4098.0,
-            4098.0,
-            0,
-            true,
-            &[VoiceBaseline {
-                note: 72,
-                actual_onset: 4097.0,
-                input_onset: 4097.0,
-                velocity: 0.8,
-                pitch_microcents: 7_200_000_000,
-                ..Default::default()
-            }],
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap();
-        publisher.baseline(0, &recovered, 4098.0, Route::default()).unwrap();
+        assert_eq!(drained, PUBLICATION_RING, "the reserved cell carried the gap");
+        assert_eq!(gaps, 1);
+        assert_eq!(held_at_gap, Some(2), "the fixture must reach the gap holding both keys");
+        assert_eq!(tracker.held_count(), 0, "the gap clears stale held state");
+        assert!(!tracker.source_current_certain(SourceId::DIRECT));
+
+        // The refresh restores what is sounding NOW and nothing else: key 60
+        // was released while the lane was full and does not come back.
         publisher
-            .note(NoteEvent::off(4099.0, SourceId::DIRECT, 0, 72).into(), 4099.0, Route::default())
+            .baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)]), Route::default())
             .unwrap();
-        consumer.drain(|event, _, _| {
-            let Delivery::Event(event) = event else { panic!() };
+        consumer.drain(|delivery, _| {
+            let Delivery::Event(event) = delivery else { panic!("unexpected control") };
             tracker.handle_canonical(event).unwrap();
             true
         });
         assert!(tracker.source_current_certain(SourceId::DIRECT));
-        assert!(
-            !tracker.source_current_certain(SourceId(1)),
-            "one baseline cannot restore another source"
-        );
-        assert_eq!(tracker.held_count(), 0);
-        assert_eq!(
-            tracker.publication_gaps().len(),
-            1,
-            "history loss remains after state recovery"
-        );
-        let note = tracker.roll().notes().next().unwrap();
-        assert_eq!((note.start, note.end), (4097.0, Some(4099.0)));
-        assert!(note.history_complete);
-        assert!(consumer
-            .shared
-            .slots
-            .iter()
-            .all(|slot| slot.state.load(Ordering::Acquire) == EMPTY));
+        assert_eq!(tracker.held_count(), 1);
+        let restored = tracker.roll().notes().find(|n| n.note == 72 && n.end.is_none()).unwrap();
+        assert_eq!(restored.start, 0.0, "the snapshot restores, it does not re-attack");
+        assert!(!restored.history_complete, "the missing history stays visible");
+        assert_eq!(tracker.publication_gaps().len(), 1);
     }
 
     #[test]
-    fn both_complete_payload_slots_stay_owned_until_full_fanout_copy() {
+    fn a_declined_snapshot_stays_owned_and_refuses_the_next_without_losing_history() {
         let (mut publisher, mut consumer) = channel();
-        let voices: Vec<_> = (0..64)
-            .map(|note| VoiceBaseline {
-                note,
-                pitch_microcents: i64::from(note) * 100_000_000,
-                velocity: 0.8,
-                ..Default::default()
-            })
-            .collect();
-        let first = SourceBaseline::new(
-            SourceId::DIRECT,
-            1,
-            1.0,
-            0.0,
-            0,
-            true,
-            &voices,
-            [ChannelBaseline::default(); 16],
-        )
-        .unwrap();
-        let mut second = first;
-        second.id = 2;
-        publisher.baseline(0, &first, 1.0, Route::default()).unwrap();
-        publisher.baseline(0, &second, 1.0, Route::default()).unwrap();
+        let voices: Vec<_> =
+            (0..64).map(|note| held(note, 0.0, i64::from(note) * 100_000_000)).collect();
+        for id in 1..=SNAPSHOT_SLOTS as u64 {
+            publisher.baseline(&frame(id, 1.0, &voices), Route::default()).unwrap();
+        }
         assert_eq!(
-            publisher.baseline(0, &second, 1.0, Route::default()),
-            Err(PublishError::BaselineBusy)
+            publisher.baseline(&frame(99, 1.0, &voices), Route::default()),
+            Err(PublishError::Busy),
+            "a full snapshot FIFO refuses rather than reporting lost history"
         );
-        assert_eq!(consumer.drain(|_, _, _| false), 0, "deferred drainer retains Reading payload");
-        assert_eq!(
-            publisher.baseline(0, &second, 1.0, Route::default()),
-            Err(PublishError::BaselineBusy)
-        );
-        let mut saved = None;
-        consumer.drain(|delivery, _, _| {
-            if saved.is_some() {
-                return false;
-            }
+        assert_eq!(consumer.drain(|_, _| false), 0, "a declining drainer retains the frame");
+        let mut seen = Vec::new();
+        consumer.drain(|delivery, _| {
             let Delivery::Event(CanonicalEvent::Baseline(frame)) = delivery else { panic!() };
-            saved = Some(harmonigraph_take::canonical::BaselineRecord::from(frame));
+            seen.push(frame.id);
             true
         });
-        second.id = 3;
-        publisher.baseline(0, &second, 2.0, Route::default()).unwrap();
-        assert_eq!(
-            saved.as_ref().unwrap().baseline().unwrap(),
-            first,
-            "deferred writer owns its own entire old payload"
+        assert_eq!(seen, (1..=SNAPSHOT_SLOTS as u64).collect::<Vec<_>>());
+        publisher.baseline(&frame(99, 2.0, &voices), Route::default()).unwrap();
+        eprintln!(
+            "canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} ring_payload={} snapshot_fifo={}",
+            std::mem::size_of::<NoteDelta>(),
+            std::mem::size_of::<Item>(),
+            std::mem::size_of::<VoiceBaseline>(),
+            std::mem::size_of::<SourceBaseline>(),
+            PUBLICATION_RING * std::mem::size_of::<Item>(),
+            SNAPSHOT_SLOTS * std::mem::size_of::<SourceBaseline>()
         );
-        consumer.drain(|_, _, _| true);
-        assert!(consumer
-            .shared
-            .slots
-            .iter()
-            .all(|slot| slot.state.load(Ordering::Acquire) == EMPTY));
-        eprintln!("canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} slot={} ring_payload={} baseline_bank={}", std::mem::size_of::<NoteDelta>(), std::mem::size_of::<Item>(), std::mem::size_of::<VoiceBaseline>(), std::mem::size_of::<SourceBaseline>(), std::mem::size_of::<BaselineSlot>(), PUBLICATION_RING * std::mem::size_of::<Item>(), BASELINES * std::mem::size_of::<BaselineSlot>());
     }
 }

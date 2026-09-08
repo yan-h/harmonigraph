@@ -394,6 +394,43 @@ fn align_replacement(
     }
 }
 
+/// What is wrong with the take itself, in the order a person should hear it.
+///
+/// A `Vec` of warnings and no `Result`: a take that PARSED is rendered, whatever
+/// its contents say about how the recording went. Refusing belongs to
+/// [`Take::read`](harmonigraph_take::Take::read) — a bad version, a corrupt line,
+/// no header — because those are takes nothing can be drawn from.
+///
+/// Missing note history used to refuse here, which was the recording path
+/// disagreeing with itself: the gap is written precisely so the roll can draw
+/// the hole (`observed_until`), and then the renderer declined to draw it. The
+/// surviving records are still the truth about what was played, and #712 makes
+/// them a video with a warning on it rather than no video at all. Nothing is
+/// invented to fill the hole — no fabricated notes, no guessed durations.
+///
+/// The incompleteness comes FIRST because only the first warning reaches the
+/// plugin's status line (`harmonigraph-record`'s `follow`), and of the things
+/// that can be wrong with an export this is the one that changes the picture.
+fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(incomplete) = take.incomplete {
+        warnings.push(format!(
+            "warning: {take_path}: note history {}..={} is missing ({:?}) — rendering \
+             the records that survived, so notes may be missing or drawn short. \
+             Nothing is invented to fill the hole.",
+            incomplete.first_publication, incomplete.last_publication, incomplete.reason
+        ));
+    }
+    if take.truncated {
+        warnings.push(format!(
+            "warning: {take_path} ends mid-record — the export was interrupted. \
+             Rendering the {} events that survived.",
+            take.notes().count()
+        ));
+    }
+    warnings
+}
+
 fn run() -> Result<(), String> {
     let Some(args) = parse_args()? else { return Ok(()) };
 
@@ -411,6 +448,11 @@ fn run() -> Result<(), String> {
     if let Some(path) = &args.ui_state {
         take.header.ui_state =
             Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
+    }
+    // Ahead of anything the command line can complain about, so the take's own
+    // trouble is the warning that reaches the Video pane's status line.
+    for warning in take_warnings(&take_path, &take) {
+        eprintln!("{warning}");
     }
 
     // The frame the take was composed for in the Video pane. The offline
@@ -442,21 +484,6 @@ fn run() -> Result<(), String> {
              the picture is recomposed to fit, not letterboxed. Drop --size to \
              render the frame as previewed.",
             frame.aspect_w, frame.aspect_h
-        );
-    }
-
-    if let Some(incomplete) = take.incomplete {
-        return Err(format!(
-            "{take_path}: incomplete canonical publication {}..={} ({:?}); rendering refused",
-            incomplete.first_publication, incomplete.last_publication, incomplete.reason
-        ));
-    }
-
-    if take.truncated {
-        eprintln!(
-            "warning: {take_path} ends mid-record — the export was interrupted. \
-             Rendering the {} events that survived.",
-            take.notes().count()
         );
     }
 
@@ -788,5 +815,66 @@ mod tests {
         assert!(!size_matches_frame([1920, 1080], &frame(9, 16)));
         assert!(!size_matches_frame([1920, 1080], &frame(1, 1)));
         assert!(!size_matches_frame([1080, 1080], &frame(16, 9)));
+    }
+
+    /// #712's acceptance behaviour: a take that lost part of its note history
+    /// is exported with a warning instead of refused.
+    ///
+    /// The fixture is incomplete for the RIGHT reason. `Take::incomplete` can
+    /// be set two ways, and the one this decision is about is a `Gap` record
+    /// carrying a lost publication range — the same record the roll draws its
+    /// hole from. A fixture that reached this through a truncated last line, or
+    /// through a `Take::default()` with the field poked, would warn for a
+    /// reason the recording path does not produce.
+    ///
+    /// Both notes are asserted present afterwards, because "render the
+    /// surviving data with gaps" is the other half of the decision: not
+    /// refusing is worth nothing if the surviving records are dropped too.
+    #[test]
+    fn a_take_missing_note_history_is_exported_with_a_warning() {
+        use harmonigraph_core::canonical::{GapReason, PublicationGap};
+        use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record, Take};
+
+        let note = |t: f64, note: u8| {
+            Record::Note(NoteRecord {
+                t,
+                source: 1,
+                channel: 0,
+                note,
+                kind: NoteKind::On { velocity: 0.8 },
+            })
+        };
+        let gap = Record::Canonical(CanonicalRecord::Gap(
+            PublicationGap {
+                source: Some(harmonigraph_core::SourceId(1)),
+                time: 0.4,
+                through: 0.9,
+                first: 6,
+                last: 8,
+                reason: GapReason::PublicationFull,
+            }
+            .into(),
+        ));
+        let lines = [Record::Header(Header::default()), note(0.2, 60), gap, note(1.2, 64)];
+        let encoded = lines
+            .iter()
+            .map(|record| ron::to_string(record).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
+        let incomplete = take.incomplete.expect("a Gap record marks the take incomplete");
+        assert_eq!((incomplete.first_publication, incomplete.last_publication), (6, 8));
+
+        let warnings = take_warnings("take-1.take", &take);
+        assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
+        // `warning:` is the prefix `harmonigraph-record`'s `follow` picks the
+        // status line's warning out by, so it is a format contract between the
+        // two binaries rather than decoration.
+        assert!(warnings[0].starts_with("warning:"), "{}", warnings[0]);
+        assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);
+
+        let played: Vec<u8> = take.notes().map(|n| n.note).collect();
+        assert_eq!(played, [60, 64], "the records either side of the hole still render");
     }
 }

@@ -4,6 +4,7 @@
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::confirmed::{ConfirmedPitches, PitchProvenance};
 use harmonigraph_core::SourceId;
+use harmonigraph_record::publication::Lanes;
 use nice_plug::wrapper::clap::configuration::OwnedInput;
 
 use super::{
@@ -82,6 +83,7 @@ impl From<Observation> for NoteDelta {
     }
 }
 
+#[derive(Default)]
 pub struct Direct {
     pub state: State,
     pending: Queue<Observation, OUTPUT_WINDOW>,
@@ -106,32 +108,19 @@ pub struct Direct {
     fence: u64,
     pub sequence: u64,
     lifetime: u64,
-    pub baseline_id: u64,
-    pub recovery: bool,
+    /// The last snapshot identity each lane accepted. Per lane, because each
+    /// lane's consumer deduplicates on it: a frame one lane took and the other
+    /// refused must not come back under an id the taker already has.
+    pub baseline_id: Lanes<u64>,
+    /// Which lane still owes DIRECT a snapshot. Per lane for the same reason
+    /// the ids are: a full display ring says nothing about the take's.
+    pub recovery: Lanes<bool>,
+    /// A report that never reached EITHER lane, so both owe a gap. Not per
+    /// lane: this is the observation failing before publication, not a lane
+    /// refusing it.
     pub lost: bool,
     anchor: Option<(ClockId, i64, f64, f64)>,
-    pub coverage_start: f64,
     pub offset: i64,
-}
-
-impl Default for Direct {
-    fn default() -> Self {
-        Self {
-            state: State::default(),
-            pending: Queue::default(),
-            carried: Queue::default(),
-            carried_lost: None,
-            fence: 0,
-            sequence: 0,
-            lifetime: 0,
-            baseline_id: 0,
-            recovery: false,
-            lost: false,
-            anchor: None,
-            coverage_start: 0.0,
-            offset: 0,
-        }
-    }
 }
 
 impl Direct {
@@ -139,14 +128,11 @@ impl Direct {
         assert!(self.pending().is_none());
         self.offset = offset;
         self.anchor = None;
-        self.recovery = true;
+        self.recovery = Lanes::both(true);
     }
     pub fn begin(&mut self, clock: ClockId, raw: i64, time: f64, rate: f64) {
         match self.anchor {
-            None => {
-                self.anchor = Some((clock, raw, time, rate));
-                self.coverage_start = time;
-            }
+            None => self.anchor = Some((clock, raw, time, rate)),
             Some((old, _, _, old_rate)) if old != clock || old_rate != rate => {
                 // Only an explicit owner reset can establish new certainty.
                 self.state.complete = false;
@@ -211,7 +197,7 @@ impl Direct {
         self.carried_lost = None;
         self.fence = 0;
         self.anchor = None;
-        self.recovery = false;
+        self.recovery = Lanes::both(false);
         self.lost = false;
         // Source sequences/lifetimes do not repeat when the raw clock resets.
     }
@@ -318,7 +304,7 @@ impl Direct {
                 self.sequence = sequence;
                 if self.pending.push(delta.into()).is_err() {
                     self.lost = true;
-                    self.recovery = true;
+                    self.recovery = Lanes::both(true);
                 }
                 // A fenced voice is one the Hub scores from here rather than
                 // from a capture record, so every change to one is owed to the

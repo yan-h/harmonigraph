@@ -37,7 +37,6 @@ struct Voice {
     channel: u8,
     pitch: i64,
     node: Option<LatticePos>,
-    configuration_revision: u64,
     decision: u64,
 }
 
@@ -53,7 +52,6 @@ impl Voice {
             channel: voice.channel,
             pitch: voice.pitch_microcents,
             node: voice.attack_node,
-            configuration_revision: voice.assignment.map_or(0, |config| config.revision),
             decision: voice.decision,
         }
     }
@@ -408,9 +406,10 @@ const _: () = assert!(
     std::mem::size_of::<Option<Plan>>() - std::mem::size_of::<ResolvedConfig>() + 128 <= 256
 );
 const _: () = assert!(std::mem::size_of::<Option<Voice>>() <= 256);
-// One context cell keeps full room for a future complete configuration beside
-// the eight bytes its revision already occupies.
-const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 - 8 <= 256);
+// One context cell keeps full room for a future complete configuration. It
+// used to hold that configuration's revision, which nothing read: the decision
+// a voice was taken under lives in the take's configuration timeline.
+const _: () = assert!(std::mem::size_of::<Option<Voice>>() + 128 <= 256);
 
 #[cfg(test)]
 impl Sequencer {
@@ -818,7 +817,8 @@ impl Hub {
                 // paired Tune reaches both.
                 if source != 0 {
                     self.rows[source - 1].participating = value;
-                    self.rows[source - 1].repair = true;
+                    self.rows[source - 1].repair =
+                        harmonigraph_record::publication::Lanes::both(true);
                 }
             }
             return true;
@@ -1042,7 +1042,6 @@ impl Hub {
                     + i64::from(correction)
                     + (player * 100_000_000.0).round() as i64,
                 node: selection.node(),
-                configuration_revision: configuration.revision,
                 decision,
             });
         }

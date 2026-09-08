@@ -878,7 +878,7 @@ fn production_musical_normal_phrase_overrides_bends_and_keeps_old_configuration_
         expected.assignment, wrong.assignment
     );
     writer.drain(&mut capture);
-    let display = writer.display_events();
+    let display = capture.display_events();
     let mut live = harmonigraph_core::NoteTracker::new();
     for record in &display {
         record.apply(&mut live).unwrap();
@@ -1040,7 +1040,7 @@ fn production_musical_off_is_excluded_from_display_and_the_take() {
         phrase.idle();
     }
     writer.drain(&mut capture);
-    let display = writer.display_events();
+    let display = capture.display_events();
     let deltas = |source: u64| {
         display
             .iter()
@@ -1073,7 +1073,7 @@ fn production_musical_off_is_excluded_from_display_and_the_take() {
         phrase.idle();
     }
     writer.drain(&mut capture);
-    let after = writer.display_events();
+    let after = capture.display_events();
     for record in &after {
         record.apply(&mut live).unwrap();
     }
@@ -1155,4 +1155,253 @@ fn production_musical_off_pitches_do_not_reach_learning() {
     assert_ne!(quiet, shown, "the two tracks are distinguishable, or the row above proves nothing");
     assert_eq!(learned, original, "so the flat Off G is no fifth: the learned axis holds");
     phrase.release_all();
+}
+
+/// #712, finding 2: `publication_free()` was the MINIMUM across both lanes, so
+/// a display ring the editor had stopped draining refused a snapshot the TAKE
+/// was waiting for. The harm is silent and lands in a recording whose own lane
+/// is healthy: the file carries no gap and no warning, and simply keeps the
+/// source's stale `participating: false`. Replaying it hides every note that
+/// source played after the toggle -- a wrong video, drawn from a take that says
+/// nothing is wrong.
+///
+/// Off first, so the toggle below has something to change; the display lane is
+/// filled while the writer keeps up, so exactly one of the two lanes is short.
+#[test]
+fn a_full_display_lane_does_not_hold_back_the_takes_participation_snapshot() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-display-block-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("block.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let toggled =
+        inspect_source(&phrase.sources[0], |source| source.offer.as_ref().unwrap().lease.source).0;
+    let off = phrase.sources[0].participation(false, 0);
+    phrase.step([vec![off], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..4 {
+        phrase.idle();
+        writer.drain(&mut capture);
+    }
+    phrase.step([vec![note(1, 0, 50, 0, true)], vec![note(2, 0, 57, 0, true)], vec![]], [0, 1, 2]);
+    for _ in 0..8 {
+        phrase.idle();
+        writer.drain(&mut capture);
+    }
+    // The writer keeps up; the editor has stopped. Only the display ring fills.
+    for _ in 0..80 {
+        phrase.step(
+            [vec![], (0..64).map(|t| expression(2, 0.1234567890123, t)).collect(), vec![]],
+            [0, 1, 2],
+        );
+        writer.drain(&mut capture);
+    }
+    assert!(!writer.failed(), "the take lane kept up, so the take is healthy");
+    let participating = |take: &harmonigraph_take::Take, source: u64| {
+        take.events
+            .iter()
+            .filter_map(|record| match record {
+                CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
+                _ => None,
+            })
+            .rfind(|frame| frame.source.0 == source)
+            .map(|frame| frame.participating)
+    };
+    writer.drain(&mut capture);
+    let before = harmonigraph_take::Take::read(&path).unwrap();
+    assert_eq!(
+        participating(&before, toggled),
+        Some(false),
+        "the fixture must reach the toggle with the take holding the Off state"
+    );
+    // Off -> Participating, with the display lane still full. Its notes reach
+    // the take either way; what the take needs is the baseline that says the
+    // source is no longer hidden.
+    let on = phrase.sources[0].participation(true, 0);
+    phrase.step([vec![on], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..12 {
+        phrase.idle();
+        writer.drain(&mut capture);
+    }
+    let after = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(after.incomplete.is_none(), "the take's own lane lost nothing");
+    assert_eq!(
+        participating(&after, toggled),
+        Some(true),
+        "the Participating snapshot reached the take through a full display lane"
+    );
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// #712, finding 3: a snapshot one lane accepted and the other refused as
+/// `Busy` must not come back under an identity the accepting lane already has.
+///
+/// 5A judged this benign because "both consumers dedup on id" -- the dedup is
+/// exactly what makes it harmful. The old code advanced the row's `baseline_id`
+/// only when BOTH lanes took the frame, so once the display's 20-slot frame
+/// FIFO filled, every later refresh was republished under the id the TAKE had
+/// already taken, and the take's fanout dropped each one as a duplicate. The
+/// file's last word about that source then stays stale for good, however many
+/// refreshes the row goes on owing.
+///
+/// The fixture fills the display's frame FIFO with participation toggles --
+/// each one arms a repair without touching the item ring, so the display can be
+/// short of FRAMES while it still has room for items, which is the only way
+/// `Busy` (rather than "skipped, no cells") is reachable at all.
+#[test]
+fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-partial-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("partial.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let toggled =
+        inspect_source(&phrase.sources[0], |source| source.offer.as_ref().unwrap().lease.source).0;
+    // Well past SNAPSHOT_SLOTS, so the display is refusing long before the end.
+    const TOGGLES: usize = 30;
+    for index in 0..TOGGLES {
+        let value = index % 2 == 1;
+        let event = phrase.sources[0].participation(value, 0);
+        phrase.step([vec![event], vec![], vec![]], [0, 1, 2]);
+        for _ in 0..6 {
+            phrase.idle();
+            writer.drain(&mut capture);
+        }
+    }
+    writer.drain(&mut capture);
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let of_source = |records: &[CanonicalRecord], source: u64| -> Vec<(u64, bool)> {
+        records
+            .iter()
+            .filter_map(|record| match record {
+                CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
+                _ => None,
+            })
+            .filter(|frame| frame.source.0 == source)
+            .map(|frame| (frame.id, frame.participating))
+            .collect()
+    };
+    let written = of_source(&take.events, toggled);
+    let displayed = of_source(&capture.display_events(), toggled);
+    println!("PROBE take={} display={}", written.len(), displayed.len());
+    assert!(
+        displayed.len() < TOGGLES,
+        "the fixture must actually reach a refusal on the display: {} of {TOGGLES}",
+        displayed.len()
+    );
+    assert!(
+        written.len() >= TOGGLES,
+        "every refresh the row owed reached the take: {} of {TOGGLES}",
+        written.len()
+    );
+    assert!(
+        written.windows(2).all(|pair| pair[1].0 > pair[0].0),
+        "each one under a fresh identity, so none is deduplicated away"
+    );
+    assert_eq!(
+        written.last().map(|(_, participating)| *participating),
+        Some(TOGGLES.is_multiple_of(2)),
+        "so the file's last word about the source is the current one"
+    );
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// The take's twin of what 5A gave the display: a gap clears EVERY source in
+/// `NoteTracker`, so one lost report owes every source a fresh snapshot on the
+/// lane that lost it -- not only the row whose report did not fit. The display
+/// got that from `take_display_outage()`; the take lane had nothing, and a
+/// replay of such a take would draw the other sources from state the gap had
+/// already thrown away.
+///
+/// Here only the writer stops draining, so the take lane is the one that
+/// overflows and the editor's copy stays whole.
+#[test]
+fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-take-gap-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("gap.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let sources: Vec<u64> = (0..3)
+        .map(|index| {
+            inspect_source(&phrase.sources[index], |source| {
+                source.offer.as_ref().unwrap().lease.source
+            })
+            .0
+        })
+        .collect();
+    phrase.step(
+        [
+            vec![note(1, 0, 50, 0, true)],
+            vec![note(2, 0, 57, 0, true)],
+            vec![note(3, 0, 62, 0, true)],
+        ],
+        [0, 1, 2],
+    );
+    for _ in 0..8 {
+        phrase.idle();
+        writer.drain(&mut capture);
+        capture.display_events();
+    }
+    // The editor keeps up; the writer has stopped. Only the take ring fills,
+    // and the report it loses is one source's expression.
+    for _ in 0..80 {
+        phrase.step(
+            [(0..64).map(|t| expression(1, 0.1234567890123, t)).collect(), vec![], vec![]],
+            [0, 1, 2],
+        );
+        capture.display_events();
+    }
+    for _ in 0..8 {
+        phrase.idle();
+        writer.drain(&mut capture);
+        capture.display_events();
+    }
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let gap = take
+        .events
+        .iter()
+        .position(|record| matches!(record, CanonicalRecord::Gap(_)))
+        .expect("the fixture must actually overflow the take lane");
+    let refreshed: std::collections::BTreeSet<u64> = take.events[gap..]
+        .iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
+            _ => None,
+        })
+        .map(|frame| frame.source.0)
+        .collect();
+    for source in &sources {
+        assert!(
+            refreshed.contains(source),
+            "source {source} owes the take a snapshot after the gap: got {refreshed:?}"
+        );
+    }
+    phrase.release_all();
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
 }

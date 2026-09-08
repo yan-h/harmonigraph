@@ -69,7 +69,6 @@ impl From<ProvenanceRecord> for PitchProvenance {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AssignmentRecord {
-    pub configuration_revision: u64,
     pub decision: u64,
     pub node: Option<[i32; 3]>,
     pub correction_microcents: i64,
@@ -78,7 +77,6 @@ pub struct AssignmentRecord {
 impl From<AssignmentMetadata> for AssignmentRecord {
     fn from(a: AssignmentMetadata) -> Self {
         Self {
-            configuration_revision: a.configuration_revision,
             decision: a.decision,
             node: a.node.map(|p| [p.threes, p.fives, p.sevens]),
             correction_microcents: a.correction_microcents,
@@ -89,7 +87,6 @@ impl From<AssignmentMetadata> for AssignmentRecord {
 impl From<AssignmentRecord> for AssignmentMetadata {
     fn from(a: AssignmentRecord) -> Self {
         Self {
-            configuration_revision: a.configuration_revision,
             decision: a.decision,
             node: a.node.map(|p| LatticePos::new(p[0], p[1], p[2])),
             correction_microcents: a.correction_microcents,
@@ -215,38 +212,21 @@ impl From<&VoiceRecord> for VoiceBaseline {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ChannelRecord {
-    pub controllers: Vec<u8>,
-    pub controller_valid: [u64; 2],
-    pub pitch_bend: Option<u16>,
-    pub pressure: Option<u8>,
-    pub program: Option<u8>,
-}
-impl From<ChannelBaseline> for ChannelRecord {
-    fn from(c: ChannelBaseline) -> Self {
-        Self {
-            controllers: c.controllers.to_vec(),
-            controller_valid: c.controller_valid,
-            pitch_bend: c.pitch_bend,
-            pressure: c.pressure,
-            program: c.program,
-        }
-    }
-}
-
+/// What one source was sounding at time `t`, and nothing else.
+///
+/// It also carried the source's 16 channels of folded controller state and the
+/// time its knowledge began. Both existed for the repair protocol #712
+/// replaced, nothing on the reading side ever looked at either, and the
+/// channel block was 15% of every published frame — see [`SourceBaseline`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BaselineRecord {
     pub source: u64,
     pub id: u64,
     pub t: f64,
-    pub coverage_start: f64,
     pub output_cut: u64,
     pub participating: bool,
     pub voices: Vec<VoiceRecord>,
-    pub channels: Vec<ChannelRecord>,
 }
 impl From<&SourceBaseline> for BaselineRecord {
     fn from(b: &SourceBaseline) -> Self {
@@ -254,41 +234,28 @@ impl From<&SourceBaseline> for BaselineRecord {
             source: b.source.0,
             id: b.id,
             t: b.time,
-            coverage_start: b.coverage_start,
             output_cut: b.output_cut,
             participating: b.participating,
             voices: b.voices().iter().copied().map(Into::into).collect(),
-            channels: b.channels.into_iter().map(Into::into).collect(),
         }
     }
 }
 impl BaselineRecord {
     pub fn baseline(&self) -> Result<SourceBaseline, InvalidCanonical> {
-        if self.voices.len() > 64 || self.channels.len() != 16 {
+        if self.voices.len() > 64 {
             return Err(InvalidCanonical);
         }
         let mut voices = [VoiceBaseline::default(); 64];
         for (to, from) in voices.iter_mut().zip(&self.voices) {
             *to = from.into();
         }
-        let mut channels = [ChannelBaseline::default(); 16];
-        for (to, from) in channels.iter_mut().zip(&self.channels) {
-            to.controllers =
-                from.controllers.as_slice().try_into().map_err(|_| InvalidCanonical)?;
-            to.controller_valid = from.controller_valid;
-            to.pitch_bend = from.pitch_bend;
-            to.pressure = from.pressure;
-            to.program = from.program;
-        }
         SourceBaseline::new(
             SourceId(self.source),
             self.id,
             self.t,
-            self.coverage_start,
             self.output_cut,
             self.participating,
             &voices[..self.voices.len()],
-            channels,
         )
     }
 }
@@ -404,7 +371,6 @@ impl CanonicalRecord {
             Self::Delta(d) => d.event.t += offset,
             Self::Baseline(b) => {
                 b.t += offset;
-                b.coverage_start += offset;
                 for v in &mut b.voices {
                     v.input_onset += offset;
                     v.actual_onset += offset;

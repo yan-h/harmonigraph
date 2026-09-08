@@ -1,15 +1,41 @@
 //! Rich factual source state, owned by a serialized callback. The same reducer
 //! accepts observed DIRECT ingress and actual accepted output; provenance is
 //! explicit and neither a plan nor a publication acknowledgement is an event.
-use harmonigraph_core::canonical::{
-    ChannelBaseline, EventTiming, NoteDelta, SourceBaseline, VoiceBaseline,
-};
+use harmonigraph_core::canonical::{EventTiming, NoteDelta, SourceBaseline, VoiceBaseline};
 use harmonigraph_core::confirmed::{
     ConfirmedPitch, ConfirmedPitches, PitchProvenance, HELD_PER_SOURCE,
 };
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId, VoiceKey};
 
 use super::event::Event;
+
+/// Latest accepted ordinary MIDI channel values. Validity accompanies each
+/// value: an untouched control is not fabricated neutral state.
+///
+/// Audio-side only. It used to ride out on every `SourceBaseline` as well,
+/// where nothing ever read it — the display, the roll, the take reader and the
+/// offline renderer all take channel state from nowhere, and the two callers
+/// that want it (the sustain sweep and the pitch-centre debt) read this copy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChannelBaseline {
+    pub controllers: [u8; 128],
+    pub controller_valid: [u64; 2],
+    pub pitch_bend: Option<u16>,
+    pub pressure: Option<u8>,
+    pub program: Option<u8>,
+}
+
+impl Default for ChannelBaseline {
+    fn default() -> Self {
+        Self {
+            controllers: [0; 128],
+            controller_valid: [0; 2],
+            pitch_bend: None,
+            pressure: None,
+            program: None,
+        }
+    }
+}
 
 pub struct State {
     voices: [Option<VoiceBaseline>; HELD_PER_SOURCE],
@@ -159,7 +185,6 @@ impl State {
         id: u64,
         cut: u64,
         time: f64,
-        coverage_start: f64,
         participating: bool,
     ) -> Option<SourceBaseline> {
         if !self.complete {
@@ -171,17 +196,7 @@ impl State {
             voices[count] = *voice;
             count += 1;
         }
-        SourceBaseline::new(
-            source,
-            id,
-            time,
-            coverage_start,
-            cut,
-            participating,
-            &voices[..count],
-            self.channels,
-        )
-        .ok()
+        SourceBaseline::new(source, id, time, cut, participating, &voices[..count]).ok()
     }
 
     /// The caller has already assigned the original input lifetime and, for
